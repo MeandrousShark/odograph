@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}{{ range_label(report.start, report.end) }} Report — Odograph{% endblock %}
+{% block content %}
+
+<p>
+  <a href="/report/{{ report.year }}">← {{ report.year }} annual report</a>
+  · <a href="/report/range/export?from={{ report.start.isoformat() }}&to={{ report.end.isoformat() }}">Export XLSX</a>
+</p>
+
+<h2>{{ range_label(report.start, report.end) }} mileage report</h2>
+
+{% if report.trip_count == 0 %}
+  <p class="empty">No trips recorded {{ report.start.isoformat() }} – {{ report.end.isoformat() }}.</p>
+{% else %}
+
+<div class="report-summary">
+  <div><span class="muted">Business miles</span><strong>{{ report.business_m | mi }} mi</strong></div>
+  <div><span class="muted">Personal miles</span><strong>{{ report.personal_m | mi }} mi</strong></div>
+  <div><span class="muted">Business share</span>
+    <strong>{{ "%.1f"|format(report.business_pct) if report.business_pct is not none else "—" }}%</strong></div>
+  <div><span class="muted">Total deduction</span>
+    <strong>{{ report.total_deduction | usd }}</strong></div>
+</div>
+
+{% if report.rate_periods %}
+<p class="muted">Rate{{ "s" if report.rate_periods|length > 1 }} applied: {{ format_rate_periods(report.rate_periods) }}</p>
+{% endif %}
+
+{% if report.caveats.any %}
+<div class="report-caveats">
+  <strong>Review before filing:</strong>
+  <ul>
+    {% for line in caveat_lines(report.caveats, report.year) %}
+    <li>{{ line }}{% if loop.last and report.caveats.missing_rate %} <a href="/settings">Add one</a>.{% endif %}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% include "_report_tables.html" %}
+
+{% endif %}
+
+{% endblock %}

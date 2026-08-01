@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Sign in — Odograph{% endblock %}
+{% block content %}
+
+<h2>Sign in</h2>
+
+{% if error %}
+<div class="form-error-summary" role="alert">{{ error }}</div>
+{% endif %}
+
+{% if local_admin_exists %}
+<form method="post" action="/login/local" class="auth-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <label>Email
+    <input type="email" name="email" required autocomplete="username" autofocus>
+  </label>
+  <label>Password
+    <input type="password" name="password" required autocomplete="current-password">
+  </label>
+  <button type="submit" class="control control-primary">Sign in</button>
+</form>
+
+{% if oidc_available %}
+<p class="auth-divider">or</p>
+<a class="control control-secondary" href="/login/oidc">Sign in with OIDC</a>
+{% endif %}
+
+{% else %}
+<p class="muted">
+  No administrator has been set up yet.
+  {% if setup_available %}
+  <a href="/setup">Complete setup</a> to create one.
+  {% else %}
+  See the README's setup instructions to configure sign-in for this instance.
+  {% endif %}
+</p>
+{% endif %}
+
+{% endblock %}

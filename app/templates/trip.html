@@ -1,0 +1,378 @@
+{% extends "base.html" %}
+{% from "_purpose_field.html" import purpose_field %}
+{% from "_trip_delete_dialog.html" import trip_delete_dialog %}
+{% block title %}Trip {{ trip.started_at | local_dt }} — Odograph{% endblock %}
+{% block head %}
+  <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
+  <script src="/static/vendor/leaflet/leaflet.js"></script>
+  <style>#map { height: 480px; border-radius: 6px; margin-top: 1rem; }</style>
+{% endblock %}
+{% block content %}
+
+<p><a href="/trips">All trips</a></p>
+
+<h2>{{ trip.started_at | local_dt }} → {{ trip.ended_at | local_time }}
+  {% if trip.has_gap %}<span class="status-badge status-warning" title="Distance may under-read">Recording gap</span>{% endif %}
+</h2>
+<p class="muted">
+  Route:
+  {{ describe_endpoint(trip.start_place_name, trip.start_lat, trip.start_lon, trip.get('start_address')) }} →
+  {{ describe_endpoint(trip.end_place_name, trip.end_lat, trip.end_lon, trip.get('end_address')) }}
+</p>
+<p>
+  {{ trip.display_distance_m | mi }} mi ({{ trip.display_distance_m | km }} km)
+  {% if trip.snap_status in ('ok', 'low_confidence') %}
+    <span class="muted" style="font-size:.8rem">— road-snapped{% if trip.snap_status == 'low_confidence' %} (low confidence){% endif %}, raw GPS {{ trip.distance_m | mi }} mi</span>
+  {% elif trip.snap_status == 'pending' %}
+    <span class="muted" style="font-size:.8rem">— not yet road-snapped</span>
+  {% elif trip.snap_status == 'failed' %}
+    <span class="muted" style="font-size:.8rem">— road-snap failed, showing raw GPS distance</span>
+  {% endif %}
+  ·
+  {{ trip | duration }} · {{ trip.point_count }} points ·
+  {{ trip.category }}{% if trip.purpose %} · purpose: “{{ trip.purpose }}”{% endif %}{% if trip.notes %} · “{{ trip.notes }}”{% endif %}
+</p>
+
+{% if trip.source == 'detected' %}
+<div id="map"></div>
+{% endif %}
+
+<div class="trip-detail-fields">
+  <div class="trip-detail-field">
+    <span class="field-label">Purpose</span>
+    {{ purpose_field(
+      recent_purposes | default([], true), trip.purpose, input_class='notes',
+      hx_post='/trips/' ~ trip.id ~ '/purpose', hx_swap='none'
+    ) }}
+  </div>
+  <div class="trip-detail-field">
+    <span class="field-label">Notes</span>
+    <input class="notes" name="notes" value="{{ trip.notes or '' }}" placeholder="notes…"
+           hx-post="/trips/{{ trip.id }}/notes" hx-trigger="change" hx-swap="none">
+  </div>
+  <!-- Vehicle and Advanced trip tools share one row (each field/disclosure
+       above gets its own instead) because they were the two controls users
+       actually confused for each other in QA: the purpose field's own
+       "Recent…" dropdown chevron sat directly under the Notes label, and
+       the notes input's full-width layout forced it onto a line by itself
+       below both, reading as one tangled control. Vehicle and Advanced
+       tools have no such overlap risk, so pairing them costs nothing and
+       saves vertical space. -->
+  <div class="trip-detail-row">
+    <div class="trip-detail-field">
+      <span class="field-label">Vehicle</span>
+      <!-- hx-swap="none": /trips/{id}/vehicle returns a standalone card,
+           which this detail page does not need to insert. The <select>
+           already reflects the chosen vehicle via native browser behavior, so
+           there's nothing this page needs to re-render from the response body. -->
+      <select hx-post="/trips/{{ trip.id }}/vehicle" hx-trigger="change"
+              hx-swap="none" name="vehicle_id">
+        <option value="">—</option>
+        {% for v in vehicles %}
+        <option value="{{ v.id }}" {{ 'selected' if trip.vehicle_id == v.id }}>{{ v.name }}</option>
+        {% endfor %}
+        {% if trip.vehicle_id and trip.vehicle_id not in (vehicles | map(attribute='id') | list) %}
+        <option value="{{ trip.vehicle_id }}" selected>{{ trip.vehicle_name }} (inactive)</option>
+        {% endif %}
+      </select>
+    </div>
+
+    {% if trip.source == 'detected' %}
+    <!-- Occasional correction tools (merge/split/place-naming) are gated behind
+         one disclosure so they never compete with the map for attention. The
+         map-click handlers below still find these controls by ID at event
+         time regardless of whether this <details> is open. -->
+    <details class="advanced-tools">
+      <summary>Advanced trip tools</summary>
+
+      <div class="boundary-edit">
+    {% if has_prev_trip %}
+    <details class="add-manual" id="merge-prev">
+      <summary>Merge with previous trip</summary>
+      <form hx-post="/trips/{{ trip.id }}/merge_prev">
+        <label>Category
+          <select name="category">
+            {% for c in categories %}<option value="{{ c }}">{{ c | capitalize }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>Purpose {{ purpose_field(recent_purposes | default([], true)) }}</label>
+        <label>Notes <input type="text" name="notes"></label>
+        <label>Vehicle
+          <select name="vehicle_id">
+            <option value="keep" selected>Keep</option>
+            <option value="">—</option>
+            {% for v in vehicles %}
+            <option value="{{ v.id }}">{{ v.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button type="submit">Merge</button>
+      </form>
+    </details>
+    {% endif %}
+    {% if has_next_trip %}
+    <details class="add-manual" id="merge-next">
+      <summary>Merge with next trip</summary>
+      <form hx-post="/trips/{{ trip.id }}/merge_next">
+        <label>Category
+          <select name="category">
+            {% for c in categories %}<option value="{{ c }}">{{ c | capitalize }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>Purpose {{ purpose_field(recent_purposes | default([], true)) }}</label>
+        <label>Notes <input type="text" name="notes"></label>
+        <label>Vehicle
+          <select name="vehicle_id">
+            <option value="keep" selected>Keep</option>
+            <option value="">—</option>
+            {% for v in vehicles %}
+            <option value="{{ v.id }}">{{ v.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button type="submit">Merge</button>
+      </form>
+    </details>
+    {% endif %}
+    <button type="button" id="split-toggle">Split trip</button>
+    <div id="split-confirm" style="display:none"></div>
+  </div>
+
+  <div class="place-naming">
+    {% if trip.start_place_name %}
+      <p>Start: <strong>{{ trip.start_place_name }}</strong></p>
+    {% else %}
+      <details class="add-manual" id="name-start">
+        <summary>Name start location</summary>
+        <form hx-post="/places">
+          <label>Name <input type="text" name="name" required></label>
+          <label>Kind
+            <select name="kind">
+              <option value="home">Home</option>
+              <option value="work">Work</option>
+              <option value="other" selected>Other</option>
+            </select>
+          </label>
+          <label>Lat <input type="number" step="0.000001" name="lat" id="start-lat"
+                             value="{{ trip.start_lat }}" style="width:8rem"></label>
+          <label>Lon <input type="number" step="0.000001" name="lon" id="start-lon"
+                             value="{{ trip.start_lon }}" style="width:8rem"></label>
+          <label>Radius (m) <input type="number" name="radius_m" value="150" min="1" style="width:5rem"></label>
+          <button type="submit">Save</button>
+        </form>
+      </details>
+    {% endif %}
+    {% if trip.end_place_name %}
+      <p>End: <strong>{{ trip.end_place_name }}</strong></p>
+    {% else %}
+      <details class="add-manual" id="name-end">
+        <summary>Name end location</summary>
+        <form hx-post="/places">
+          <label>Name <input type="text" name="name" required></label>
+          <label>Kind
+            <select name="kind">
+              <option value="home">Home</option>
+              <option value="work">Work</option>
+              <option value="other" selected>Other</option>
+            </select>
+          </label>
+          <label>Lat <input type="number" step="0.000001" name="lat" id="end-lat"
+                             value="{{ trip.end_lat }}" style="width:8rem"></label>
+          <label>Lon <input type="number" step="0.000001" name="lon" id="end-lon"
+                             value="{{ trip.end_lon }}" style="width:8rem"></label>
+          <label>Radius (m) <input type="number" name="radius_m" value="150" min="1" style="width:5rem"></label>
+          <button type="submit">Save</button>
+        </form>
+      </details>
+    {% endif %}
+  </div>
+</details>
+    {% endif %}
+  </div>
+</div>
+
+<div class="trip-detail-delete">
+  {{ trip_delete_dialog(
+    trip, 'trip-delete-detail-' ~ trip.id, '/trips/' ~ trip.id ~ '/delete'
+  ) }}
+</div>
+
+{% if trip.source == 'detected' %}
+<script nonce="{{ csp_nonce }}">
+  const path = {{ path_geojson | safe if path_geojson else 'null' }};
+  const pathSnapped = {{ path_snapped_geojson | safe if path_snapped_geojson else 'null' }};
+  const stays = {{ stay_centroids | safe }};
+  const minTripDistanceM = {{ min_trip_distance_m }};
+  const start = [{{ trip.start_lat }}, {{ trip.start_lon }}];
+  const end = [{{ trip.end_lat }}, {{ trip.end_lon }}];
+
+  const mapEl = document.getElementById('map');
+  const map = L.map('map');
+  const theme = getComputedStyle(document.documentElement);
+  const routeColor = theme.getPropertyValue('--route').trim() || '#2d6a4f';
+  const stayColor = theme.getPropertyValue('--border-strong').trim() || '#888';
+
+  // The map MUST have a view before any vector layer (polyline/circle) is
+  // added. Adding a path to a viewless map leaves its pixel bounds undefined;
+  // the next redraw then calls Leaflet's bounds.intersects(), which reads
+  // `.min` off that undefined and throws — killing the whole script so the
+  // route and markers never render (only the tiles, added first, survive).
+  // This is why the map appeared but the route didn't, and only on trips that
+  // had stay circles. Establish the view first, then layer everything on.
+  let bounds = L.latLngBounds([start, end]);
+  map.fitBounds(bounds.pad(0.15));
+
+  L.tileLayer({{ map_tile_url | tojson }}, {
+    maxZoom: 19,
+    attribution: {{ map_tile_attribution | tojson }}
+  }).addTo(map);
+
+  const hasSnapped = pathSnapped && pathSnapped.coordinates && pathSnapped.coordinates.length > 0;
+
+  // Raw path becomes a thin, faded, dashed underlay once a snapped path
+  // exists (for comparison); otherwise it's the primary solid line, same
+  // as before M6. pathSnapped, when present, is drawn solid on top and
+  // wins framing (bounds is reassigned last).
+  if (path && path.coordinates && path.coordinates.length > 1) {
+    const rawStyle = hasSnapped
+      ? { color: routeColor, weight: 2, opacity: 0.5, dashArray: '4' }
+      : { color: routeColor, weight: 4 };
+    const rawLine = L.geoJSON(path, { style: rawStyle }).addTo(map);
+    bounds = rawLine.getBounds();
+  } else if (!hasSnapped) {
+    // No stored path at all (e.g. a very short trip simplified away) —
+    // fall back to a straight start→end line so the route is always
+    // visibly represented.
+    L.polyline([start, end], { color: routeColor, weight: 3, dashArray: '6' }).addTo(map);
+  }
+  if (hasSnapped) {
+    const snappedLine = L.geoJSON(pathSnapped, { style: { color: routeColor, weight: 4 } }).addTo(map);
+    bounds = snappedLine.getBounds();
+  }
+  map.fitBounds(bounds.pad(0.15));
+
+  L.marker(start, { title: 'Start' }).addTo(map);
+  L.marker(end, { title: 'End' }).addTo(map);
+  for (const c of stays) {
+    L.circle([c.coordinates[1], c.coordinates[0]],
+             { radius: 150, color: stayColor, fillOpacity: 0.1 }).addTo(map);
+  }
+
+  // Split mode: a third, exclusive click-mode alongside the place-naming
+  // one below. While armed, clicking the map picks the nearest *real* GPS
+  // point (never the raw click coordinate — the split anchor must be an
+  // actual points.id) and shows a confirmation before submitting.
+  let splitMode = false;
+  let tripPoints = null;
+  let tripCumDist = null;
+  window.__splitPointId = null;
+  const splitToggle = document.getElementById('split-toggle');
+  const splitConfirm = document.getElementById('split-confirm');
+
+  function haversineM(lat1, lon1, lat2, lon2) {
+    const R = 6371000, toRad = d => d * Math.PI / 180;
+    const dphi = toRad(lat2 - lat1), dlmb = toRad(lon2 - lon1);
+    const a = Math.sin(dphi / 2) ** 2 +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dlmb / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(a));
+  }
+
+  function cumulativeDistances(points) {
+    const out = [0];
+    for (let i = 1; i < points.length; i++) {
+      out.push(out[i - 1] + haversineM(
+        points[i - 1].lat, points[i - 1].lon, points[i].lat, points[i].lon
+      ));
+    }
+    return out;
+  }
+
+  splitToggle?.addEventListener('click', async () => {
+    splitMode = !splitMode;
+    splitToggle.textContent = splitMode ? 'Cancel split' : 'Split trip';
+    splitConfirm.style.display = 'none';
+    splitConfirm.innerHTML = '';
+    window.__splitPointId = null;
+    if (splitMode && !tripPoints) {
+      const resp = await fetch(window.location.pathname + '/points');
+      tripPoints = await resp.json();
+      tripCumDist = cumulativeDistances(tripPoints);
+    }
+  });
+
+  // Lets a "name this place" form be corrected to the actual building entrance
+  // rather than the raw GPS fix — clicking the map fills whichever naming
+  // form is currently open (if exactly one is; ambiguous otherwise, so a
+  // click does nothing rather than guessing).
+  map.on('click', function (e) {
+    if (splitMode) {
+      if (!tripPoints || tripPoints.length < 3) return;
+      let nearest = null, nearestDist = Infinity;
+      for (const p of tripPoints) {
+        const d = haversineM(e.latlng.lat, e.latlng.lng, p.lat, p.lon);
+        if (d < nearestDist) { nearestDist = d; nearest = p; }
+      }
+      const first = tripPoints[0], last = tripPoints[tripPoints.length - 1];
+      if (!nearest || nearest.id === first.id || nearest.id === last.id) {
+        splitConfirm.style.display = 'block';
+        splitConfirm.textContent = 'That point is already this trip\'s boundary — pick a point further along the route.';
+        return;
+      }
+      const idx = tripPoints.indexOf(nearest);
+      const fromStart = tripCumDist[idx];
+      const fromEnd = tripCumDist[tripCumDist.length - 1] - fromStart;
+      if (fromStart < minTripDistanceM || fromEnd < minTripDistanceM) {
+        splitConfirm.style.display = 'block';
+        splitConfirm.textContent = `That point is too close to the start or end of the trip ` +
+          `(each half must be at least ${Math.round(minTripDistanceM)}m) — pick a point further along the route.`;
+        return;
+      }
+      window.__splitPointId = nearest.id;
+      splitConfirm.style.display = 'block';
+      splitConfirm.innerHTML = `Split at ${new Date(nearest.t).toLocaleTimeString()}? ` +
+        '<button type="button" hx-post="' + window.location.pathname + '/split" ' +
+        'hx-vals=\'js:{"point_id": window.__splitPointId}\' ' +
+        'hx-confirm="Split this trip here? Both halves keep their own GPS data.">Confirm split</button>';
+      htmx.process(splitConfirm);
+      return;
+    }
+    const startOpen = document.getElementById('name-start')?.open;
+    const endOpen = document.getElementById('name-end')?.open;
+    let latEl = null, lonEl = null;
+    if (startOpen && !endOpen) {
+      latEl = document.getElementById('start-lat'); lonEl = document.getElementById('start-lon');
+    } else if (endOpen && !startOpen) {
+      latEl = document.getElementById('end-lat'); lonEl = document.getElementById('end-lon');
+    }
+    if (latEl && lonEl) {
+      latEl.value = e.latlng.lat.toFixed(6);
+      lonEl.value = e.latlng.lng.toFixed(6);
+    }
+  });
+
+  // Mobile browsers frequently finish laying out the map container *after*
+  // this inline script runs. Re-fit once the container reports real
+  // dimensions so the route isn't framed against a zero/wrong-size viewport.
+  let fitted = false;
+  function fit() {
+    if (mapEl.offsetWidth === 0 || mapEl.offsetHeight === 0) return;
+    map.invalidateSize();
+    if (bounds.isValid()) map.fitBounds(bounds.pad(0.15));
+    fitted = true;
+  }
+
+  // ResizeObserver fires when the container actually gets its dimensions,
+  // regardless of how late the browser lays it out — the reliable signal.
+  if (window.ResizeObserver) {
+    const ro = new ResizeObserver(() => {
+      fit();
+      if (fitted) ro.disconnect();  // stop once fitted so we don't fight zoom
+    });
+    ro.observe(mapEl);
+  }
+  requestAnimationFrame(() => requestAnimationFrame(fit));
+  window.addEventListener('load', fit);
+</script>
+{% endif %}
+
+{% endblock %}

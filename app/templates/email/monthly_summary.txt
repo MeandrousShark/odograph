@@ -1,0 +1,8 @@
+Odograph: {{ month_label }} summary.
+
+Business miles: {{ business_mi }}
+Deduction: {{ deduction }}
+Unclassified trips: {{ unclassified }}
+{% if report_url %}
+Full report: {{ report_url }}
+{% endif %}

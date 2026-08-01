@@ -1,0 +1,6 @@
+<ul class="address-results">
+  {% for r in results %}
+  <li><button type="button" data-fill-place-latlon
+              data-lat="{{ r.lat }}" data-lon="{{ r.lon }}">{{ r.label }}</button></li>
+  {% endfor %}
+</ul>

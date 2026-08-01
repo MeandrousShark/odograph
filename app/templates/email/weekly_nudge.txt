@@ -1,0 +1,4 @@
+Odograph: {{ count }} unclassified {{ noun }} in the past week.
+{% if review_url %}
+Review them here: {{ review_url }}
+{% endif %}

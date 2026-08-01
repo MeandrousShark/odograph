@@ -1,0 +1,20 @@
+{% if connectivity is none %}
+<p class="muted">Not checked yet.</p>
+{% else %}
+<dl class="diagnostics-list">
+  {% for result in connectivity %}
+  <div>
+    <dt>{{ result.service }}</dt>
+    <dd>
+      {% if not result.configured %}
+        not configured
+      {% elif result.ok %}
+        ok ({{ result.detail }})
+      {% else %}
+        FAILED ({{ result.detail }})
+      {% endif %}
+    </dd>
+  </div>
+  {% endfor %}
+</dl>
+{% endif %}

@@ -1,0 +1,686 @@
+:root {
+  color-scheme: light dark;
+
+  /* Catppuccin Latte (light) palette tokens */
+  --latte-base: #eff1f5;
+  --latte-mantle: #e6e9ef;
+  --latte-surface0: #ccd0da;
+  --latte-overlay0: #9ca0b0;
+  --latte-text: #4c4f69;
+  --latte-subtext0: #6c6f85;
+  --latte-green: #40a02b;
+  --latte-mauve: #8839ef;
+  --latte-red: #d20f39;
+  --latte-peach: #fe640b;
+
+  /* Catppuccin Macchiato (dark) palette tokens */
+  --macchiato-base: #24273a;
+  --macchiato-mantle: #1e2030;
+  --macchiato-surface0: #363a4f;
+  --macchiato-overlay0: #6e738d;
+  --macchiato-text: #cad3f5;
+  --macchiato-subtext0: #a5adcb;
+  --macchiato-green: #a6da95;
+  --macchiato-mauve: #c6a0f6;
+  --macchiato-red: #ed8796;
+  --macchiato-peach: #f5a97f;
+}
+
+/* Active flavor mapping. Three layers, lowest to highest priority:
+   1. Latte by default (below).
+   2. System dark preference (@media block).
+   3. Explicit user choice via Settings — a `data-theme` attribute
+      on <html>, set by JS and persisted in localStorage. Attribute selectors
+      out-specificity the bare `:root` rules below regardless of source
+      order, so an explicit choice always wins over system preference. */
+:root {
+  --base: var(--latte-base); --mantle: var(--latte-mantle);
+  --surface0: var(--latte-surface0); --overlay0: var(--latte-overlay0);
+  --text: var(--latte-text); --subtext0: var(--latte-subtext0);
+  --green: var(--latte-green); --mauve: var(--latte-mauve);
+  --red: var(--latte-red); --peach: var(--latte-peach);
+  --border: var(--latte-surface0);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --base: var(--macchiato-base); --mantle: var(--macchiato-mantle);
+    --surface0: var(--macchiato-surface0); --overlay0: var(--macchiato-overlay0);
+    --text: var(--macchiato-text); --subtext0: var(--macchiato-subtext0);
+    --green: var(--macchiato-green); --mauve: var(--macchiato-mauve);
+    --red: var(--macchiato-red); --peach: var(--macchiato-peach);
+    --border: var(--macchiato-surface0);
+  }
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --base: var(--latte-base); --mantle: var(--latte-mantle);
+  --surface0: var(--latte-surface0); --overlay0: var(--latte-overlay0);
+  --text: var(--latte-text); --subtext0: var(--latte-subtext0);
+  --green: var(--latte-green); --mauve: var(--latte-mauve);
+  --red: var(--latte-red); --peach: var(--latte-peach);
+  --border: var(--latte-surface0);
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --base: var(--macchiato-base); --mantle: var(--macchiato-mantle);
+  --surface0: var(--macchiato-surface0); --overlay0: var(--macchiato-overlay0);
+  --text: var(--macchiato-text); --subtext0: var(--macchiato-subtext0);
+  --green: var(--macchiato-green); --mauve: var(--macchiato-mauve);
+  --red: var(--macchiato-red); --peach: var(--macchiato-peach);
+  --border: var(--macchiato-surface0);
+}
+
+/* Semantic layer — everything else references these, never a flavor color
+   directly, so a future flavor swap only touches the blocks above. */
+:root {
+  --bg: var(--base);
+  --bg-alt: var(--mantle);
+  --surface: var(--mantle);
+  --surface-elevated: var(--base);
+  --fg: var(--text);
+  --fg-muted: var(--subtext0);
+  --border-strong: var(--overlay0);
+  --cat-business: var(--green);
+  --cat-personal: var(--mauve);
+  --danger: var(--red);
+  --warn: var(--peach);
+  --route: var(--green);
+  --focus-ring: var(--mauve);
+  --shadow: 0 0.35rem 1.25rem rgb(30 32 48 / 14%);
+  --control-bg: var(--surface-elevated);
+  --control-fg: var(--fg);
+  --control-border: var(--border-strong);
+  --control-shadow: 0 .1rem .3rem rgb(30 32 48 / 12%);
+  --space-1: .25rem;
+  --space-2: .5rem;
+  --space-3: .75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --control-height: 2.75rem;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  max-width: 1100px; margin: 0 auto; padding: var(--space-4) var(--space-6);
+  background: var(--bg); color: var(--fg);
+}
+button, input, select { min-height: var(--control-height); }
+button, input, select, textarea {
+  color: var(--control-fg); background-color: var(--control-bg);
+  border: 1px solid var(--control-border); border-radius: var(--radius-sm); font: inherit;
+}
+button { padding: 0 var(--space-3); cursor: pointer; box-shadow: var(--control-shadow); }
+button:disabled { cursor: not-allowed; opacity: .55; }
+input[type="checkbox"], input[type="radio"] { min-height: 1rem; min-width: 1rem; }
+header { display: grid; grid-template-columns: auto 1fr auto; gap: var(--space-4); align-items: center;
+         border-bottom: 1px solid var(--border); padding-bottom: var(--space-3); margin-bottom: var(--space-4); }
+header h1 { font-size: 1.3rem; margin: 0; }
+header h1 a { text-decoration: none; }
+header nav { display: flex; justify-content: center; gap: var(--space-3); flex-wrap: wrap; font-size: .9rem; }
+.header-account { display: flex; gap: var(--space-2); align-items: center; font-size: .85rem; }
+header .who { color: var(--fg-muted); }
+.logout-form { display: inline; }
+.link-button { background: none; border: none; min-height: var(--control-height); padding: 0 var(--space-2); margin: 0; font: inherit;
+               color: inherit; text-decoration: underline; cursor: pointer; box-shadow: none; }
+a, button, input, select, textarea, summary { overflow-wrap: anywhere; }
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
+textarea:focus-visible, summary:focus-visible {
+  outline: 3px solid var(--focus-ring); outline-offset: 2px;
+}
+.control {
+  display: inline-flex; min-height: var(--control-height); align-items: center; justify-content: center;
+  border-radius: var(--radius-sm); padding: 0 var(--space-3); cursor: pointer;
+  font: inherit; text-decoration: none; box-shadow: var(--control-shadow);
+}
+.control-primary { color: var(--base); background: var(--cat-business); border: 1px solid var(--cat-business); font-weight: 600; }
+.control-secondary { color: var(--control-fg); background: var(--control-bg); border: 1px solid var(--control-border); }
+.control-quiet { color: var(--fg); background: transparent; border: 1px solid transparent; }
+.control-destructive { color: var(--base); background: var(--danger); border: 1px solid var(--danger); }
+h2 { font-size: 1.05rem; margin: 1.5rem 0 .25rem; }
+.month-summary { font-size: .85rem; color: var(--fg-muted); margin-bottom: .5rem; }
+.table-wrapper { overflow-x: auto; }
+/* Tables crush their columns to min-content before .table-wrapper's
+   overflow-x ever engages, so the global `summary { overflow-wrap: anywhere }`
+   rule (kept above for other long-content controls) squeezes a table-cell
+   <summary>Edit</summary> down to its narrowest legal wrap point — one
+   letter per line — well before the table would actually need to scroll.
+   Scoping summaries back to normal wrapping here keeps the action word
+   intact and lets the table grow past its wrapper instead of its cells. */
+.table-wrapper summary { overflow-wrap: normal; white-space: nowrap; }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid var(--border); }
+th { font-weight: 600; font-size: .8rem; text-transform: uppercase; opacity: .6; }
+td.num { font-variant-numeric: tabular-nums; }
+.trip-route { overflow-wrap: anywhere; line-height: 1.35; }
+/* Review's three keyboard-mirrored decisions must stay visually grouped;
+   wrapping one label away from the others makes a rapid triage pass easier
+   to misread. */
+.tags { white-space: nowrap; }
+.tags button { border: 1px solid var(--control-border); background: var(--control-bg);
+               color: var(--fg); border-radius: 4px;
+               padding: .15rem .5rem; cursor: pointer; font-size: .8rem; }
+.tags button.active-business { background: var(--cat-business); color: var(--base); border-color: var(--cat-business); }
+.tags button.active-personal { background: var(--cat-personal); color: var(--base); border-color: var(--cat-personal); }
+input.notes { width: 100%; min-width: 8rem; border: 1px solid transparent;
+              background: var(--control-bg); color: var(--control-fg); padding: .15rem .25rem; border-radius: 4px; }
+input.notes:hover, input.notes:focus { border-color: var(--border-strong); }
+.purpose-field { position: relative; display: inline-block; max-width: 100%; vertical-align: middle; }
+.purpose-field input { box-sizing: border-box; padding-right: 2rem; }
+.purpose-field::after {
+  content: ""; position: absolute; right: .65rem; top: 50%; width: .4rem; height: .4rem;
+  border-right: 2px solid var(--fg-muted); border-bottom: 2px solid var(--fg-muted);
+  transform: translateY(-70%) rotate(45deg); pointer-events: none;
+}
+.purpose-field-empty::after { opacity: .45; }
+.purpose-recent {
+  appearance: none; position: absolute; inset: 0 0 0 auto; width: 1.75rem;
+  min-width: 0; border: 0; border-left: 1px solid var(--border-strong);
+  border-radius: 0 4px 4px 0; background: var(--control-bg); color: transparent;
+  cursor: pointer;
+}
+.purpose-recent:focus { outline: 2px solid var(--fg); outline-offset: -2px; }
+.purpose-recent:disabled { cursor: default; opacity: .45; }
+.purpose-recent option { color: var(--fg); background: var(--bg); font-size: .9rem; }
+.manual-badge { font-size: .7rem; border: 1px solid var(--border-strong); border-radius: 4px;
+                padding: 0 .3rem; opacity: .7; }
+.trip-card-list { display: grid; gap: var(--space-3); min-width: 0; }
+.trip-card {
+  min-width: 0; padding: var(--space-4); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow);
+}
+.trip-card-heading { display: flex; justify-content: space-between; gap: var(--space-3); align-items: baseline; }
+.trip-card-heading > * { min-width: 0; }
+.trip-card-heading-main { display: flex; min-width: 0; align-items: center; gap: var(--space-3); }
+.trip-card-selector {
+  min-height: var(--control-height); align-items: center; gap: var(--space-1);
+  color: var(--fg-muted); font-size: .8rem; white-space: nowrap;
+}
+.trip-card-selector:not([hidden]) { display: inline-flex; }
+.trip-card-selector input { margin: 0; }
+.selected-label { display: none; font-weight: 600; }
+.trip-card.is-selected {
+  border: 2px solid var(--focus-ring); background: var(--surface0);
+  box-shadow: 0 0 0 1px var(--focus-ring), var(--shadow);
+}
+.trip-card.is-selected .selection-label { display: none; }
+.trip-card.is-selected .selected-label { display: inline; }
+.trip-card-time { margin-left: var(--space-2); color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.trip-card-distance { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.trip-card-route { margin: var(--space-2) 0; }
+.trip-card-badges { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; }
+.category-badge, .status-badge {
+  display: inline-flex; max-width: 100%; padding: .2rem .5rem; border: 1px solid var(--border-strong);
+  border-radius: 999px; font-size: .78rem; overflow-wrap: anywhere;
+}
+.category-business { border-color: var(--cat-business); }
+.category-personal { border-color: var(--cat-personal); }
+.category-unclassified, .status-warning { border-color: var(--warn); }
+.trip-card-controls { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: flex-end; margin-top: var(--space-2); }
+.trip-card-control { display: flex; flex-direction: column; gap: .15rem; min-width: 0; flex: 1 1 10rem; }
+.trip-card-control .field-label { font-size: .75rem; color: var(--fg-muted); }
+/* `> select` (not the bare descendant selector) so this can never reach the
+   purpose field's *inner* .purpose-recent <select> -- that one is a small
+   absolutely-positioned chevron overlay (see .purpose-recent above) that a
+   `width: 100%` would stretch across the whole field, silently intercepting
+   every click meant for the free-text input underneath it. */
+.trip-card-control > select { width: 100%; min-width: 0; max-width: 14rem; }
+.trip-card-control .purpose-field { width: 100%; min-width: 0; }
+.trip-card-control .purpose-field input { width: 100%; }
+.trip-card-actions {
+  display: grid; grid-template-columns: 6rem max-content max-content minmax(0, 1fr);
+  grid-template-rows: var(--control-height) auto; gap: var(--space-2);
+  align-items: start; margin-top: var(--space-3);
+}
+.trip-card-details {
+  display: grid; grid-template-rows: var(--control-height) auto;
+  grid-column: 1 / -1; grid-row: 1 / span 2; min-width: 0;
+}
+.trip-card-details > summary {
+  grid-row: 1; width: fit-content; min-height: var(--control-height); align-content: center;
+  cursor: pointer; white-space: nowrap;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  background: var(--control-bg); color: var(--control-fg);
+  box-shadow: var(--control-shadow);
+}
+.trip-card-detail-content {
+  grid-row: 2; min-width: 0; width: 100%; margin-top: var(--space-2); padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+.trip-card-route-action, .trip-card-edit-action { grid-row: 1; position: relative; z-index: 1; }
+.trip-card-route-action { grid-column: 2; }
+.trip-card-edit-action { grid-column: 3; }
+.trip-card-detail-content dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); margin: 0; }
+.trip-card-detail-content dl div, .trip-card-detail-content dd { min-width: 0; overflow-wrap: anywhere; }
+.trip-card-detail-content dt { color: var(--fg-muted); font-size: .75rem; }
+.trip-card-detail-content dd { margin: .15rem 0 0; }
+.trip-warning-callout {
+  overflow-wrap: anywhere; margin: var(--space-3) 0 0;
+  padding: var(--space-2) var(--space-3); border: 1px solid var(--warn);
+  border-left-width: .3rem; border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warn) 6%, var(--surface-elevated));
+  color: var(--danger);
+}
+.trip-warning-callout a { font-weight: 600; text-decoration: underline; }
+.trip-card-detail-actions { margin-top: var(--space-3); }
+.trip-pager { display: flex; justify-content: center; padding: var(--space-3); }
+.trip-edit-card h3 { margin: 0; }
+.trip-edit-heading { display: flex; justify-content: space-between; gap: var(--space-3); align-items: start; margin-bottom: var(--space-3); }
+.trip-edit-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+.trip-edit-grid + .trip-edit-grid { margin-top: var(--space-3); }
+.trip-edit-grid label { display: flex; min-width: 0; flex-direction: column; gap: var(--space-1); font-size: .8rem; }
+.trip-edit-grid input, .trip-edit-grid select, .trip-edit-grid textarea { width: 100%; min-width: 0; }
+.trip-edit-notes { grid-column: 1 / -1; }
+.trip-edit-actions { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
+.form-error-summary, .field-error { color: var(--danger); }
+.form-error-summary { border: 1px solid var(--danger); border-radius: var(--radius-sm); padding: var(--space-2); }
+.field-error { font-size: .75rem; }
+.filter-bar { display: flex; gap: 1rem; align-items: end; flex-wrap: wrap;
+              margin-bottom: 1rem; font-size: .85rem; }
+.trip-filter-bar { width: 100%; justify-content: space-between; }
+.trip-page-disclosures {
+  --trip-page-summary-width: min(9rem, calc(50% - var(--space-1)));
+  position: relative; width: 100%; min-width: 0;
+  padding-top: var(--control-height); margin-bottom: var(--space-4);
+}
+.trip-page-disclosure {
+  display: block; min-width: 0; margin: 0;
+}
+.trip-page-disclosure > summary {
+  position: absolute; top: 0; width: var(--trip-page-summary-width);
+  min-height: var(--control-height); align-content: center; cursor: pointer; white-space: nowrap;
+  border: 1px solid var(--control-border); border-radius: var(--radius-sm);
+  padding: var(--space-2); background: var(--control-bg); color: var(--control-fg);
+  box-shadow: var(--control-shadow); font-size: .85rem; font-weight: 500; line-height: 1.2;
+}
+.trip-tools > summary { left: 0; }
+.trip-manual > summary { left: calc(var(--trip-page-summary-width) + var(--space-2)); }
+.trip-tools > .trip-filter-bar {
+  min-width: 0; width: 100%; margin-top: var(--space-3);
+}
+.trip-page-disclosures > .trip-manual { margin: 0; }
+.trip-manual-content {
+  min-width: 0; width: 100%; margin-top: var(--space-3);
+}
+.filter-bar .field { display: flex; flex-direction: column; gap: .15rem; }
+.filter-bar .field-label { font-size: .75rem; }
+.filter-bar .pills { display: flex; gap: .35rem; min-height: var(--control-height); flex-wrap: wrap; }
+.filter-bar .pills a { display: flex; align-items: center; border: 1px solid var(--control-border);
+                       border-radius: 4px; padding: 0 .55rem; text-decoration: none;
+                       background: var(--control-bg); box-shadow: var(--control-shadow); }
+.filter-bar .pills a.active { background: var(--surface0); font-weight: 600; }
+.filter-bar .date-range { display: flex; gap: .5rem; align-items: end; }
+.filter-bar .date-range label { display: flex; flex-direction: column; font-size: .75rem; gap: .15rem; }
+.filter-bar .date-range input[type="date"] { box-sizing: border-box; }
+.filter-date-row, .filter-apply-row, .filter-link-groups {
+  display: flex; gap: var(--space-2); align-items: end;
+}
+.filter-clear { white-space: nowrap; }
+.gap { cursor: help; }
+.missing-trip-badge { color: var(--danger); }
+.osrm-hint { font-size: .75rem; opacity: .7; align-self: center; }
+.manual-prefill-context {
+  margin: var(--space-3) 0 0; padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--warn); color: var(--fg-muted);
+}
+details.add-manual { margin: 1rem 0; }
+details.add-manual form { display: flex; gap: .5rem; flex-wrap: wrap; align-items: end;
+                          padding: .75rem; border: 1px solid var(--border); border-radius: 6px; }
+details.add-manual label { display: flex; flex-direction: column; font-size: .75rem; gap: .15rem; }
+details.add-manual fieldset { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
+                              border: 1px solid var(--border); border-radius: 6px; padding: .5rem; }
+details.add-manual legend { font-size: .75rem; opacity: .7; padding: 0 .3rem; }
+.theme-picker { display: flex; gap: 1rem; align-items: center; width: fit-content;
+                border: 1px solid var(--border); border-radius: 6px; padding: .5rem .75rem; margin: 0; }
+.theme-picker legend { font-size: .75rem; opacity: .7; padding: 0 .3rem; }
+.theme-picker label { display: flex; align-items: center; gap: .3rem; font-size: .85rem; }
+.time-now-field { display: flex; gap: .25rem; align-items: center; }
+.now-btn { border: 1px solid var(--control-border); background: var(--control-bg); color: var(--control-fg);
+           border-radius: 4px; padding: .1rem .4rem; cursor: pointer; font-size: .7rem; }
+.expense-edit { min-width: 18rem; display: flex; flex-direction: column; gap: .4rem;
+                padding: .5rem; }
+.expense-edit label { display: flex; flex-direction: column; font-size: .75rem; gap: .15rem; }
+.danger { color: var(--danger); }
+.trip-delete-trigger {
+  min-height: var(--control-height); padding: 0 var(--space-3); white-space: nowrap;
+  color: var(--base); background: var(--danger); border: 1px solid var(--danger);
+  border-radius: var(--radius-sm); cursor: pointer;
+}
+.trip-delete-dialog {
+  box-sizing: border-box; width: min(28rem, calc(100vw - 2rem)); max-width: 100%;
+  color: var(--fg); background: var(--surface-elevated); border: 1px solid var(--border-strong);
+  border-radius: 8px; padding: 0;
+}
+.trip-delete-dialog::backdrop { background: rgb(0 0 0 / 55%); }
+.trip-delete-dialog-content { padding: 1rem; }
+.trip-delete-dialog-content h2 { margin: 0 0 .75rem; }
+.trip-delete-dialog-content p { margin: 0 0 1rem; line-height: 1.4; }
+.trip-delete-dialog-actions { display: flex; justify-content: flex-end; gap: .5rem; }
+.trip-delete-dialog-actions button { padding: .4rem .75rem; cursor: pointer; }
+.trip-delete-confirm {
+  color: var(--base); background: var(--danger); border: 1px solid var(--danger);
+  border-radius: 4px; font-weight: 600;
+}
+.review-card-actions { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
+.trip-detail-delete { margin: 1rem 0; }
+.selection-action-bar {
+  position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%);
+  display: flex; gap: .75rem; align-items: center; flex-wrap: wrap;
+  background: var(--surface-elevated); color: var(--fg); border: 1px solid var(--border-strong);
+  border-radius: 8px; padding: .6rem .9rem; z-index: 2;
+  box-shadow: var(--shadow);
+}
+.selection-action-bar #selection-count { font-size: .85rem; font-weight: 600; }
+/* .selection-more is a <details> used as an in-bar menu rather than a page
+   disclosure, so it gets its own positioned popup instead of
+   .trip-page-disclosure's inline-expansion layout. It deliberately has no
+   position of its own: .selection-more's position inside the bar shifts
+   with viewport width — under the flex layout above (live-measured off-
+   screen ~536-621px when the menu anchored left:0 to .selection-more
+   directly) and just as much under the narrow-width grid layout below,
+   where .selection-more can land in any column — so the menu instead
+   escalates to .selection-action-bar's own containing block (position:
+   fixed) and anchors right:0 there — the bar's right edge stays inside the
+   viewport at every width and layout mode the bar itself supports, which
+   the menu's right edge can then never pass. */
+.selection-more > summary {
+  min-height: var(--control-height); align-content: center; cursor: pointer;
+  white-space: nowrap; border: 1px solid var(--control-border); border-radius: var(--radius-sm);
+  padding: 0 var(--space-3); background: var(--control-bg); color: var(--control-fg);
+  box-shadow: var(--control-shadow);
+}
+.selection-more-menu {
+  position: absolute; bottom: calc(100% + var(--space-2)); right: 0; z-index: 3;
+  display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2);
+  width: max-content; min-width: 14rem; max-width: calc(100vw - 2rem);
+  background: var(--surface-elevated); color: var(--fg);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  padding: var(--space-3); box-shadow: var(--shadow);
+}
+.selection-toolbar { display: flex; justify-content: flex-end; margin: var(--space-3) 0; }
+.selection-minimum { max-width: 15rem; color: var(--fg-muted); font-size: .8rem; }
+.selection-dialog {
+  box-sizing: border-box; width: min(28rem, calc(100vw - 2rem)); max-width: 100%;
+  color: var(--fg); background: var(--surface-elevated); border: 1px solid var(--border-strong);
+  border-radius: 8px; padding: 0;
+}
+.selection-dialog::backdrop { background: rgb(0 0 0 / 55%); }
+.selection-dialog-content { padding: 1rem; display: flex; flex-direction: column; gap: var(--space-3); }
+.selection-dialog-content h2 { margin: 0; }
+.selection-dialog-explain { margin: 0; line-height: 1.4; color: var(--fg-muted); font-size: .9rem; }
+.selection-dialog-content label { display: flex; flex-direction: column; gap: .2rem; font-size: .85rem; }
+.selection-dialog-fieldset { border: 1px solid var(--border); border-radius: var(--radius-sm);
+                              padding: var(--space-2) var(--space-3); display: flex; flex-direction: column; gap: .3rem; }
+.selection-dialog-fieldset label { flex-direction: row; align-items: center; gap: .4rem; font-size: .9rem; }
+.selection-dialog-radios { display: flex; flex-direction: column; gap: var(--space-3); }
+.selection-dialog-radio { flex-direction: row !important; align-items: flex-start; gap: .5rem; font-size: .9rem; }
+.selection-dialog-radio > input[type="radio"] { margin-top: .3rem; }
+.selection-dialog-radio > span { padding-top: .1rem; }
+.selection-dialog-error { margin: 0; }
+.selection-dialog-actions { display: flex; justify-content: flex-end; gap: .5rem; }
+.selection-dialog-actions button { padding: .4rem .75rem; cursor: pointer; }
+.settings-table { width: 100%; }
+.settings-table-scroll { max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
+.settings-table-scroll-device-fixes .settings-table { min-width: 34rem; }
+.settings-table-scroll-rates .settings-table { min-width: 42rem; }
+.settings-table-scroll-vehicles .settings-table { min-width: 58rem; }
+.settings-table-scroll-odometer-readings .settings-table { min-width: 38rem; }
+.settings-table-scroll-odometer-intervals .settings-table { min-width: 48rem; }
+.settings-table-scroll-places .settings-table { min-width: 50rem; }
+.settings-table-scroll-rules .settings-table { min-width: 36rem; }
+.settings-table-scroll-overrides .settings-table { min-width: 48rem; }
+/* The overrides table is an undo log with no row limit, so an active user's
+   history can otherwise grow past the viewport. A rem cap can't account for
+   viewport height, so this caps it relative to the viewport instead, keeping
+   the expanded section on screen with the table scrolling internally. */
+.settings-table-scroll-overrides { max-height: 60vh; overflow-y: auto; }
+.settings-table button, .vehicle-default-indicator { white-space: nowrap; }
+.diagnostics-list {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: var(--space-3); margin: 0;
+}
+.diagnostics-list div {
+  min-width: 0; padding: var(--space-3); background: var(--surface0);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.diagnostics-list dt { color: var(--fg-muted); font-size: .8rem; }
+.diagnostics-list dd { margin: var(--space-1) 0 0; overflow-wrap: anywhere; }
+.vehicle-default-indicator {
+  display: inline-flex; min-height: var(--control-height); align-items: center;
+  padding: 0 var(--space-3); border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm); background: var(--surface0); color: var(--fg);
+  font-size: .85rem;
+}
+a { color: inherit; }
+.empty { opacity: .6; margin: 2rem 0; }
+.muted { opacity: .6; }
+/* /login and /setup: same label/input stacking as .trip-edit-grid label,
+   but a single narrow column -- these forms are never side-by-side with
+   other content, unlike the in-page edit grids they borrow the shape from. */
+.auth-form {
+  display: flex; flex-direction: column; gap: var(--space-3);
+  max-width: 22rem; margin-top: var(--space-3);
+}
+.auth-form label { display: flex; flex-direction: column; gap: var(--space-1); font-size: .85rem; }
+.auth-divider { text-align: center; color: var(--fg-muted); font-size: .8rem; margin: var(--space-3) 0; }
+.ytd-deduction { font-size: .95rem; margin: .25rem 0 1rem; }
+.ytd-deduction.muted { font-size: .85rem; }
+/* Trip detail's Purpose/Notes/Vehicle block. Purpose and Notes each get
+   their own stacked field: the purpose field's overlaid
+   "Recent…" chevron and the notes input's width:100% previously packed both
+   into one flowing <p>, which read as one tangled control. Vehicle and the
+   Advanced trip tools disclosure have no such overlap risk, so they're
+   allowed to share a row (see the comment in trip.html) and wrap to
+   stacked at narrow widths via the same flex-wrap the row already needs. */
+.trip-detail-fields { display: flex; flex-direction: column; gap: var(--space-3); margin: 1rem 0; }
+.trip-detail-field { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+.trip-detail-field .field-label { font-size: .75rem; color: var(--fg-muted); }
+.trip-detail-row { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: flex-end; }
+.trip-detail-row .trip-detail-field { flex: 1 1 12rem; }
+.trip-detail-row .advanced-tools { margin: 0; flex: 1 1 auto; }
+/* Reuses .trip-card-details' control-styled summary rather
+   than .add-manual's form-first layout, since this disclosure wraps several
+   unrelated sub-tools (merge/split/place-naming) instead of a single form. */
+.advanced-tools { margin: 1.5rem 0; }
+.advanced-tools > summary {
+  width: fit-content; min-height: var(--control-height); align-content: center;
+  cursor: pointer; white-space: nowrap;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  background: var(--control-bg); color: var(--control-fg);
+  box-shadow: var(--control-shadow);
+}
+.advanced-tools[open] > summary { margin-bottom: var(--space-3); }
+/* For a top-level page section that happens to collapse -- unlike
+   .advanced-tools (a control-styled disclosure nested inside a section),
+   this reads as a plain <h2> sibling in the document outline. The <h2> in
+   the summary carries its own font-size/weight/color, so the margin here
+   stands in for that h2's usual top/bottom margin; the marker/triangle is
+   left as the browser default, same as every other <details> in this app.
+   The h2's `display: inline` is load-bearing, not a leftover: a block-level
+   child of a `display: list-item` summary pushes the marker onto its own
+   line above the heading text, so without it the triangle renders orphaned
+   on its own row instead of beside "Manual trip edits". */
+.section-disclosure { margin: 1.5rem 0 .25rem; }
+.section-disclosure > summary { cursor: pointer; }
+.section-disclosure > summary > h2 { display: inline; margin: 0; }
+.place-naming { margin: .75rem 0; font-size: .9rem; }
+.place-naming p { margin: .35rem 0; }
+/* auto-fit computes its repetition count from the track's definite MAX,
+   not the min — so a fixed max on the track (previously 14rem) undercounts
+   columns at narrow widths: a ~495px phone needs two 224px maxes to fit
+   side by side, but auto-fit only tries 224px-wide columns and settles for
+   one, leaving the row half-empty. Moving the max off the track (`1fr`, so
+   counting is driven by the 11rem min) and onto the container as a
+   max-width fixes both ends: report.html/report_range.html's handful of
+   stats still stay compact rather than stretching edge-to-edge across the
+   1100px body — the 1052px content column caps at 60.5rem (4 x 14rem
+   tracks + 3 x 1.5rem gaps), so floor((968+24)/(176+24)) is 4, giving the
+   same four-per-row look (and 4+4+2 on the fuller expenses page) as
+   before. At phone widths, auto-fit now counts by the 11rem floor: ~430-
+   495px viewports (382-447px content) fit 2 columns, and 320px (272px
+   content) still collapses to 1 with no horizontal scroll. 11rem still
+   fits the widest real label ("Registration / taxes" on expenses.html)
+   over a five-figure dollar value without overflow, though the label may
+   wrap onto two lines at the tightest widths. */
+.report-summary {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 1.5rem; max-width: 60.5rem; margin: 1rem 0;
+}
+.report-summary div { display: flex; flex-direction: column; gap: .1rem; }
+.report-summary strong { font-size: 1.2rem; }
+.report-caveats { border: 1px solid var(--warn); border-radius: 6px; padding: .5rem .75rem;
+                   margin: 1rem 0; font-size: .85rem; }
+.report-caveats ul { margin: .35rem 0 0; padding-left: 1.25rem; }
+.stats-summary { display: grid; grid-template-columns: repeat(4, minmax(9rem, 1fr)); gap: .75rem; margin: 1rem 0; }
+.stats-summary div { background: var(--bg-alt); border: 1px solid var(--border); border-radius: 6px; padding: .6rem .75rem; display: flex; flex-direction: column; gap: .15rem; }
+.stats-summary span, .stats-summary small { font-size: .8rem; color: var(--fg-muted); }
+.stats-summary strong { font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+.stats-section { margin: 1.5rem 0; }
+/* The weekly/monthly SVGs render a fixed 720-unit viewBox at width: 100%,
+   so on narrow phones the whole chart — including its 11px axis text —
+   scales down with the container and becomes unreadable. Wrapping each
+   chart in .chart-scroll and giving .stats-chart a min-width equal to its
+   native viewBox width keeps text at its designed size and lets narrow
+   screens scroll the chart sideways instead, the same scroll-inside-a-
+   wrapper convention .table-wrapper already uses for tables. The 1052px
+   desktop content column is wider than the 720px (45rem) viewBox, so
+   desktop rendering is unchanged. */
+.chart-scroll { overflow-x: auto; }
+.stats-chart { display: block; width: 100%; min-width: 45rem; height: auto; overflow: visible; }
+.stats-chart text { fill: var(--fg-muted); font-size: 11px; }
+.stats-axis { stroke: var(--border-strong); stroke-width: 1; }
+.stats-legend { display: flex; gap: .8rem; font-size: .8rem; color: var(--fg-muted); }
+.stats-legend span::before { content: ""; display: inline-block; width: .65rem; height: .65rem; border-radius: 2px; margin-right: .25rem; }
+.stats-legend .business::before { background: var(--cat-business); }
+.stats-legend .personal::before { background: var(--cat-personal); }
+.stats-legend .unclassified::before { background: var(--warn); }
+.stats-rankings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.5rem; }
+.stats-rankings h2 { margin-top: 0; }
+.stats-coverage { font-size: .8rem; }
+
+/* Weekly dashboard metric cards. Reuses the trip-card surface/shadow/radius
+   tokens rather than stats-summary's plainer background so the metric cards
+   read as the same visual family as the trip cards underneath them on the
+   same page. */
+.dashboard-heading { margin-bottom: var(--space-2); }
+.week-nav {
+  display: flex; gap: var(--space-3); align-items: center; flex-wrap: wrap;
+  margin-bottom: var(--space-4); font-size: .9rem;
+}
+.week-nav-link { min-height: var(--control-height); display: inline-flex; align-items: center; }
+.week-nav-next[aria-disabled="true"] { opacity: .5; cursor: default; }
+.dashboard-metrics {
+  display: grid; grid-template-columns: repeat(4, minmax(9rem, 1fr)); gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+.metric-card {
+  min-width: 0; padding: var(--space-4); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow);
+  display: flex; flex-direction: column; gap: var(--space-1);
+}
+.metric-label { font-size: .8rem; color: var(--fg-muted); }
+.metric-value { font-size: 1.3rem; font-variant-numeric: tabular-nums; }
+.metric-unavailable { font-size: 1rem; color: var(--fg-muted); }
+.metric-detail { font-size: .8rem; color: var(--fg-muted); overflow-wrap: anywhere; }
+.attention-strip {
+  display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: center;
+  margin-bottom: var(--space-4); padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--warn); border-left-width: .3rem; border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warn) 6%, var(--surface-elevated));
+}
+.attention-item a { font-weight: 600; }
+.dashboard-links { display: flex; gap: var(--space-3); align-items: center; margin-bottom: var(--space-4); }
+.dashboard-day-heading { margin: var(--space-4) 0 var(--space-2); }
+.dashboard-day-heading:first-of-type { margin-top: 0; }
+
+@media (max-width: 700px) {
+  .stats-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stats-rankings { grid-template-columns: 1fr; }
+  .dashboard-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 900px) {
+  .trip-filter-bar { justify-content: flex-start; }
+}
+
+@media (max-width: 760px) {
+  body { padding: var(--space-3); }
+  header { grid-template-columns: 1fr auto; align-items: start; }
+  header nav { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; }
+  .header-account .who { display: none; }
+  .filter-bar, .filter-bar .date-range, details.add-manual form {
+    align-items: stretch; flex-direction: column;
+  }
+  .filter-bar .field, .filter-bar .date-range, .filter-bar .date-range label,
+  details.add-manual label { width: 100%; }
+  .trip-filter-bar { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
+  .trip-filter-bar .trip-filter-form { display: grid; width: 100%; gap: var(--space-2); }
+  .trip-filter-bar .filter-date-row {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-1);
+  }
+  .trip-filter-bar .filter-date-row input { width: 100%; min-width: 0; }
+  .trip-filter-bar .filter-apply-row {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: var(--space-2); align-items: end;
+  }
+  .trip-filter-bar .filter-apply-row select { width: 100%; min-width: 0; }
+  .trip-filter-bar .filter-link-groups {
+    display: grid; grid-template-columns: auto minmax(0, 1fr);
+    gap: var(--space-3); align-items: end;
+  }
+  .trip-filter-bar .filter-link-groups .field { width: auto; min-width: 0; }
+  .filter-bar .pills a { min-height: var(--control-height); }
+  .trip-edit-grid, .trip-card-detail-content dl { grid-template-columns: 1fr; }
+  .trip-card-heading { align-items: start; }
+  .trip-card-time { display: block; margin: var(--space-1) 0 0; }
+  .trip-card-controls { flex-direction: column; align-items: stretch; }
+  .trip-card-control { flex: 1 1 auto; }
+  .trip-card-control > select { max-width: none; }
+  .trip-card-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; }
+  .trip-card-details { display: block; flex: 1 0 100%; }
+  .trip-card-route-action, .trip-card-edit-action { position: static; }
+  .trip-card-actions > .control { flex: 1 1 auto; }
+  .trip-card-details > summary { width: 100%; }
+  /* Flex-wrap here used to ragged-wrap unpredictably (count/Category/
+     Purpose/Vehicle on one row, More/Clear/Done scattered on the next) at
+     phone widths. Grid gives it a predictable shape instead: the count
+     spans the full row on its own, and the action controls flow into a
+     multi-column grid below it. Desktop keeps the plain flex row from the
+     base rule above, where there's room for everything to sit inline. */
+  .selection-action-bar {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(7rem, 1fr));
+    gap: var(--space-2);
+    width: calc(100vw - 1.5rem); max-height: calc(100vh - 1.5rem); overflow-y: auto;
+  }
+  .selection-action-bar #selection-count { grid-column: 1 / -1; }
+  .selection-more-menu { max-width: calc(100vw - 3rem); }
+}
+
+@media (max-width: 420px) {
+  header { grid-template-columns: 1fr; }
+  header nav, .header-account { grid-column: 1; }
+  .header-account { flex-wrap: wrap; }
+  .trip-card { padding: var(--space-3); }
+  .trip-card-heading { flex-direction: column; gap: var(--space-1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+}
+
+/* Dark map tiles: no dark tile provider needed — invert+hue-rotate keeps
+   water/parks plausible. Markers, route line, and stay circles live in
+   separate Leaflet panes, so this filter never touches them. Same
+   priority order as the palette above: system preference, overridable by
+   an explicit theme choice in either direction. */
+@media (prefers-color-scheme: dark) {
+  .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.95) contrast(.9); }
+}
+:root[data-theme="dark"] .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.95) contrast(.9); }
+:root[data-theme="light"] .leaflet-tile-pane { filter: none; }

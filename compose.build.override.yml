@@ -1,0 +1,6 @@
+services:
+  app:
+    build: .
+    # Keep a source build from replacing the pinned release image in the
+    # local image store, where a later canonical install could reuse it.
+    image: ${COMPOSE_PROJECT_NAME}_app:dev

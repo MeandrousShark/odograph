@@ -1,0 +1,24 @@
+# The Dockerfile only COPYs app/, migrations/, static/, and the
+# requirements files, so nothing here is strictly required for a correct
+# build. It exists to keep the build context small and to make secret
+# leakage into an image layer structurally impossible even if the
+# COPY set changes later.
+.env*
+!.env.example
+
+.git
+.venv
+tests/
+docs/
+.claude/
+.codex/
+__pycache__/
+*.pyc
+.pytest_cache/
+compose.yaml
+scripts/
+.pgdump/
+backups/
+
+# OS junk
+.DS_Store

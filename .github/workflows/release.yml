@@ -1,0 +1,391 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      image: ${{ steps.release.outputs.image }}
+      revision: ${{ steps.release.outputs.revision }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate tagged release inputs
+        id: release
+        env:
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          revision="$(git rev-parse HEAD)"
+          image="ghcr.io/${REPOSITORY,,}"
+          python scripts/release_notes.py --tag "$VERSION"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Refuse to replace an existing GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "A GitHub release already exists for $VERSION; release tags are immutable." >&2
+            exit 1
+          fi
+
+  test:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TEST_DATABASE_URL: postgresql://mileage:testpw@127.0.0.1:5432/mileage
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_DB: mileage
+          POSTGRES_USER: mileage
+          POSTGRES_PASSWORD: testpw
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U mileage -d mileage"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Install Gitleaks
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/gitleaks.tar.gz"
+          install_dir="$RUNNER_TEMP/gitleaks-bin"
+          curl -fsSL --retry 3 \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            -o "$archive"
+          echo "${GITLEAKS_SHA256}  ${archive}" | sha256sum --check -
+          mkdir -p "$install_dir"
+          tar -xzf "$archive" -C "$install_dir" gitleaks
+          echo "$install_dir" >> "$GITHUB_PATH"
+          "$install_dir/gitleaks" version
+      - name: Check shell script syntax
+        run: git ls-files -z -- '*.sh' | xargs -0 -n1 bash -n
+      - name: Run full test suite
+        run: python -m pytest
+      - name: Read tag-scoped pip-audit acceptances
+        id: pip_acceptances
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          python scripts/release_notes.py --tag "$VERSION"
+          {
+            echo 'ids<<EOF'
+            cat pip-audit.ignore
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+      - name: Audit locked Python dependencies
+        uses: pypa/gh-action-pip-audit@v1.1.0
+        with:
+          inputs: requirements.lock
+          no-deps: true
+          ignore-vulns: ${{ steps.pip_acceptances.outputs.ids }}
+
+  build-amd64:
+    needs: [prepare, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+          persist-credentials: false
+      - name: Prepare architecture-scoped scan acceptance
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: python scripts/release_notes.py --tag "$VERSION"
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v4
+      - name: Build and push untagged amd64 image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          pull: true
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.version }}
+            GIT_REVISION=${{ needs.prepare.outputs.revision }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          outputs: type=image,name=${{ needs.prepare.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+          sbom: false
+      - name: Scan amd64 image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ needs.prepare.outputs.image }}@${{ steps.build.outputs.digest }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          scanners: vuln
+          trivyignores: trivy-amd64.ignore
+      - name: Emit amd64 digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          echo "- linux/amd64: \`$DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
+
+  build-arm64:
+    needs: [prepare, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+          persist-credentials: false
+      - name: Prepare architecture-scoped scan acceptance
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: python scripts/release_notes.py --tag "$VERSION"
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@v4
+      - name: Build and push untagged arm64 image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/arm64
+          pull: true
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.version }}
+            GIT_REVISION=${{ needs.prepare.outputs.revision }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          outputs: type=image,name=${{ needs.prepare.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+          sbom: false
+      - name: Scan arm64 image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ needs.prepare.outputs.image }}@${{ steps.build.outputs.digest }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          scanners: vuln
+          trivyignores: trivy-arm64.ignore
+      - name: Emit arm64 digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          echo "- linux/arm64: \`$DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    needs: [prepare, build-amd64, build-arm64]
+    runs-on: ubuntu-latest
+    # Generous on purpose: the SBOM and signing steps run after the manifest
+    # is already published, so a timeout here would strand a released, tagged
+    # image that is unsigned — and release tags are immutable, so recovering
+    # means a new patch tag, not a re-run.
+    timeout-minutes: 25
+    permissions:
+      contents: write
+      packages: write
+      # Keyless cosign signing exchanges this token for a short-lived Fulcio
+      # certificate; no signing key exists for anyone to hold or rotate.
+      id-token: write
+    outputs:
+      manifest-digest: ${{ steps.manifest.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+          persist-credentials: false
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v4
+      - name: Verify tag still identifies the built revision
+        env:
+          EXPECTED_REVISION: ${{ needs.prepare.outputs.revision }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          current_revision="$(gh api "repos/$REPOSITORY/commits/$VERSION" --jq .sha)"
+          if [[ "$current_revision" != "$EXPECTED_REVISION" ]]; then
+            echo "$VERSION moved during the release run; refusing to publish." >&2
+            exit 1
+          fi
+      - name: Refuse to replace an existing image tag
+        env:
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          if docker buildx imagetools inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then
+            echo "An image already exists for $IMAGE:$VERSION; release tags are immutable." >&2
+            exit 1
+          fi
+      - name: Verify architecture manifests
+        env:
+          AMD64_DIGEST: ${{ needs.build-amd64.outputs.digest }}
+          ARM64_DIGEST: ${{ needs.build-arm64.outputs.digest }}
+          IMAGE: ${{ needs.prepare.outputs.image }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect "$IMAGE@$AMD64_DIGEST" --format '{{json .Image}}' |
+            jq -e '.os == "linux" and .architecture == "amd64"'
+          docker buildx imagetools inspect "$IMAGE@$ARM64_DIGEST" --format '{{json .Image}}' |
+            jq -e '.os == "linux" and .architecture == "arm64"'
+      - name: Publish multi-architecture manifest
+        id: manifest
+        env:
+          AMD64_DIGEST: ${{ needs.build-amd64.outputs.digest }}
+          ARM64_DIGEST: ${{ needs.build-arm64.outputs.digest }}
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "$IMAGE:$VERSION" \
+            "$IMAGE@$AMD64_DIGEST" \
+            "$IMAGE@$ARM64_DIGEST"
+          manifest_json="$(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{json .Manifest}}')"
+          jq -e '([.manifests[].platform | "\(.os)/\(.architecture)"] | sort) == ["linux/amd64", "linux/arm64"]' \
+            <<< "$manifest_json"
+          manifest_digest="$(jq -er '.digest' <<< "$manifest_json")"
+          echo "digest=$manifest_digest" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Published $IMAGE:$VERSION"
+            echo
+            echo "- manifest: \`$manifest_digest\`"
+            echo "- linux/amd64: \`$AMD64_DIGEST\`"
+            echo "- linux/arm64: \`$ARM64_DIGEST\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      # SBOMs are generated with a standalone syft scan against each pushed
+      # architecture digest, not build-push-action's own sbom/provenance
+      # attestation. That built-in attestation changes what a build's
+      # reported digest points to (an attestation-wrapping index rather than
+      # the plain platform manifest this workflow already composes into a
+      # manifest list by hand), which would break the digest plumbing above.
+      # A digest-addressed scan after the push has no such effect.
+      - name: Generate linux/amd64 SBOM
+        uses: anchore/sbom-action@v0.24.0
+        with:
+          image: ${{ needs.prepare.outputs.image }}@${{ needs.build-amd64.outputs.digest }}
+          format: spdx-json
+          output-file: sbom-linux-amd64.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Generate linux/arm64 SBOM
+        uses: anchore/sbom-action@v0.24.0
+        with:
+          image: ${{ needs.prepare.outputs.image }}@${{ needs.build-arm64.outputs.digest }}
+          format: spdx-json
+          output-file: sbom-linux-arm64.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4.1.2
+      # Attestations attach to a single platform manifest's own digest, since
+      # that is the thing with a file layout an SBOM describes; a manifest
+      # list has none. Each architecture keeps its own attested SBOM.
+      - name: Attest each architecture's SBOM
+        env:
+          AMD64_DIGEST: ${{ needs.build-amd64.outputs.digest }}
+          ARM64_DIGEST: ${{ needs.build-arm64.outputs.digest }}
+          IMAGE: ${{ needs.prepare.outputs.image }}
+        run: |
+          set -euo pipefail
+          cosign attest --yes \
+            --type spdxjson \
+            --predicate sbom-linux-amd64.spdx.json \
+            "$IMAGE@$AMD64_DIGEST"
+          cosign attest --yes \
+            --type spdxjson \
+            --predicate sbom-linux-arm64.spdx.json \
+            "$IMAGE@$ARM64_DIGEST"
+      # cosign does not recurse into an index's children when signing it, so
+      # the manifest list and each architecture digest are signed explicitly;
+      # otherwise a pull pinned to one architecture's digest would carry no
+      # signature at all. Keyless: the OIDC token above becomes a short-lived
+      # Fulcio certificate scoped to this exact workflow run, so there is no
+      # long-lived private key to store, rotate, or leak.
+      - name: Sign the manifest and each architecture digest
+        env:
+          AMD64_DIGEST: ${{ needs.build-amd64.outputs.digest }}
+          ARM64_DIGEST: ${{ needs.build-arm64.outputs.digest }}
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          MANIFEST_DIGEST: ${{ steps.manifest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "$IMAGE@$MANIFEST_DIGEST"
+          cosign sign --yes "$IMAGE@$AMD64_DIGEST"
+          cosign sign --yes "$IMAGE@$ARM64_DIGEST"
+      - name: Create GitHub release from changelog
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          python scripts/release_notes.py --tag "$VERSION"
+          args=(release create "$VERSION" --verify-tag --title "$VERSION" --notes-file release-notes.md)
+          if [[ "$VERSION" == *-* ]]; then
+            args+=(--prerelease)
+          fi
+          gh "${args[@]}"

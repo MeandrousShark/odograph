@@ -1,0 +1,149 @@
+{% from "_purpose_field.html" import purpose_field %}
+{% from "_trip_delete_dialog.html" import trip_delete_dialog %}
+<div id="review-card">
+{% if state == 'card' %}
+  <p class="review-remaining muted">{{ remaining }} remaining</p>
+
+  <h3>{{ trip.started_at | local_date }}
+    {% if trip.source == 'manual' %}<span class="manual-badge">manual</span>{% endif %}
+    {% if trip.has_gap %}<span class="status-badge status-warning" title="Distance may under-read">Recording gap</span>{% endif %}
+  </h3>
+  <p>{{ trip.started_at | local_time }} → {{ trip.ended_at | local_time }} · {{ trip | duration }}</p>
+  <p>{{ trip.display_distance_m | mi }} mi <span class="muted">({{ trip.display_distance_m | km }} km)</span></p>
+  <p style="font-size:.9rem">
+    {{ describe_endpoint(trip.start_place_name, trip.start_lat, trip.start_lon, trip.get('start_address')) }}
+    →
+    {{ describe_endpoint(trip.end_place_name, trip.end_lat, trip.end_lon, trip.get('end_address')) }}
+  </p>
+
+  {% if trip.source == 'detected' %}
+  <div id="review-map"></div>
+  <script nonce="{{ csp_nonce }}">
+    // IIFE: this script re-executes on every htmx swap of #review-card (a
+    // new card, a new trip), and top-level `const`/`let` in one classic
+    // <script> collide with the next one's -- wrapping in a function scope
+    // is what lets the *same* variable names be redeclared swap after swap.
+    (function () {
+      var path = {{ path_geojson | safe if path_geojson else 'null' }};
+      var pathSnapped = {{ path_snapped_geojson | safe if path_snapped_geojson else 'null' }};
+      var start = [{{ trip.start_lat }}, {{ trip.start_lon }}];
+      var end = [{{ trip.end_lat }}, {{ trip.end_lon }}];
+
+      var mapEl = document.getElementById('review-map');
+      var map = L.map(mapEl);
+      var theme = getComputedStyle(document.documentElement);
+      var routeColor = theme.getPropertyValue('--route').trim() || '#2d6a4f';
+
+      // Same map-before-layers ordering as trip.html's init script (see its
+      // comment there): adding a vector layer to a viewless map leaves its
+      // pixel bounds undefined, and the next redraw throws inside Leaflet's
+      // bounds-intersects check, killing the rest of this script.
+      var bounds = L.latLngBounds([start, end]);
+      map.fitBounds(bounds.pad(0.15));
+
+      L.tileLayer({{ map_tile_url | tojson }}, {
+        maxZoom: 19,
+        attribution: {{ map_tile_attribution | tojson }}
+      }).addTo(map);
+
+      // Snapped preferred, raw fallback -- same display rule as
+      // display_distance_m's COALESCE. Unlike trip.html's audit view (which
+      // draws both, for comparison), a triage card draws exactly one route:
+      // this isn't the place to judge snap quality.
+      var hasSnapped = pathSnapped && pathSnapped.coordinates && pathSnapped.coordinates.length > 0;
+      var hasRaw = path && path.coordinates && path.coordinates.length > 1;
+      if (hasSnapped || hasRaw) {
+        var display = hasSnapped ? pathSnapped : path;
+        var line = L.geoJSON(display, { style: { color: routeColor, weight: 4 } }).addTo(map);
+        bounds = line.getBounds();
+      } else {
+        // No stored path at all (e.g. a very short trip simplified away) --
+        // fall back to a straight start→end line, same as trip.html.
+        L.polyline([start, end], { color: routeColor, weight: 3, dashArray: '6' }).addTo(map);
+      }
+      map.fitBounds(bounds.pad(0.15));
+
+      L.marker(start, { title: 'Start' }).addTo(map);
+      L.marker(end, { title: 'End' }).addTo(map);
+
+      // Mobile browsers frequently finish laying out the swapped-in card
+      // *after* this script runs; re-fit once the container reports real
+      // dimensions (same fix as trip.html's).
+      function fit() {
+        if (mapEl.offsetWidth === 0 || mapEl.offsetHeight === 0) return;
+        map.invalidateSize();
+        if (bounds.isValid()) map.fitBounds(bounds.pad(0.15));
+      }
+      if (window.ResizeObserver) {
+        var ro = new ResizeObserver(function () { fit(); ro.disconnect(); });
+        ro.observe(mapEl);
+      }
+      requestAnimationFrame(function () { requestAnimationFrame(fit); });
+    })();
+  </script>
+  {% endif %}
+
+  <!-- Business/Personal/Skip live inside one <form> purely so htmx's
+       default "include the closest enclosing form" behavior carries the
+       current from/to/vehicle filters along automatically -- no per-button
+       hx-vals duplicating them, and no drift between the three actions'
+       filter params. Vehicle/notes below stay outside this form: they post
+       to unrelated endpoints that don't take filter params, and (being
+       hx-swap="none") must not inherit this form's hx-target/hx-swap. -->
+  <form id="review-form" hx-target="#review-card" hx-swap="outerHTML">
+    <input type="hidden" name="from" value="{{ filter_from }}">
+    <input type="hidden" name="to" value="{{ filter_to }}">
+    <input type="hidden" name="vehicle" value="{{ filter_vehicle }}">
+    <p>
+      Purpose
+      {{ purpose_field(
+        recent_purposes | default([], true), trip.purpose, input_class='notes',
+        hx_post='/trips/' ~ trip.id ~ '/purpose', hx_swap='none'
+      ) }}
+    </p>
+    <p class="tags">
+      <button type="button" id="review-business" hx-post="/review/{{ trip.id }}/tag"
+              hx-vals='{"category": "business"}'>Business (b)</button>
+      <button type="button" id="review-personal" hx-post="/review/{{ trip.id }}/tag"
+              hx-vals='{"category": "personal"}'>Personal (p)</button>
+      <button type="button" id="review-skip" hx-post="/review/{{ trip.id }}/skip">Skip (s)</button>
+    </p>
+  </form>
+
+  <p>
+    Vehicle
+    <select hx-post="/trips/{{ trip.id }}/vehicle" hx-trigger="change"
+            hx-swap="none" name="vehicle_id">
+      <option value="">—</option>
+      {% for v in vehicles %}
+      <option value="{{ v.id }}" {{ 'selected' if trip.vehicle_id == v.id }}>{{ v.name }}</option>
+      {% endfor %}
+      {% if trip.vehicle_id and trip.vehicle_id not in (vehicles | map(attribute='id') | list) %}
+      <option value="{{ trip.vehicle_id }}" selected>{{ trip.vehicle_name }} (inactive)</option>
+      {% endif %}
+    </select>
+  </p>
+  <p>
+    Notes
+    <input class="notes" name="notes" value="{{ trip.notes or '' }}" placeholder="notes…"
+           hx-post="/trips/{{ trip.id }}/notes" hx-trigger="change" hx-swap="none">
+  </p>
+
+  <div class="review-card-actions">
+    <a href="/trips/{{ trip.id }}">View trip detail →</a>
+    {{ trip_delete_dialog(
+      trip, 'trip-delete-review-' ~ trip.id, '/review/' ~ trip.id ~ '/delete',
+      hx_target='#review-card', hx_swap='outerHTML',
+      filter_from=filter_from, filter_to=filter_to, filter_vehicle=filter_vehicle
+    ) }}
+  </div>
+
+{% elif state == 'done' %}
+  <p class="empty">No more unclassified trips in this pass.</p>
+  <p><a href="{{ review_url }}">Start over</a> · <a href="/trips">Back to trip list</a></p>
+
+{% else %}
+  <p class="empty">Nothing to review.</p>
+  <p><a href="/trips">Back to trip list</a></p>
+{% endif %}
+</div>

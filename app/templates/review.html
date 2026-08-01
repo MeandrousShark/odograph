@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Review — Odograph{% endblock %}
+{% block head %}
+  <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
+  <script src="/static/vendor/leaflet/leaflet.js"></script>
+  <style>#review-map { height: 320px; border-radius: 6px; margin: .75rem 0; }</style>
+{% endblock %}
+{% block content %}
+
+<p><a href="/trips">All trips</a></p>
+<h2>Review unclassified trips</h2>
+
+{% include "_review_card.html" %}
+
+<script nonce="{{ csp_nonce }}">
+  // Page-level (on `document`, not the card) so the handler survives every
+  // htmx outerHTML swap of #review-card -- a listener bound to the card
+  // itself would be torn down along with it on every Business/Personal/
+  // Skip action. Suppressed while an input/textarea/select has focus so
+  // the vehicle picker and notes field (and any future form control) can
+  // never be hijacked by an accidental keystroke while typing.
+  document.addEventListener('keydown', function (e) {
+    if (document.querySelector('dialog[open]')) return;
+    var tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    var selector = null;
+    if (e.key === 'b' || e.key === 'B') selector = '#review-business';
+    else if (e.key === 'p' || e.key === 'P') selector = '#review-personal';
+    else if (e.key === 's' || e.key === 'S') selector = '#review-skip';
+    if (!selector) return;
+    var button = document.querySelector(selector);
+    if (button) button.click();
+  });
+</script>
+
+{% endblock %}

@@ -1,0 +1,51 @@
+<div id="vehicles-table">
+<div class="settings-table-scroll settings-table-scroll-vehicles">
+<table class="settings-table">
+  <thead>
+    <tr><th>Name</th><th>Make</th><th>Model</th><th>Plate</th><th>Default</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for v in vehicles %}
+    <tr id="vehicle-{{ v.id }}" {{ 'style="opacity:.55"' if not v.active }}>
+      <td><input type="text" name="name" value="{{ v.name }}" required style="width:8rem" {{ 'disabled' if not v.active }}></td>
+      <td><input type="text" name="make" value="{{ v.make or '' }}" style="width:6rem" {{ 'disabled' if not v.active }}></td>
+      <td><input type="text" name="model" value="{{ v.model or '' }}" style="width:6rem" {{ 'disabled' if not v.active }}></td>
+      <td><input type="text" name="plate" value="{{ v.plate or '' }}" style="width:5rem" {{ 'disabled' if not v.active }}></td>
+      <td class="num">
+        {% if v.is_default %}
+          <span class="vehicle-default-indicator">Default</span>
+        {% elif v.active %}
+          <button type="button" hx-post="/settings/vehicles/{{ v.id }}/default"
+                  hx-target="#vehicles-table" hx-swap="outerHTML">Set default</button>
+        {% endif %}
+      </td>
+      <td>
+        {% if v.active %}
+        <button type="button" hx-post="/settings/vehicles/{{ v.id }}/update" hx-include="closest tr"
+                hx-target="#vehicles-table" hx-swap="outerHTML">Save</button>
+        <button type="button" class="danger" title="Deactivate vehicle"
+                hx-post="/settings/vehicles/{{ v.id }}/deactivate"
+                hx-target="#vehicles-table" hx-swap="outerHTML"
+                hx-confirm="Deactivate '{{ v.name }}'? It stays on trips already using it, but drops out of the picker for new trips.">Deactivate</button>
+        {% else %}
+          <span class="muted">inactive</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<details class="add-manual">
+  <summary>Add vehicle</summary>
+  <form hx-post="/settings/vehicles" hx-target="#vehicles-table" hx-swap="outerHTML">
+    <label>Name <input type="text" name="name" required style="width:8rem"></label>
+    <label>Make <input type="text" name="make" style="width:6rem"></label>
+    <label>Model <input type="text" name="model" style="width:6rem"></label>
+    <label>Plate <input type="text" name="plate" style="width:5rem"></label>
+    <label><input type="checkbox" name="is_default" value="1"> Make default</label>
+    <button type="submit">Add</button>
+  </form>
+</details>
+</div>

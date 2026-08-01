@@ -1,0 +1,57 @@
+<div id="rates-table">
+<div class="settings-table-scroll settings-table-scroll-rates">
+<table class="settings-table">
+  <thead>
+    <tr><th>Year</th><th>Rate ($/mi)</th><th>Mid-year change</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for rate in rates %}
+    <tr>
+      <td>{{ rate.year }}<input type="hidden" name="year" value="{{ rate.year }}"></td>
+      <td class="num">
+        <input type="number" name="rate_per_mi" value="{{ '%.4f' | format(rate.rate_per_mi) }}"
+               step="0.0001" min="0.0001" style="width:6rem">
+      </td>
+      <td>
+        <label><input type="checkbox" name="mid_year" value="1"
+                      {{ 'checked' if rate.rate_h2_per_mi is not none }}> split from</label>
+        <select name="h2_start_month">
+          {% for m in range(1, 13) %}
+          <option value="{{ m }}" {{ 'selected' if (rate.h2_start_month or 7) == m }}>{{ month_abbr[m] }} 1</option>
+          {% endfor %}
+        </select>
+        →
+        <input type="number" name="rate_h2_per_mi" placeholder="$/mi" step="0.0001" min="0.0001"
+               style="width:6rem"
+               value="{{ '%.4f' | format(rate.rate_h2_per_mi) if rate.rate_h2_per_mi is not none else '' }}">
+      </td>
+      <td>
+        <button type="button" hx-post="/settings/rates" hx-include="closest tr"
+                hx-target="#rates-table" hx-swap="outerHTML">Save</button>
+        {% if rate.env_override %}
+        <span class="manual-badge" title="MILEAGE_RATE_{{ rate.year }} env var overrides this until the app restarts">env override</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<p class="muted">Tick <em>split from</em> for a year the IRS changed the rate mid-year
+  (e.g. 2022) — trips before that month use the first rate, trips from it use the second.</p>
+
+<details class="add-manual">
+  <summary>Add / update year</summary>
+  <form hx-post="/settings/rates" hx-target="#rates-table" hx-swap="outerHTML">
+    <label>Year <input type="number" name="year" min="2000" max="2100" required style="width:5rem"></label>
+    <label>Rate ($/mi) <input type="number" name="rate_per_mi" step="0.0001" min="0.0001" required style="width:6rem"></label>
+    <label><input type="checkbox" name="mid_year" value="1"> Mid-year change from</label>
+    <select name="h2_start_month">
+      {% for m in range(1, 13) %}<option value="{{ m }}" {{ 'selected' if m == 7 }}>{{ month_abbr[m] }} 1</option>{% endfor %}
+    </select>
+    <label>2nd-half rate ($/mi) <input type="number" name="rate_h2_per_mi" step="0.0001" min="0.0001" style="width:6rem"></label>
+    <button type="submit">Save</button>
+  </form>
+</details>
+</div>

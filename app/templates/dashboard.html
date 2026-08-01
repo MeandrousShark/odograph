@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Odograph{% endblock %}
+{% block content %}
+
+<h2 class="dashboard-heading">{{ range_label(dashboard.nav.week_start, dashboard.nav.week_end) }}</h2>
+
+<nav class="week-nav" aria-label="Week navigation">
+  <a class="week-nav-link" href="/?week={{ dashboard.nav.prev_week_start.isoformat() }}">&laquo; Previous week</a>
+  <a class="week-nav-link week-nav-current" href="/">Current week</a>
+  {% if dashboard.nav.is_current_week %}
+  <span class="week-nav-link week-nav-next" aria-disabled="true">Next week &raquo;</span>
+  {% else %}
+  <a class="week-nav-link week-nav-next" href="/?week={{ dashboard.nav.next_week_start.isoformat() }}">Next week &raquo;</a>
+  {% endif %}
+</nav>
+
+<div class="dashboard-metrics">
+  <div class="metric-card">
+    <span class="metric-label">Trips</span>
+    <strong class="metric-value">{{ dashboard.trip_count }}</strong>
+  </div>
+  <div class="metric-card">
+    <span class="metric-label">Distance</span>
+    <strong class="metric-value">{{ dashboard.distance.total_m | mi }} mi</strong>
+    <small class="metric-detail">
+      {{ dashboard.distance.business_m | mi }} mi business ·
+      {{ dashboard.distance.personal_m | mi }} mi personal ·
+      {{ dashboard.distance.unclassified_m | mi }} mi unclassified
+    </small>
+  </div>
+  <div class="metric-card">
+    <span class="metric-label">Expenses recorded</span>
+    <strong class="metric-value">{{ dashboard.expense_total | usd }}</strong>
+    <small class="metric-detail">Spending this week, not a deduction —
+      <a href="/expenses">view expenses</a>.</small>
+  </div>
+  <div class="metric-card">
+    <span class="metric-label">Estimated deduction</span>
+    {% if dashboard.deduction.available %}
+    <strong class="metric-value">{{ dashboard.deduction.amount | usd }}</strong>
+    {% else %}
+    <strong class="metric-value metric-unavailable">Unavailable</strong>
+    <small class="metric-detail">No mileage rate on file for part of this week —
+      <a href="/settings">add one</a>.</small>
+    {% endif %}
+  </div>
+</div>
+
+{% if dashboard.attention %}
+<div class="attention-strip" role="status">
+  {% if dashboard.attention.unclassified_count %}
+  <span class="attention-item"><a href="{{ dashboard.attention.review_url }}">{{ dashboard.attention.unclassified_count }} unclassified trip{{ 's' if dashboard.attention.unclassified_count != 1 }} to review</a></span>
+  {% endif %}
+  {% if dashboard.attention.missing_trip_count %}
+  <span class="attention-item"><a href="{{ dashboard.attention.missing_trip_url }}">{{ dashboard.attention.missing_trip_count }} possible missing trip{{ 's' if dashboard.attention.missing_trip_count != 1 }}</a></span>
+  {% endif %}
+</div>
+{% endif %}
+
+<div class="dashboard-links">
+  <a class="control control-secondary" href="/trips">View all trips</a>
+  <a href="/trips#manual-trip">Add manual trip</a>
+</div>
+
+{% if not dashboard.day_groups %}
+  <p class="empty">No trips this week.</p>
+{% endif %}
+
+{% for day_group in dashboard.day_groups %}
+  <h3 class="dashboard-day-heading">
+    {{ day_group.day.strftime('%a %b %-d') }}{% if day_group.is_today %} — Today{% elif day_group.is_yesterday %} — Yesterday{% endif %}
+  </h3>
+  <div class="trip-card-list">
+    {% for trip in day_group.trips %}{% include "_trip_card.html" %}{% endfor %}
+  </div>
+{% endfor %}
+
+{% endblock %}

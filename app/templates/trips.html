@@ -1,0 +1,606 @@
+{% extends "base.html" %}
+{% from "_purpose_field.html" import purpose_field %}
+{% block title %}Trips — Odograph{% endblock %}
+{% block content %}
+
+{% if ytd_deduction is not none %}
+<p class="ytd-deduction">Year-to-date ({{ ytd_year }}) business deduction:
+  <strong>{{ ytd_deduction | usd }}</strong></p>
+{% else %}
+<p class="ytd-deduction muted">No mileage rate on file for {{ ytd_year }} yet —
+  deduction estimates are unavailable. <a href="/settings">Add one</a>.</p>
+{% endif %}
+
+{% set filters_active = filter_category or filter_from or filter_to or filter_vehicle %}
+<div class="trip-page-disclosures">
+<details class="trip-page-disclosure trip-tools" {{ 'open' if filters_active }}>
+  <summary>Filters &amp; tools</summary>
+  <div class="filter-bar trip-filter-bar">
+    <div class="field trip-filter-category">
+      <span class="field-label">Category</span>
+      <span class="pills">
+        <a href="{{ filter_url('') }}" class="{{ 'active' if not filter_category }}">All</a>
+        <a href="{{ filter_url('business') }}" class="{{ 'active' if filter_category == 'business' }}">Business</a>
+        <a href="{{ filter_url('personal') }}" class="{{ 'active' if filter_category == 'personal' }}">Personal</a>
+        <a href="{{ filter_url('unclassified') }}" class="{{ 'active' if filter_category == 'unclassified' }}">Unclassified</a>
+      </span>
+    </div>
+    <form class="date-range trip-filter-form" method="get">
+      <input type="hidden" name="category" value="{{ filter_category }}">
+      <div class="filter-date-row">
+        <label>From <input type="date" name="from" value="{{ filter_from }}"></label>
+        <label>To <input type="date" name="to" value="{{ filter_to }}"></label>
+      </div>
+      <div class="filter-apply-row">
+        <label>Vehicle
+          <select name="vehicle">
+            <option value="">All</option>
+            <option value="none" {{ 'selected' if filter_vehicle == 'none' }}>Unassigned</option>
+            {% for v in vehicles %}
+            <option value="{{ v.id }}" {{ 'selected' if filter_vehicle == v.id | string }}>{{ v.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button type="submit">Filter</button>
+        {% if filters_active %}<a class="control control-secondary filter-clear" href="/trips">Clear</a>{% endif %}
+      </div>
+    </form>
+    <div class="filter-link-groups">
+      <div class="field">
+        <span class="field-label">Export</span>
+        <span class="pills">
+          <a href="{{ export_url('csv') }}">CSV</a>
+          <a href="{{ export_url('xlsx') }}">XLSX</a>
+        </span>
+      </div>
+      <div class="field">
+        <span class="field-label">Triage</span>
+        <span class="pills">
+          <a href="{{ review_url }}">Review unclassified</a>
+        </span>
+      </div>
+    </div>
+  </div>
+</details>
+
+<details class="trip-page-disclosure trip-manual add-manual" id="manual-trip" {{ 'open' if manual_prefill }}>
+  <summary>Add manual trip</summary>
+  <div class="trip-manual-content">
+  {% if manual_prefill %}
+  <p class="manual-prefill-context" role="status">
+    The date, start time, and notes were prefilled from the possible missing-trip window.
+    Enter the end time and distance, then review every field before adding the trip.
+  </p>
+  {% endif %}
+  <form hx-post="/trips/manual">
+    <label>Date <input type="date" name="date"
+      value="{{ manual_prefill.date if manual_prefill and manual_prefill.date else now_local().strftime('%Y-%m-%d') }}" required></label>
+    <label>Start
+      <span class="time-now-field">
+        <input type="time" name="start_time" value="{{ manual_prefill.start_time if manual_prefill else '' }}" required>
+        <button type="button" class="now-btn" data-time-now-field="start_time">now</button>
+      </span>
+    </label>
+    <label>End
+      <span class="time-now-field">
+        <input type="time" name="end_time" required>
+        <button type="button" class="now-btn" data-time-now-field="end_time">now</button>
+      </span>
+    </label>
+    <label>Distance (mi) <input type="number" name="distance" step="0.1" min="0.1" required style="width:5rem"></label>
+    {% if manual_prefill and manual_prefill.osrm_hint %}
+    <span class="osrm-hint" title="Suggested road distance between the two trips' endpoints (OSRM)">{{ manual_prefill.osrm_hint }}</span>
+    {% endif %}
+    <label>Category
+      <select name="category">
+        <option value="unclassified">—</option>
+        <option value="business">Business</option>
+        <option value="personal">Personal</option>
+      </select>
+    </label>
+    <label>Vehicle
+      <select name="vehicle_id">
+        <option value="">—</option>
+        {% for v in vehicles %}
+        <option value="{{ v.id }}" {{ 'selected' if v.is_default or vehicles | length == 1 }}>{{ v.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Purpose {{ purpose_field(recent_purposes | default([], true)) }}</label>
+    <label>Notes <input type="text" name="notes" value="{{ manual_prefill.notes if manual_prefill else '' }}"></label>
+    <button type="submit">Add</button>
+  </form>
+  </div>
+</details>
+</div>
+
+<div class="selection-toolbar">
+  <button type="button" id="selection-start" class="control control-secondary">Select trips</button>
+  <button type="button" id="selection-done" class="control control-secondary" hidden>Done</button>
+</div>
+
+{% if not months %}
+  <p class="empty">No trips yet. Once OwnTracks starts posting and you take a drive,
+  detected trips will appear here (about 5 minutes after you arrive).</p>
+{% endif %}
+
+{% for month in months %}
+  <h2>{{ month.label }}</h2>
+  <div class="month-summary">
+    {{ month.trip_count }} trips ·
+    {{ month.total_m | mi }} mi total ·
+    {{ month.business_m | mi }} mi business
+    {% if month.business_deduction is not none %}
+    · {{ month.business_deduction | usd }} deduction
+    {% endif %}
+  </div>
+  <div class="trip-card-list">
+    {% set trips = month.trips %}
+    {% set has_more = month.has_more %}
+    {% set next_url = month.next_url %}
+    {% include "_trip_page_rows.html" %}
+  </div>
+{% endfor %}
+
+<div id="selection-action-bar" class="selection-action-bar" hidden>
+  <span id="selection-count" aria-live="polite"></span>
+  <button type="button" id="selection-select-all" class="control control-secondary">Select all</button>
+  <button type="button" id="category-dialog-open" class="control control-secondary" disabled
+          aria-haspopup="dialog" aria-controls="category-dialog">Category</button>
+  <button type="button" id="purpose-dialog-open" class="control control-secondary" disabled
+          aria-haspopup="dialog" aria-controls="purpose-dialog">Purpose</button>
+  <button type="button" id="vehicle-dialog-open" class="control control-secondary" disabled
+          aria-haspopup="dialog" aria-controls="vehicle-dialog">Vehicle</button>
+  <details class="selection-more">
+    <summary>More</summary>
+    <div class="selection-more-menu">
+      <button type="button" id="merge-dialog-open" class="control control-secondary" disabled
+              aria-haspopup="dialog" aria-controls="merge-dialog">Merge selected…</button>
+      <span id="merge-minimum" class="selection-minimum">Merging needs at least two selected trips.</span>
+    </div>
+  </details>
+  <button type="button" id="selection-clear" class="control control-secondary">Clear selection</button>
+  <button type="button" id="selection-bar-done" class="control control-secondary">Done</button>
+</div>
+
+<dialog id="category-dialog" class="selection-dialog" aria-labelledby="category-dialog-title">
+  <form class="selection-dialog-content" data-selection-dialog-confirm="category-dialog-confirm">
+    <h2 id="category-dialog-title">Set category for <span data-selection-count>0 trips</span></h2>
+    <fieldset class="selection-dialog-fieldset">
+      <legend>Category</legend>
+      <label><input type="radio" name="category" value="business"> Business</label>
+      <label><input type="radio" name="category" value="personal"> Personal</label>
+      <label><input type="radio" name="category" value="unclassified"> Unclassified</label>
+    </fieldset>
+    <p class="selection-dialog-error" role="alert" hidden></p>
+    <div class="selection-dialog-actions">
+      <button type="button" data-selection-dialog-cancel autofocus>Cancel</button>
+      <button type="button" id="category-dialog-confirm" disabled>Set category</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="purpose-dialog" class="selection-dialog" aria-labelledby="purpose-dialog-title">
+  <form class="selection-dialog-content" data-selection-dialog-confirm="purpose-dialog-confirm">
+    <h2 id="purpose-dialog-title">Set purpose for <span data-selection-count>0 trips</span></h2>
+    <div class="selection-dialog-radios">
+      <label class="selection-dialog-radio">
+        <input type="radio" name="purpose-mode" value="set">
+        <span>Set purpose to…</span>
+        {{ purpose_field(recent_purposes | default([], true), input_id='purpose-dialog-input') }}
+      </label>
+      <label class="selection-dialog-radio">
+        <input type="radio" name="purpose-mode" value="clear">
+        <span>Clear purpose</span>
+      </label>
+    </div>
+    <p class="selection-dialog-error" role="alert" hidden></p>
+    <div class="selection-dialog-actions">
+      <button type="button" data-selection-dialog-cancel autofocus>Cancel</button>
+      <button type="button" id="purpose-dialog-confirm" disabled>Set purpose</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="vehicle-dialog" class="selection-dialog" aria-labelledby="vehicle-dialog-title">
+  <form class="selection-dialog-content" data-selection-dialog-confirm="vehicle-dialog-confirm">
+    <h2 id="vehicle-dialog-title">Set vehicle for <span data-selection-count>0 trips</span></h2>
+    <label>Vehicle
+      <select id="vehicle-dialog-select">
+        <option value="" selected disabled hidden>Choose…</option>
+        <option value="clear">No vehicle</option>
+        {% for v in vehicles %}
+        <option value="{{ v.id }}">{{ v.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <p class="selection-dialog-error" role="alert" hidden></p>
+    <div class="selection-dialog-actions">
+      <button type="button" data-selection-dialog-cancel autofocus>Cancel</button>
+      <button type="button" id="vehicle-dialog-confirm" disabled>Set vehicle</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="merge-dialog" class="selection-dialog" aria-labelledby="merge-dialog-title">
+  <form class="selection-dialog-content" data-selection-dialog-confirm="merge-dialog-confirm">
+    <h2 id="merge-dialog-title">Merge <span data-selection-count>0 trips</span></h2>
+    <p class="selection-dialog-explain">
+      Merging combines the selected detected trips from one device into a single trip. The
+      merged trip's start and end boundaries may shift; this only works for contiguous
+      detected trips from the same device.
+    </p>
+    <label>Category
+      <select id="merge-dialog-category">
+        <option value="keep" selected>Keep</option>
+        <option value="unclassified">—</option>
+        <option value="business">Business</option>
+        <option value="personal">Personal</option>
+      </select>
+    </label>
+    <label>Purpose {{ purpose_field(recent_purposes | default([], true), input_id='merge-dialog-purpose') }}</label>
+    <label>Notes <input type="text" id="merge-dialog-notes"></label>
+    <label>Vehicle
+      <select id="merge-dialog-vehicle">
+        <option value="keep" selected>Keep</option>
+        <option value="">No vehicle</option>
+        {% for v in vehicles %}
+        <option value="{{ v.id }}">{{ v.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <p class="selection-dialog-error" role="alert" hidden></p>
+    <div class="selection-dialog-actions">
+      <button type="button" data-selection-dialog-cancel autofocus>Cancel</button>
+      <button type="button" id="merge-dialog-confirm">Merge <span data-selection-count>0 trips</span></button>
+    </div>
+  </form>
+</dialog>
+
+<script nonce="{{ csp_nonce }}">
+  // Checkbox multi-select actions use plain fetch rather than htmx because
+  // the selection spans independent monthly card lists and isn't naturally
+  // expressible as one static form.
+  const CSRF_TOKEN = "{{ csrf }}";
+
+  // The manual-trip "now" buttons fill a time input with the current clock
+  // reading in the app's display timezone — not the browser's — so the value
+  // agrees with how /trips/manual interprets the submitted naive time (it
+  // stamps display_tz onto it). formatToParts avoids the "24:00-at-midnight"
+  // quirk some engines emit for hour12:false hour formatting.
+  const DISPLAY_TZ = "{{ display_tz }}";
+  function setTimeNow(fieldName) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: DISPLAY_TZ, hour: "2-digit", minute: "2-digit", hour12: false,
+    }).formatToParts(new Date());
+    const part = (t) => parts.find((p) => p.type === t).value;
+    const hour = part("hour") === "24" ? "00" : part("hour");
+    const field = document.querySelector(`[name="${fieldName}"]`);
+    if (field) field.value = `${hour}:${part("minute")}`;
+  }
+  document.addEventListener('click', function (event) {
+    const btn = event.target.closest('[data-time-now-field]');
+    if (btn) setTimeNow(btn.dataset.timeNowField);
+  });
+
+  const selection = new Set();
+  const selectionBar = document.getElementById('selection-action-bar');
+  const selectionCount = document.getElementById('selection-count');
+  const selectionStart = document.getElementById('selection-start');
+  const selectionClear = document.getElementById('selection-clear');
+  const selectionDone = document.getElementById('selection-done');
+  const selectionBarDone = document.getElementById('selection-bar-done');
+  const selectionSelectAll = document.getElementById('selection-select-all');
+  const categoryOpen = document.getElementById('category-dialog-open');
+  const purposeOpen = document.getElementById('purpose-dialog-open');
+  const vehicleOpen = document.getElementById('vehicle-dialog-open');
+  const mergeOpen = document.getElementById('merge-dialog-open');
+  const mergeMinimum = document.getElementById('merge-minimum');
+  let selectionMode = false;
+
+  function tripCountLabel(n) {
+    return `${n} ${n === 1 ? 'trip' : 'trips'}`;
+  }
+
+  function updateSelectionShell() {
+    document.body.classList.toggle('selection-mode', selectionMode);
+    selectionStart.hidden = selectionMode;
+    selectionDone.hidden = !selectionMode;
+    // Hiding the bar only on mode-exit (not on an empty selection) keeps
+    // "Clear selection" visibly distinct from "Done": Clear empties the
+    // selection but leaves the bar open with its buttons greyed out via
+    // hasSelection/canMerge below, while Done is the only action that
+    // actually hides the bar and the per-card checkboxes.
+    selectionBar.hidden = !selectionMode;
+
+    const hasSelection = selection.size >= 1;
+    categoryOpen.disabled = !hasSelection;
+    purposeOpen.disabled = !hasSelection;
+    vehicleOpen.disabled = !hasSelection;
+
+    const canMerge = selection.size >= 2;
+    mergeOpen.disabled = !canMerge;
+    mergeMinimum.hidden = canMerge;
+
+    document.querySelectorAll('[data-selection-count]').forEach((el) => {
+      el.textContent = tripCountLabel(selection.size);
+    });
+    selectionCount.textContent = `${tripCountLabel(selection.size)} selected`;
+
+    document.querySelectorAll('.trip-card').forEach((card) => {
+      const match = card.id.match(/^trip-(\d+)$/);
+      if (!match) return;
+      const selected = selection.has(parseInt(match[1], 10));
+      card.classList.toggle('is-selected', selected);
+      const selector = card.querySelector('.trip-card-selector');
+      const checkbox = card.querySelector('.merge-select');
+      if (selector) selector.hidden = !selectionMode;
+      if (checkbox) checkbox.checked = selected;
+    });
+  }
+
+  function clearSelection() {
+    selection.clear();
+    updateSelectionShell();
+  }
+
+  function setSelectionMode(enabled) {
+    selectionMode = enabled;
+    if (!enabled) selection.clear();
+    updateSelectionShell();
+  }
+
+  selectionStart.addEventListener('click', () => setSelectionMode(true));
+  selectionClear.addEventListener('click', clearSelection);
+  selectionDone.addEventListener('click', () => setSelectionMode(false));
+  selectionBarDone.addEventListener('click', () => setSelectionMode(false));
+
+  // Only the cards currently in the DOM -- a trip beyond an unopened "Load
+  // more" page was never fetched, so there's nothing here to select it into.
+  selectionSelectAll.addEventListener('click', () => {
+    document.querySelectorAll('.trip-card').forEach((card) => {
+      const match = card.id.match(/^trip-(\d+)$/);
+      if (match) selection.add(parseInt(match[1], 10));
+    });
+    updateSelectionShell();
+  });
+
+  // Escape's browser-native effect is closing an open <dialog>; give it a
+  // consistent "back out of whatever's active" meaning by also exiting
+  // selection mode when no dialog is open.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (document.querySelector('dialog[open]')) return;
+    if (selectionMode) setSelectionMode(false);
+  });
+
+  // A merge navigates away via window.location.href; if the browser then
+  // restores this page from bfcache on Back, the DOM (and its checkboxes)
+  // can reflect trip IDs that no longer exist server-side. Force a fresh
+  // load so stale selection state can't be resubmitted into a 404.
+  window.addEventListener('pageshow', (e) => {
+    if (e.persisted) window.location.reload();
+  });
+
+  document.addEventListener('change', (e) => {
+    if (!selectionMode || !e.target.matches('.merge-select')) return;
+    const id = parseInt(e.target.value, 10);
+    if (e.target.checked) {
+      selection.add(id);
+    } else {
+      selection.delete(id);
+    }
+    updateSelectionShell();
+  });
+
+  function reconcileSelection() {
+    for (const id of Array.from(selection)) {
+      const card = document.getElementById('trip-' + id);
+      if (!card) {
+        selection.delete(id);
+      }
+    }
+    updateSelectionShell();
+  }
+
+  document.addEventListener('htmx:afterSwap', () => {
+    setTimeout(reconcileSelection, 0);
+  });
+  document.addEventListener('htmx:afterRequest', () => {
+    setTimeout(reconcileSelection, 0);
+  });
+  // htmx:afterSwap fires before htmx's own settle logic finishes touching
+  // the swapped-in element's attributes/classes, so an is-selected class
+  // applied there (even via setTimeout(0), inside the ~20ms settle window)
+  // gets clobbered by the time settling completes. htmx:afterSettle fires
+  // once settling is actually done, so reconciling there is what makes the
+  // highlight stick after an Edit/Cancel swap.
+  document.addEventListener('htmx:afterSettle', reconcileSelection);
+
+  // The four bulk-action dialogs are native <dialog> elements, the same
+  // pattern _trip_delete_dialog.html/base.html use for delete confirmation:
+  // showModal() opens them, Escape and Cancel both fire the dialog's native
+  // "close" event, and that event (not the click that triggered it) is what
+  // returns focus to the triggering button so keyboard/Escape and mouse
+  // Cancel behave identically.
+  function openDialog(dialog, trigger) {
+    dialog.addEventListener('close', () => {
+      if (trigger.isConnected) trigger.focus();
+    }, { once: true });
+    dialog.showModal();
+  }
+
+  document.addEventListener('click', (e) => {
+    const cancel = e.target.closest('[data-selection-dialog-cancel]');
+    if (cancel) cancel.closest('dialog')?.close('cancel');
+  });
+
+  // Each dialog's content is a <form> (for fieldset/label semantics), so a
+  // lone text input — the purpose dialog's free-text field, or the merge
+  // dialog's purpose/notes fields — implicitly submits on Enter. Native
+  // submission would navigate the page to "?field=value" and drop the
+  // selection instead of running the fetch-based batch/merge request, so
+  // every submit is caught here and redirected to the dialog's own confirm
+  // button (a no-op if that button is currently disabled).
+  document.addEventListener('submit', (e) => {
+    const form = e.target.closest('.selection-dialog-content');
+    if (!form) return;
+    e.preventDefault();
+    const confirmId = form.dataset.selectionDialogConfirm;
+    const confirmButton = confirmId && document.getElementById(confirmId);
+    if (confirmButton && !confirmButton.disabled) confirmButton.click();
+  });
+
+  function dialogError(dialog) {
+    return dialog.querySelector('.selection-dialog-error');
+  }
+
+  function showDialogError(dialog, message) {
+    const err = dialogError(dialog);
+    err.textContent = message;
+    err.hidden = false;
+  }
+
+  function clearDialogError(dialog) {
+    const err = dialogError(dialog);
+    err.hidden = true;
+    err.textContent = '';
+  }
+
+  // A failed batch/merge request re-shows the dialog's own error and keeps
+  // it open with the selection untouched, rather than reloading or
+  // clearing state, so the user can correct the request without
+  // reselecting trips.
+  async function submitBatchUpdate(dialog, body) {
+    clearDialogError(dialog);
+    const resp = await fetch('/trips/batch_update', {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': CSRF_TOKEN },
+      body,
+    });
+    if (resp.ok) {
+      window.location.reload();
+      return;
+    }
+    const err = await resp.json().catch(() => ({}));
+    showDialogError(dialog, err.detail || 'Batch update failed.');
+  }
+
+  const categoryDialog = document.getElementById('category-dialog');
+  const categoryConfirm = document.getElementById('category-dialog-confirm');
+
+  categoryDialog.addEventListener('change', (e) => {
+    if (e.target.name === 'category') categoryConfirm.disabled = false;
+  });
+
+  categoryOpen.addEventListener('click', () => {
+    if (categoryOpen.disabled) return;
+    categoryDialog.querySelectorAll('input[name="category"]').forEach((r) => { r.checked = false; });
+    categoryConfirm.disabled = true;
+    clearDialogError(categoryDialog);
+    openDialog(categoryDialog, categoryOpen);
+  });
+
+  categoryConfirm.addEventListener('click', async () => {
+    const chosen = categoryDialog.querySelector('input[name="category"]:checked');
+    if (!chosen) return;
+    const body = new URLSearchParams();
+    for (const id of selection) body.append('trip_ids', id);
+    body.append('category', chosen.value);
+    await submitBatchUpdate(categoryDialog, body);
+  });
+
+  const purposeDialog = document.getElementById('purpose-dialog');
+  const purposeConfirm = document.getElementById('purpose-dialog-confirm');
+  const purposeInput = document.getElementById('purpose-dialog-input');
+
+  purposeDialog.addEventListener('change', (e) => {
+    if (e.target.name === 'purpose-mode') purposeConfirm.disabled = false;
+  });
+
+  purposeOpen.addEventListener('click', () => {
+    if (purposeOpen.disabled) return;
+    purposeDialog.querySelectorAll('input[name="purpose-mode"]').forEach((r) => { r.checked = false; });
+    purposeInput.value = '';
+    purposeConfirm.disabled = true;
+    clearDialogError(purposeDialog);
+    openDialog(purposeDialog, purposeOpen);
+  });
+
+  purposeConfirm.addEventListener('click', async () => {
+    const mode = purposeDialog.querySelector('input[name="purpose-mode"]:checked');
+    if (!mode) return;
+    const body = new URLSearchParams();
+    for (const id of selection) body.append('trip_ids', id);
+    body.append('set_purpose', 'true');
+    body.append('purpose', mode.value === 'clear' ? '' : purposeInput.value);
+    await submitBatchUpdate(purposeDialog, body);
+  });
+
+  const vehicleDialog = document.getElementById('vehicle-dialog');
+  const vehicleConfirm = document.getElementById('vehicle-dialog-confirm');
+  const vehicleSelect = document.getElementById('vehicle-dialog-select');
+
+  vehicleSelect.addEventListener('change', () => {
+    vehicleConfirm.disabled = !vehicleSelect.value;
+  });
+
+  vehicleOpen.addEventListener('click', () => {
+    if (vehicleOpen.disabled) return;
+    vehicleSelect.value = '';
+    vehicleConfirm.disabled = true;
+    clearDialogError(vehicleDialog);
+    openDialog(vehicleDialog, vehicleOpen);
+  });
+
+  vehicleConfirm.addEventListener('click', async () => {
+    if (!vehicleSelect.value) return;
+    const body = new URLSearchParams();
+    for (const id of selection) body.append('trip_ids', id);
+    body.append('vehicle_id', vehicleSelect.value === 'clear' ? '' : vehicleSelect.value);
+    await submitBatchUpdate(vehicleDialog, body);
+  });
+
+  const mergeDialog = document.getElementById('merge-dialog');
+  const mergeConfirm = document.getElementById('merge-dialog-confirm');
+  const mergeCategorySelect = document.getElementById('merge-dialog-category');
+  const mergePurposeInput = document.getElementById('merge-dialog-purpose');
+  const mergeNotesInput = document.getElementById('merge-dialog-notes');
+  const mergeVehicleSelect = document.getElementById('merge-dialog-vehicle');
+
+  mergeOpen.addEventListener('click', () => {
+    if (mergeOpen.disabled) return;
+    mergeCategorySelect.value = 'keep';
+    mergePurposeInput.value = '';
+    mergeNotesInput.value = '';
+    mergeVehicleSelect.value = 'keep';
+    clearDialogError(mergeDialog);
+    openDialog(mergeDialog, mergeOpen);
+  });
+
+  mergeConfirm.addEventListener('click', async () => {
+    if (selection.size < 2) return;
+    clearDialogError(mergeDialog);
+    const body = new URLSearchParams();
+    for (const id of selection) body.append('trip_ids', id);
+    const category = mergeCategorySelect.value;
+    body.append('category', category === 'keep' ? 'unclassified' : category);
+    body.append('purpose', mergePurposeInput.value);
+    body.append('notes', mergeNotesInput.value);
+    body.append('vehicle_id', mergeVehicleSelect.value);
+    const resp = await fetch('/trips/merge_selected', {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': CSRF_TOKEN },
+      body,
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      window.location.href = '/trips/' + data.trip_id;
+    } else {
+      const err = await resp.json().catch(() => ({}));
+      showDialogError(mergeDialog, err.detail || 'Merge failed.');
+    }
+  });
+</script>
+
+{% endblock %}

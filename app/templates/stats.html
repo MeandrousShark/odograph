@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Stats · Odograph{% endblock %}
+{% block content %}
+<h2>{{ stats.year }} driving overview</h2>
+{% if not stats.trip_count %}
+<p class="empty">No trips recorded this year yet.</p>
+{% else %}
+<div class="stats-summary">
+  <div><span>Total miles</span><strong>{{ stats.total_m | mi }}</strong><small>{{ stats.trip_count }} trips</small></div>
+  <div><span>Business</span><strong>{{ stats.business_m | mi }} mi</strong><small>{% if stats.business_share is not none %}{{ "%.0f" | format(stats.business_share * 100) }}% of classified miles{% else %}No classified miles yet{% endif %}</small></div>
+  <div><span>Personal</span><strong>{{ stats.personal_m | mi }} mi</strong></div>
+  <div><span>Unclassified</span><strong>{{ stats.unclassified_m | mi }} mi</strong><small>{{ stats.unclassified_trips }} trips · <a href="/?category=unclassified">Review</a></small></div>
+</div>
+
+<section class="stats-section">
+  <h2>Recent weekly miles</h2>
+  <div class="chart-scroll">{{ stats.weekly_chart | safe }}</div>
+</section>
+<section class="stats-section">
+  <h2>Monthly miles</h2>
+  <div class="chart-scroll">{{ stats.monthly_chart | safe }}</div>
+  <p class="stats-legend"><span class="business">Business</span><span class="personal">Personal</span><span class="unclassified">Unclassified</span></p>
+</section>
+
+<div class="stats-rankings">
+  <section>
+    <h2>Top named routes</h2>
+    {% if stats.routes %}
+    <table><thead><tr><th>Route</th><th>Trips</th><th>Miles</th></tr></thead><tbody>
+      {% for route in stats.routes %}<tr><td>{{ route.start_name }} ↔ {{ route.end_name }}</td><td>{{ route.trip_count }}</td><td class="num">{{ route.total_m | mi }}</td></tr>{% endfor %}
+    </tbody></table>
+    {% else %}<p class="muted">No trips with both endpoints named yet.</p>{% endif %}
+  </section>
+  <section>
+    <h2>Most-used places</h2>
+    {% if stats.places %}
+    <table><thead><tr><th>Place</th><th>Endpoint visits</th></tr></thead><tbody>
+      {% for place in stats.places %}<tr><td>{{ place.name }}</td><td class="num">{{ place.visit_count }}</td></tr>{% endfor %}
+    </tbody></table>
+    {% else %}<p class="muted">Name places in Settings to see this ranking.</p>{% endif %}
+  </section>
+</div>
+{% if stats.unnamed_trip_count %}<p class="muted stats-coverage">{{ stats.unnamed_trip_count }} trip(s) with an unnamed endpoint are excluded from named-route rankings.</p>{% endif %}
+{% endif %}
+{% endblock %}

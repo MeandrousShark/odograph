@@ -1,0 +1,4 @@
+Odograph: log an odometer reading for {{ vehicles }} ({{ noun }}).
+{% if settings_url %}
+{{ settings_url }}
+{% endif %}

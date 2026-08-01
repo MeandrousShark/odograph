@@ -1,0 +1,87 @@
+services:
+  db:
+    image: docker.io/postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: mileage
+      POSTGRES_USER: mileage
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mileage -d mileage"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  app:
+    # This canonical file always pulls an immutable release tag and never
+    # builds. Contributors who want a source build add
+    # compose.build.override.yml.
+    image: ghcr.io/meandrousshark/odograph:v0.6.0
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://mileage:${POSTGRES_PASSWORD}@db:5432/mileage
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS}
+    ports:
+      - "127.0.0.1:8077:8000"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    # The slim base image has no curl; a Python one-liner against the
+    # already-running interpreter avoids adding a package just for this.
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # Self-hosted road-snapping. No `depends_on` from `app` — the app
+  # must run fully fine whether this service exists, is stopped, or was
+  # never started at all; OSRM_URL empty/unset in .env disables snapping
+  # entirely. No published ports: `app` reaches it at http://osrm:5000
+  # over the compose network only. The `osrmdata` volume is populated by a
+  # one-time prep step (osrm-extract/partition/customize against a road
+  # extract), not by this service itself — starting this service before
+  # that prep is done just crash-loops it against an empty /data. The
+  # `osrm` profile keeps it out of a plain `up -d`; opt in explicitly with
+  # `--profile osrm` once the data is prepared.
+  osrm:
+    image: docker.io/osrm/osrm-backend:v5.25.0
+    profiles: ["osrm"]
+    # List form (not a single string) is required here: podman-compose
+    # shell-splits a string-form `command:` into words before substituting
+    # variables, which breaks the `:?` error message's spaces apart from
+    # the `${...}` token and produces a "No closing brace" parse error.
+    command:
+      - osrm-routed
+      - --algorithm
+      - mld
+      - --max-matching-size
+      - "1000"
+      # .env.example ships OSRM_DATASET commented out, so this guard
+      # fires for anyone who starts this profile before running
+      # scripts/provision_osrm.sh and uncommenting it — the alternative
+      # is a crash-loop against an empty /data with no explanation.
+      - /data/${OSRM_DATASET:?set in .env}
+    volumes:
+      - osrmdata:/data
+    restart: unless-stopped
+
+volumes:
+  dbdata:
+  osrmdata:
+
+# podman-compose 1.3.0 errors without this declaration even though it adds
+# no configuration beyond the implicit default network.
+networks:
+  default:

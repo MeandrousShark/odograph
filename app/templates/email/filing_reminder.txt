@@ -1,0 +1,10 @@
+Odograph: {{ year }} filing reminder.
+
+Business miles: {{ business_mi }}
+Deduction: {{ deduction }}
+{% if report_url %}
+Report: {{ report_url }}
+{% endif %}
+{% if export_url %}
+Export (XLSX): {{ export_url }}
+{% endif %}

@@ -1,0 +1,20 @@
+{% macro purpose_field(recent_purposes, value='', name='purpose', input_id='', input_class='', placeholder='business purpose…', hx_post='', hx_target='', hx_swap='', aria_invalid=false, describedby='') -%}
+<span class="purpose-field{% if not recent_purposes %} purpose-field-empty{% endif %}">
+  <input type="text" name="{{ name }}" value="{{ value or '' }}"
+         {% if input_id %}id="{{ input_id }}"{% endif %}
+         {% if input_class %}class="{{ input_class }}"{% endif %}
+         placeholder="{{ placeholder }}" autocomplete="off" data-purpose-input
+         {% if aria_invalid %}aria-invalid="true"{% endif %}
+         {% if describedby %}aria-describedby="{{ describedby }}"{% endif %}
+         {% if hx_post %}hx-post="{{ hx_post }}" hx-trigger="change"{% endif %}
+         {% if hx_target %}hx-target="{{ hx_target }}"{% endif %}
+         {% if hx_swap %}hx-swap="{{ hx_swap }}"{% endif %}>
+  <select class="purpose-recent" data-purpose-selector
+          aria-label="Choose a recent business purpose"
+          title="Choose a recent business purpose"
+          {% if not recent_purposes %}disabled{% endif %}>
+    <option value="">Recent…</option>
+    {% for purpose in recent_purposes %}<option value="{{ purpose }}">{{ purpose }}</option>{% endfor %}
+  </select>
+</span>
+{%- endmacro %}

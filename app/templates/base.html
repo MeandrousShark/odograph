@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Odograph{% endblock %}</title>
+  <script src="/static/vendor/htmx/htmx.min.js"></script>
+  <link rel="stylesheet" href="/static/style.css?v={{ static_version }}">
+  <script nonce="{{ csp_nonce }}">
+    // Applied before first paint so an explicit theme choice never flashes
+    // the other one; absent, style.css falls through to system preference.
+    (function () {
+      var stored = localStorage.getItem("theme");
+      if (stored === "light" || stored === "dark") {
+        document.documentElement.setAttribute("data-theme", stored);
+      }
+    })();
+  </script>
+  {% block head %}{% endblock %}
+</head>
+<body hx-headers='{"X-CSRF-Token": "{{ csrf }}"}'>
+  <header>
+    <h1><a href="/">Odograph</a></h1>
+    {% if user %}
+    <nav aria-label="Primary navigation">
+      <a href="/">Dashboard</a>
+      <a href="/trips">Trips</a>
+      <a href="/review">Review</a>
+      <a href="/report">Report</a>
+      <a href="/expenses">Expenses</a>
+      <a href="/stats">Stats</a>
+    </nav>
+    <div class="header-account">
+      <span class="who">{{ user.name or user.email or user.sub }}</span>
+      <a href="/settings">Settings</a>
+      <form class="logout-form" hx-post="/logout" hx-swap="none"><button type="submit" class="link-button">Log out</button></form>
+    </div>
+    {% endif %}
+  </header>
+  <script nonce="{{ csp_nonce }}">
+    // Browser datalists are rendered inconsistently and can be hidden behind
+    // password-manager/autofill UI. The explicit recent-purpose selector is
+    // paired with its free-text input by a shared wrapper, which also makes
+    // this delegation work for edit cards and review cards swapped in by htmx.
+    document.addEventListener("change", function (event) {
+      if (!event.target.matches("[data-purpose-selector]")) return;
+      var field = event.target.closest(".purpose-field");
+      var input = field && field.querySelector("[data-purpose-input]");
+      if (!input || !event.target.value) return;
+      input.value = event.target.value;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      event.target.selectedIndex = 0;
+    });
+  </script>
+  <script nonce="{{ csp_nonce }}">
+    // Trip deletion uses an in-page native dialog instead of the browser's
+    // confirm prompt. Delegation keeps the same behavior for trip cards and
+    // review cards inserted later by htmx. Native dialog handles Escape;
+    // the one-shot close listener restores focus to the triggering control
+    // for both Escape and the explicit Cancel button.
+    document.addEventListener("click", function (event) {
+      var trigger = event.target.closest("[data-trip-delete-open]");
+      if (trigger) {
+        var dialog = document.getElementById(trigger.dataset.tripDeleteOpen);
+        if (!dialog || typeof dialog.showModal !== "function") return;
+        dialog.addEventListener("close", function () {
+          if (trigger.isConnected) trigger.focus();
+        }, { once: true });
+        dialog.showModal();
+        return;
+      }
+
+      var cancel = event.target.closest("[data-trip-delete-cancel]");
+      if (cancel) cancel.closest("dialog")?.close("cancel");
+    });
+  </script>
+  {% block content %}{% endblock %}
+</body>
+</html>

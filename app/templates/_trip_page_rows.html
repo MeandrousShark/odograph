@@ -1,0 +1,9 @@
+{% for trip in trips %}{% include "_trip_card.html" %}{% endfor %}
+{% if has_more %}
+<div class="trip-pager">
+  <button type="button" class="control control-secondary"
+          hx-get="{{ next_url }}" hx-target="closest .trip-pager" hx-swap="outerHTML">
+    Load more
+  </button>
+</div>
+{% endif %}

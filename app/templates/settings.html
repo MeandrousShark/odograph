@@ -1,0 +1,371 @@
+{% extends "base.html" %}
+{% block title %}Settings — Odograph{% endblock %}
+{% block content %}
+
+<h2>Appearance</h2>
+<p class="muted">Follows your device's light/dark setting unless overridden here.
+  Applies immediately and is remembered only in this browser.</p>
+
+<fieldset class="theme-picker" id="theme-picker">
+  <legend>Theme</legend>
+  <label><input type="radio" name="theme-choice" value="system"> System</label>
+  <label><input type="radio" name="theme-choice" value="light"> Light</label>
+  <label><input type="radio" name="theme-choice" value="dark"> Dark</label>
+</fieldset>
+<script nonce="{{ csp_nonce }}">
+(function () {
+  // Client-side only — no server state. Keeping System as an explicit choice
+  // is what lets a browser return to following the OS after a persisted
+  // light or dark override.
+  var picker = document.getElementById("theme-picker");
+  function currentChoice() {
+    var stored = localStorage.getItem("theme");
+    return (stored === "light" || stored === "dark") ? stored : "system";
+  }
+  function apply(choice) {
+    if (choice === "system") {
+      localStorage.removeItem("theme");
+      document.documentElement.removeAttribute("data-theme");
+    } else {
+      localStorage.setItem("theme", choice);
+      document.documentElement.setAttribute("data-theme", choice);
+    }
+  }
+  var checked = picker.querySelector('input[value="' + currentChoice() + '"]');
+  if (checked) checked.checked = true;
+  picker.addEventListener("change", function (event) {
+    if (event.target.name !== "theme-choice") return;
+    apply(event.target.value);
+  });
+})();
+</script>
+
+{% if diagnostics is defined %}
+  <h2>Diagnostics</h2>
+  <dl class="diagnostics-list">
+    <div><dt>App version</dt><dd><code>{{ diagnostics.app_version }}</code></dd></div>
+    <div><dt>Git revision</dt><dd><code>{{ diagnostics.git_revision }}</code></dd></div>
+    <div><dt>Schema version</dt><dd><code>{{ diagnostics.schema_version }}</code></dd></div>
+    <div><dt>Detector version</dt><dd><code>{{ diagnostics.detector_version }}</code></dd></div>
+  </dl>
+
+  {% if diagnostics_report is defined and diagnostics_report %}
+  {% set report = diagnostics_report %}
+  <h3>Database</h3>
+  <dl class="diagnostics-list">
+    <div><dt>Connectivity</dt>
+      <dd>{{ "ok" if report.database.ok else "FAILED (" ~ report.database.error_type ~ ")" }}</dd></div>
+    {% for key, value in report.database.stats.items() | sort %}
+    <div><dt>{{ key }}</dt><dd>{{ value }}</dd></div>
+    {% endfor %}
+  </dl>
+
+  <h3>Migrations</h3>
+  <p class="muted">Applied vs. the migrations shipped in this image.</p>
+  <dl class="diagnostics-list">
+    <div><dt>Status</dt><dd>{{ report.migrations.status }}</dd></div>
+    <div><dt>Applied</dt>
+      <dd>{{ report.migrations.applied if report.migrations.applied is not none else "unknown" }}</dd></div>
+    <div><dt>Expected</dt><dd>{{ report.migrations.expected }}</dd></div>
+  </dl>
+
+  <h3>Workers</h3>
+  <p class="muted">State lives in this process's memory only and resets on every restart —
+    timestamps below are since process start, not since the worker was first enabled.</p>
+  <table class="settings-table">
+    <thead>
+      <tr><th>Worker</th><th>Enabled</th><th>Last run</th><th>Last success</th><th>Last failure</th><th>Next run</th></tr>
+    </thead>
+    <tbody>
+      {% for worker in report.workers %}
+      <tr>
+        <td>{{ worker.name }}</td>
+        <td>{{ "yes" if worker.enabled else "no" }}</td>
+        {% if not worker.enabled %}
+        <td colspan="4" class="muted">disabled</td>
+        {% elif not worker.state_available %}
+        <td colspan="4" class="muted">unavailable outside the running app process</td>
+        {% else %}
+        <td>{{ worker.last_run_at | local_dt if worker.last_run_at else "unknown" }}</td>
+        <td>{{ worker.last_success_at | local_dt if worker.last_success_at else "none since process start" }}</td>
+        <td>{% if worker.last_failure_at %}{{ worker.last_failure_at | local_dt }} ({{ worker.last_failure_type }}){% else %}none since process start{% endif %}</td>
+        <td>{{ worker.next_run_at | local_dt if worker.next_run_at else "unknown" }}</td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h3>Configuration presence</h3>
+  <p class="muted">Whether a setting is present — never its value.</p>
+  <dl class="diagnostics-list">
+    {% for key, value in report.config_presence.items() | sort %}
+    <div><dt>{{ key }}</dt><dd>{{ "yes" if value else "no" }}</dd></div>
+    {% endfor %}
+  </dl>
+
+  <h3>Connectivity</h3>
+  <p class="muted">OSRM, the geocoder, ntfy, and SMTP are only probed when you click below —
+    never automatically, so an outage here never becomes background traffic against a
+    third-party service.</p>
+  <button type="button" hx-post="/settings/diagnostics/check"
+          hx-target="#diagnostics-connectivity" hx-swap="innerHTML">Check now</button>
+  <div id="diagnostics-connectivity">
+    {% include "_diagnostics_connectivity.html" %}
+  </div>
+  {% endif %}
+{% endif %}
+
+<h2>Device status</h2>
+<p class="muted">Newest location fix received from each device that has posted to
+  <code>/ingest</code>, and how many it has sent in total — the fastest way to tell
+  whether a phone is actually reaching this instance. No coordinates are shown here.</p>
+
+{% if device_fixes %}
+<div class="settings-table-scroll settings-table-scroll-device-fixes">
+<table id="device-fixes-table" class="settings-table">
+  <thead><tr><th>Device</th><th>Last received</th><th>Last recorded</th><th>Points</th></tr></thead>
+  <tbody>
+    {% for d in device_fixes %}
+    <tr>
+      <td>{{ d.device }}</td>
+      <td>{{ d.newest_received_at | local_dt }}</td>
+      <td>{{ d.newest_recorded_at | local_dt }}</td>
+      <td class="num">{{ d.point_count }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">No location fixes received yet.</p>
+{% endif %}
+
+<h2>Mileage rates</h2>
+<p class="muted">IRS standard mileage rate per business mile, used for the deduction
+  estimates on the trip list. A <code>MILEAGE_RATE_&lt;YEAR&gt;</code> environment
+  variable overrides the stored rate for that year until the app restarts.</p>
+
+{% include "_rates_table.html" %}
+
+<h2>Vehicles</h2>
+<p class="muted">Trips can be assigned to a vehicle so the deduction can be broken
+  out per vehicle on the annual report. Deactivating a vehicle removes it from the
+  picker for new trip assignments but leaves it (and its name) on trips already
+  using it.</p>
+
+{% include "_vehicles_table.html" %}
+
+<p>
+  <label>
+    <input type="checkbox" name="auto_assign_default_vehicle" value="1"
+           hx-post="/settings/vehicles/auto_assign" hx-trigger="change" hx-swap="none"
+           {{ 'checked' if auto_assign_default_vehicle }}>
+    Assign the default vehicle to newly detected trips
+  </label>
+</p>
+
+<h2>Odometer readings</h2>
+<p class="muted">Log a dashboard odometer value now and then to reconcile it against GPS-
+  detected distance — this catches driving the tracker missed (dead zones, app not
+  running) and supplies the total-miles figure the actual-expense comparison needs.
+  It doesn't change the standard-mileage deduction shown elsewhere in the app.</p>
+
+{% include "_odometer_table.html" %}
+
+<h2>Places</h2>
+<p class="muted">Named locations used to auto-tag trips. Radius is how close (in
+  meters) a trip's start/end must be to count as "at" this place.</p>
+
+<div class="settings-table-scroll settings-table-scroll-places">
+<table id="places-table" class="settings-table">
+  <thead><tr><th>Name</th><th>Kind</th><th>Location</th><th>Radius (m)</th><th></th></tr></thead>
+  <tbody>
+    {% for place in places %}
+    <tr id="place-{{ place.id }}">
+      <td><input type="text" name="name" value="{{ place.name }}" required style="width:8rem"></td>
+      <td>
+        <select name="kind">
+          <option value="home" {{ 'selected' if place.kind == 'home' }}>Home</option>
+          <option value="work" {{ 'selected' if place.kind == 'work' }}>Work</option>
+          <option value="other" {{ 'selected' if place.kind == 'other' }}>Other</option>
+        </select>
+      </td>
+      <td class="num">
+        <input type="number" step="0.000001" name="lat" value="{{ place.lat }}" style="width:7rem">
+        <input type="number" step="0.000001" name="lon" value="{{ place.lon }}" style="width:7rem">
+      </td>
+      <td class="num"><input type="number" name="radius_m" value="{{ place.radius_m | round(0) }}" min="1" style="width:4.5rem"></td>
+      <td>
+        <button type="button" hx-post="/places/{{ place.id }}/update" hx-include="closest tr">Save</button>
+        <button type="button" class="danger" title="Delete place"
+                hx-post="/places/{{ place.id }}/delete"
+                hx-confirm="Delete place '{{ place.name }}'? Trips referencing it will show coordinates instead.">Delete</button>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<details class="add-manual">
+  <summary>Add place</summary>
+  <form hx-post="/places">
+    <label>Name <input type="text" name="name" required></label>
+    <label>Kind
+      <select name="kind">
+        <option value="home">Home</option>
+        <option value="work">Work</option>
+        <option value="other" selected>Other</option>
+      </select>
+    </label>
+    {% if geocode_enabled %}
+    <label>Address search <input type="text" name="q" autocomplete="off"
+        placeholder="Start typing an address…" style="width:16rem"
+        hx-get="/places/search" hx-trigger="keyup changed delay:400ms"
+        hx-target="#address-results"></label>
+    <div id="address-results"></div>
+    {% endif %}
+    <label>Lat <input type="number" step="0.000001" name="lat" required style="width:8rem"></label>
+    <label>Lon <input type="number" step="0.000001" name="lon" required style="width:8rem"></label>
+    <label>Radius (m) <input type="number" name="radius_m" value="150" min="1" style="width:5rem"></label>
+    <button type="submit">Add</button>
+  </form>
+</details>
+<script nonce="{{ csp_nonce }}">
+// Delegated on document (not the button) so a CSP-compatible listener still
+// works after every htmx swap of the address-results list.
+document.addEventListener('click', function (event) {
+  var btn = event.target.closest('[data-fill-place-latlon]');
+  if (!btn) return;
+  var form = btn.closest('form');
+  // Geoapify returns 7-decimal coordinates; the lat/lon inputs' step="0.000001"
+  // (6 decimals, matching trip.html's map-click fill) rejects that on submit
+  // as an HTML5 step-mismatch unless rounded down to the same precision here.
+  form.querySelector('input[name="lat"]').value = parseFloat(btn.dataset.lat).toFixed(6);
+  form.querySelector('input[name="lon"]').value = parseFloat(btn.dataset.lon).toFixed(6);
+  document.getElementById('address-results').innerHTML = '';
+});
+</script>
+
+<h2>Auto-tag rules</h2>
+<p class="muted">Rules match a trip's start/end locations to auto-set a category
+  when neither side has been tagged by hand. Commuting between home and a regular
+  workplace is generally not tax-deductible per IRS guidance — that's why the
+  seeded <strong>home ↔ work</strong> rule tags trips personal.</p>
+
+<div class="settings-table-scroll settings-table-scroll-rules">
+<table id="rules-table" class="settings-table">
+  <thead><tr><th>Side A</th><th>Side B</th><th>Category</th><th></th></tr></thead>
+  <tbody>
+    {% for rule in rules %}
+    <tr>
+      <td>{{ rule.a_desc }}</td>
+      <td>{{ rule.b_desc }}</td>
+      <td>{{ rule.category | capitalize }}</td>
+      <td>
+        <button type="button" class="danger" title="Delete rule"
+                hx-post="/rules/{{ rule.id }}/delete"
+                hx-confirm="Delete this rule?">Delete</button>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<details class="add-manual">
+  <summary>Add rule</summary>
+  <form hx-post="/rules">
+    <fieldset>
+      <legend>Side A</legend>
+      <label><input type="radio" name="a_mode" value="kind" checked> Kind</label>
+      <select name="a_kind">
+        <option value="home">Home</option>
+        <option value="work">Work</option>
+        <option value="other">Other</option>
+      </select>
+      <label><input type="radio" name="a_mode" value="place"> Specific place</label>
+      <select name="a_place">
+        {% for place in places %}<option value="{{ place.id }}">{{ place.name }}</option>{% endfor %}
+      </select>
+      <label><input type="radio" name="a_mode" value="any"> Any</label>
+    </fieldset>
+    <fieldset>
+      <legend>Side B</legend>
+      <label><input type="radio" name="b_mode" value="kind" checked> Kind</label>
+      <select name="b_kind">
+        <option value="home">Home</option>
+        <option value="work">Work</option>
+        <option value="other">Other</option>
+      </select>
+      <label><input type="radio" name="b_mode" value="place"> Specific place</label>
+      <select name="b_place">
+        {% for place in places %}<option value="{{ place.id }}">{{ place.name }}</option>{% endfor %}
+      </select>
+      <label><input type="radio" name="b_mode" value="any"> Any</label>
+    </fieldset>
+    <label>Category
+      <select name="category"><option value="business">Business</option><option value="personal">Personal</option></select>
+    </label>
+    <button type="submit">Add rule</button>
+  </form>
+</details>
+
+<details class="section-disclosure" id="manual-trip-edits">
+  <summary><h2>Manual trip edits ({{ boundary_overrides | length }})</h2></summary>
+  <p class="muted">Undo a merge, split, or deletion you made. These are
+    reapplied whenever trips are re-detected.</p>
+
+  {% if boundary_overrides %}
+  <div class="settings-table-scroll settings-table-scroll-overrides">
+  <table id="boundary-overrides-table" class="settings-table">
+    <thead><tr><th>Device</th><th>Kind</th><th>Detail</th><th>Created</th><th></th></tr></thead>
+    <tbody>
+      {% for o in boundary_overrides %}
+      <tr id="boundary-override-{{ o.id }}">
+        <td>{{ o.device }}</td>
+        <td>{% if o.kind == 'suppress' %}Merged{% elif o.kind == 'discard' %}Deleted{% else %}Split{% endif %}</td>
+        <td>
+          {% if o.kind == 'force' %}
+            at point #{{ o.point_id }}
+          {% else %}
+            {{ o.range_start | local_dt }} → {{ o.range_end | local_dt }}
+          {% endif %}
+        </td>
+        <td>{{ o.created_at | local_dt }}</td>
+        <td>
+          <button type="button" class="danger" title="{{ 'Restore deleted trip' if o.kind == 'discard' else 'Undo this override' }}"
+                  hx-post="/settings/boundary_overrides/{{ o.id }}/delete"
+                  hx-confirm="{% if o.kind == 'discard' %}Restore this deleted trip? Its stored location data will be reprocessed.{% else %}Undo this merge/split? The affected trips will be re-detected.{% endif %}">
+            {{ 'Restore' if o.kind == 'discard' else 'Undo' }}
+          </button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">No manual trip edits.</p>
+  {% endif %}
+</details>
+<script nonce="{{ csp_nonce }}">
+(function () {
+  // The undo button's response is an HX-Redirect (full page reload), so the
+  // open/closed state has to survive that reload here rather than in memory.
+  var details = document.getElementById("manual-trip-edits");
+  if (localStorage.getItem("manualTripEditsOpen") === "1") {
+    details.open = true;
+  }
+  details.addEventListener("toggle", function () {
+    if (details.open) {
+      localStorage.setItem("manualTripEditsOpen", "1");
+    } else {
+      localStorage.removeItem("manualTripEditsOpen");
+    }
+  });
+})();
+</script>
+
+{% endblock %}

@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Setup — Odograph{% endblock %}
+{% block content %}
+
+<h2>{{ 'Reset administrator password' if mode == 'reset' else 'Create administrator' }}</h2>
+
+{% if mode == 'reset' %}
+<p class="muted">An administrator already exists ({{ admin_email }}). Submitting this form
+  resets that administrator's password — it can never create a second one.</p>
+{% else %}
+<p class="muted">No administrator exists yet. This form creates the sole administrator
+  for this instance.</p>
+{% endif %}
+
+{% if error %}
+<div class="form-error-summary" role="alert">{{ error }}</div>
+{% endif %}
+
+<form method="post" action="/setup" class="auth-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <label>Setup token
+    <input type="password" name="token" required autocomplete="off" autofocus>
+  </label>
+  {% if mode == 'create' %}
+  <label>Email
+    <input type="email" name="email" required autocomplete="username">
+  </label>
+  {% endif %}
+  <label>{{ 'New password' if mode == 'reset' else 'Password' }}
+    <input type="password" name="password" required autocomplete="new-password" minlength="8">
+  </label>
+  <label>Confirm password
+    <input type="password" name="password_confirm" required autocomplete="new-password" minlength="8">
+  </label>
+  <button type="submit" class="control control-primary">
+    {{ 'Reset password' if mode == 'reset' else 'Create administrator' }}
+  </button>
+</form>
+
+{% endblock %}

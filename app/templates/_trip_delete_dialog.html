@@ -1,0 +1,44 @@
+{% macro trip_delete_dialog(
+  trip, dialog_id, action_url,
+  trigger_label='Delete trip', trigger_title='Delete trip',
+  hx_target=none, hx_swap=none,
+  filter_from=none, filter_to=none, filter_vehicle=none,
+  fragment=false
+) %}
+<button type="button" class="control control-destructive trip-delete-trigger"
+        title="{{ trigger_title }}" aria-haspopup="dialog"
+        aria-label="{{ trigger_title }}"
+        aria-controls="{{ dialog_id }}" data-trip-delete-open="{{ dialog_id }}">
+  {{ trigger_label }}
+</button>
+<dialog id="{{ dialog_id }}" class="trip-delete-dialog"
+        aria-labelledby="{{ dialog_id }}-title"
+        aria-describedby="{{ dialog_id }}-description">
+  <form class="trip-delete-dialog-content">
+    <h2 id="{{ dialog_id }}-title">Delete trip?</h2>
+    <p id="{{ dialog_id }}-description">
+      {% if trip.source == 'detected' %}
+        This removes the detected trip from your mileage history. Stored location data is kept,
+        so you can restore the trip from Settings.
+      {% else %}
+        This permanently deletes the manual trip. It cannot be restored.
+      {% endif %}
+    </p>
+    {% if filter_from is not none %}
+      <input type="hidden" name="from" value="{{ filter_from }}">
+      <input type="hidden" name="to" value="{{ filter_to }}">
+      <input type="hidden" name="vehicle" value="{{ filter_vehicle }}">
+    {% endif %}
+    {% if fragment %}<input type="hidden" name="fragment" value="true">{% endif %}
+    <div class="trip-delete-dialog-actions">
+      <button type="button" data-trip-delete-cancel autofocus>Cancel</button>
+      <button type="button" class="control control-destructive trip-delete-confirm"
+              hx-post="{{ action_url }}"
+              {% if hx_target %}hx-target="{{ hx_target }}"{% endif %}
+              {% if hx_swap %}hx-swap="{{ hx_swap }}"{% endif %}>
+        Delete trip
+      </button>
+    </div>
+  </form>
+</dialog>
+{% endmacro %}

@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}{{ report.year }} Report — Odograph{% endblock %}
+{% block content %}
+
+<p>
+  <a href="/report/{{ report.year - 1 }}">← {{ report.year - 1 }}</a>
+  <strong style="margin: 0 .5rem">{{ report.year }}</strong>
+  <a href="/report/{{ report.year + 1 }}">{{ report.year + 1 }} →</a>
+  · <a href="/report/{{ report.year }}/export">Export XLSX</a>
+  · <a href="/expenses?year={{ report.year }}">Expense ledger</a>
+</p>
+
+<div class="filter-bar">
+  <div class="field">
+    <span class="field-label">Quarterly / custom range</span>
+    <span class="pills">
+      {% for q in range(1, 5) %}
+      {% set qstart, qend = quarter_bounds(report.year, q) %}
+      <a href="/report/range?from={{ qstart.isoformat() }}&to={{ qend.isoformat() }}">Q{{ q }}</a>
+      {% endfor %}
+    </span>
+  </div>
+  <form class="date-range" method="get" action="/report/range">
+    <label>From <input type="date" name="from" required></label>
+    <label>To <input type="date" name="to" required></label>
+    <button type="submit">View range</button>
+  </form>
+</div>
+
+<h2>{{ report.year }} annual mileage report</h2>
+
+{% if report.trip_count == 0 %}
+  <p class="empty">No trips recorded in {{ report.year }}.</p>
+{% else %}
+
+<div class="report-summary">
+  <div><span class="muted">Business miles</span><strong>{{ report.business_m | mi }} mi</strong></div>
+  <div><span class="muted">Personal miles</span><strong>{{ report.personal_m | mi }} mi</strong></div>
+  <div><span class="muted">Business share</span>
+    <strong>{{ "%.1f"|format(report.business_pct) if report.business_pct is not none else "—" }}%</strong></div>
+  <div><span class="muted">Total deduction</span>
+    <strong>{{ report.total_deduction | usd }}</strong></div>
+</div>
+
+{% if report.rate_periods %}
+<p class="muted">Rate{{ "s" if report.rate_periods|length > 1 }} applied: {{ format_rate_periods(report.rate_periods) }}</p>
+{% endif %}
+
+{% if report.caveats.any %}
+<div class="report-caveats">
+  <strong>Review before filing:</strong>
+  <ul>
+    {% for line in caveat_lines(report.caveats, report.year) %}
+    <li>{{ line }}{% if loop.last and report.caveats.missing_rate %} <a href="/settings">Add one</a>.{% endif %}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% include "_report_tables.html" %}
+
+{% if odometer_coverage %}
+<h2>Odometer coverage</h2>
+<ul>
+  {% for line in odometer_coverage %}
+  <li>{{ coverage_line(line) }}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% endif %}
+
+{% if expense_report.comparisons %}
+<h2>Standard vs. actual expense estimate</h2>
+<p class="muted">Parking, tolls, and any other fully-business entries are added outside
+  both methods. Shared operating expenses are multiplied by the vehicle's business-use
+  percentage.</p>
+<div class="table-wrapper">
+<table>
+  <thead>
+    <tr>
+      <th>Vehicle</th><th>Business miles</th><th>Total miles</th><th>Business use</th>
+      <th>Shared expenses</th><th>Fully business</th><th>Standard estimate</th>
+      <th>Actual estimate</th><th>Larger estimate</th><th>Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for line in expense_report.comparisons %}
+    <tr>
+      <td>{{ line.vehicle_name }}</td>
+      <td class="num">{{ line.business_m | mi }} mi</td>
+      <td class="num">{{ line.denominator_m | mi }} mi<br>
+        <small class="muted">{{ "odometer" if line.denominator_source == "odometer" else "GPS detected" }}</small></td>
+      <td class="num">{{ "%.1f%%"|format(line.business_pct * 100) if line.business_pct is not none else "—" }}</td>
+      <td class="num">{{ line.allocated_expenses | usd }}</td>
+      <td class="num">{{ line.fully_business_expenses | usd }}</td>
+      <td class="num">{{ line.standard_total | usd }}</td>
+      <td class="num">{{ line.actual_total | usd }}</td>
+      <td>
+        {% if line.larger_estimate == "standard" %}Standard by {{ line.difference | usd }}
+        {% elif line.larger_estimate == "actual" %}Actual by {{ line.difference | usd }}
+        {% elif line.larger_estimate == "tie" %}Tie
+        {% else %}—{% endif %}
+        {% if line.provisional and line.larger_estimate %}<small class="muted"> (provisional)</small>{% endif %}
+      </td>
+      <td>{{ comparison_status(line) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<div class="report-caveats">
+  <strong>Review before filing:</strong>
+  <ul>
+    {% for line in comparison_caveat_lines(expense_report.comparisons) %}<li>{{ line }}</li>{% endfor %}
+  </ul>
+  <p>See <a href="https://www.irs.gov/publications/p463">IRS Publication 463</a> and
+    <a href="https://www.irs.gov/publications/p946">IRS Publication 946</a>.</p>
+</div>
+{% endif %}
+
+{% endblock %}
