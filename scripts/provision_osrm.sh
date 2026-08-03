@@ -98,17 +98,6 @@ pbf_filename="$(basename -- "$URL")"
 dataset_basename="${pbf_filename%.osm.pbf}"
 dataset_value="${dataset_basename}.osrm"
 
-# compose.yaml's `osrm` service command interpolates ${OSRM_DATASET:?...},
-# and Compose interpolates the whole file before any CLI override is
-# applied -- so even `run`, which replaces that command outright, still
-# fails at the interpolation stage if OSRM_DATASET is unset. A fresh
-# install has it unset or commented out by design (that's the point of the
-# guard: catch anyone who skips this script), so without a placeholder,
-# provisioning could never satisfy its own prerequisite. The placeholder
-# value itself is never used -- every invocation below supplies its own
-# explicit command, ignoring whatever compose.yaml's `command:` resolves to.
-export OSRM_DATASET="${OSRM_DATASET:-osrm-provisioning-placeholder}"
-
 MIN_STAGE_FREE_KB=524288   # 512 MiB floor, just to catch an obviously-full
                             # disk before downloading anything. Actual
                             # space needed varies hugely by region -- see

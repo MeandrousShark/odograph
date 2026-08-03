@@ -27,6 +27,41 @@ reproduced here.
 - Complete before release: list every application, database, configuration,
   and operational break, or state explicitly that there are none.
 
+## [0.6.1] - 2026-08-03
+
+### Changed
+
+- The optional `osrm` service now checks `OSRM_DATASET` when it starts,
+  rather than Compose requiring the variable to render the file. Starting
+  `--profile osrm` before provisioning a dataset still gets an explanatory
+  message: the container exits immediately instead of serving an empty
+  `/data`. It just no longer affects anyone who leaves the profile off.
+
+### Fixed
+
+- A clean 0.6.0 installation could not start on either supported container
+  runtime. The `osrm` service required `OSRM_DATASET`, which `.env.example`
+  ships commented out by design, and Compose interpolates every service in
+  the file before it applies profile filtering. Every Compose subcommand,
+  `pull` and `up -d` and `ps` alike, failed with `required variable
+  OSRM_DATASET is missing a value: set in .env`, even though the `osrm`
+  profile was never enabled. The baseline `db` and `app` services now start
+  from a freshly generated `.env` with no extra configuration, and the
+  backup, restore, and provisioning scripts work again.
+
+### Supported upgrade path
+
+- Upgrade directly from 0.6.0. Pull the new image and recreate the app; no
+  migration runs and no `.env` change is required.
+- An operator who worked around the defect by setting `OSRM_DATASET` to a
+  dummy value in `.env` should remove that line unless a real provisioned
+  dataset backs it, so the `osrm` service's own check stays meaningful.
+
+### Breaking changes
+
+- None. Nothing in the application, database schema, configuration, or
+  operational procedures breaks relative to 0.6.0.
+
 ## [0.6.0] - 2026-07-31
 
 ### Added

@@ -15,13 +15,13 @@ a host for the memory-hungry step, and refreshing an extract later.
 ## Is this for you
 
 Odograph computes IRS standard-mileage deductions, so it's built for a US
-operator. That's the actual reason this document exists: the app ships an
-example extract for the maintainer's own region, and a US operator anywhere
-else needs their own state's extract to route against, or road-snapping
-quietly does nothing useful for them. Nothing here technically restricts you
-to a US extract (OSRM will route against whatever regional map data you
-give it, wherever that is), but the deduction figures stay US IRS mileage
-rates regardless of which region you snap against.
+operator. That's the actual reason this document exists: the project ships no
+road data at all, so anyone who wants road-snapping provisions an extract
+covering their own area first, or snapping quietly does nothing useful for
+them. Nothing here technically restricts you to a US extract (OSRM will route
+against whatever regional map data you give it, wherever that is), but the
+deduction figures stay US IRS mileage rates regardless of which region you
+snap against.
 
 ## Choosing an extract
 
@@ -82,11 +82,13 @@ OSRM_URL=http://osrm:5000
 ```
 
 `OSRM_DATASET` ships commented out in `.env.example` on purpose: an
-uncommented default would silently point a fresh install at whichever region
-happened to ship as the example. Leaving it unset is exactly what makes
-`compose.yaml`'s guard on that variable fire with a clear error instead of
-the `osrm` service crash-looping against an empty `/data` if you start the
-profile before provisioning. Then start (or restart) the service:
+uncommented default would silently point a fresh install at someone else's
+region. If you start the `osrm` profile before provisioning, the service
+itself catches the empty value and exits with an explanation, rather than
+failing obscurely against an empty `/data`. The service is set to restart, so
+the container will exit and restart repeatedly until you either provision a
+dataset or stop the profile; run `docker compose logs osrm` to read the
+message. Then start (or restart) the service:
 
 ```sh
 docker compose --profile osrm up -d osrm      # or: podman-compose --profile osrm up -d osrm

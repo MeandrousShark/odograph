@@ -18,7 +18,7 @@ services:
     # This canonical file always pulls an immutable release tag and never
     # builds. Contributors who want a source build add
     # compose.build.override.yml.
-    image: ghcr.io/meandrousshark/odograph:v0.6.0
+    image: ghcr.io/meandrousshark/odograph:v0.6.1
     depends_on:
       db:
         condition: service_healthy
@@ -45,34 +45,42 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  # Self-hosted road-snapping. No `depends_on` from `app` — the app
-  # must run fully fine whether this service exists, is stopped, or was
-  # never started at all; OSRM_URL empty/unset in .env disables snapping
+  # Self-hosted road-snapping. No `depends_on` from `app`: the app must
+  # run fully fine whether this service exists, is stopped, or was never
+  # started at all; OSRM_URL empty/unset in .env disables snapping
   # entirely. No published ports: `app` reaches it at http://osrm:5000
   # over the compose network only. The `osrmdata` volume is populated by a
   # one-time prep step (osrm-extract/partition/customize against a road
-  # extract), not by this service itself — starting this service before
-  # that prep is done just crash-loops it against an empty /data. The
-  # `osrm` profile keeps it out of a plain `up -d`; opt in explicitly with
+  # extract), not by this service itself, so the command below refuses to
+  # start rather than crash-loop against an empty /data. The `osrm`
+  # profile keeps it out of a plain `up -d`; opt in explicitly with
   # `--profile osrm` once the data is prepared.
   osrm:
     image: docker.io/osrm/osrm-backend:v5.25.0
     profiles: ["osrm"]
+    environment:
+      # Defaulted to empty rather than guarded with `:?`. Compose
+      # interpolates every service in this file before it applies profile
+      # filtering, so a required-variable guard here refuses to render the
+      # file at all for the baseline majority who never enable this
+      # profile, breaking even `up -d` and `ps`. The check lives in the
+      # command below instead, where it only runs if this service starts.
+      OSRM_DATASET: ${OSRM_DATASET:-}
     # List form (not a single string) is required here: podman-compose
     # shell-splits a string-form `command:` into words before substituting
-    # variables, which breaks the `:?` error message's spaces apart from
-    # the `${...}` token and produces a "No closing brace" parse error.
+    # variables, which would tear this script apart at its spaces and
+    # newlines. `$$` escapes the `$` so the container's shell expands
+    # OSRM_DATASET at run time; a single `$` would have Compose substitute
+    # it while rendering the file, leaving the guard nothing to test.
     command:
-      - osrm-routed
-      - --algorithm
-      - mld
-      - --max-matching-size
-      - "1000"
-      # .env.example ships OSRM_DATASET commented out, so this guard
-      # fires for anyone who starts this profile before running
-      # scripts/provision_osrm.sh and uncommenting it — the alternative
-      # is a crash-loop against an empty /data with no explanation.
-      - /data/${OSRM_DATASET:?set in .env}
+      - /bin/sh
+      - -c
+      - |
+        if [ -z "$${OSRM_DATASET}" ]; then
+          echo "error: OSRM_DATASET is not set in .env, so this service has no dataset to serve. Run scripts/provision_osrm.sh against a regional road extract, then set the OSRM_DATASET value it prints before starting the osrm profile." >&2
+          exit 1
+        fi
+        exec osrm-routed --algorithm mld --max-matching-size 1000 "/data/$${OSRM_DATASET}"
     volumes:
       - osrmdata:/data
     restart: unless-stopped
