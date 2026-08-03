@@ -2,35 +2,97 @@
 # Build a candidate public-release tree from this repository's committed
 # state (HEAD), by explicit inclusion of only the paths a public snapshot
 # should ever contain. Nothing here modifies this repository or touches
-# any remote; it only writes files under the output directory you give it.
+# any remote; it only writes files under the target directory you give it,
+# and only ever prints the commit/push steps for a human to run by hand.
 #
 # Usage:
 #   scripts/make_public_snapshot.sh <output-dir>
+#   scripts/make_public_snapshot.sh --publish <clone-dir> <expected-origin>
 #
-# <output-dir> must not already exist, or must be empty. On success it
-# contains the candidate public tree, verified to exclude internal
-# planning material, scanned for known private-infrastructure hostnames,
-# and scanned for stray references (e.g. dangling links) to internal-only
+# Bootstrap mode (the first form) requires <output-dir> to not already
+# exist, or to be empty, since there is no prior tree to compare against.
+#
+# Publish mode (the second form) targets an existing clone of the public
+# repository and regenerates its tree in place: it refuses an unsafe
+# target, clears every top-level entry except .git, extracts the same
+# allowlisted archive over the emptied tree, then reports the resulting
+# `git status`/`git diff --stat` so a reviewer sees exactly what changed --
+# including a file the private tree or the allowlist has since dropped.
+# Extraction alone can only add or overwrite a file, never remove one that
+# stopped shipping, so the clearing step is what a routine re-run needs to
+# keep a dropped file from lingering in the published tree indefinitely.
+# <expected-origin> must match the clone's configured `origin` remote
+# exactly, so a mistyped path can't clear a directory that happens to be a
+# git work tree but isn't the intended one.
+#
+# Either mode: the resulting tree is verified to exclude internal planning
+# material, scanned for known private-infrastructure hostnames, and
+# scanned for stray references (e.g. dangling links) to internal-only
 # docs from within the files that do ship.
-# The script prints next steps (init a fresh repo, one commit, push to a
-# private rehearsal remote) rather than performing them, so a human
-# reviews the result before anything leaves this machine.
 set -euo pipefail
 
-if [ "$#" -ne 1 ]; then
-    echo "usage: $0 <output-dir>" >&2
-    exit 1
+if [ "$#" -ge 1 ] && [ "$1" = "--publish" ]; then
+    MODE=publish
+    shift
+    if [ "$#" -ne 2 ]; then
+        echo "usage: $0 --publish <clone-dir> <expected-origin>" >&2
+        exit 1
+    fi
+    TARGET="$1"
+    EXPECTED_ORIGIN="$2"
+else
+    MODE=bootstrap
+    if [ "$#" -ne 1 ]; then
+        echo "usage: $0 <output-dir>" >&2
+        exit 1
+    fi
+    OUTDIR="$1"
 fi
 
-OUTDIR="$1"
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 
-if [ -e "$OUTDIR" ] && [ -n "$(ls -A "$OUTDIR" 2>/dev/null)" ]; then
-    echo "error: '$OUTDIR' already exists and is not empty; refusing to overwrite it." >&2
-    exit 1
+if [ "$MODE" = publish ]; then
+    # Every refusal below runs before the clearing step further down: it is
+    # the only thing standing between an unreviewed local edit and the `rm
+    # -rf` that follows, so checking order here is a safety property, not
+    # just validation ordering.
+    if [ ! -d "$TARGET" ]; then
+        echo "error: publish target '$TARGET' does not exist." >&2
+        exit 1
+    fi
+    if ! TARGET_TOPLEVEL="$(git -C "$TARGET" rev-parse --show-toplevel 2>/dev/null)"; then
+        echo "error: publish target '$TARGET' is not a git work tree." >&2
+        exit 1
+    fi
+    TARGET_ABS="$(cd "$TARGET" && pwd)"
+    if [ "$TARGET_TOPLEVEL" != "$TARGET_ABS" ]; then
+        echo "error: publish target '$TARGET' is not the root of its git work tree (root is '$TARGET_TOPLEVEL')." >&2
+        exit 1
+    fi
+    if [ -n "$(git -C "$TARGET_ABS" status --porcelain)" ]; then
+        echo "error: publish target '$TARGET_ABS' has uncommitted changes; refusing to clear a dirty work tree." >&2
+        exit 1
+    fi
+    TARGET_ORIGIN="$(git -C "$TARGET_ABS" remote get-url origin 2>/dev/null || true)"
+    if [ -z "$TARGET_ORIGIN" ]; then
+        echo "error: publish target '$TARGET_ABS' has no 'origin' remote." >&2
+        exit 1
+    fi
+    if [ "$TARGET_ORIGIN" != "$EXPECTED_ORIGIN" ]; then
+        echo "error: publish target's origin ('$TARGET_ORIGIN') does not match the expected origin ('$EXPECTED_ORIGIN')." >&2
+        exit 1
+    fi
+
+    find "$TARGET_ABS" -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf -- {} +
+    OUTDIR="$TARGET_ABS"
+else
+    if [ -e "$OUTDIR" ] && [ -n "$(ls -A "$OUTDIR" 2>/dev/null)" ]; then
+        echo "error: '$OUTDIR' already exists and is not empty; refusing to overwrite it." >&2
+        exit 1
+    fi
+    mkdir -p "$OUTDIR"
+    OUTDIR="$(cd "$OUTDIR" && pwd)"
 fi
-mkdir -p "$OUTDIR"
-OUTDIR="$(cd "$OUTDIR" && pwd)"
 
 cd "$REPO_ROOT"
 
@@ -95,15 +157,20 @@ else
     violations=1
 fi
 
+# .git is pruned from every find below, not just this one: a publish-mode
+# target is an existing clone, so its .git holds thousands of packed
+# objects that would otherwise slow every scan, wreck the file count, and
+# could surface a "finding" inside a packed object with no corresponding
+# shipped file to fix.
 while IFS= read -r -d '' f; do
     echo "error: internal planning file leaked into snapshot: ${f#"$OUTDIR"/}" >&2
     violations=1
-done < <(find "$OUTDIR" \( -iname 'CLAUDE.md' -o -iname 'AGENTS.md' \) -print0)
+done < <(find "$OUTDIR" -name .git -prune -o \( -iname 'CLAUDE.md' -o -iname 'AGENTS.md' \) -print0)
 
 while IFS= read -r -d '' f; do
     echo "error: .claude/ path leaked into snapshot: ${f#"$OUTDIR"/}" >&2
     violations=1
-done < <(find "$OUTDIR" -path '*/.claude/*' -o -name '.claude' -print0 2>/dev/null)
+done < <(find "$OUTDIR" -name .git -prune -o -path '*/.claude/*' -o -name '.claude' -print0 2>/dev/null)
 
 if [ "$violations" -ne 0 ]; then
     echo "error: exclusion checks failed; see above." >&2
@@ -125,13 +192,14 @@ else
     echo "warning: gitleaks not found on PATH; falling back to a plain grep for known private hostnames. This is NOT equivalent to a real secrets scan -- install gitleaks before a real publication." >&2
     # Excludes this script's own filename: it necessarily contains these
     # hostnames as literal grep patterns, which would otherwise make the
-    # fallback scan fail against itself every time.
+    # fallback scan fail against itself every time. Also excludes .git,
+    # for the same packed-object reasons noted above.
     # Matches the specific private-infrastructure hostnames, not the bare
     # "hannoncloud" domain: SECURITY.md deliberately publishes
     # security@hannoncloud.com as the security contact, and a bare-domain
     # pattern would flag that intentional, public-facing address every time
     # gitleaks isn't installed.
-    if grep -RIn --exclude="$(basename "$0")" "sapporo\|miles\.hannoncloud\.com\|git\.hannoncloud\.com" "$OUTDIR"; then
+    if grep -RIn --exclude="$(basename "$0")" --exclude-dir=.git "sapporo\|miles\.hannoncloud\.com\|git\.hannoncloud\.com" "$OUTDIR"; then
         echo "error: found known private-infrastructure hostnames in the snapshot; see above." >&2
         exit 1
     fi
@@ -160,23 +228,37 @@ while IFS= read -r -d '' f; do
         grep -InE "$INTERNAL_DOC_PATTERN" "$f" >&2
         violations=1
     fi
-done < <(find "$OUTDIR" -type f ! -name "$(basename "$0")" -print0)
+done < <(find "$OUTDIR" -name .git -prune -o -type f ! -name "$(basename "$0")" -print0)
 
 if [ "$violations" -ne 0 ]; then
     echo "error: internal-doc reference checks failed; see above." >&2
     exit 1
 fi
 
-file_count="$(find "$OUTDIR" -type f | wc -l | tr -d ' ')"
+file_count="$(find "$OUTDIR" -name .git -prune -o -type f -print | wc -l | tr -d ' ')"
 echo "Snapshot built at: $OUTDIR"
 echo "File count: $file_count"
 echo
-echo "Next steps (not performed by this script):"
-echo "  cd '$OUTDIR'"
-echo "  git init"
-echo "  git add -A"
-echo "  git commit -m 'Initial public release (vX.Y.Z)'"
-echo "  # Push to a throwaway PRIVATE GitHub repo first and review its file"
-echo "  # listing before ever pushing to a public remote:"
-echo "  git remote add origin <private-rehearsal-repo-url>"
-echo "  git push -u origin HEAD"
+
+if [ "$MODE" = publish ]; then
+    echo "Effect on '$OUTDIR':"
+    git -C "$OUTDIR" status --short
+    echo
+    git -C "$OUTDIR" diff --stat HEAD
+    echo
+    echo "Next steps (not performed by this script):"
+    echo "  cd '$OUTDIR'"
+    echo "  git add -A"
+    echo "  git commit -m 'Describe this public change'"
+    echo "  git push"
+else
+    echo "Next steps (not performed by this script):"
+    echo "  cd '$OUTDIR'"
+    echo "  git init"
+    echo "  git add -A"
+    echo "  git commit -m 'Initial public release (vX.Y.Z)'"
+    echo "  # Push to a throwaway PRIVATE GitHub repo first and review its file"
+    echo "  # listing before ever pushing to a public remote:"
+    echo "  git remote add origin <private-rehearsal-repo-url>"
+    echo "  git push -u origin HEAD"
+fi

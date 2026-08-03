@@ -63,7 +63,7 @@ Every release section must state:
 - any security scan acceptance in the exact syntax described below.
 
 For the first public release, use the explicit statement "Prior-release
-artifact upgrade gate: not applicable — no prior public release exists." Do
+artifact upgrade gate: not applicable. No prior public release exists." Do
 not imply that the gate ran.
 
 Validate that the release-note extractor selects the intended section, then
@@ -112,14 +112,16 @@ the affected scanner and architecture, and record why shipping is safe enough
 until a fix is available.
 
 Acceptances belong only in the exact release tag's changelog section. The
-reason after the em dash must be nonempty and specific. These are the accepted
-forms:
+reason after the separator must be nonempty and specific. The separator may be
+either a colon and a space, shown below and preferred for new entries, or a
+spaced em dash, which older entries use and which is still accepted. These are
+the accepted forms:
 
 ```text
-- **Security scan acceptance (pip-audit):** `GHSA-xxxx-xxxx-xxxx` — reason
-- **Security scan acceptance (Trivy linux/amd64):** `CVE-YYYY-NNNN` — reason
-- **Security scan acceptance (Trivy linux/arm64):** `CVE-YYYY-NNNN` — reason
-- **Security scan acceptance (Trivy all):** `CVE-YYYY-NNNN` — reason
+- **Security scan acceptance (pip-audit):** `GHSA-xxxx-xxxx-xxxx`: reason
+- **Security scan acceptance (Trivy linux/amd64):** `CVE-YYYY-NNNN`: reason
+- **Security scan acceptance (Trivy linux/arm64):** `CVE-YYYY-NNNN`: reason
+- **Security scan acceptance (Trivy all):** `CVE-YYYY-NNNN`: reason
 ```
 
 Use `all` only when the same finding and rationale apply to both published
@@ -154,7 +156,7 @@ Signing is keyless: the job exchanges its GitHub Actions OIDC token for a
 short-lived Fulcio certificate scoped to this exact workflow run, so there is
 no long-lived private key for a maintainer to generate, store, or rotate, and
 no key file that can leak. Verification instead checks the certificate's
-recorded identity — which workflow, in which repository, on which ref — against
+recorded identity (which workflow, in which repository, on which ref) against
 the public Rekor transparency log, both without a key.
 
 ### Verifying a release's signature and SBOM
@@ -178,21 +180,32 @@ cosign verify --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISS
   "$IMAGE@$ARM64_DIGEST"
 ```
 
-Each architecture digest also carries an attested SBOM; verifying the
-attestation and extracting the SBOM it covers are one command each:
+Each architecture digest also carries an attested SBOM. One command per
+architecture verifies that attestation and writes out the SBOM it covers. What
+the attestation signs is an in-toto statement whose subject is the architecture
+digest; the SPDX document is that statement's `predicate`, so extract the
+predicate rather than the whole statement:
 
 ```sh
 cosign verify-attestation --type spdxjson \
   --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" \
-  "$IMAGE@$AMD64_DIGEST" | jq -r '.payload' | base64 -d | jq . > sbom-amd64.spdx.json
+  "$IMAGE@$AMD64_DIGEST" | jq -r '.payload' | base64 -d | jq '.predicate' > sbom-amd64.spdx.json
 
 cosign verify-attestation --type spdxjson \
   --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" \
-  "$IMAGE@$ARM64_DIGEST" | jq -r '.payload' | base64 -d | jq . > sbom-arm64.spdx.json
+  "$IMAGE@$ARM64_DIGEST" | jq -r '.payload' | base64 -d | jq '.predicate' > sbom-arm64.spdx.json
+```
+
+Each written file is then a standalone SPDX document rather than the statement
+wrapping it. Confirm that before relying on it; an empty package list means the
+extraction, not the release, went wrong:
+
+```sh
+jq -r '.spdxVersion, (.packages | length)' sbom-amd64.spdx.json
 ```
 
 A failed verification means the artifact was not produced by this exact
-workflow run for this exact repository and tag — treat it the same as a failed
+workflow run for this exact repository and tag. Treat it the same as a failed
 digest comparison: stop and investigate before deploying.
 
 ## Create the immutable tag
@@ -293,7 +306,7 @@ remain identical; a database-service operational change needs a release-specific
 drill documented in that release's notes.
 
 For the first public release, record "Prior-release artifact upgrade gate: not
-applicable — no prior public release exists." A clean-install verification on
+applicable. No prior public release exists." A clean-install verification on
 both architectures is still required.
 
 ## Complete the release

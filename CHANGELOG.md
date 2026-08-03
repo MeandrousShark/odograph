@@ -39,11 +39,11 @@ reproduced here.
   `geoapify` (hosted, needs `GEOCODE_API_KEY`) or `nominatim` (self-hosted
   only, needs `GEOCODE_NOMINATIM_URL`, which ships with no default). Left
   unset with `GEOCODE_API_KEY` set, it resolves to `geoapify`.
-- `GEOCODE_OMIT_COUNTRY` — the trailing country suffix stripped from a
+- `GEOCODE_OMIT_COUNTRY`: the trailing country suffix stripped from a
   geocoded address, now configurable and provider-agnostic. Defaults to
   `United States of America`, reproducing prior behavior exactly; set empty
   to disable stripping.
-- `scripts/provision_osrm.sh` and `docs/osrm.md` — provisions a self-hosted
+- `scripts/provision_osrm.sh` and `docs/osrm.md`: provisions a self-hosted
   OSRM dataset from an operator-chosen Geofabrik extract, replacing the need
   to inherit the maintainer's own Washington-state example region.
 - `MAP_TILE_URL` and `MAP_TILE_ATTRIBUTION`.
@@ -84,7 +84,7 @@ reproduced here.
 
 - This is the first public release of Odograph. There is no prior public
   release to upgrade from; clean installation is the only supported path.
-- Prior-release artifact upgrade gate: not applicable — no prior public
+- Prior-release artifact upgrade gate: not applicable. No prior public
   release exists.
 
 ### Breaking changes

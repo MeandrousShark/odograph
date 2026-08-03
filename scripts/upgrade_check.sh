@@ -80,7 +80,10 @@ immutable_image_ref() {
     fi
     if [[ "$ref" =~ ^[^[:space:]@]+:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
         tag="${ref##*:}"
-        [ "${tag,,}" != "latest" ] && return 0
+        # Lowercased with tr rather than "${tag,,}": that expansion is bash 4+,
+        # and macOS still ships bash 3.2, where it is a syntax error rather
+        # than a graceful failure.
+        [ "$(printf '%s' "$tag" | tr '[:upper:]' '[:lower:]')" != "latest" ] && return 0
     fi
     return 1
 }

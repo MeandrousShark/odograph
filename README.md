@@ -1,10 +1,5 @@
 # Odograph
 
-**This is a US tax tool.** Odograph computes mileage deductions from IRS
-standard mileage rates. Outside the US, that figure is not merely
-unlocalized — it's wrong. If you're not a US filer, the deduction reports
-this project produces are not useful to you.
-
 Odograph is a self-hosted mileage tracker fed by [OwnTracks](https://owntracks.org/)
 in HTTP mode. Ingests location fixes, detects trips via stay-point clustering, tags them
 as business/personal (or manually when detection misses a drive), and provides a
@@ -16,6 +11,11 @@ Nominatim), and ntfy/email reminders for trips that still need tagging. See
 outside your instance, and under what configuration, and
 [docs/security.md](docs/security.md) for the trust model, entry-point
 security, and an operator hardening checklist.
+
+**This is a US tax tool.** Odograph computes mileage deductions from IRS
+standard mileage rates. Outside the US, that figure is not merely
+unlocalized. It's wrong. If you're not a US filer, the deduction reports
+this project produces are not useful to you.
 
 ## Install
 
@@ -40,6 +40,15 @@ security, and an operator hardening checklist.
   empty capability set. It writes nothing to disk, so this only matters if you
   bind-mount a host directory into it yourself: make sure that path is
   readable (and writable, if applicable) by UID/GID 10001.
+
+Linux is what this project is tested on and what it supports. Nothing in the
+design is Linux-specific beyond that: these are ordinary Linux container
+images, so Docker Desktop or `podman machine` on macOS or Windows will very
+likely work. It is simply not tested, so it is not claimed. If you try it and
+something breaks, open an issue. I have both platforms available and am glad
+to help track a problem down; I just don't test them ahead of time. Note that
+the phone posts location fixes continuously, so whatever the operating system,
+a machine that sleeps makes a poor host.
 
 ### Clean-host quickstart
 
@@ -151,14 +160,14 @@ The baseline stack needs none of these:
   `nominatim` (self-hosted only; also needs `GEOCODE_NOMINATIM_URL`, which
   ships with no default). Left unset with `GEOCODE_API_KEY` set, it resolves
   to `geoapify` for compatibility with configs from before this setting
-  existed — an existing `.env` needs no change. See
+  existed. An existing `.env` needs no change. See
   [the privacy guide](docs/privacy.md) for exactly what each provider
   receives before enabling either.
 - ntfy reminders and SMTP email are likewise enabled only when their
   corresponding `.env` variables are set. See
   [the privacy guide](docs/privacy.md) before enabling external services.
 - Self-hosted OSRM road snapping is an optional compose profile. It requires a
-  separately prepared regional dataset before starting `--profile osrm` — the
+  separately prepared regional dataset before starting `--profile osrm`. The
   app ships no default region. See [docs/osrm.md](docs/osrm.md) for choosing
   an extract, provisioning it, and sizing a host for it.
 
@@ -219,6 +228,16 @@ service-level agreement, guaranteed response time, or promise of help operating
 custom infrastructure. See [SECURITY.md](SECURITY.md) for security-reporting
 and supported-version details and [CONTRIBUTING.md](CONTRIBUTING.md) for the
 project scope.
+
+## AI assistance
+
+AI tools were used as development assistants on this project: implementation,
+debugging, testing, review, and documentation. I directed the product and
+design decisions, and I reviewed and tested the resulting work before release.
+
+Every release is signed and traceable to the exact source commit and CI run
+that built it. The verification commands are in
+[docs/releasing.md](docs/releasing.md).
 
 ## License
 

@@ -36,27 +36,27 @@ here; see `requirements.lock` for the full resolved set.
 
 ## Services (not bundled, used at runtime if configured)
 
-- **OpenStreetMap** — trip and route maps render OpenStreetMap tiles and
+- **OpenStreetMap**: trip and route maps render OpenStreetMap tiles and
   data, which are © OpenStreetMap contributors and licensed under the Open
   Database License (ODbL). This carries an attribution requirement, which
   the app already satisfies: pages that load OSM tiles render an "©
   OpenStreetMap" attribution link on the map. See
   [openstreetmap.org/copyright](https://www.openstreetmap.org/copyright).
-- **OSRM** — optional, self-hosted road-snapping and routing. OSRM
+- **OSRM**: optional, self-hosted road-snapping and routing. OSRM
   (Open Source Routing Machine) is BSD-2-Clause licensed. This project
   does not vendor or redistribute OSRM; it talks to an instance the
   operator runs themselves.
-- **Geoapify** — one of two optional reverse-geocoding/address-autocomplete
+- **Geoapify**: one of two optional reverse-geocoding/address-autocomplete
   providers, used when `GEOCODE_PROVIDER=geoapify`. This is a third-party
   paid API service, not bundled software. Operators who enable it bring
   their own API key and are responsible for accepting Geoapify's own terms
   of service.
-- **Nominatim** — the other optional geocoding provider, used when
+- **Nominatim**: the other optional geocoding provider, used when
   `GEOCODE_PROVIDER=nominatim`. Unlike Geoapify, this isn't a third-party
   runtime dependency: it's self-hosted only, so it's infrastructure the
   operator runs themselves, not a service or terms of use anyone else
   controls. It still queries OSM-derived data, which carries the same ODbL
   attribution requirement as the map tiles above regardless of who's
-  hosting the Nominatim instance — an operator running their own is
+  hosting the Nominatim instance. An operator running their own is
   responsible for that attribution the same way this project already is
   for its own use of OSM data.

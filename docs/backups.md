@@ -24,7 +24,7 @@ Three things are deliberately **not** in the archive:
 - **`.env`.** It holds your database, ingest, session, setup, OIDC, and
   optional-service secrets and configuration, and none of it lives in
   PostgreSQL. The backup script never reads or prints it. See
-  [Protecting `.env`](#protecting-env) below — losing it is a real recovery
+  [Protecting `.env`](#protecting-env) below. Losing it is a real recovery
   problem even though the database restores fine on its own.
 - **The optional `osrmdata` volume.** It holds reproducible OSRM routing
   artifacts built from a regional road extract, not data this application
@@ -69,8 +69,8 @@ sidecar and a non-secret `.manifest` file (creation time, schema version,
 Postgres/PostGIS versions, source ref), and sets the `backups/` directory to
 mode `700`. It refuses to overwrite an existing archive, sidecar, or
 manifest, and it never puts a password on the command line or prints
-anything from `.env`. If any step fails, cleanup removes the partial output —
-there's never an archive on disk that looks successful but isn't.
+anything from `.env`. If any step fails, cleanup removes the partial output.
+There's never an archive on disk that looks successful but isn't.
 
 Pick your own output path with `--output`:
 
@@ -98,13 +98,13 @@ any restore.
 Restores are deliberately fresh-target-only: the script refuses to run while
 the `app` service is up, and refuses any target database that already
 contains application relations (including a pre-existing `schema_migrations`
-table). There is no in-place overwrite and no `--replace` flag — restoring
+table). There is no in-place overwrite and no `--replace` flag. Restoring
 into a used database means creating a new, empty one first (see
 [Disaster recovery](#disaster-recovery) below for the case where the old data
 needs to survive alongside it).
 
-For a target you already know is empty — a brand-new install, or a `dbdata`
-volume you just recreated on purpose — stop the app and restore:
+For a target you already know is empty (a brand-new install, or a `dbdata`
+volume you just recreated on purpose), stop the app and restore:
 
 ```sh
 docker compose stop app          # or: podman-compose stop app
@@ -117,7 +117,7 @@ The restore runs `pg_restore --single-transaction --exit-on-error`, so a
 failure mid-restore leaves nothing partially committed. On success it runs
 `ANALYZE`, prints the restored schema version, and compares it against the
 archive's manifest if one is next to it (a mismatch is a warning, not a
-failure — the restore already committed). It does not start the app for
+failure, since the restore already committed). It does not start the app for
 you; start it yourself once you're satisfied, so its own startup migrations
 (if the target release differs from the one that made the backup) run under
 your observation.
@@ -128,7 +128,7 @@ still always runs). This is not valid together with `--verify-only`.
 
 ## Protecting `.env`
 
-Keep a separate, encrypted copy of `.env` — a password manager, a
+Keep a separate, encrypted copy of `.env`: a password manager, a
 GPG-encrypted file, or an encrypted backup tool's repository (see
 [Encryption and off-host copies](#encryption-and-off-host-copies)) all work.
 It's the only place several of your instance's secrets exist outside memory,
@@ -139,7 +139,7 @@ What losing a given value actually costs, if you don't have a copy:
 - **`POSTGRES_PASSWORD`** only matters if you still have the *original*
   `dbdata` volume around. The Postgres image applies this variable only when
   initializing an empty data directory, so an existing volume's role
-  password was fixed back when that volume was first created — a value that
+  password was fixed back when that volume was first created, a value that
   no longer matches in `.env` just means the app can't authenticate, and
   fixing it means resetting the role's password directly inside the
   container rather than editing `.env`. Restoring into a fresh volume (the
@@ -152,7 +152,7 @@ What losing a given value actually costs, if you don't have a copy:
 - **`ADMIN_TOKEN`** is safely regenerable. Put a new high-entropy value in
   `.env` and recreate the app to reissue the one-time `/setup` page.
 - **`INGEST_PASSWORD`** is safely regenerable, but every OwnTracks device
-  needs its password field updated to match before it can post again — see
+  needs its password field updated to match before it can post again. See
   [Connecting OwnTracks](owntracks.md).
 - **`OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET`** have to be
   re-obtained from your identity provider; nothing here regenerates them
@@ -161,7 +161,7 @@ What losing a given value actually costs, if you don't have a copy:
   you run, plus whatever that provider needs: an operator on Geoapify also
   needs `GEOCODE_API_KEY` re-obtained from Geoapify, the same as the keys
   below; an operator on self-hosted Nominatim needs only
-  `GEOCODE_NOMINATIM_URL` pointed back at their own instance — there's no
+  `GEOCODE_NOMINATIM_URL` pointed back at their own instance. There's no
   key to re-obtain, since that provider never issued one.
 - **Optional-service keys** (`NTFY_TOKEN` / `NTFY_USERNAME` /
   `NTFY_PASSWORD`, `SMTP_USERNAME` / `SMTP_PASSWORD`) have to be re-obtained
@@ -173,7 +173,7 @@ If `.env` is gone and no encrypted copy exists, generate a fresh one
 (`scripts/generate_env.sh`) and expect the following, on top of the restored
 data itself:
 
-- Every existing browser session is invalidated — the new `SESSION_SECRET`
+- Every existing browser session is invalidated: the new `SESSION_SECRET`
   can't validate cookies signed by the old one, so everyone (including you)
   has to sign in again.
 - Every OwnTracks device needs reconfiguring with the new `INGEST_PASSWORD`
@@ -184,14 +184,14 @@ data itself:
 - The geocoder needs `GEOCODE_PROVIDER` set again either way. An operator on
   Geoapify also needs `GEOCODE_API_KEY` re-entered from Geoapify; an
   operator on self-hosted Nominatim just needs `GEOCODE_NOMINATIM_URL`
-  pointed back at their own instance — nothing to re-obtain from a third
+  pointed back at their own instance, nothing to re-obtain from a third
   party.
 - `osrmdata` was never in the database dump regardless of what happened to
   `.env`, so self-hosted road-snapping needs its one-time regional extract
   prepared again before you re-enable that profile.
 
 None of this affects the restored trips, points, places, vehicles, or
-expenses — it's entirely about re-establishing access and external
+expenses. It's entirely about re-establishing access and external
 integrations around data that's already back.
 
 ## Scheduling
@@ -245,8 +245,8 @@ sudo systemctl list-timers mileage-backup.timer
 
 ## Encryption and off-host copies
 
-A local, unencrypted `backups/` directory is not a complete backup strategy
-— it doesn't survive host loss and, since these archives contain location
+A local, unencrypted `backups/` directory is not a complete backup strategy.
+It doesn't survive host loss and, since these archives contain location
 history, it deserves the same at-rest protection as `.env`. Compose an
 established backup tool around the script rather than scripting your own
 upload; neither of these scripts, nor any other part of this project, embeds
@@ -271,7 +271,7 @@ borg prune --keep-daily 7 --keep-weekly 5 --keep-monthly 12 /mnt/backup-target/m
 ```
 
 Both tools encrypt the repository, deduplicate across runs, and support
-pushing to remote storage — configure that transport and any credentials
+pushing to remote storage. Configure that transport and any credentials
 through the tool's own configuration (environment file, credential helper,
 etc.), not by editing these project scripts.
 
@@ -286,7 +286,7 @@ ages out.
 
 This is a different knob from `RAW_MESSAGE_RETENTION_DAYS`, which only
 prunes the raw ingest payload table (`raw_messages`) inside the *live*
-database — it never touches points, trips, or any other derived data, and
+database. It never touches points, trips, or any other derived data, and
 defaults to 365 days. Backup retention is independent of it: a dump taken
 before a raw message aged out still contains that row, and keeps containing
 it for as long as your backup retention policy keeps that dump around. If
@@ -318,13 +318,13 @@ unset COMPOSE_PROJECT_NAME
 ```
 
 Because `COMPOSE_PROJECT_NAME` is unset again afterward, that `down -v`
-targets only the disposable `mileage-drill` project's volumes — your real
+targets only the disposable `mileage-drill` project's volumes. Your real
 installation, running under its own project name, is untouched throughout.
 
 ## Disaster recovery
 
 Use this runbook when the running installation is broken badly enough that
-you don't trust its `dbdata` volume — corruption, a bad manual change, a
+you don't trust its `dbdata` volume: corruption, a bad manual change, a
 failed upgrade you don't want to chase. The old volume stays exactly as it
 is until you've verified the new one and deliberately choose to delete the
 old one; nothing here deletes it for you.
@@ -344,7 +344,7 @@ old one; nothing here deletes it for you.
    ```
 
 3. **Restore into it.** The restore script's own guardrails are your safety
-   net here — it refuses to run if this "fresh" target somehow already has
+   net here: it refuses to run if this "fresh" target somehow already has
    application data:
 
    ```sh
@@ -365,14 +365,14 @@ old one; nothing here deletes it for you.
    - Sign in as your local administrator (or through OIDC, if configured).
    - Open the trip list and confirm representative trips, places, and
      vehicles look right.
-   - Confirm `/ingest` still accepts a point — `scripts/send_test_track.sh`
+   - Confirm `/ingest` still accepts a point. `scripts/send_test_track.sh`
      is the fastest way (see [Connecting OwnTracks](owntracks.md)).
    - Confirm background workers started (check `docker compose logs app` /
      `podman-compose logs app` for detector/snap/retention worker startup
      lines).
 
-5. **Only once all of that checks out**, retire the old volume yourself —
-   this project never deletes a volume automatically. If the recovery
+5. **Only once all of that checks out**, retire the old volume yourself.
+   This project never deletes a volume automatically. If the recovery
    project should become your primary installation going forward, that's an
    ordinary Compose administration step (renaming, or just adopting
    `COMPOSE_PROJECT_NAME=mileage-recovery` as the one you keep using) outside
@@ -380,4 +380,4 @@ old one; nothing here deletes it for you.
 
 If `.env` didn't survive whatever went wrong either, see
 [Recovering when only the database dump survived](#recovering-when-only-the-database-dump-survived)
-above — the database itself restores the same way regardless.
+above. The database itself restores the same way regardless.

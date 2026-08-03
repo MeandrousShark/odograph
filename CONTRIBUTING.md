@@ -7,7 +7,7 @@ This is a single-user, self-hosted mileage tracker. It is deliberately
 one. Feature scope is maintainer-driven: proposals that push toward
 multi-tenancy, hosted-SaaS operation, or general-purpose scope beyond
 personal mileage tracking are unlikely to be accepted. There is a single
-maintainer, and review happens on a best-effort basis — there's no fixed
+maintainer, and review happens on a best-effort basis. There's no fixed
 cadence or SLA for issues or pull requests.
 
 ## Development setup
@@ -22,7 +22,7 @@ python3 -m venv .venv
 
 Most tests are pure functions (trip detector, report builders) and need no
 database. If `pytest` cannot import `httpx` or `psycopg_pool`, the `.venv`
-is stale or incomplete — reinstall `requirements-dev.txt` before treating
+is stale or incomplete. Reinstall `requirements-dev.txt` before treating
 that as a test failure. Note the naming split: the PyPI package is
 `psycopg-pool`, but the Python import is `psycopg_pool`.
 
