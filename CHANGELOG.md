@@ -13,6 +13,11 @@ reproduced here.
 
 ### Changed
 
+- `.env.example` now documents `INGEST_USERNAME` and
+  `RAW_MESSAGE_RETENTION_DAYS`, and no longer lists
+  `FULL_REPROCESS_WARN_POINTS`, which only selected the severity of a log
+  line. No application default changed, and an existing `.env` needs no edit.
+
 ### Fixed
 
 ### Security

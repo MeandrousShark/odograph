@@ -12,7 +12,8 @@ In the OwnTracks app, open Settings and configure a connection:
 - **Mode:** HTTP
 - **URL:** `https://your-domain/ingest` (your instance's address, with
   `/ingest` appended, for example `https://mileage.example.com/ingest`)
-- **Username:** `owntracks`
+- **Username:** `owntracks`, unless you have set `INGEST_USERNAME` in `.env`
+  to something else
 - **Password:** the value of `INGEST_PASSWORD` from your instance's `.env`
   file
 - **Device ID / Tracker ID (`tid`):** any short identifier, for example the

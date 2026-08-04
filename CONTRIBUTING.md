@@ -41,6 +41,36 @@ TEST_DATABASE_URL=postgresql://mileage:testpw@127.0.0.1:55432/mileage \
 
 Without `TEST_DATABASE_URL` set, DB-dependent tests skip rather than fail.
 
+### Running the app directly
+
+Run a database container and start the app directly:
+
+```sh
+podman run -d --name mileage-db -p 5432:5432 \
+  -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=mileage -e POSTGRES_USER=mileage \
+  docker.io/postgis/postgis:16-3.4
+
+DATABASE_URL=postgresql://mileage:dev@localhost:5432/mileage \
+INGEST_PASSWORD=dev SESSION_SECRET=dev DEV_NO_AUTH=1 \
+uvicorn app.main:create_app --factory --reload
+```
+
+For a containerized source build, add the contributor override explicitly:
+
+```sh
+# Docker Compose v2
+docker compose -f compose.yaml -f compose.build.override.yml up -d --build
+
+# Or Podman Compose
+podman-compose -f compose.yaml -f compose.build.override.yml up -d --build
+```
+
+Run only the command for your runtime. The override gives the development
+image a project-scoped name and leaves the canonical pinned release image
+unchanged. Both development paths use the same `.env.example` variables.
+Maintainers use the executable [release procedure](docs/releasing.md) for
+versioned publication.
+
 ## Expectations for changes
 
 - The full test suite should be green before you open a pull request.

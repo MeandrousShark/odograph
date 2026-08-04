@@ -171,54 +171,11 @@ The baseline stack needs none of these:
   app ships no default region. See [docs/osrm.md](docs/osrm.md) for choosing
   an extract, provisioning it, and sizing a host for it.
 
-## Tests
+## Contributing
 
-Most tests are pure functions (trip detector, report builders) and need no database:
-
-```sh
-python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/pytest
-```
-
-DB-backed tests (ingest, detector integration, routes) require a Postgres/PostGIS database.
-Set `TEST_DATABASE_URL` to run them; without it, they skip:
-
-```sh
-TEST_DATABASE_URL=postgresql://mileage:testpw@127.0.0.1:55432/mileage \
-  .venv/bin/pytest
-```
-
-Use a disposable test database, never production data.
-
-## Local development
-
-Run a database container and start the app directly:
-
-```sh
-podman run -d --name mileage-db -p 5432:5432 \
-  -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=mileage -e POSTGRES_USER=mileage \
-  docker.io/postgis/postgis:16-3.4
-
-DATABASE_URL=postgresql://mileage:dev@localhost:5432/mileage \
-INGEST_PASSWORD=dev SESSION_SECRET=dev DEV_NO_AUTH=1 \
-uvicorn app.main:create_app --factory --reload
-```
-
-For a containerized source build, add the contributor override explicitly:
-
-```sh
-# Docker Compose v2
-docker compose -f compose.yaml -f compose.build.override.yml up -d --build
-
-# Or Podman Compose
-podman-compose -f compose.yaml -f compose.build.override.yml up -d --build
-```
-
-Run only the command for your runtime. The override gives the development
-image a project-scoped name and leaves the canonical pinned release image
-unchanged. Both development paths use the same `.env.example` variables.
-Maintainers use the executable [release procedure](docs/releasing.md) for
-versioned publication.
+Interested in running the test suite or working on the code itself? See
+[CONTRIBUTING.md](CONTRIBUTING.md) for development setup, running tests, and
+local development instructions.
 
 ## Support
 

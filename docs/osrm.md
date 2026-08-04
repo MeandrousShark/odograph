@@ -132,7 +132,7 @@ data: it doesn't hot-reload a dataset that changed underneath it:
 
 ```sh
 scripts/provision_osrm.sh https://download.geofabrik.de/north-america/us/florida-latest.osm.pbf
-docker compose --profile osrm up -d --force-recreate osrm   # or: podman-compose --profile osrm up -d --force-recreate osrm
+docker compose --profile osrm up -d --force-recreate osrm
 ```
 
 If the new extract's filename differs from the old one (a different region,

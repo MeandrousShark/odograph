@@ -30,7 +30,8 @@ Three things are deliberately **not** in the archive:
   artifacts built from a regional road extract, not data this application
   generated. If you use the `osrm` compose profile, reprovision it with the
   same one-time extract/partition/customize step described in
-  [README.md](../README.md) rather than backing it up.
+  [Self-hosted OSRM road-snapping](osrm.md#provisioning) rather than backing
+  it up.
 - **The PostGIS-managed `tiger`, `tiger_data`, and `topology` schemas.**
   These are created by the database image itself on every fresh volume, not
   by this application, so a restore target already has them without needing
@@ -107,10 +108,10 @@ For a target you already know is empty (a brand-new install, or a `dbdata`
 volume you just recreated on purpose), stop the app and restore:
 
 ```sh
-docker compose stop app          # or: podman-compose stop app
-docker compose up -d db          # or: podman-compose up -d db
+docker compose stop app
+docker compose up -d db
 scripts/restore_database.sh backups/mileage-20260719T030000Z.dump
-docker compose up -d app         # or: podman-compose up -d app
+docker compose up -d app
 ```
 
 The restore runs `pg_restore --single-transaction --exit-on-error`, so a
@@ -302,10 +303,10 @@ distinct project name so it gets its own volumes:
 
 ```sh
 export COMPOSE_PROJECT_NAME=mileage-drill
-docker compose up -d db                      # or: podman-compose up -d db
+docker compose up -d db
 scripts/restore_database.sh --skip-checksum backups/mileage-20260719T030000Z.dump
 # (omit --skip-checksum if the archive's .sha256 sidecar is right next to it)
-docker compose up -d app                     # or: podman-compose up -d app
+docker compose up -d app
 curl -fsS http://127.0.0.1:8077/healthz
 ```
 
@@ -313,7 +314,7 @@ Sign in, confirm a representative trip or two, then tear the drill down and
 remove its volumes once you're satisfied:
 
 ```sh
-docker compose down -v                       # or: podman-compose down -v
+docker compose down -v
 unset COMPOSE_PROJECT_NAME
 ```
 
@@ -340,7 +341,7 @@ old one; nothing here deletes it for you.
 
    ```sh
    export COMPOSE_PROJECT_NAME=mileage-recovery
-   docker compose up -d db          # or: podman-compose up -d db
+   docker compose up -d db
    ```
 
 3. **Restore into it.** The restore script's own guardrails are your safety
@@ -355,7 +356,7 @@ old one; nothing here deletes it for you.
    cutting over:
 
    ```sh
-   docker compose up -d app         # or: podman-compose up -d app
+   docker compose up -d app
    curl -fsS http://127.0.0.1:8077/healthz
    ```
 

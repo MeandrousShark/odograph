@@ -37,6 +37,11 @@ random_uri_secret() {
     fi
 }
 
+# Single source of truth for which variables get generated secrets. The awk
+# substitution and the printed summary both derive from this array, so a
+# later change to the set can't update one and miss the other.
+GENERATED_VARS=(POSTGRES_PASSWORD INGEST_PASSWORD SESSION_SECRET ADMIN_TOKEN)
+
 # This value is interpolated directly into DATABASE_URL. Hex retains 256
 # bits of entropy without URI delimiters that would change its parse.
 POSTGRES_PASSWORD="$(random_uri_secret)"
@@ -47,39 +52,29 @@ ADMIN_TOKEN="$(random_secret)"
 # awk generates the whole file in one pass rather than editing in place:
 # BSD sed (macOS) and GNU sed (Linux) take incompatible -i syntax, and
 # writing fresh output sidesteps that difference entirely.
-awk -v pw="$POSTGRES_PASSWORD" -v ip="$INGEST_PASSWORD" \
-    -v ss="$SESSION_SECRET" -v at="$ADMIN_TOKEN" '
-    /^POSTGRES_PASSWORD=/ { print "POSTGRES_PASSWORD=" pw; next }
-    /^INGEST_PASSWORD=/   { print "INGEST_PASSWORD=" ip; next }
-    /^SESSION_SECRET=/    { print "SESSION_SECRET=" ss; next }
-    /^ADMIN_TOKEN=/       { print "ADMIN_TOKEN=" at; next }
-    { print }
-' "$ENV_EXAMPLE" > "$ENV_FILE"
+awk_args=()
+awk_program=""
+for var in "${GENERATED_VARS[@]}"; do
+    awk_args+=(-v "${var}=${!var}")
+    awk_program+="/^${var}=/ { print \"${var}=\" ${var}; next } "
+done
+awk_program+="{ print }"
+
+awk "${awk_args[@]}" "$awk_program" "$ENV_EXAMPLE" > "$ENV_FILE"
 
 # Secrets are inside; not world/group readable.
 chmod 600 "$ENV_FILE"
 
 cat <<EOF
 Generated $ENV_FILE with fresh random values for:
-  POSTGRES_PASSWORD
-  INGEST_PASSWORD
-  SESSION_SECRET
-  ADMIN_TOKEN
+$(printf '  %s\n' "${GENERATED_VARS[@]}")
 
-Still needs your own input before starting the stack:
-  DISPLAY_TZ           - your IANA timezone (defaults to America/New_York)
-  HTTPS reverse proxy  - configure your domain before browser setup; see
-                         docs/reverse-proxy.md
-  FORWARDED_ALLOW_IPS  - '*' is safe only because port 8077 stays loopback-bound
-                         behind a trusted proxy -- both failed-auth rate
-                         limiters key off the client address this produces,
-                         so publishing the port with '*' still set lets a
-                         client spoof X-Forwarded-For and dodge them. Set it
-                         to your proxy's exact IP/CIDR if you widen the bind
-                         or proxy topology.
-  Optional services left commented out: OIDC, reverse geocoding, ntfy, and
-  email. Uncomment and fill in only the ones you use.
-  OSRM (road-snapping) is opt-in: it ships with no dataset configured, so
-  provision your own region's extract with scripts/provision_osrm.sh before
-  starting it with --profile osrm; see docs/osrm.md.
+Still needs your own input before starting the stack. See .env.example for
+what each setting controls and README.md for the install walkthrough:
+  - DISPLAY_TZ
+  - FORWARDED_ALLOW_IPS (only if you're not using the loopback-bound
+    reverse-proxy setup; see docs/reverse-proxy.md)
+  - Optional services left commented out: OIDC, reverse geocoding, ntfy,
+    and email
+  - OSRM (road-snapping), opt-in; see docs/osrm.md
 EOF

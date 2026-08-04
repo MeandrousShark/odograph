@@ -67,10 +67,10 @@ the pre-upgrade backup, described in [Rollback](#rollback) below.
 4. **Pull the pinned image and restart, then verify:**
 
    ```sh
-   docker compose pull app                  # or: podman-compose pull app
-   docker compose up -d                     # or: podman-compose up -d
-   docker compose ps                        # or: podman-compose ps
-   docker compose logs app                  # or: podman-compose logs app
+   docker compose pull app
+   docker compose up -d
+   docker compose ps
+   docker compose logs app
    curl -fsS http://127.0.0.1:8077/healthz
    ```
 
@@ -138,14 +138,14 @@ database, and not attempting to undo a migration in place.
 1. Stop the candidate release:
 
    ```sh
-   docker compose stop app        # or: podman-compose stop app
+   docker compose stop app
    ```
 
 2. Check out the exact previous release:
 
    ```sh
    git checkout vX.Y.Z-1
-   docker compose pull app        # or: podman-compose pull app
+   docker compose pull app
    ```
 
 3. Restore the pre-upgrade dump into a **fresh** volume/Compose project, per
