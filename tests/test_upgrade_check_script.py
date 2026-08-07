@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -388,6 +389,121 @@ def test_source_candidate_allows_app_drift_and_uses_build_override(tmp_path):
     assert "compose.build.override.yml" not in config_lines[0]
     assert "compose.build.override.yml" in config_lines[1]
     assert list(scratch_root.glob("upgrade_check.*")) == []
+
+
+def _extract_function(source: str, name: str) -> str:
+    marker = f"{name}() {{"
+    start = source.index(marker)
+    brace_start = source.index("{", start)
+    depth = 0
+    end = brace_start
+    for end, char in enumerate(source[brace_start:], start=brace_start):
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                break
+    return source[start : end + 1]
+
+
+def _manifest_comparison_harness(tmp_path: Path) -> Path:
+    # step7_upgrade's manifest comparison is the one under test here (the
+    # bug: it compared schema_version, which necessarily changes across a
+    # migration-running upgrade). Standing up the full drill's containers
+    # just to exercise this comparison would be impractical, so the exact
+    # functions it relies on are pulled out of the real script and driven
+    # directly against fixture manifests instead.
+    source = UPGRADE_SCRIPT.read_text()
+    functions = "\n\n".join(
+        _extract_function(source, name)
+        for name in (
+            "step_pass",
+            "step_fail",
+            "assert_manifests_equal",
+            "strip_schema_version_section",
+            "assert_data_manifests_equal",
+        )
+    )
+    script = tmp_path / "compare.sh"
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'SCRATCH="$1"\n'
+        'A="$2"\n'
+        'B="$3"\n'
+        'DESC="$4"\n\n'
+        f"{functions}\n\n"
+        'assert_data_manifests_equal "$A" "$B" "$DESC"\n'
+    )
+    script.chmod(0o755)
+    return script
+
+
+def test_data_manifest_comparison_ignores_schema_version_drift(tmp_path):
+    script = _manifest_comparison_harness(tmp_path)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+
+    common_data = "== local_admin ==\nadmin@example.test\n== vehicles ==\ncar\n"
+    manifest_a = tmp_path / "manifest-a.txt"
+    manifest_b = tmp_path / "manifest-b.txt"
+    manifest_a.write_text("== schema_version ==\n18\n" + common_data)
+    manifest_b.write_text("== schema_version ==\n19\n" + common_data)
+
+    result = subprocess.run(
+        ["bash", str(script), str(scratch), str(manifest_a), str(manifest_b), "schema-only-diff"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[PASS] schema-only-diff" in result.stdout
+
+
+def test_data_manifest_comparison_still_fails_on_data_drift(tmp_path):
+    script = _manifest_comparison_harness(tmp_path)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+
+    manifest_a = tmp_path / "manifest-a.txt"
+    manifest_b = tmp_path / "manifest-b.txt"
+    manifest_a.write_text("== schema_version ==\n18\n== vehicles ==\ncar\n")
+    manifest_b.write_text("== schema_version ==\n19\n== vehicles ==\ntruck\n")
+
+    result = subprocess.run(
+        ["bash", str(script), str(scratch), str(manifest_a), str(manifest_b), "data-diff"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode != 0
+    assert "manifest mismatch (data-diff)" in result.stderr
+    assert "-car" in result.stderr
+    assert "+truck" in result.stderr
+
+
+def test_keep_teardown_message_reports_project_patterns_without_unbound_variable(
+    tmp_path,
+):
+    repo, base_ref, candidate_ref = _install_repo(tmp_path)
+
+    result, _, _, scratch_root = _run(
+        repo,
+        ["--base", base_ref, "--candidate", candidate_ref, "--keep"],
+        tmp_path,
+    )
+
+    assert "unbound variable" not in result.stderr
+    assert "--keep given: leaving containers/volumes/scratch in place" in result.stdout
+
+    match = re.search(r"^  project:\s+(\S+)$", result.stdout, re.MULTILINE)
+    assert match, result.stdout
+    project = match.group(1)
+    assert f"'{project}-*'/'{project}_*' (docker)," in result.stdout
+    assert list(scratch_root.glob("upgrade_check.*")) != []
 
 
 def test_source_candidate_refuses_db_service_drift_before_up(tmp_path):

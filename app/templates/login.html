@@ -19,13 +19,17 @@
   </label>
   <button type="submit" class="control control-primary">Sign in</button>
 </form>
+{% endif %}
+
+{% if local_admin_exists and oidc_available %}
+<p class="auth-divider">or</p>
+{% endif %}
 
 {% if oidc_available %}
-<p class="auth-divider">or</p>
 <a class="control control-secondary" href="/login/oidc">Sign in with OIDC</a>
 {% endif %}
 
-{% else %}
+{% if not local_admin_exists and not oidc_available %}
 <p class="muted">
   No administrator has been set up yet.
   {% if setup_available %}

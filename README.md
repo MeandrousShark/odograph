@@ -148,6 +148,12 @@ invalidate it either. If you need to revoke every existing browser session,
 also replace `SESSION_SECRET` with a new high-entropy value before the final
 app recreation. This signs everyone out; it does not affect stored data.
 
+Logging out ends the application's own session and returns you to the login
+page, but it does not end the identity provider's session. With OIDC,
+signing back in afterward may not prompt for credentials at all, because the
+provider still considers you signed in. To fully sign out, also sign out of
+the identity provider directly.
+
 ### Optional integrations
 
 The baseline stack needs none of these:

@@ -1,6 +1,8 @@
 """Tests for POST-only /logout (Batch B item 4): a bare GET no longer logs
 anyone out (CSRF-able), and the CSRF-protected POST behaves like the old
-GET did. No DB needed -- logout only touches the session.
+GET did. No DB needed -- logout only touches the session; the follow-up
+GET /login below uses a fake pool/oauth (test_auth_route_ordering.py's
+pattern) purely to exercise routing, not real persistence.
 
 Session state is seeded/inspected through two test-only routes bolted onto
 the bare app below, the same "smallest ASGI app that exercises real
@@ -11,19 +13,69 @@ only actually runs when dispatched through the router.
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import httpx
 import pytest
 from fastapi import FastAPI, Request, Response
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.responses import PlainTextResponse, RedirectResponse
 
 from app.auth import make_router
+
+
+class _FakeOAuthClient:
+    async def authorize_redirect(self, request, redirect_uri):
+        return RedirectResponse("https://idp.example.com/authorize", status_code=303)
+
+
+class _FakeOAuth:
+    pocketid = _FakeOAuthClient()
+
+
+class _FakeCursor:
+    async def execute(self, *args, **kwargs):
+        return self
+
+    async def fetchone(self):
+        return None  # no local admin row -- production's exact configuration
+
+
+class _FakeConn:
+    def cursor(self, row_factory=None):
+        return _FakeCursor()
+
+
+class _FakeConnCtx:
+    async def __aenter__(self):
+        return _FakeConn()
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
+class _FakePool:
+    def connection(self):
+        return _FakeConnCtx()
 
 
 def _bare_app() -> FastAPI:
     app = FastAPI()
     app.add_middleware(
         SessionMiddleware, secret_key="test-secret", same_site="lax", https_only=False
+    )
+    # OIDC configured, no local admin: production's exact configuration, and
+    # the one in which GET /login used to auto-redirect to the provider
+    # instead of rendering a page (the logout bug).
+    app.state.config = SimpleNamespace(
+        dev_no_auth=False, admin_token="", allowed_email="", oidc_configured=True
+    )
+    app.state.oauth = _FakeOAuth()
+    app.state.pool = _FakePool()
+    app.state.templates = SimpleNamespace(
+        TemplateResponse=lambda request, name, context, status_code=200: (
+            PlainTextResponse(f"rendered:{name}", status_code=status_code)
+        )
     )
 
     @app.post("/test/seed-session")
@@ -85,5 +137,26 @@ def test_post_logout_with_valid_csrf_clears_session_and_redirects():
 
             logged_out = await client.get("/test/session")
             assert logged_out.json() == {"has_user": False}
+
+    asyncio.run(run())
+
+
+def test_post_logout_then_following_hx_redirect_renders_login_not_oidc():
+    # Regression test for the reported defect: logging out looked like a
+    # no-op because the IdP's own SSO session silently re-authenticated the
+    # browser the moment it landed on /login. GET /login must render the
+    # login page here rather than issue an OIDC redirect.
+    async def run():
+        async with await _client() as client:
+            await client.post("/test/seed-session")
+            logout_response = await client.post(
+                "/logout", headers={"X-CSRF-Token": "test-csrf-token"}
+            )
+            assert logout_response.status_code == 204
+            redirect_target = logout_response.headers["HX-Redirect"]
+
+            login_response = await client.get(redirect_target)
+            assert login_response.status_code == 200
+            assert login_response.text == "rendered:login.html"
 
     asyncio.run(run())

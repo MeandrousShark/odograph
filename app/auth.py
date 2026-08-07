@@ -133,23 +133,13 @@ def make_router() -> APIRouter:
         cfg = request.app.state.config
         if cfg.dev_no_auth:
             return RedirectResponse("/", status_code=303)
-        oauth = request.app.state.oauth
-        pool = request.app.state.pool
-        async with pool.connection() as conn:
-            admin = await _get_local_admin(conn)
-        if oauth is not None and admin is None:
-            # Zero-change path: an OIDC-configured instance with no local
-            # admin set up yet redirects immediately, exactly as before --
-            # an existing production deployment sees no behavior change.
-            return await _oidc_authorize_redirect(request)
         return await _render_login(request, error=None)
 
     @router.get("/login/oidc", name="login_oidc")
     async def login_oidc(request: Request):
-        # Reachable when both OIDC and a local admin are configured, so the
-        # rendered login page's "Sign in with OIDC" link has somewhere to
-        # go -- plain GET /login no longer auto-redirects once a local
-        # admin exists.
+        # Reachable when OIDC is configured, so the rendered login page's
+        # "Sign in with OIDC" link has somewhere to go -- plain GET /login
+        # never auto-redirects to the provider.
         cfg = request.app.state.config
         oauth = request.app.state.oauth
         if cfg.dev_no_auth or oauth is None:

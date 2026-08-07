@@ -27,6 +27,70 @@ reproduced here.
 - Complete before release: list every application, database, configuration,
   and operational break, or state explicitly that there are none.
 
+## [0.7.1] - 2026-08-07
+
+### Fixed
+
+- **Signing out now signs you out.** On an installation using OIDC without a
+  local administrator, the sign-out button appeared to do nothing. It really
+  did clear the application's session, but the page it then sent the browser
+  to redirected straight back to the identity provider, which still held its
+  own sign-in and returned the browser with a fresh session before anything
+  was visible. Sign-out now ends on the sign-in page, as it reads.
+- The sign-in page offers the OIDC button on an installation that has OIDC
+  configured but no local administrator. That combination previously rendered
+  neither a password form nor an OIDC button, only the message that no
+  administrator had been set up. It went unnoticed because that installation
+  never reached the page before this release.
+- `scripts/upgrade_check.sh` can now verify a release that runs a database
+  migration. Its final comparison required the whole database manifest to be
+  unchanged across the upgrade, and the manifest begins with the schema
+  version, so any release running a migration failed the check by definition.
+  The comparison now excludes the schema version, which the same step already
+  asserts separately against the candidate's migration count. A second fix
+  stops the `--keep` teardown message from crashing on an unset variable.
+
+### Changed
+
+- **The sign-in page is always shown.** An installation with OIDC configured
+  and no local administrator used to be sent straight to the identity
+  provider when it needed to sign in. It now sees the sign-in page with a
+  "Sign in with OIDC" button on it. This is one extra click per sign-in and
+  it is what makes signing out work, since a page that redirects on sight
+  cannot show anyone that they are signed out. Installations that already
+  showed a sign-in page are unaffected, no configuration changes, and every
+  sign-in that worked before still works.
+- `docs/releasing.md` now requires running `pip-audit` against the exact tree
+  a release is about to tag. The dependency scan runs inside the release
+  workflow, so a vulnerability found there burns an immutable tag that has
+  already been pushed.
+
+### Security
+
+- Signing out ends this application's session. It does **not** end the
+  identity provider's session, because the application performs no
+  provider-side sign-out. After signing out, signing back in through OIDC may
+  not prompt for credentials at all, since the provider still considers the
+  browser signed in. To end both, sign out of the identity provider as well.
+  The README's "Password recovery and session revocation" section now says
+  so. This is unchanged behaviour that was previously undocumented, not a new
+  limitation.
+
+### Supported upgrade path
+
+- Upgrade directly from 0.7.0. This release **runs no database migration**;
+  the schema stays at 19 and no `.env` change is required. Pull the new image
+  and recreate the app. Rolling back to 0.7.0 is a plain image change with no
+  database work, since nothing about the stored data differs between the two.
+
+### Breaking changes
+
+- None. There is no application, database, configuration, or operational
+  break. The sign-in page appearing where an automatic redirect used to
+  happen is a visible change in behaviour, described under Changed, but it
+  breaks no configuration or contract and every existing way of signing in
+  still works.
+
 ## [0.7.0] - 2026-08-06
 
 ### Added

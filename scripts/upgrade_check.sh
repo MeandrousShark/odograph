@@ -270,7 +270,7 @@ cleanup() {
         echo "  scratch:  $SCRATCH"
         echo "  manual teardown: (cd '$BASE_DIR' && $compose_cmd down), then remove any"
         echo "  volume(s) beginning with '$PROJECT' and any image(s) named"
-        echo "  'localhost/$PROJECT*' (podman) or '$PROJECT-*'/'$PROJECT_*' (docker),"
+        echo "  'localhost/$PROJECT*' (podman) or '$PROJECT-*'/'${PROJECT}_*' (docker),"
         echo "  then: rm -rf '$SCRATCH'"
         exit "$exit_code"
     fi
@@ -380,10 +380,11 @@ count_points() {
         "SELECT count(*) FROM points WHERE device = '$2'"
 }
 
-# schema_version is its own manifest section so a future migration's
-# expected difference is trivial to isolate from the rest of the diff; with
-# no migration added between these two checkouts, the whole file is expected
-# to match byte-for-byte here.
+# schema_version is its own manifest section so a migration's expected
+# difference across an upgrade is trivial to isolate from the rest of the
+# diff (see strip_schema_version_section / assert_data_manifests_equal
+# below); every other comparison in this drill is base-to-base and expects
+# the whole file, schema_version included, to match byte-for-byte.
 capture_manifest() {
     local dir="$1" outfile="$2"
     {
@@ -450,6 +451,30 @@ assert_manifests_equal() {
         cat "$SCRATCH/last-manifest-diff.txt" >&2
         step_fail "$desc"
     fi
+}
+
+# schema_version legitimately changes across an upgrade that runs a
+# migration, so step 7 (the only caller that spans an upgrade) can't reuse
+# assert_manifests_equal's whole-file diff; it checks schema_version
+# separately against the candidate's migration count instead. This strips
+# just that one section before comparing everything else, so every data
+# section still has to match byte-for-byte.
+strip_schema_version_section() {
+    awk '
+        /^== schema_version ==$/ { skip = 1; next }
+        skip && /^== / { skip = 0 }
+        skip { next }
+        { print }
+    ' "$1"
+}
+
+assert_data_manifests_equal() {
+    local a="$1" b="$2" desc="$3" a_data b_data
+    a_data="$(mktemp "$SCRATCH/manifest-data.XXXXXX")"
+    b_data="$(mktemp "$SCRATCH/manifest-data.XXXXXX")"
+    strip_schema_version_section "$a" > "$a_data"
+    strip_schema_version_section "$b" > "$b_data"
+    assert_manifests_equal "$a_data" "$b_data" "$desc"
 }
 
 # --- HTTP helpers for the token-gated setup flow and local login -----------
@@ -727,8 +752,8 @@ step7_upgrade() {
     [ "$v" = "$mig" ] || step_fail "step 7: schema_version ($v) does not equal the candidate's migration count ($mig)"
 
     capture_manifest "$CAND_DIR" "$SCRATCH/manifest-after-upgrade.txt"
-    assert_manifests_equal "$SCRATCH/manifest-after-ingest.txt" "$SCRATCH/manifest-after-upgrade.txt" \
-        "step 7: candidate healthy, schema_version=$v matches migration count, manifest unchanged"
+    assert_data_manifests_equal "$SCRATCH/manifest-after-ingest.txt" "$SCRATCH/manifest-after-upgrade.txt" \
+        "step 7: candidate healthy, schema_version=$v matches migration count, data unchanged"
 }
 
 step8_rollback() {

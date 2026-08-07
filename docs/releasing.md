@@ -12,15 +12,44 @@ Before preparing a release:
 - Confirm the target version follows semantic versioning and has not been used
   as a git tag, GitHub release, or container tag.
 - Confirm `main` is the intended release tree and its required checks are green.
-- Review dependency and scheduled image-scan results. Resolve blocking findings
-  or record a narrowly scoped acceptance as described below.
+- Run the dependency scan yourself against the exact tree you intend to tag,
+  and resolve it to a clean result before going further:
+
+  ```sh
+  pip-audit -r requirements.lock --no-deps --disable-pip
+  ```
+
+  Do this even when the scheduled scan was green. That scan runs weekly, so
+  its result can be up to seven days stale, and an advisory published in
+  between first surfaces inside the release workflow, where the same check
+  blocks. By then the tag exists and is immutable, so a finding there costs
+  the version number rather than a few minutes: the release has to be
+  abandoned and recut as the next patch. Resolve findings by upgrading the
+  affected dependency where possible, or record a narrowly scoped acceptance
+  as described below.
+
+  Changing a pin has its own precondition. The image installs
+  `requirements.lock` on the `python:3.13-slim` base for both published
+  architectures, so a new version without prebuilt wheels for either one turns
+  the build into a source build. Confirm both before committing the change:
+
+  ```sh
+  for PLAT in manylinux_2_28_x86_64 manylinux_2_28_aarch64; do
+    pip download --only-binary=:all: --platform "$PLAT" --python-version 3.13 \
+      --no-deps -d /tmp/wheelcheck "<package>==<version>"
+  done
+  ```
+
+- Review the scheduled image-scan results. Resolve blocking findings or record
+  a narrowly scoped acceptance as described below.
 - Read every release note since the previous supported release. Decide the
   supported upgrade path, identify breaking operational or data changes, and
   determine whether the standard artifact upgrade drill applies.
-- Have `git`, `gh`, Docker with Buildx, and `jq` available. Install `pip-audit`
-  and Trivy when reproducing scans locally. Authenticate `gh` and Docker to
-  GitHub/GHCR with the repository and package permissions needed for the
-  release.
+- Have `git`, `gh`, Docker with Buildx, `jq`, and `pip-audit` available, the
+  last of these because the dependency scan above is required rather than
+  optional. Install Trivy when reproducing the image scans locally.
+  Authenticate `gh` and Docker to GitHub/GHCR with the repository and package
+  permissions needed for the release.
 
 Set the release values without a `latest` alias:
 

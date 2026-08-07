@@ -144,12 +144,15 @@ def test_setup_is_reachable_when_admin_token_is_set():
     assert response.status_code == 200
 
 
-def test_login_redirects_to_oidc_when_configured_and_no_local_admin_exists():
-    # The zero-change path: OIDC configured, no local admin row yet.
+def test_login_renders_page_when_configured_and_no_local_admin_exists():
+    # GET /login never auto-redirects to the provider, even in this
+    # configuration (OIDC configured, no local admin row yet): auto-redirect
+    # here is what let the IdP's own SSO session silently re-authenticate a
+    # user right after they logged out.
     app = _bare_app(admin_token="", oidc_configured=True, local_admin_row=None)
     response = asyncio.run(_get(app, "/login"))
-    assert response.status_code == 303
-    assert response.headers["location"] == "https://idp.example.com/authorize"
+    assert response.status_code == 200
+    assert response.text == "rendered:login.html"
 
 
 def test_login_renders_page_when_local_admin_exists_even_with_oidc_configured():

@@ -40,6 +40,17 @@ def test_both_configured_shows_password_form_and_oidc_button():
     assert "Sign in with OIDC" in body
 
 
+def test_oidc_only_shows_oidc_button_and_no_password_form():
+    # Production's configuration: OIDC set up, no local admin yet. GET
+    # /login no longer auto-redirects to the provider for this case (that
+    # was the logout bug), so this rendered combination is now reachable.
+    body = _render(local_admin_exists=False, oidc_available=True)
+    assert 'href="/login/oidc"' in body
+    assert "Sign in with OIDC" in body
+    assert 'action="/login/local"' not in body
+    assert 'name="password"' not in body
+
+
 def test_no_admin_and_setup_available_points_at_setup():
     body = _render(local_admin_exists=False, oidc_available=False, setup_available=True)
     assert 'action="/login/local"' not in body
