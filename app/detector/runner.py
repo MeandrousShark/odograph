@@ -242,7 +242,7 @@ class DetectorRunner:
 
         cur = await conn.execute(
             "SELECT id, started_at, ended_at, category::text, tag_source::text FROM trips "
-            "WHERE device = %s AND source = 'detected' AND started_at >= %s",
+            "WHERE device = %s AND source = 'detected' AND NOT imported AND started_at >= %s",
             (device, t0),
         )
         existing = [

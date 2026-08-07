@@ -16,7 +16,7 @@ Authlib==1.7.2
 certifi==2026.6.17
 cffi==2.1.0
 click==8.4.2
-cryptography==49.0.0
+cryptography==50.0.0
 et_xmlfile==2.0.0
 fastapi==0.139.0
 h11==0.16.0

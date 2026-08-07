@@ -38,6 +38,7 @@ from app.expenses import (
 )
 from app.missing_trip import missing_trip_badge
 from app.odometer import OdometerReading, reconcile, vehicle_coverage_for_report
+from app.places_desc import PLACE_KINDS
 from app.rates import ENV_PREFIX, METERS_PER_MILE, deduction, load_rates
 from app.report import (
     build_annual_report,
@@ -69,7 +70,7 @@ TRIP_COLUMNS = """
     id, device, source::text AS source, started_at, ended_at, distance_m,
     COALESCE(distance_snapped_m, distance_m) AS display_distance_m,
     snap_status::text AS snap_status,
-    point_count, has_gap, category::text AS category, purpose, notes,
+    point_count, has_gap, imported, category::text AS category, purpose, notes,
     ST_Y(start_geom::geometry) AS start_lat, ST_X(start_geom::geometry) AS start_lon,
     ST_Y(end_geom::geometry) AS end_lat, ST_X(end_geom::geometry) AS end_lon,
     (SELECT name FROM places WHERE id = trips.start_place_id) AS start_place_name,
@@ -130,7 +131,6 @@ TRIP_COLUMNS = """
 """
 
 CATEGORIES = ("business", "personal", "unclassified")
-PLACE_KINDS = ("home", "work", "other")
 RULE_CATEGORIES = ("business", "personal")
 EXPORT_MEDIA_TYPES = {
     "csv": "text/csv",
@@ -1942,9 +1942,31 @@ def make_router() -> APIRouter:
         async with pool.connection() as conn:
             await conn.execute("SELECT pg_advisory_xact_lock(%s)", (ADVISORY_LOCK_KEY,))
 
+            # Checked before the trip-selection query below excludes imported
+            # trips (AND NOT imported): that exclusion alone would just make
+            # an imported id look "no longer exist[ent]" below, an accurate
+            # but unhelpful reason for a trip that in fact exists and simply
+            # can't be merged. An imported trip has no backing points in this
+            # instance (see migrations/019_trip_imported.sql), so it was
+            # never a legitimate merge candidate -- suppressing the real stay
+            # between it and a neighbor is meaningless with no points to
+            # reprocess, and the old behavior here was an opaque 500 once the
+            # final lookup failed to find a trip the suppress override could
+            # never have produced.
+            cur = await conn.execute(
+                "SELECT 1 FROM trips WHERE id = ANY(%s) AND imported LIMIT 1",
+                (trip_ids,),
+            )
+            if await cur.fetchone():
+                raise HTTPException(
+                    status_code=400,
+                    detail="One or more selected trips came from a data import and have no "
+                    "location points in this instance, so they cannot be merged.",
+                )
+
             cur = await conn.execute(
                 "SELECT id, device, source::text AS source, started_at, ended_at "
-                "FROM trips WHERE id = ANY(%s)",
+                "FROM trips WHERE id = ANY(%s) AND NOT imported",
                 (trip_ids,),
             )
             rows = await cur.fetchall()
@@ -1962,7 +1984,7 @@ def make_router() -> APIRouter:
             last_start = max(t.started_at for t in selected)
             cur = await conn.execute(
                 "SELECT id, started_at, ended_at FROM trips WHERE device = %s "
-                "AND source = 'detected' AND started_at BETWEEN %s AND %s "
+                "AND source = 'detected' AND NOT imported AND started_at BETWEEN %s AND %s "
                 "ORDER BY started_at",
                 (device, first_start, last_start),
             )
@@ -2027,19 +2049,28 @@ def make_router() -> APIRouter:
         # misleadingly report that no adjacent detected trip exists.
         if trip["source"] != "detected":
             raise HTTPException(status_code=400, detail="Only detected trips can be merged")
+        # Same reasoning, for the other reason a trip can't be merged: an
+        # imported trip has no backing points in this instance, so it's
+        # never a legitimate merge candidate regardless of direction.
+        if trip["imported"]:
+            raise HTTPException(
+                status_code=400,
+                detail="This trip came from a data import and has no location points in "
+                "this instance, so it cannot be merged.",
+            )
 
         async with pool.connection() as conn:
             if direction == "next":
                 cur = await conn.execute(
                     "SELECT id FROM trips WHERE device = %s "
-                    "AND source = 'detected' AND started_at > %s "
+                    "AND source = 'detected' AND NOT imported AND started_at > %s "
                     "ORDER BY started_at ASC LIMIT 1",
                     (trip["device"], trip["started_at"]),
                 )
             else:
                 cur = await conn.execute(
                     "SELECT id FROM trips WHERE device = %s "
-                    "AND source = 'detected' AND started_at < %s "
+                    "AND source = 'detected' AND NOT imported AND started_at < %s "
                     "ORDER BY started_at DESC LIMIT 1",
                     (trip["device"], trip["started_at"]),
                 )

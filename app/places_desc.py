@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+# Shared by app/ui.py (place CRUD, trip tag rules) and app/portable.py
+# (bundle validation) -- lives here, not in either of those, because this
+# module already has zero imports of its own, so importing PLACE_KINDS from
+# it can never create a cycle.
+PLACE_KINDS = ("home", "work", "other")
+
 
 def describe_endpoint(
     name: str | None, lat: float | None, lon: float | None, address: str | None = None

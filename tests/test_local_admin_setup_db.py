@@ -2,7 +2,7 @@
 flow. Route handlers are invoked directly (same convention as
 tests/test_odometer_db.py): `require_csrf` is a router-level dependency the
 ASGI app enforces, not something calling the Python function exercises, so
-these tests drive the manual `_check_form_csrf` path inside the handlers
+these tests drive the manual `check_form_csrf` path inside the handlers
 via the `csrf_token` form field instead.
 """
 from __future__ import annotations

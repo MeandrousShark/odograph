@@ -77,11 +77,15 @@
       </select>
     </div>
 
-    {% if trip.source == 'detected' %}
+    {% if trip.source == 'detected' and not trip.imported %}
     <!-- Occasional correction tools (merge/split/place-naming) are gated behind
          one disclosure so they never compete with the map for attention. The
          map-click handlers below still find these controls by ID at event
-         time regardless of whether this <details> is open. -->
+         time regardless of whether this <details> is open. An imported trip
+         has no backing points in this instance, so merge and split (which
+         both need real points to reprocess) would only ever be refused --
+         not trip.imported keeps this whole disclosure, not just those two
+         controls, off an imported trip's page. -->
     <details class="advanced-tools">
       <summary>Advanced trip tools</summary>
 

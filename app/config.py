@@ -81,6 +81,7 @@ class Config:
     map_tile_url: str
     map_tile_attribution: str
     hsts_max_age: int
+    portable_import_max_bytes: int
 
     @property
     def map_tile_host(self) -> str:
@@ -283,4 +284,11 @@ class Config:
             # 0/unset means no HSTS header at all -- see the SecurityHeadersMiddleware
             # docstring in app/main.py for why this stays opt-in.
             hsts_max_age=int(os.environ.get("HSTS_MAX_AGE", 0)),
+            # A portable export is one JSON document covering the whole
+            # ledger core (no route geometry, no raw points) -- even a large,
+            # multi-year single-user instance stays well under this before
+            # json.loads even has to run on it.
+            portable_import_max_bytes=int(
+                os.environ.get("PORTABLE_IMPORT_MAX_BYTES", 50 * 1024 * 1024)
+            ),
         )

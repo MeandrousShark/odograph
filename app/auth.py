@@ -31,10 +31,11 @@ def _ensure_csrf(request: Request) -> str:
     return token
 
 
-def _check_form_csrf(request: Request, token: str) -> None:
-    """CSRF check for the plain (no-JS, no custom-header) login/setup forms
-    -- distinct from require_csrf's X-CSRF-Token header check, which htmx
-    sets automatically but a bare HTML <form> POST cannot.
+def check_form_csrf(request: Request, token: str) -> None:
+    """CSRF check for a plain (no-JS, no custom-header) <form> POST -- login,
+    setup, and the portable data import form (app/portable.py) -- distinct
+    from require_csrf's X-CSRF-Token header check, which htmx sets
+    automatically but a bare HTML <form> POST cannot.
     """
     expected = request.session.get("csrf") or ""
     if not (expected and hmac.compare_digest(expected, token or "")):
@@ -165,7 +166,7 @@ def make_router() -> APIRouter:
         cfg = request.app.state.config
         if cfg.dev_no_auth:
             raise HTTPException(status_code=404)
-        _check_form_csrf(request, csrf_token)
+        check_form_csrf(request, csrf_token)
 
         limiter: FailedAuthLimiter = request.app.state.login_limiter
         ip = client_ip(request)
@@ -220,7 +221,7 @@ def make_router() -> APIRouter:
         cfg = request.app.state.config
         if not cfg.admin_token:
             raise HTTPException(status_code=404)
-        _check_form_csrf(request, csrf_token)
+        check_form_csrf(request, csrf_token)
 
         pool = request.app.state.pool
         async with pool.connection() as conn:

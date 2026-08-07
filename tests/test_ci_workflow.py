@@ -13,6 +13,32 @@ def load_workflow() -> dict:
     return yaml.load(WORKFLOW.read_text(), Loader=yaml.BaseLoader)
 
 
+# The snapshot script builds its tree from `git archive HEAD`, so it only
+# ever contains committed content. Comparing it against the working tree
+# fails on any uncommitted edit even when the snapshot is correct; these
+# helpers compare against HEAD instead so the test stays sensitive only to
+# real snapshot defects.
+def committed_tracked_files(relative_dir: str) -> set[str]:
+    result = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", "HEAD", "--", relative_dir],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return {line for line in result.stdout.splitlines() if line}
+
+
+def committed_bytes(relative_path: str) -> bytes:
+    result = subprocess.run(
+        ["git", "show", f"HEAD:{relative_path}"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    )
+    return result.stdout
+
+
 def test_ci_runs_full_suite_on_push_and_pull_requests_with_postgis():
     workflow = load_workflow()
 
@@ -72,11 +98,7 @@ def test_public_snapshot_includes_ci_and_release_files(tmp_path):
         text=True,
     )
 
-    source_workflows = {
-        path.relative_to(ROOT).as_posix()
-        for path in (ROOT / ".github" / "workflows").iterdir()
-        if path.is_file()
-    }
+    source_workflows = committed_tracked_files(".github/workflows")
     snapshot_workflows = {
         path.relative_to(snapshot).as_posix()
         for path in (snapshot / ".github" / "workflows").iterdir()
@@ -85,17 +107,17 @@ def test_public_snapshot_includes_ci_and_release_files(tmp_path):
     assert ".github/workflows/test.yml" in snapshot_workflows
     assert snapshot_workflows == source_workflows
     assert (snapshot / ".github" / "workflows" / "test.yml").read_bytes() == (
-        WORKFLOW.read_bytes()
+        committed_bytes(".github/workflows/test.yml")
     )
     assert (snapshot / "compose.build.override.yml").read_bytes() == (
-        ROOT / "compose.build.override.yml"
-    ).read_bytes()
+        committed_bytes("compose.build.override.yml")
+    )
     assert (snapshot / "CHANGELOG.md").read_bytes() == (
-        ROOT / "CHANGELOG.md"
-    ).read_bytes()
+        committed_bytes("CHANGELOG.md")
+    )
     assert (snapshot / "docs" / "releasing.md").read_bytes() == (
-        ROOT / "docs" / "releasing.md"
-    ).read_bytes()
+        committed_bytes("docs/releasing.md")
+    )
 
     snapshot_docs = {
         path.relative_to(snapshot).as_posix()

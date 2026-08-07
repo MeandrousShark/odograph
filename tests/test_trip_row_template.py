@@ -311,6 +311,20 @@ def test_advanced_tools_disclosure_contains_merge_split_and_place_naming_control
     ) < tools.index('id="name-start"')
 
 
+def test_imported_detected_trip_detail_has_no_advanced_tools():
+    """An imported trip keeps source == 'detected' (it's a fact about the
+    source instance) but has no backing points here, so merge and split --
+    the reason this disclosure exists -- would always be refused. Gated off
+    entirely rather than left to fail per-action."""
+    body = _render_detail(
+        _trip(source="detected", imported=True), has_prev_trip=True, has_next_trip=True,
+    )
+
+    assert 'class="advanced-tools"' not in body
+    assert 'id="merge-prev"' not in body
+    assert 'id="split-toggle"' not in body
+
+
 def test_manual_trip_detail_has_no_map_or_advanced_tools():
     body = _render_detail(_trip(source="manual"), has_prev_trip=False, has_next_trip=False)
 

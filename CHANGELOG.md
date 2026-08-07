@@ -13,11 +13,6 @@ reproduced here.
 
 ### Changed
 
-- `.env.example` now documents `INGEST_USERNAME` and
-  `RAW_MESSAGE_RETENTION_DAYS`, and no longer lists
-  `FULL_REPROCESS_WARN_POINTS`, which only selected the severity of a log
-  line. No application default changed, and an existing `.env` needs no edit.
-
 ### Fixed
 
 ### Security
@@ -31,6 +26,71 @@ reproduced here.
 
 - Complete before release: list every application, database, configuration,
   and operational break, or state explicitly that there are none.
+
+## [0.7.0] - 2026-08-06
+
+### Added
+
+- Portable data export and import, so an installation's records can move to
+  another instance or leave the application in a readable form. This is
+  separate from the existing tax-report CSV/XLSX export, which produces
+  formatted reports rather than a re-importable copy. A new "Data export /
+  import" section on the Settings page drives both sides.
+- Export downloads the whole ledger as a single versioned JSON file:
+  vehicles, places, auto-tag rules, mileage rates, trips, expenses, odometer
+  readings, and the application settings row. Rows reference each other
+  through file-local ids rather than database ids, and expense amounts travel
+  as decimal strings so a currency value cannot drift by a cent in a round
+  trip.
+- Import reads that file back, allocating fresh database ids and rewriting
+  every reference through them, so a target instance whose id sequences sit
+  at different values is safe. The whole import runs in one transaction: it
+  either applies completely or leaves the database untouched. A "Dry run"
+  option validates a file and reports exactly what it would do without
+  writing anything.
+- Three limits are deliberate in this first version and are reported rather
+  than worked around. The file does not carry trip route geometry or raw
+  location points, so an imported trip keeps its ledger fields, its start and
+  end places, and the distance a report counts, but not its mapped path.
+  Import requires a clean target: an instance that has been migrated but has
+  no trips, expenses, odometer readings, or places yet, and still has only
+  the vehicle and auto-tag rules a fresh install seeds. It refuses anything
+  else and names what it found rather than merging. Import also requires the
+  file's schema version to match the target's exactly.
+
+### Changed
+
+- `.env.example` now documents `INGEST_USERNAME` and
+  `RAW_MESSAGE_RETENTION_DAYS`, and no longer lists
+  `FULL_REPROCESS_WARN_POINTS`, which only selected the severity of a log
+  line. No application default changed, and an existing `.env` needs no edit.
+
+### Security
+
+- `cryptography` moves from 49.0.0 to 50.0.0 in `requirements.lock`, picking
+  up the fix for PYSEC-2026-3552. The flaw is a Bleichenbacher oracle in that
+  library's PKCS#7 decryption helpers, reachable only by an application that
+  decrypts attacker-supplied S/MIME `EnvelopedData` and reflects the outcome.
+  Odograph never calls those helpers: `cryptography` is present only as
+  Authlib's dependency for verifying OIDC tokens, so no installation was
+  exposed. The upgrade keeps the release's blocking dependency scan clean
+  without recording an acceptance.
+
+### Supported upgrade path
+
+- Upgrade directly from 0.6.1. Unlike 0.6.1, this release **runs a database
+  migration** (schema 18 to 19) the first time the new app starts. Take a
+  backup with `scripts/backup_database.sh` and verify it before pulling the
+  new image, following the procedure in `docs/upgrading.md`. No `.env` change
+  is required.
+
+### Breaking changes
+
+- None. There is no application, configuration, or operational break. The
+  migration only adds one column to `trips` with a default, so it needs no
+  operator action and rewrites no existing data. Migrations are forward-only:
+  rolling back to 0.6.1 means restoring the pre-upgrade backup, not reversing
+  the migration.
 
 ## [0.6.1] - 2026-08-03
 

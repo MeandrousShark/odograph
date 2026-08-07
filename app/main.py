@@ -15,7 +15,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import JSONResponse, RedirectResponse
 from starlette.staticfiles import StaticFiles
 
-from app import auth, ingest, ui
+from app import auth, ingest, portable, ui
 from app.auth import AuthRedirect
 from app.config import Config
 from app.db import make_pool, run_migrations
@@ -401,6 +401,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     app.include_router(ingest.make_router())
     app.include_router(auth.make_router())
     app.include_router(ui.make_router())
+    app.include_router(portable.make_router())
     app.mount("/static", RevalidatingStaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
     return app

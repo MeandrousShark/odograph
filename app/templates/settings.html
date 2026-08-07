@@ -368,4 +368,22 @@ document.addEventListener('click', function (event) {
 })();
 </script>
 
+<h2>Data export / import</h2>
+<p class="muted">Export the whole ledger: vehicles, places, auto-tag rules,
+  mileage rates, trips (category/purpose/notes/vehicle/place assignments),
+  expenses, odometer readings, and this settings row, as one JSON file. It
+  does not include route/path geometry or raw location points. Import only
+  supports a freshly migrated, otherwise-empty instance on the same schema
+  version; the response is the raw JSON result of the attempt, including a
+  structured error report if it's refused.</p>
+
+<p><a href="/settings/export/data">Download export</a></p>
+
+<form method="post" action="/settings/import/data" enctype="multipart/form-data">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <label>Bundle file <input type="file" name="file" accept="application/json,.json" required></label>
+  <label><input type="checkbox" name="dry_run" value="1"> Dry run (validate only, don't write)</label>
+  <button type="submit">Import</button>
+</form>
+
 {% endblock %}
