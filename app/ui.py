@@ -1763,9 +1763,9 @@ def make_router() -> APIRouter:
                 # detected trip exists for this device.
                 cur = await conn.execute(
                     "SELECT EXISTS (SELECT 1 FROM trips WHERE device = %s "
-                    " AND source = 'detected' AND started_at > %s), "
+                    " AND source = 'detected' AND NOT imported AND started_at > %s), "
                     "EXISTS (SELECT 1 FROM trips WHERE device = %s "
-                    " AND source = 'detected' AND started_at < %s)",
+                    " AND source = 'detected' AND NOT imported AND started_at < %s)",
                     (trip["device"], trip["started_at"],
                      trip["device"], trip["started_at"]),
                 )

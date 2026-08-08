@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -710,3 +710,89 @@ def test_detector_insert_leaves_vehicle_null_when_default_is_deactivated():
     `v.is_default AND v.active` guard yields nothing even with the setting
     still on."""
     asyncio.run(_run_auto_assign_default_deactivated_scenario())
+
+
+# --- reprocess_places / resolve_and_autotag vs. imported trips ------
+
+T0 = datetime(2026, 7, 1, 8, 0, 0, tzinfo=timezone.utc)
+
+
+async def _run_reprocess_places_imported_guard_scenario():
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        await _reset_schema(pool)
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "INSERT INTO places (name, kind, geom) VALUES "
+                "('Home', 'home', ST_SetSRID(ST_MakePoint(-122.33, 47.60), 4326)::geography), "
+                "('Work', 'work', ST_SetSRID(ST_MakePoint(-122.30, 47.62), 4326)::geography) "
+                "RETURNING id"
+            )
+            home_id, work_id = [r[0] for r in await cur.fetchall()]
+
+            # A portable-imported trip (app/portable.py): resolved places and
+            # a rule tag, but no geometry, since the bundle format carries
+            # none. reprocess_places must leave it exactly as imported, not
+            # null out its places (start_geom/end_geom IS NULL, so the
+            # resolution subselects would otherwise match nothing) and
+            # cascade into reverting its tag.
+            cur = await conn.execute(
+                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
+                " imported, start_place_id, end_place_id, category, tag_source) "
+                "VALUES (%s, 'detected', %s, %s, 1000, true, %s, %s, 'personal', 'rule') "
+                "RETURNING id",
+                (DEVICE, T0, T0 + timedelta(minutes=20), home_id, work_id),
+            )
+            imported_id = (await cur.fetchone())[0]
+
+            # A normal, non-imported detected trip with real geometry at the
+            # same two places but not yet resolved, standing in for a fresh
+            # detector insert awaiting its first reprocess. The guard must
+            # not stop this one from being resolved and autotagged exactly
+            # as before.
+            cur = await conn.execute(
+                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
+                " start_geom, end_geom) "
+                "VALUES (%s, 'detected', %s, %s, 1000, "
+                " ST_SetSRID(ST_MakePoint(-122.33, 47.60), 4326)::geography, "
+                " ST_SetSRID(ST_MakePoint(-122.30, 47.62), 4326)::geography) "
+                "RETURNING id",
+                (DEVICE, T0 + timedelta(hours=1), T0 + timedelta(hours=1, minutes=20)),
+            )
+            live_id = (await cur.fetchone())[0]
+
+        await reprocess_places(pool)
+
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT start_place_id, end_place_id, category::text, tag_source::text "
+                "FROM trips WHERE id = %s",
+                (imported_id,),
+            )
+            assert await cur.fetchone() == (home_id, work_id, "personal", "rule"), (
+                "reprocess_places must not touch an imported trip's places or tag"
+            )
+
+            cur = await conn.execute(
+                "SELECT start_place_id, end_place_id, category::text, tag_source::text "
+                "FROM trips WHERE id = %s",
+                (live_id,),
+            )
+            assert await cur.fetchone() == (home_id, work_id, "personal", "rule"), (
+                "a normal detected trip must still be resolved and autotagged"
+            )
+    finally:
+        await pool.close()
+
+
+def test_reprocess_places_skips_imported_trips_but_still_resolves_live_ones():
+    """migrations/019_trip_imported.sql's NOT imported guard reached the
+    reconcile and merge paths but missed reprocess_places and
+    resolve_and_autotag: any places/rules CRUD in Settings would null out an
+    imported trip's places (its start_geom/end_geom is NULL, so the
+    resolution subselects match nothing) and, via plan_autotags's revert
+    branch, wipe its rule tag back to unclassified. This is the regression
+    test for that guard, alongside proof that a genuine non-imported trip is
+    still processed normally in the same reprocess_places call."""
+    asyncio.run(_run_reprocess_places_imported_guard_scenario())

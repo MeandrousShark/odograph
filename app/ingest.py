@@ -14,6 +14,7 @@ import binascii
 import hmac
 import json
 import logging
+import math
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
@@ -24,6 +25,13 @@ from starlette.responses import JSONResponse
 log = logging.getLogger(__name__)
 
 MAX_FUTURE_SKEW = timedelta(minutes=5)
+
+# A firmware/device bug that reports tst in milliseconds instead of seconds
+# (seen in practice) lands around year 55000, and datetime.fromtimestamp
+# raises OSError or ValueError well before then depending on platform. Cap at
+# a fixed, comfortably-future date instead of relying on that exception: no
+# real OwnTracks fix will ever carry a timestamp past it.
+MAX_TST = datetime(2100, 1, 1, tzinfo=timezone.utc).timestamp()
 
 
 class FailedAuthLimiter:
@@ -163,10 +171,21 @@ def make_router() -> APIRouter:
             log.warning("ingest: dropping non-object payload")
             return _ok()
 
+        serialized, poison_reason = _jsonb_encode(payload)
+        if poison_reason:
+            # Whole message dropped, not just the offending field: a device
+            # sending an unstorable value like this is malfunctioning enough
+            # that its other readings in the same fix aren't trustworthy
+            # either, and raw_messages is meant to be the verbatim record of
+            # an accepted message -- silently rewriting the payload to make it
+            # storable would make that record a lie.
+            log.warning("ingest: dropping payload before storage: %s", poison_reason)
+            return _ok()
+
         pool = request.app.state.pool
         async with pool.connection() as conn:
             await conn.execute(
-                "INSERT INTO raw_messages (payload) VALUES (%s)", (json.dumps(payload),)
+                "INSERT INTO raw_messages (payload) VALUES (%s)", (serialized,)
             )
             if payload.get("_type") != "location":
                 return _ok()
@@ -211,6 +230,63 @@ def _int(v) -> int | None:
     return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
 
+def _jsonb_encode(payload: dict) -> tuple[str | None, str | None]:
+    """Serializes payload for the raw_messages jsonb column.
+
+    Returns (text, None) if safe to store, or (None, reason) if it must be
+    dropped. jsonb is strict RFC 8259, but json.loads tolerates shapes that
+    then raise from inside the open transaction on INSERT: bare NaN/Infinity
+    tokens (json.dumps re-emits whatever json.loads accepted), and strings
+    containing a NUL or an unpaired UTF-16 surrogate (both valid JSON, but
+    jsonb's parser rejects the resulting escape). Checking up front, before
+    any statement runs, avoids ever raising inside the transaction -- an
+    after-the-fact catch would leave the transaction aborted and need
+    savepoint handling to recover cleanly.
+    """
+    try:
+        text = json.dumps(payload, allow_nan=False)
+    except ValueError:
+        return None, "non-finite number in payload"
+    reason = _unstorable_char_reason(payload)
+    if reason:
+        return None, reason
+    return text, None
+
+
+def _unstorable_char_reason(value) -> str | None:
+    """Returns a drop reason if a string anywhere in value has a character
+    jsonb's UTF-8 encoder refuses, or None if value is safe to store.
+
+    A lone surrogate (U+D800-U+DFFF) can only exist here as an unpaired
+    \\uD800-\\uDFFF escape: json.loads decodes a valid surrogate PAIR
+    straight into the single astral codepoint it represents (an emoji
+    escape pair becomes one character outside the surrogate range), so by
+    the time this runs there is no pairing left to check -- any codepoint
+    still in that range is unpaired by definition, and a blunt per-character
+    range check is enough, no pair-matching logic required.
+    """
+    if isinstance(value, str):
+        for ch in value:
+            if ch == "\x00":
+                return "NUL character in payload"
+            if "\ud800" <= ch <= "\udfff":
+                return "unpaired surrogate in payload"
+        return None
+    if isinstance(value, dict):
+        for k, v in value.items():
+            reason = _unstorable_char_reason(k) or _unstorable_char_reason(v)
+            if reason:
+                return reason
+        return None
+    if isinstance(value, list):
+        for v in value:
+            reason = _unstorable_char_reason(v)
+            if reason:
+                return reason
+        return None
+    return None
+
+
 def _validate_location(payload: dict) -> str | None:
     """Returns a drop reason, or None if the payload is a usable fix."""
     lat, lon, tst = payload.get("lat"), payload.get("lon"), payload.get("tst")
@@ -221,8 +297,13 @@ def _validate_location(payload: dict) -> str | None:
         return "lat/lon out of range"
     if lat == 0 and lon == 0:
         return "null island (0,0)"
-    if tst <= 0:
-        return "non-positive tst"
+    if not math.isfinite(tst):
+        return "non-finite tst"
+    if tst <= 0 or tst > MAX_TST:
+        return "tst out of range"
     if datetime.fromtimestamp(tst, tz=timezone.utc) > datetime.now(timezone.utc) + MAX_FUTURE_SKEW:
         return "tst in the future (device clock skew)"
+    t = payload.get("t")
+    if t is not None and not isinstance(t, str):
+        return "non-string t"
     return None

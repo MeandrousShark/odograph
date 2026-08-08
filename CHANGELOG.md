@@ -27,6 +27,56 @@ reproduced here.
 - Complete before release: list every application, database, configuration,
   and operational break, or state explicitly that there are none.
 
+## [0.7.3] - 2026-08-08
+
+### Fixed
+
+- **Editing a place or a tagging rule no longer erases imported trips'
+  locations and categories.** Trips brought in from a portable export carry
+  their place labels and categories directly, because the export format holds
+  no map coordinates. Any place or rule change in Settings re-derives every
+  trip's start and end place from its coordinates, and imported trips have
+  none, so the app wrote an empty answer over the labels the import had set. A
+  second step then reverted every affected trip that a rule had tagged back to
+  unclassified, because no rule matched a trip with no places. An imported
+  history could silently lose its place names and its business or personal
+  categories, dropping those trips out of the mileage totals, after an
+  ordinary Settings edit. Imported trips are now left alone by that
+  re-derivation, matching the protection they already had from the trip
+  detector. Trips recorded normally are re-derived exactly as before.
+
+- **A trip's "merge with previous" and "merge with next" buttons no longer
+  appear when the only neighbouring trip is an imported one.** The buttons
+  showed whenever any adjacent trip existed, but merging deliberately refuses
+  to touch imported trips, so in that situation the button could only fail.
+  This was most visible on the first normally recorded trip after an import.
+
+- **A malformed message from a tracking device can no longer stall every
+  later location update.** OwnTracks holds onto a message and retries it when
+  the server reports an error, which is what stops a brief outage from losing
+  a drive. Several malformed messages made the server report an error every
+  time, so the device retried the same message indefinitely and every reading
+  queued behind it was stuck with it. Trips simply stopped appearing, with
+  nothing to indicate why. The affected shapes were a timestamp reported in
+  milliseconds instead of seconds (a common device misconfiguration) or
+  otherwise outside a sane range, a timestamp that was not a number at all, a
+  trigger field arriving as something other than text, and any message
+  carrying a value the message store cannot hold: a not-a-number or infinite
+  value, a NUL character, or an unpaired surrogate inside a text field. Every
+  one of these is now discarded quietly, the way other malformed input was
+  already handled, so a single bad message can no longer block the messages
+  behind it. Valid content that merely looks unusual, an emoji in a device
+  name for example, is unaffected and still stored.
+
+### Supported upgrade path
+
+- `v0.7.0`, `v0.7.1`, and `v0.7.2` may upgrade directly to `v0.7.3`.
+
+### Breaking changes
+
+- None. There is no migration; the schema stays at 19. No configuration
+  changes, and no operational changes beyond the usual image pin bump.
+
 ## [0.7.2] - 2026-08-07
 
 ### Fixed

@@ -463,7 +463,10 @@ async def resolve_and_autotag(conn, trip_ids: list[int]) -> None:
     the UI's places/rules CRUD endpoints (via `reprocess_places`) so both
     paths run the identical logic. `source = 'detected'` restricts this to
     trips with geometry — manual trips have none, so they'd never resolve a
-    place anyway, but the filter keeps intent explicit.
+    place anyway, but the filter keeps intent explicit. `NOT imported`
+    excludes portable-imported trips: they carry no start_geom/end_geom (the
+    bundle format has no geometry), so re-resolving would null out the
+    place ids the import set directly and cascade into un-autotagging them.
     """
     if not trip_ids:
         return
@@ -479,7 +482,7 @@ async def resolve_and_autotag(conn, trip_ids: list[int]) -> None:
         "   WHERE t.end_geom IS NOT NULL AND ST_DWithin(t.end_geom, p.geom, p.radius_m)"
         "   ORDER BY ST_Distance(t.end_geom, p.geom) LIMIT 1"
         " ) "
-        "WHERE t.id = ANY(%s) AND t.source = 'detected'",
+        "WHERE t.id = ANY(%s) AND t.source = 'detected' AND NOT t.imported",
         (trip_ids,),
     )
 
@@ -489,7 +492,7 @@ async def resolve_and_autotag(conn, trip_ids: list[int]) -> None:
         "FROM trips t "
         "LEFT JOIN places sp ON sp.id = t.start_place_id "
         "LEFT JOIN places ep ON ep.id = t.end_place_id "
-        "WHERE t.id = ANY(%s) AND t.source = 'detected'",
+        "WHERE t.id = ANY(%s) AND t.source = 'detected' AND NOT t.imported",
         (trip_ids,),
     )
     autotag_trips = [
@@ -532,7 +535,9 @@ async def reprocess_places(pool: AsyncConnectionPool) -> None:
     """
     async with pool.connection() as conn:
         await conn.execute("SELECT pg_advisory_xact_lock(%s)", (ADVISORY_LOCK_KEY,))
-        cur = await conn.execute("SELECT id FROM trips WHERE source = 'detected'")
+        cur = await conn.execute(
+            "SELECT id FROM trips WHERE source = 'detected' AND NOT imported"
+        )
         trip_ids = [r[0] for r in await cur.fetchall()]
         await resolve_and_autotag(conn, trip_ids)
 
