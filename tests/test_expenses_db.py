@@ -35,7 +35,7 @@ def _route(path: str, method: str | None = None):
 
 
 def _request(pool):
-    config = SimpleNamespace(display_tz=TZ)
+    config = SimpleNamespace(display_tz=TZ, app_version="test")
     return SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, config=config, templates=make_templates(config),

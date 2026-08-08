@@ -6,6 +6,7 @@ Same `make_templates`/`.render()` convention as `tests/test_expenses.py`.
 from __future__ import annotations
 
 from datetime import date, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -33,7 +34,7 @@ def _trip(month: int, category: str = "business", miles: float = 1) -> dict:
 
 
 def _render(name: str, **context) -> str:
-    templates = make_templates(SimpleNamespace(display_tz=TZ))
+    templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     return templates.env.get_template(name).render(**context)
 
 
@@ -42,11 +43,47 @@ def test_report_html_has_q1_through_q4_preset_links_for_displayed_year():
     body = _render(
         "report.html", report=report, odometer_coverage=[], expenses=[],
         expense_report=SimpleNamespace(comparisons=[]), user=USER, csrf="token",
+        next_year_disabled=False,
     )
     assert '/report/range?from=2026-01-01&to=2026-03-31' in body
     assert '/report/range?from=2026-04-01&to=2026-06-30' in body
     assert '/report/range?from=2026-07-01&to=2026-09-30' in body
     assert '/report/range?from=2026-10-01&to=2026-12-31' in body
+
+
+def test_report_html_next_year_link_enabled_for_a_past_year():
+    report = build_annual_report([], RATES, TZ, 2020)
+    body = _render(
+        "report.html", report=report, odometer_coverage=[], expenses=[],
+        expense_report=SimpleNamespace(comparisons=[]), user=USER, csrf="token",
+        next_year_disabled=False,
+    )
+    assert '<a href="/report/2021">2021 →</a>' in body
+    assert 'aria-disabled="true"' not in body
+
+
+def test_report_html_next_year_control_disabled_in_place_for_the_current_year():
+    report = build_annual_report([], RATES, TZ, 2026)
+    body = _render(
+        "report.html", report=report, odometer_coverage=[], expenses=[],
+        expense_report=SimpleNamespace(comparisons=[]), user=USER, csrf="token",
+        next_year_disabled=True,
+    )
+    assert '<span class="report-year-next" aria-disabled="true">2027 →</span>' in body
+    assert 'href="/report/2027"' not in body
+    # Previous-year link is unguarded and stays a real link either way.
+    assert '<a href="/report/2025">← 2025</a>' in body
+
+
+def test_report_html_next_year_control_disabled_for_a_url_reached_future_year():
+    report = build_annual_report([], RATES, TZ, 2030)
+    body = _render(
+        "report.html", report=report, odometer_coverage=[], expenses=[],
+        expense_report=SimpleNamespace(comparisons=[]), user=USER, csrf="token",
+        next_year_disabled=True,
+    )
+    assert '<span class="report-year-next" aria-disabled="true">2031 →</span>' in body
+    assert 'href="/report/2031"' not in body
 
 
 def test_report_range_html_has_no_odometer_or_expense_sections():
@@ -65,3 +102,20 @@ def test_report_range_html_empty_state_has_no_tables():
     body = _render("report_range.html", report=report, user=USER, csrf="token")
     assert "No trips recorded" in body
     assert "<table>" not in body
+
+
+def test_by_vehicle_heading_sits_directly_before_its_table():
+    # "By vehicle" is the only report heading immediately followed by a bare
+    # <table>, which is what made its first column look misaligned against
+    # the heading above it -- the global first-column padding fix depends on
+    # this adjacency, not on any report-specific styling.
+    report = build_annual_report([_trip(1), _trip(2)], RATES, TZ, 2026)
+    body = _render(
+        "report.html", report=report, odometer_coverage=[], expenses=[],
+        expense_report=SimpleNamespace(comparisons=[]), user=USER, csrf="token",
+        next_year_disabled=False,
+    )
+    assert "<h2>By vehicle</h2>\n<table>" in body
+
+    css = (Path(__file__).parents[1] / "static/style.css").read_text()
+    assert "th:first-child, td:first-child { padding-left: 0; }" in css

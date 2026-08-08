@@ -40,14 +40,14 @@ def _trip(**overrides) -> dict:
 
 
 def _render(trip: dict) -> str:
-    templates = make_templates(SimpleNamespace(display_tz=TZ))
+    templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     return templates.env.get_template("_trip_card.html").render(
         trip=trip, vehicles=[], recent_purposes=[]
     )
 
 
 def _render_detail(trip: dict, **overrides) -> str:
-    templates = make_templates(SimpleNamespace(display_tz=TZ))
+    templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     context = {
         "trip": trip, "recent_purposes": [], "vehicles": [],
         "categories": ["unclassified", "business", "personal"],
@@ -126,7 +126,7 @@ def test_trip_actions_share_desktop_row_and_keep_mobile_details_full_width():
 
 
 def test_review_card_keeps_full_addresses_outside_compact_trip_list():
-    templates = make_templates(SimpleNamespace(display_tz=TZ))
+    templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     body = templates.env.get_template("_review_card.html").render(
         trip=_trip(end_place_name=None), remaining=0, state="card", path_geojson=None,
         path_snapped_geojson=None, vehicles=[], filter_from="", filter_to="",
@@ -138,7 +138,7 @@ def test_review_card_keeps_full_addresses_outside_compact_trip_list():
 
 
 def test_trip_detail_keeps_full_addresses_outside_compact_trip_list():
-    templates = make_templates(SimpleNamespace(display_tz=TZ))
+    templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     body = templates.env.get_template("trip.html").render(
         trip=_trip(end_place_name=None), recent_purposes=[], vehicles=[],
         categories=[], has_prev_trip=False, has_next_trip=False,
@@ -209,7 +209,7 @@ def test_trip_card_has_no_vehicle_status_badge():
 
 
 def test_trip_card_controls_render_vehicle_select_and_purpose_field():
-    templates = make_templates(SimpleNamespace(display_tz=TZ))
+    templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     body = templates.env.get_template("_trip_card.html").render(
         trip=_trip(vehicle_id=2, purpose="Client visit"),
         vehicles=[
@@ -257,7 +257,7 @@ def test_missing_trip_badge_absent_when_covered():
 
 
 def test_merge_forms_include_vehicle_picker_defaulted_to_keep():
-    templates = make_templates(SimpleNamespace(display_tz=TZ))
+    templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     body = templates.env.get_template("trip.html").render(
         trip=_trip(), recent_purposes=[],
         vehicles=[

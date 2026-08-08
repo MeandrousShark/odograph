@@ -40,107 +40,6 @@
 })();
 </script>
 
-{% if diagnostics is defined %}
-  <h2>Diagnostics</h2>
-  <dl class="diagnostics-list">
-    <div><dt>App version</dt><dd><code>{{ diagnostics.app_version }}</code></dd></div>
-    <div><dt>Git revision</dt><dd><code>{{ diagnostics.git_revision }}</code></dd></div>
-    <div><dt>Schema version</dt><dd><code>{{ diagnostics.schema_version }}</code></dd></div>
-    <div><dt>Detector version</dt><dd><code>{{ diagnostics.detector_version }}</code></dd></div>
-  </dl>
-
-  {% if diagnostics_report is defined and diagnostics_report %}
-  {% set report = diagnostics_report %}
-  <h3>Database</h3>
-  <dl class="diagnostics-list">
-    <div><dt>Connectivity</dt>
-      <dd>{{ "ok" if report.database.ok else "FAILED (" ~ report.database.error_type ~ ")" }}</dd></div>
-    {% for key, value in report.database.stats.items() | sort %}
-    <div><dt>{{ key }}</dt><dd>{{ value }}</dd></div>
-    {% endfor %}
-  </dl>
-
-  <h3>Migrations</h3>
-  <p class="muted">Applied vs. the migrations shipped in this image.</p>
-  <dl class="diagnostics-list">
-    <div><dt>Status</dt><dd>{{ report.migrations.status }}</dd></div>
-    <div><dt>Applied</dt>
-      <dd>{{ report.migrations.applied if report.migrations.applied is not none else "unknown" }}</dd></div>
-    <div><dt>Expected</dt><dd>{{ report.migrations.expected }}</dd></div>
-  </dl>
-
-  <h3>Workers</h3>
-  <p class="muted">State lives in this process's memory only and resets on every restart —
-    timestamps below are since process start, not since the worker was first enabled.</p>
-  <table class="settings-table">
-    <thead>
-      <tr><th>Worker</th><th>Enabled</th><th>Last run</th><th>Last success</th><th>Last failure</th><th>Next run</th></tr>
-    </thead>
-    <tbody>
-      {% for worker in report.workers %}
-      <tr>
-        <td>{{ worker.name }}</td>
-        <td>{{ "yes" if worker.enabled else "no" }}</td>
-        {% if not worker.enabled %}
-        <td colspan="4" class="muted">disabled</td>
-        {% elif not worker.state_available %}
-        <td colspan="4" class="muted">unavailable outside the running app process</td>
-        {% else %}
-        <td>{{ worker.last_run_at | local_dt if worker.last_run_at else "unknown" }}</td>
-        <td>{{ worker.last_success_at | local_dt if worker.last_success_at else "none since process start" }}</td>
-        <td>{% if worker.last_failure_at %}{{ worker.last_failure_at | local_dt }} ({{ worker.last_failure_type }}){% else %}none since process start{% endif %}</td>
-        <td>{{ worker.next_run_at | local_dt if worker.next_run_at else "unknown" }}</td>
-        {% endif %}
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-
-  <h3>Configuration presence</h3>
-  <p class="muted">Whether a setting is present — never its value.</p>
-  <dl class="diagnostics-list">
-    {% for key, value in report.config_presence.items() | sort %}
-    <div><dt>{{ key }}</dt><dd>{{ "yes" if value else "no" }}</dd></div>
-    {% endfor %}
-  </dl>
-
-  <h3>Connectivity</h3>
-  <p class="muted">OSRM, the geocoder, ntfy, and SMTP are only probed when you click below —
-    never automatically, so an outage here never becomes background traffic against a
-    third-party service.</p>
-  <button type="button" hx-post="/settings/diagnostics/check"
-          hx-target="#diagnostics-connectivity" hx-swap="innerHTML">Check now</button>
-  <div id="diagnostics-connectivity">
-    {% include "_diagnostics_connectivity.html" %}
-  </div>
-  {% endif %}
-{% endif %}
-
-<h2>Device status</h2>
-<p class="muted">Newest location fix received from each device that has posted to
-  <code>/ingest</code>, and how many it has sent in total — the fastest way to tell
-  whether a phone is actually reaching this instance. No coordinates are shown here.</p>
-
-{% if device_fixes %}
-<div class="settings-table-scroll settings-table-scroll-device-fixes">
-<table id="device-fixes-table" class="settings-table">
-  <thead><tr><th>Device</th><th>Last received</th><th>Last recorded</th><th>Points</th></tr></thead>
-  <tbody>
-    {% for d in device_fixes %}
-    <tr>
-      <td>{{ d.device }}</td>
-      <td>{{ d.newest_received_at | local_dt }}</td>
-      <td>{{ d.newest_recorded_at | local_dt }}</td>
-      <td class="num">{{ d.point_count }}</td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
-</div>
-{% else %}
-<p class="muted">No location fixes received yet.</p>
-{% endif %}
-
 <h2>Mileage rates</h2>
 <p class="muted">IRS standard mileage rate per business mile, used for the deduction
   estimates on the trip list. A <code>MILEAGE_RATE_&lt;YEAR&gt;</code> environment
@@ -385,5 +284,109 @@ document.addEventListener('click', function (event) {
   <label><input type="checkbox" name="dry_run" value="1"> Dry run (validate only, don't write)</label>
   <button type="submit">Import</button>
 </form>
+
+<details class="section-disclosure" id="diagnostics">
+  <summary><h2>Diagnostics</h2></summary>
+
+  {% if diagnostics is defined %}
+  <dl class="diagnostics-list">
+    <div><dt>App version</dt><dd><code>{{ diagnostics.app_version }}</code></dd></div>
+    <div><dt>Git revision</dt><dd><code>{{ diagnostics.git_revision }}</code></dd></div>
+    <div><dt>Schema version</dt><dd><code>{{ diagnostics.schema_version }}</code></dd></div>
+    <div><dt>Detector version</dt><dd><code>{{ diagnostics.detector_version }}</code></dd></div>
+  </dl>
+
+  {% if diagnostics_report is defined and diagnostics_report %}
+  {% set report = diagnostics_report %}
+  <h3>Database</h3>
+  <dl class="diagnostics-list">
+    <div><dt>Connectivity</dt>
+      <dd>{{ "ok" if report.database.ok else "FAILED (" ~ report.database.error_type ~ ")" }}</dd></div>
+    {% for key, value in report.database.stats.items() | sort %}
+    <div><dt>{{ key }}</dt><dd>{{ value }}</dd></div>
+    {% endfor %}
+  </dl>
+
+  <h3>Migrations</h3>
+  <p class="muted">Applied vs. the migrations shipped in this image.</p>
+  <dl class="diagnostics-list">
+    <div><dt>Status</dt><dd>{{ report.migrations.status }}</dd></div>
+    <div><dt>Applied</dt>
+      <dd>{{ report.migrations.applied if report.migrations.applied is not none else "unknown" }}</dd></div>
+    <div><dt>Expected</dt><dd>{{ report.migrations.expected }}</dd></div>
+  </dl>
+
+  <h3>Workers</h3>
+  <p class="muted">State lives in this process's memory only and resets on every restart —
+    timestamps below are since process start, not since the worker was first enabled.</p>
+  <table class="settings-table">
+    <thead>
+      <tr><th>Worker</th><th>Enabled</th><th>Last run</th><th>Last success</th><th>Last failure</th><th>Next run</th></tr>
+    </thead>
+    <tbody>
+      {% for worker in report.workers %}
+      <tr>
+        <td>{{ worker.name }}</td>
+        <td>{{ "yes" if worker.enabled else "no" }}</td>
+        {% if not worker.enabled %}
+        <td colspan="4" class="muted">disabled</td>
+        {% elif not worker.state_available %}
+        <td colspan="4" class="muted">unavailable outside the running app process</td>
+        {% else %}
+        <td>{{ worker.last_run_at | local_dt if worker.last_run_at else "unknown" }}</td>
+        <td>{{ worker.last_success_at | local_dt if worker.last_success_at else "none since process start" }}</td>
+        <td>{% if worker.last_failure_at %}{{ worker.last_failure_at | local_dt }} ({{ worker.last_failure_type }}){% else %}none since process start{% endif %}</td>
+        <td>{{ worker.next_run_at | local_dt if worker.next_run_at else "unknown" }}</td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h3>Configuration presence</h3>
+  <p class="muted">Whether a setting is present — never its value.</p>
+  <dl class="diagnostics-list">
+    {% for key, value in report.config_presence.items() | sort %}
+    <div><dt>{{ key }}</dt><dd>{{ "yes" if value else "no" }}</dd></div>
+    {% endfor %}
+  </dl>
+
+  <h3>Connectivity</h3>
+  <p class="muted">OSRM, the geocoder, ntfy, and SMTP are only probed when you click below —
+    never automatically, so an outage here never becomes background traffic against a
+    third-party service.</p>
+  <button type="button" hx-post="/settings/diagnostics/check"
+          hx-target="#diagnostics-connectivity" hx-swap="innerHTML">Check now</button>
+  <div id="diagnostics-connectivity">
+    {% include "_diagnostics_connectivity.html" %}
+  </div>
+  {% endif %}
+  {% endif %}
+
+  <h2>Device status</h2>
+  <p class="muted">Newest location fix received from each device that has posted to
+    <code>/ingest</code>, and how many it has sent in total — the fastest way to tell
+    whether a phone is actually reaching this instance. No coordinates are shown here.</p>
+
+  {% if device_fixes %}
+  <div class="settings-table-scroll settings-table-scroll-device-fixes">
+  <table id="device-fixes-table" class="settings-table">
+    <thead><tr><th>Device</th><th>Last received</th><th>Last recorded</th><th>Points</th></tr></thead>
+    <tbody>
+      {% for d in device_fixes %}
+      <tr>
+        <td>{{ d.device }}</td>
+        <td>{{ d.newest_received_at | local_dt }}</td>
+        <td>{{ d.newest_recorded_at | local_dt }}</td>
+        <td class="num">{{ d.point_count }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">No location fixes received yet.</p>
+  {% endif %}
+</details>
 
 {% endblock %}

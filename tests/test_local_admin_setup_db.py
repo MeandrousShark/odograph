@@ -47,7 +47,7 @@ def _request(pool, *, admin_token="setup-token", ip="203.0.113.5", limiter=None,
     return SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, config=cfg,
-            templates=make_templates(SimpleNamespace(display_tz=TZ)),
+            templates=make_templates(SimpleNamespace(display_tz=TZ, app_version="test")),
             oauth=None,
             login_limiter=limiter or FailedAuthLimiter(3, 900.0),
         )),

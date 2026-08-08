@@ -125,6 +125,8 @@ header h1 a { text-decoration: none; }
 header nav { display: flex; justify-content: center; gap: var(--space-3); flex-wrap: wrap; font-size: .9rem; }
 .header-account { display: flex; gap: var(--space-2); align-items: center; font-size: .85rem; }
 header .who { color: var(--fg-muted); }
+footer { border-top: 1px solid var(--border); margin-top: var(--space-4); padding-top: var(--space-3); }
+footer p { margin: 0; font-size: .8rem; }
 .logout-form { display: inline; }
 .link-button { background: none; border: none; min-height: var(--control-height); padding: 0 var(--space-2); margin: 0; font: inherit;
                color: inherit; text-decoration: underline; cursor: pointer; box-shadow: none; }
@@ -155,6 +157,10 @@ h2 { font-size: 1.05rem; margin: 1.5rem 0 .25rem; }
 .table-wrapper summary { overflow-wrap: normal; white-space: nowrap; }
 table { border-collapse: collapse; width: 100%; font-size: .9rem; }
 th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid var(--border); }
+/* No left padding on the first column, so a table's first column lines
+   up with the headings and body text sharing its content column instead
+   of sitting half a cell further right. */
+th:first-child, td:first-child { padding-left: 0; }
 th { font-weight: 600; font-size: .8rem; text-transform: uppercase; opacity: .6; }
 td.num { font-variant-numeric: tabular-nums; }
 .trip-route { overflow-wrap: anywhere; line-height: 1.35; }
@@ -575,7 +581,16 @@ a { color: inherit; }
   margin-bottom: var(--space-4); font-size: .9rem;
 }
 .week-nav-link { min-height: var(--control-height); display: inline-flex; align-items: center; }
-.week-nav-next[aria-disabled="true"] { opacity: .5; cursor: default; }
+/* Shared by the dashboard's "Next week" control and the annual report's
+   "next year" control -- both disable in place (rather than hiding) so the
+   row doesn't reflow as the reader pages forward, so both need the same
+   dimmed, non-interactive treatment. Scoped to these two controls, not a
+   bare [aria-disabled="true"] selector, so the rule doesn't reach every
+   future aria-disabled element application-wide (a form control, say,
+   where cursor: default would be wrong). */
+.week-nav-next[aria-disabled="true"], .report-year-next[aria-disabled="true"] {
+  opacity: .5; cursor: default;
+}
 .dashboard-metrics {
   display: grid; grid-template-columns: repeat(4, minmax(9rem, 1fr)); gap: var(--space-3);
   margin-bottom: var(--space-4);

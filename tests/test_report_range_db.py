@@ -1,7 +1,9 @@
 """DB-backed tests for the arbitrary date-range/quarterly report routes:
 `/report/range` and `/report/range/export`. Route
 handlers are invoked directly, same convention `tests/test_odometer_db.py`/
-`tests/test_review_db.py` use.
+`tests/test_review_db.py` use. Also covers `/report/{year}`'s next-year
+guard's timezone wiring (`test_report_page_...`), since this is the DB-backed
+report-route file with the `_endpoint`/`_request` harness that test needs.
 """
 from __future__ import annotations
 
@@ -16,6 +18,7 @@ import pytest
 from fastapi import HTTPException
 from openpyxl import load_workbook
 
+import app.ui as ui
 from app.db import make_pool, run_migrations
 from app.main import make_templates
 from app.ui import make_router
@@ -35,7 +38,7 @@ def _endpoint(path: str):
 
 
 def _request(pool):
-    config = SimpleNamespace(display_tz=TZ)
+    config = SimpleNamespace(display_tz=TZ, app_version="test")
     return SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, config=config, templates=make_templates(config),
@@ -221,3 +224,58 @@ async def _range_export_scenario():
 
 def test_range_report_export_media_type_filename_and_row_filtering():
     asyncio.run(_range_export_scenario())
+
+
+class _FrozenDatetime(datetime):
+    """`datetime.now(tz)` fixed at 2027-01-01 03:00 UTC (2026-12-31 19:00 in
+    `America/Los_Angeles`) -- the instant a UTC-based "current year" would
+    already read 2027 while the display timezone's hasn't rolled over yet.
+    Subclasses the real `datetime`, not a bare stub, so every other
+    `datetime(...)` construction `app.ui` does elsewhere (e.g. `_fetch_range_trips`'s
+    day boundaries) keeps working unchanged; only `.now()` is fixed.
+    """
+
+    _instant = datetime(2027, 1, 1, 3, 0, tzinfo=timezone.utc)
+
+    @classmethod
+    def now(cls, tz=None):
+        return cls._instant if tz is None else cls._instant.astimezone(tz)
+
+
+async def _report_page_year_boundary_scenario():
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        await _reset_schema(pool)
+        request = _request(pool)
+        page = _endpoint("/report/{year}")
+
+        # The operator's local year is still 2026 at this instant, so 2027
+        # hasn't started for them -- the control offering it must be
+        # disabled even though UTC already reads January 2027.
+        current = await page(request, year=2026, user=USER)
+        current_body = current.body.decode()
+        assert '<span class="report-year-next" aria-disabled="true">2027 →</span>' in current_body
+        assert 'href="/report/2027"' not in current_body
+        assert '<a href="/report/2025">← 2025</a>' in current_body
+
+        # 2026 itself, one year forward from 2025, has already started (most
+        # of it happened before this instant) -- its own control must stay
+        # enabled, which is what catches an off-by-one the other way.
+        past = await page(request, year=2025, user=USER)
+        past_body = past.body.decode()
+        assert '<a href="/report/2026">2026 →</a>' in past_body
+        assert 'aria-disabled="true"' not in past_body
+    finally:
+        await pool.close()
+
+
+def test_report_page_next_year_guard_uses_display_timezone_at_new_years_eve_boundary(monkeypatch):
+    # Proves app/ui.py's report_page route passes a tz-localized `now` (not
+    # a naive/UTC one) into next_year_disabled: patching ui.datetime.now to a
+    # fixed instant and letting the route localize it via `datetime.now(tz)`
+    # is the only way this test can distinguish the two -- a plain
+    # `datetime.now()` call site would see the frozen instant's UTC year
+    # (2027) instead and fail the assertions above.
+    monkeypatch.setattr(ui, "datetime", _FrozenDatetime)
+    asyncio.run(_report_page_year_boundary_scenario())

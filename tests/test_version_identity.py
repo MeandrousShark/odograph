@@ -67,7 +67,7 @@ class _Pool:
 
 
 def _render_settings(diagnostics):
-    templates = make_templates(SimpleNamespace(display_tz=TZ))
+    templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     return templates.env.get_template("settings.html").render(
         boundary_overrides=[], rates=[], vehicles=[], odometer=[], places=[], rules=[],
         geocode_enabled=False, device_fixes=[], diagnostics=diagnostics,
@@ -119,6 +119,26 @@ def test_settings_diagnostics_render_all_runtime_versions():
     assert ">17<" in diagnostics
     assert "Detector version" in diagnostics
     assert ">2<" in diagnostics
+
+
+def test_authenticated_page_footer_shows_the_configured_app_version():
+    # The diagnostics dict's app_version deliberately differs from the
+    # make_templates() config's -- proves the footer reads the template
+    # global, not whatever a route happened to pass into the page context.
+    body = _render_settings({
+        "app_version": "diagnostics-dict-version-should-not-appear-in-footer",
+        "git_revision": "0123456789abcdef",
+        "schema_version": 17,
+        "detector_version": 2,
+    })
+
+    assert "<footer>" in body
+    footer = body.split("<footer>", 1)[1].split("</footer>", 1)[0]
+    assert "test" in footer
+    assert "diagnostics-dict-version-should-not-appear-in-footer" not in footer
+    assert "17" not in footer
+    assert ">2<" not in footer
+    assert "<a " not in footer
 
 
 def test_schema_version_is_queried_live_and_detector_version_stays_two():

@@ -27,6 +27,62 @@ reproduced here.
 - Complete before release: list every application, database, configuration,
   and operational break, or state explicitly that there are none.
 
+## [0.7.2] - 2026-08-07
+
+### Fixed
+
+- **The review page's map now appears with every trip.** Classifying a trip
+  as business or personal, or skipping it, brings up the next unclassified
+  trip. Its card used to arrive with everything else present but no map, and
+  only reloading the page brought the route back. This mattered because the
+  review page is meant to be worked through one trip after another from the
+  keyboard, and the map is the main thing a trip is judged by. The map now
+  appears with every trip as you work through them, with no reloading needed.
+- The dashboard's "Add manual trip" link took you to the trips page but left
+  the form collapsed, so the action looked like it had done nothing. It now
+  arrives with the manual-trip form already open. This works whether or not
+  JavaScript is enabled.
+- The first column of every table now lines up with the heading above it and
+  with the surrounding text. Previously it sat slightly further right than
+  its own heading; it was most visible under "By vehicle" on the report page
+  and under "Top named routes" and "Most-used places" on the stats page, and
+  it applied to the settings page's tables too.
+- The report page offered a link to the next tax year even before that year
+  had started, which led to an empty report and a dead end. That link is now
+  shown but disabled until the year begins, matching how the dashboard
+  already treats the coming week. The current year is worked out in the
+  display timezone, so it changes over at midnight where the operator is, not
+  in UTC. Going to a future year directly by URL still works, which matters
+  if a forward-dated expense has put records there.
+
+### Changed
+
+- **Settings now leads with settings.** The diagnostic information and the
+  device status block have moved into a single collapsed section at the
+  bottom of the page. Everything that was there before is still there, one
+  click away.
+
+### Added
+
+- **Signed-in pages now carry a footer showing the running application
+  version**, the quickest way to confirm what an installation is running. It
+  does not appear on the sign-in or first-run setup pages, so the version is
+  not disclosed to anyone who has not signed in, and `/healthz` continues to
+  report no version, schema, or component identifiers. The footer carries no
+  external links.
+
+### Supported upgrade path
+
+- Upgrade directly from 0.7.1 by pulling the new image. This release **runs
+  no database migration**; the schema stays at 19 and no configuration change
+  is required. Because nothing touches the database, rolling back is a matter
+  of repointing at the previous image.
+
+### Breaking changes
+
+- None. There is no application, database, configuration, or operational
+  break in this release.
+
 ## [0.7.1] - 2026-08-07
 
 ### Fixed

@@ -53,7 +53,7 @@ def _request(pool, *, ip="203.0.113.9", limiter=None, session=None):
     return SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, config=cfg,
-            templates=make_templates(SimpleNamespace(display_tz=TZ)),
+            templates=make_templates(SimpleNamespace(display_tz=TZ, app_version="test")),
             oauth=None,
             login_limiter=limiter or FailedAuthLimiter(3, 900.0),
         )),
@@ -185,7 +185,7 @@ async def _shared_limiter_with_setup_scenario():
         setup_request_factory = lambda: SimpleNamespace(
             app=SimpleNamespace(state=SimpleNamespace(
                 pool=pool, config=setup_cfg,
-                templates=make_templates(SimpleNamespace(display_tz=TZ)),
+                templates=make_templates(SimpleNamespace(display_tz=TZ, app_version="test")),
                 oauth=None, login_limiter=limiter,
             )),
             session={"csrf": "test-csrf"},

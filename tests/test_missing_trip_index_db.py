@@ -38,7 +38,9 @@ INDEX = _endpoint()
 
 
 def _request(pool, osrm_url="", osrm_http_client=None):
-    config = SimpleNamespace(display_tz=TZ, trips_page_size=25, osrm_url=osrm_url)
+    config = SimpleNamespace(
+        display_tz=TZ, trips_page_size=25, osrm_url=osrm_url, app_version="test",
+    )
     return SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, templates=make_templates(config), config=config,
@@ -71,6 +73,7 @@ async def _call_index(request, **prefill):
         request, {"sub": "test"}, "", "", "", "",
         prefill.get("manual_date", ""), prefill.get("manual_start", ""),
         prefill.get("manual_notes", ""), prefill.get("bridge_trip", ""),
+        prefill.get("manual_open", ""),
     )
 
 
@@ -91,6 +94,18 @@ async def _scenario():
         # No prefill params at all: unchanged, closed, no manual_prefill.
         response = await _call_index(_request(pool))
         assert response.context["manual_prefill"] is None
+        assert response.context["manual_open"] is False
+
+        # manual_open alone (the dashboard's "Add manual trip" link): opens
+        # the form without prefilling anything. A plain str param like its
+        # neighbors, not a bool, so any non-empty value opens the form --
+        # a malformed one still renders the page rather than 422ing it.
+        response = await _call_index(_request(pool), manual_open="true")
+        assert response.context["manual_prefill"] is None
+        assert response.context["manual_open"] is True
+
+        response = await _call_index(_request(pool), manual_open="not-a-bool")
+        assert response.context["manual_open"] is True
 
         # Prefill params present but OSRM unconfigured: identical prefill,
         # no suggestion (acceptance criterion 6, unconfigured half).
@@ -104,6 +119,9 @@ async def _scenario():
             "date": "2026-07-01", "start_time": "08:10",
             "notes": "bridge: A → B", "osrm_hint": None,
         }
+        # missing_trip.py's prefill_url never sets manual_open -- the form
+        # still opens because manual_prefill alone is enough to open it.
+        assert response.context["manual_open"] is True
 
         # OSRM configured and bridge_trip resolves real coordinates:
         # exactly one /route call, hint rendered (acceptance criterion 6,

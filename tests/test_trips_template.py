@@ -11,7 +11,7 @@ ROOT = Path(__file__).parents[1]
 
 
 def _render_index(vehicles=None, **filters):
-    templates = make_templates(SimpleNamespace(display_tz=TZ))
+    templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     return templates.env.get_template("trips.html").render(
         months=[], vehicles=vehicles or [], recent_purposes=[], user={"sub": "test"},
         csrf="token", filter_category=filters.get("category", ""),
@@ -23,7 +23,7 @@ def _render_index(vehicles=None, **filters):
 
 
 def _render(vehicles):
-    templates = make_templates(SimpleNamespace(display_tz=TZ))
+    templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     body = templates.env.get_template("trips.html").render(
         months=[], vehicles=vehicles, user={"sub": "test"}, csrf="token",
         filter_category="", filter_from="", filter_to="", filter_vehicle="",
@@ -283,14 +283,33 @@ def test_manual_trip_form_closed_and_unprefilled_by_default():
     assert 'name="start_time" value=""' in body
 
 
-def test_manual_trip_form_opens_and_prefills_from_missing_trip_badge_link():
-    templates = make_templates(SimpleNamespace(display_tz=TZ))
+def test_manual_trip_form_opens_from_manual_open_flag_without_prefill():
+    # manual_open, not manual_prefill, drives the disclosure's open attribute
+    # -- this is the dashboard's "Add manual trip" link (a bare #manual-trip
+    # fragment, since a browser only auto-expands a <details> when a fragment
+    # targets something inside it, never the <details> itself).
+    templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     body = templates.env.get_template("trips.html").render(
         months=[], vehicles=[], recent_purposes=[], user={"sub": "test"},
         csrf="token", filter_category="", filter_from="", filter_to="",
         filter_vehicle="", filter_url=lambda *a, **k: "/",
         export_url=lambda *a, **k: "/", review_url="/review", ytd_year=2026,
-        ytd_deduction=None,
+        ytd_deduction=None, manual_open=True,
+    )
+
+    assert '<details class="trip-page-disclosure trip-manual add-manual" id="manual-trip" open>' in body
+    assert 'name="start_time" value=""' in body
+    assert "The date, start time, and notes were prefilled" not in body
+
+
+def test_manual_trip_form_opens_and_prefills_from_missing_trip_badge_link():
+    templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
+    body = templates.env.get_template("trips.html").render(
+        months=[], vehicles=[], recent_purposes=[], user={"sub": "test"},
+        csrf="token", filter_category="", filter_from="", filter_to="",
+        filter_vehicle="", filter_url=lambda *a, **k: "/",
+        export_url=lambda *a, **k: "/", review_url="/review", ytd_year=2026,
+        ytd_deduction=None, manual_open=True,
         manual_prefill={
             "date": "2026-07-01", "start_time": "08:10",
             "notes": "bridge: Work → Home", "osrm_hint": None,
@@ -307,13 +326,13 @@ def test_manual_trip_form_opens_and_prefills_from_missing_trip_badge_link():
 
 
 def test_manual_trip_form_shows_osrm_hint_when_present():
-    templates = make_templates(SimpleNamespace(display_tz=TZ))
+    templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     body = templates.env.get_template("trips.html").render(
         months=[], vehicles=[], recent_purposes=[], user={"sub": "test"},
         csrf="token", filter_category="", filter_from="", filter_to="",
         filter_vehicle="", filter_url=lambda *a, **k: "/",
         export_url=lambda *a, **k: "/", review_url="/review", ytd_year=2026,
-        ytd_deduction=None,
+        ytd_deduction=None, manual_open=True,
         manual_prefill={
             "date": "2026-07-01", "start_time": "08:10", "notes": "",
             "osrm_hint": "~1.4 mi by road",
@@ -325,7 +344,7 @@ def test_manual_trip_form_shows_osrm_hint_when_present():
 
 
 def test_trip_pager_is_block_markup_with_stable_next_url():
-    templates = make_templates(SimpleNamespace(display_tz=TZ))
+    templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     body = templates.env.get_template("_trip_page_rows.html").render(
         trips=[], has_more=True, next_url="/trips/month/2026/1?offset=25",
     )
@@ -390,7 +409,7 @@ def test_trip_page_disclosures_share_scoped_summary_row_and_full_width_content()
 
 
 def test_trip_filter_disclosure_preserves_urls_and_compacts_narrow_layout():
-    templates = make_templates(SimpleNamespace(display_tz=TZ))
+    templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     body = templates.env.get_template("trips.html").render(
         months=[], vehicles=[], recent_purposes=[], user={"sub": "test"}, csrf="token",
         filter_category="business", filter_from="2026-07-01", filter_to="2026-07-31",

@@ -10,7 +10,9 @@ ROOT = Path(__file__).parents[1]
 
 
 def _templates():
-    return make_templates(SimpleNamespace(display_tz=ZoneInfo("America/Los_Angeles")))
+    return make_templates(SimpleNamespace(
+        display_tz=ZoneInfo("America/Los_Angeles"), app_version="test",
+    ))
 
 
 def test_purpose_component_keeps_free_text_and_exposes_recent_selector():

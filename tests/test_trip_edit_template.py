@@ -22,7 +22,7 @@ def _render(source="detected", errors=None, **overrides):
         "end_time": "01:00",
         "distance": "8.4",
     }
-    return make_templates(SimpleNamespace(display_tz=TZ)).env.get_template(
+    return make_templates(SimpleNamespace(display_tz=TZ, app_version="test")).env.get_template(
         "_trip_edit_card.html"
     ).render(
         trip=trip,

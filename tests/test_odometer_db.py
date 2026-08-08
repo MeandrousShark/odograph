@@ -38,7 +38,7 @@ def _request(pool):
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool,
             config=SimpleNamespace(display_tz=TZ),
-            templates=make_templates(SimpleNamespace(display_tz=TZ)),
+            templates=make_templates(SimpleNamespace(display_tz=TZ, app_version="test")),
         )),
         session={"csrf": "token"},
     )

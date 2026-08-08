@@ -183,6 +183,11 @@ def make_templates(config: Config) -> Jinja2Templates:
     )
     templates.env.globals["now_local"] = now_local
     templates.env.globals["display_tz"] = str(tz)
+    # No getattr fallback here (unlike map_tile_url/missing_trip_gap_m below):
+    # those degrade to a working default when absent, but a missing app
+    # version in production would be a real misconfiguration worth an
+    # AttributeError, not a silently blank footer.
+    templates.env.globals["app_version"] = config.app_version
     templates.env.globals["describe_endpoint"] = describe_endpoint
     templates.env.globals["describe_compact_endpoint"] = describe_compact_endpoint
     templates.env.globals["format_rate_periods"] = format_rate_periods

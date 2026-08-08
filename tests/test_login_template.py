@@ -13,7 +13,7 @@ TZ = ZoneInfo("UTC")
 
 
 def _render(**context):
-    templates = make_templates(SimpleNamespace(display_tz=TZ))
+    templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     defaults = {
         "user": None, "csrf": "test-csrf-token",
         "local_admin_exists": False, "oidc_available": False,

@@ -44,6 +44,7 @@ from app.report import (
     build_annual_report,
     build_range_report,
     default_report_year,
+    next_year_disabled,
     range_filename_slug,
     sum_month_deductions,
 )
@@ -1092,6 +1093,7 @@ def make_router() -> APIRouter:
         manual_start: str = Query(""),
         manual_notes: str = Query(""),
         bridge_trip: str = Query(""),
+        manual_open: str = Query(""),
     ):
         pool = request.app.state.pool
         tz = request.app.state.config.display_tz
@@ -1196,6 +1198,11 @@ def make_router() -> APIRouter:
                 "ytd_year": ytd_year,
                 "ytd_deduction": sum_month_deductions(ytd_by_month, ytd_year, rates),
                 "manual_prefill": manual_prefill,
+                # manual_open, not manual_prefill, drives the <details open> attribute:
+                # a fragment link (e.g. #manual-trip) only auto-expands a <details> when
+                # the target is inside it, never the <details> itself, so the dashboard's
+                # "Add manual trip" link needs this dedicated flag to open the form.
+                "manual_open": bool(manual_open or manual_prefill),
             },
         )
 
@@ -1467,6 +1474,7 @@ def make_router() -> APIRouter:
                 "report": report, "odometer_coverage": odometer_coverage,
                 "expenses": expenses, "expense_report": expense_report,
                 "user": user, "csrf": request.session.get("csrf", ""),
+                "next_year_disabled": next_year_disabled(report.year, datetime.now(tz)),
             },
         )
 

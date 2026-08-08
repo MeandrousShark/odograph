@@ -153,7 +153,7 @@ def _redirect_app(pool) -> FastAPI:
 
     app = FastAPI()
     app.state.pool = pool
-    app.state.config = SimpleNamespace(dev_no_auth=False, display_tz=timezone.utc)
+    app.state.config = SimpleNamespace(dev_no_auth=False, display_tz=timezone.utc, app_version="test")
     app.state.templates = make_templates(app.state.config)
     app.add_middleware(SessionMiddleware, secret_key="test-secret", same_site="lax", https_only=False)
 

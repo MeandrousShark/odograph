@@ -252,7 +252,7 @@ def test_other_expense_requires_explicit_treatment_at_server_boundary():
 
 
 def test_expense_form_clears_required_treatment_when_other_is_selected():
-    templates = make_templates(SimpleNamespace(display_tz=TZ))
+    templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     body = templates.env.get_template("expenses.html").render(
         expenses=[],
         vehicles=[{

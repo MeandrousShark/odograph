@@ -41,7 +41,7 @@ EXPORT_TRIPS = _endpoint("/export", "GET")
 
 
 def _request(pool):
-    config = SimpleNamespace(display_tz=TZ, trips_page_size=25)
+    config = SimpleNamespace(display_tz=TZ, trips_page_size=25, app_version="test")
     return SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, templates=make_templates(config), config=config,

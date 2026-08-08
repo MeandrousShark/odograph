@@ -5,7 +5,11 @@
 <p>
   <a href="/report/{{ report.year - 1 }}">← {{ report.year - 1 }}</a>
   <strong style="margin: 0 .5rem">{{ report.year }}</strong>
+  {% if next_year_disabled %}
+  <span class="report-year-next" aria-disabled="true">{{ report.year + 1 }} →</span>
+  {% else %}
   <a href="/report/{{ report.year + 1 }}">{{ report.year + 1 }} →</a>
+  {% endif %}
   · <a href="/report/{{ report.year }}/export">Export XLSX</a>
   · <a href="/expenses?year={{ report.year }}">Expense ledger</a>
 </p>

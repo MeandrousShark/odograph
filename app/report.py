@@ -95,6 +95,19 @@ def default_report_year(now: datetime) -> int:
     return now.year - 1 if now.month <= 4 else now.year
 
 
+def next_year_disabled(report_year: int, now: datetime) -> bool:
+    """True once `report_year` is the operator's current year or later, so
+    the report page's "next year" control can't offer a year that hasn't
+    started. `>=`, not `==`, since `/report/{year}` accepts any year 1-9998
+    by URL -- a year already reached that way must not offer the one past
+    it either. `now` must already be localized to the display timezone
+    (a caller passing a UTC `now` would disable the operator's still-current
+    year right at a US evening's year boundary, when the UTC date has
+    already rolled over but the local one hasn't).
+    """
+    return report_year >= now.year
+
+
 def sum_month_deductions(
     month_meters: list[tuple[int, float]], year: int, rates: dict[int, YearRate]
 ) -> float | None:

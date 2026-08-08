@@ -11,7 +11,7 @@ TZ = timezone.utc
 
 
 def _templates():
-    return make_templates(SimpleNamespace(display_tz=TZ))
+    return make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
 
 
 def _render_detail(source: str) -> str:
@@ -109,7 +109,7 @@ def test_detected_trip_detail_still_renders_map():
 def test_detected_trip_detail_tile_layer_follows_configured_map_tile_url():
     templates = make_templates(SimpleNamespace(
         display_tz=TZ, map_tile_url="https://tiles.example.net/{z}/{x}/{y}.png",
-        map_tile_attribution="Example attribution",
+        map_tile_attribution="Example attribution", app_version="test",
     ))
     body = templates.env.get_template("trip.html").render(
         trip=_trip(source="detected"), recent_purposes=[], vehicles=[], categories=[],

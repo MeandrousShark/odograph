@@ -75,5 +75,10 @@
     });
   </script>
   {% block content %}{% endblock %}
+  {% if user %}
+  <footer>
+    <p class="muted">Odograph {{ app_version }}</p>
+  </footer>
+  {% endif %}
 </body>
 </html>

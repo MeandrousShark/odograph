@@ -55,7 +55,7 @@ class FakeSnapWorker:
 
 
 def _request(pool):
-    templates = make_templates(SimpleNamespace(display_tz=TZ))
+    templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     return SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, templates=templates, config=SimpleNamespace(display_tz=TZ),

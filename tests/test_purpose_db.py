@@ -28,7 +28,7 @@ MANUAL = _endpoint("/trips/manual")
 
 
 def _request(pool):
-    config = SimpleNamespace(display_tz=TZ)
+    config = SimpleNamespace(display_tz=TZ, app_version="test")
     return SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, templates=make_templates(config), config=config,

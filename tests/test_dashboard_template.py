@@ -70,7 +70,9 @@ def _dashboard(**overrides) -> WeekDashboard:
 
 
 def _render(dashboard: WeekDashboard) -> str:
-    templates = make_templates(SimpleNamespace(display_tz=TZ, missing_trip_gap_m=1000.0))
+    templates = make_templates(SimpleNamespace(
+        display_tz=TZ, missing_trip_gap_m=1000.0, app_version="test",
+    ))
     return templates.env.get_template("dashboard.html").render(
         dashboard=dashboard, user={"sub": "test"}, csrf="token",
     )
@@ -148,7 +150,7 @@ def test_attention_strip_present_with_review_and_missing_trip_links():
 def test_view_all_trips_and_add_manual_trip_links():
     body = _render(_dashboard())
     assert 'href="/trips">View all trips</a>' in body
-    assert 'href="/trips#manual-trip">Add manual trip</a>' in body
+    assert 'href="/trips?manual_open=true#manual-trip">Add manual trip</a>' in body
 
 
 def test_deduction_unavailable_shows_settings_link_not_a_number():

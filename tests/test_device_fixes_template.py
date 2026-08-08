@@ -13,7 +13,7 @@ TZ = timezone.utc
 
 
 def _render(device_fixes):
-    templates = make_templates(SimpleNamespace(display_tz=TZ))
+    templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     return templates.env.get_template("settings.html").render(
         boundary_overrides=[], rates=[], vehicles=[], odometer=[], places=[],
         rules=[], geocode_enabled=False, device_fixes=device_fixes,
@@ -66,7 +66,10 @@ def test_device_status_never_renders_coordinates():
             "point_count": 5,
         },
     ])
-    section = body.split("Device status", 1)[1].split("<h2>Mileage rates</h2>", 1)[0]
+    # Device status now sits at the bottom of the page inside the Diagnostics
+    # disclosure, not directly ahead of Mileage rates -- bound the slice by
+    # the disclosure's close instead.
+    section = body.split("Device status", 1)[1].split("</details>", 1)[0]
 
     assert "lat" not in section.lower()
     assert "lon" not in section.lower()

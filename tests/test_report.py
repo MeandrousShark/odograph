@@ -14,6 +14,7 @@ from app.report import (
     build_annual_report,
     build_range_report,
     default_report_year,
+    next_year_disabled,
     quarter_bounds,
     range_label,
 )
@@ -222,6 +223,35 @@ def test_default_report_year_jan_through_april_uses_prior_year():
 def test_default_report_year_may_through_december_uses_current_year():
     assert default_report_year(datetime(2026, 5, 1)) == 2026
     assert default_report_year(datetime(2026, 12, 31)) == 2026
+
+
+def test_next_year_disabled_false_for_a_past_year():
+    assert next_year_disabled(2020, datetime(2026, 6, 1, tzinfo=TZ)) is False
+
+
+def test_next_year_disabled_true_for_the_current_year():
+    # >=, not ==: the current year itself must disable the control that
+    # would offer the year after it, not just years strictly beyond it.
+    assert next_year_disabled(2026, datetime(2026, 6, 1, tzinfo=TZ)) is True
+
+
+def test_next_year_disabled_true_for_a_url_reached_future_year():
+    # /report/{year} accepts any year 1-9998 by URL; a year already reached
+    # that way must not offer the one past it either.
+    assert next_year_disabled(2030, datetime(2026, 6, 1, tzinfo=TZ)) is True
+
+
+def test_next_year_disabled_uses_the_local_year_at_the_new_years_eve_boundary():
+    # 2027-01-01 03:00 UTC is still 2026-12-31 19:00 in Los Angeles. A guard
+    # built on UTC (or a naive date.today()) would already see 2027 as
+    # current here and wrongly leave 2026's next-year control (2027) enabled
+    # -- `now` must already be localized to the display timezone.
+    now_utc = datetime(2027, 1, 1, 3, 0, tzinfo=timezone.utc)
+    now_local = now_utc.astimezone(TZ)
+    assert now_local.year == 2026
+
+    assert next_year_disabled(2026, now_local) is True  # current year: still disabled
+    assert next_year_disabled(2025, now_local) is False  # past year: still enabled
 
 
 # --- build_range_report / quarter_bounds / range_label ---

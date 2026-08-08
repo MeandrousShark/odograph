@@ -46,7 +46,9 @@ DASHBOARD = _endpoint()
 
 
 def _request(pool, tz: ZoneInfo = UTC, missing_trip_gap_m: float = 1000.0):
-    config = SimpleNamespace(display_tz=tz, missing_trip_gap_m=missing_trip_gap_m)
+    config = SimpleNamespace(
+        display_tz=tz, missing_trip_gap_m=missing_trip_gap_m, app_version="test",
+    )
     return SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, templates=make_templates(config), config=config,
@@ -243,7 +245,9 @@ def test_dashboard_passes_vehicles_and_recent_purposes_for_the_trip_card():
 def _bare_app(pool) -> FastAPI:
     app = FastAPI()
     app.state.pool = pool
-    app.state.config = SimpleNamespace(dev_no_auth=False, display_tz=UTC, missing_trip_gap_m=1000.0)
+    app.state.config = SimpleNamespace(
+        dev_no_auth=False, display_tz=UTC, missing_trip_gap_m=1000.0, app_version="test",
+    )
     app.state.templates = make_templates(app.state.config)
     app.add_middleware(SessionMiddleware, secret_key="test-secret", same_site="lax", https_only=False)
 

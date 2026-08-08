@@ -34,7 +34,7 @@ def _trip(source: str, **overrides) -> dict:
 
 
 def _render(**context):
-    templates = make_templates(SimpleNamespace(display_tz=TZ))
+    templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     defaults = {
         "trip": None, "remaining": 0, "state": "card",
         "path_geojson": None, "path_snapped_geojson": None,
@@ -46,32 +46,72 @@ def _render(**context):
     return templates.env.get_template("_review_card.html").render(**defaults)
 
 
+def _render_page(config=None, **context):
+    templates = make_templates(config or SimpleNamespace(display_tz=TZ, app_version="test"))
+    defaults = {
+        "trip": None, "remaining": 0, "state": "card",
+        "path_geojson": None, "path_snapped_geojson": None,
+        "vehicles": [], "filter_from": "", "filter_to": "", "filter_vehicle": "",
+        "review_url": "/review",
+        "recent_purposes": ["Client meeting"],
+        "user": {"name": "Tester"}, "csrf_token": "test", "csp_nonce": "",
+    }
+    defaults.update(context)
+    return templates.env.get_template("review.html").render(**defaults)
+
+
 def test_manual_trip_card_renders_without_map_block():
     body = _render(trip=_trip("manual"))
     assert "manual-badge" in body
     assert "review-map" not in body
-    assert "L.map(" not in body
 
 
-def test_detected_trip_card_renders_map_block():
-    body = _render(trip=_trip("detected"), path_geojson='{"type":"LineString","coordinates":[[1,2],[3,4]]}')
+def test_no_script_in_swapped_partial():
+    # The partial is what htmx swaps in with `outerHTML`; a swapped fragment
+    # keeps the document's original CSP nonce, so any inline <script> here
+    # would be a mismatched-nonce violation. Map init lives in review.html's
+    # page-level script instead, which loads once with a matching nonce.
+    body = _render(
+        trip=_trip("detected"),
+        path_geojson='{"type":"LineString","coordinates":[[1,2],[3,4]]}',
+    )
+    assert "<script" not in body
+
+
+def test_detected_trip_card_map_carries_geometry_data_attributes():
+    body = _render(
+        trip=_trip("detected"),
+        path_geojson='{"type":"LineString","coordinates":[[1,2],[3,4]]}',
+        path_snapped_geojson='{"type":"MultiLineString","coordinates":[[[1,2],[3,4]]]}',
+    )
     assert 'id="review-map"' in body
-    assert "L.map(" in body
+    assert 'data-start-lat="40.0"' in body
+    assert 'data-start-lon="-74.0"' in body
+    assert 'data-end-lat="40.1"' in body
+    assert 'data-end-lon="-74.1"' in body
+    assert 'data-path="{&#34;type&#34;:&#34;LineString&#34;' in body
+    assert 'data-path-snapped="{&#34;type&#34;:&#34;MultiLineString&#34;' in body
+
+
+def test_detected_trip_card_omits_path_attributes_when_no_geometry():
+    body = _render(
+        trip=_trip("detected"), path_geojson=None, path_snapped_geojson=None,
+    )
+    assert 'id="review-map"' in body
+    assert "data-path=" not in body
+    assert "data-path-snapped=" not in body
 
 
 def test_detected_trip_card_tile_layer_follows_configured_map_tile_url():
     # No literal tile.openstreetmap.org left in the template -- both the
     # tile URL and its attribution come from config so the CSP img-src and
     # the rendered map can never name two different hosts.
-    templates = make_templates(SimpleNamespace(
-        display_tz=TZ, map_tile_url="https://tiles.example.net/{z}/{x}/{y}.png",
-        map_tile_attribution="Example attribution",
-    ))
-    body = templates.env.get_template("_review_card.html").render(
-        trip=_trip("detected"), remaining=0, state="card",
-        path_geojson=None, path_snapped_geojson=None, vehicles=[],
-        filter_from="", filter_to="", filter_vehicle="", review_url="/review",
-        recent_purposes=[],
+    body = _render_page(
+        config=SimpleNamespace(
+            display_tz=TZ, map_tile_url="https://tiles.example.net/{z}/{x}/{y}.png",
+            map_tile_attribution="Example attribution", app_version="test",
+        ),
+        trip=_trip("detected"),
     )
     assert "L.tileLayer(\"https://tiles.example.net/{z}/{x}/{y}.png\"" in body
     assert '"Example attribution"' in body
@@ -85,7 +125,7 @@ def test_detected_trip_card_draws_single_segment_snapped_path():
     # display.coordinates.length > 1 -- correct for a raw LineString's point
     # count, but wrong for a MultiLineString's segment count (1 segment is
     # the common case, not "no path").
-    body = _render(
+    body = _render_page(
         trip=_trip("detected"),
         path_snapped_geojson='{"type":"MultiLineString","coordinates":[[[1,2],[3,4]]]}',
     )
@@ -131,13 +171,7 @@ def test_delete_dialog_is_source_aware_and_preserves_review_filters():
 
 
 def test_review_keyboard_shortcuts_have_no_delete_key_and_pause_for_open_dialog():
-    templates = make_templates(SimpleNamespace(display_tz=TZ))
-    body = templates.env.get_template("review.html").render(
-        trip=_trip("manual"), remaining=1, state="card", path_geojson=None,
-        path_snapped_geojson=None, vehicles=[], filter_from="", filter_to="",
-        filter_vehicle="", review_url="/review", recent_purposes=[],
-        user={"name": "Tester"}, csrf_token="test",
-    )
+    body = _render_page(trip=_trip("manual"), remaining=1)
 
     assert "document.querySelector('dialog[open]')" in body
     assert "e.key === 'd'" not in body
@@ -148,9 +182,22 @@ def test_done_state_renders_start_over_link_with_filters():
     body = _render(trip=None, state="done", remaining=0, review_url="/review?vehicle=3")
     assert "No more unclassified trips in this pass" in body
     assert 'href="/review?vehicle=3"' in body
+    assert "review-map" not in body
 
 
 def test_empty_state_has_no_start_over_link():
     body = _render(trip=None, state="empty", remaining=0)
     assert "Nothing to review" in body
     assert "Start over" not in body
+    assert "review-map" not in body
+
+
+def test_review_page_script_carries_nonce_and_initializes_map():
+    body = _render_page(
+        trip=_trip("detected"), remaining=1,
+        path_geojson='{"type":"LineString","coordinates":[[1,2],[3,4]]}',
+        csp_nonce="test-nonce-123",
+    )
+    assert '<script nonce="test-nonce-123">' in body
+    assert "function initReviewMap" in body
+    assert "htmx:afterSettle" in body

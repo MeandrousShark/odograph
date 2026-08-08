@@ -31,6 +31,142 @@
     var button = document.querySelector(selector);
     if (button) button.click();
   });
+
+  // Held here, not local to initReviewMap, so a later call can tear down the
+  // previous instance: an outerHTML swap of #review-card discards the old
+  // #review-map div, but Leaflet's own handlers and timers stay attached to
+  // it unless they are explicitly torn down first, leaking one map (and its
+  // pending resize/animation-frame callbacks against a now-detached element)
+  // per swap.
+  var reviewMap = null;
+  var reviewMapRo = null;
+  var reviewMapRaf = null;
+
+  function teardownReviewMap() {
+    if (reviewMapRaf !== null) {
+      cancelAnimationFrame(reviewMapRaf);
+      reviewMapRaf = null;
+    }
+    if (reviewMapRo) {
+      reviewMapRo.disconnect();
+      reviewMapRo = null;
+    }
+    if (reviewMap) {
+      reviewMap.remove();
+      reviewMap = null;
+    }
+  }
+
+  // Bound to htmx:afterSettle, not htmx:afterSwap: htmx swaps the response
+  // into the target during the swap phase, then replaces that same node
+  // again during settle (to run transitions/focus handling). The element
+  // present at afterSwap is a transitional node settle then discards; a map
+  // built on it is attached to a container that's about to vanish, leaving
+  // the surviving card's #review-map empty and the discarded map's
+  // ResizeObserver/rAF still running against a detached element. afterSettle
+  // is where the element that actually stays in the document is final.
+  //
+  // Runs once for the card included in the initial page load (no event, so
+  // it falls back to a document-wide lookup), then again after every
+  // settle -- #review-card is also swapped for the delete dialog and the
+  // done/manual-trip states, which have no #review-map, so this must
+  // tolerate finding none. Scoped to the swapped element (not a document-wide
+  // lookup) for event-triggered calls: htmx briefly has two #review-map
+  // nodes in the document across a swap, and a document-wide lookup can
+  // return the transitional one settle is about to discard.
+  function initReviewMap(event) {
+    var mapEl;
+    if (event) {
+      // afterSettle fires for every htmx request on the page, not only
+      // #review-card swaps -- including the hx-swap="none" posts for
+      // purpose, vehicle and notes, whose settle element is that form
+      // control, a descendant of the card, not the card itself. Tearing
+      // the map down on one of those destroys a live map for no reason, so
+      // bail here, before any teardown, unless this settle is (or contains)
+      // #review-card. Deliberately not closest(): the notes input is
+      // inside the card, so closest('#review-card') would match the exact
+      // case this must ignore.
+      var scope = (event.detail && event.detail.elt) || event.target;
+      var card = null;
+      if (scope) {
+        card = scope.id === 'review-card' ? scope : (scope.querySelector ? scope.querySelector('#review-card') : null);
+      }
+      if (!card) return;
+      mapEl = card.querySelector('#review-map');
+    } else {
+      mapEl = document.getElementById('review-map');
+    }
+
+    // No "already a .leaflet-container, skip rebuild" shortcut here: htmx's
+    // id-based settling can carry the outgoing element's classes onto the
+    // incoming one, so that class is not proof a live map is attached.
+    // teardownReviewMap()'s .remove() clears Leaflet's own id marker on the
+    // container, so rebuilding is safe and cheap even when nothing changed.
+    teardownReviewMap();
+    if (!mapEl) return;
+
+    var start = [Number(mapEl.dataset.startLat), Number(mapEl.dataset.startLon)];
+    var end = [Number(mapEl.dataset.endLat), Number(mapEl.dataset.endLon)];
+    var path = mapEl.dataset.path ? JSON.parse(mapEl.dataset.path) : null;
+    var pathSnapped = mapEl.dataset.pathSnapped ? JSON.parse(mapEl.dataset.pathSnapped) : null;
+
+    var map = L.map(mapEl);
+    reviewMap = map;
+    var theme = getComputedStyle(document.documentElement);
+    var routeColor = theme.getPropertyValue('--route').trim() || '#2d6a4f';
+
+    // Same map-before-layers ordering as trip.html's init script (see its
+    // comment there): adding a vector layer to a viewless map leaves its
+    // pixel bounds undefined, and the next redraw throws inside Leaflet's
+    // bounds-intersects check, killing the rest of this function.
+    var bounds = L.latLngBounds([start, end]);
+    map.fitBounds(bounds.pad(0.15));
+
+    L.tileLayer({{ map_tile_url | tojson }}, {
+      maxZoom: 19,
+      attribution: {{ map_tile_attribution | tojson }}
+    }).addTo(map);
+
+    // Snapped preferred, raw fallback -- same display rule as
+    // display_distance_m's COALESCE. Unlike trip.html's audit view (which
+    // draws both, for comparison), a triage card draws exactly one route:
+    // this isn't the place to judge snap quality.
+    var hasSnapped = pathSnapped && pathSnapped.coordinates && pathSnapped.coordinates.length > 0;
+    var hasRaw = path && path.coordinates && path.coordinates.length > 1;
+    if (hasSnapped || hasRaw) {
+      var display = hasSnapped ? pathSnapped : path;
+      var line = L.geoJSON(display, { style: { color: routeColor, weight: 4 } }).addTo(map);
+      bounds = line.getBounds();
+    } else {
+      // No stored path at all (e.g. a very short trip simplified away) --
+      // fall back to a straight start-to-end line, same as trip.html.
+      L.polyline([start, end], { color: routeColor, weight: 3, dashArray: '6' }).addTo(map);
+    }
+    map.fitBounds(bounds.pad(0.15));
+
+    L.marker(start, { title: 'Start' }).addTo(map);
+    L.marker(end, { title: 'End' }).addTo(map);
+
+    // Mobile browsers frequently finish laying out the swapped-in card
+    // *after* this runs; re-fit once the container reports real dimensions
+    // (same fix as trip.html's).
+    function fit() {
+      if (mapEl.offsetWidth === 0 || mapEl.offsetHeight === 0) return;
+      map.invalidateSize();
+      if (bounds.isValid()) map.fitBounds(bounds.pad(0.15));
+    }
+    if (window.ResizeObserver) {
+      var ro = new ResizeObserver(function () { fit(); ro.disconnect(); reviewMapRo = null; });
+      ro.observe(mapEl);
+      reviewMapRo = ro;
+    }
+    reviewMapRaf = requestAnimationFrame(function () {
+      reviewMapRaf = requestAnimationFrame(fit);
+    });
+  }
+
+  initReviewMap();
+  document.body.addEventListener('htmx:afterSettle', initReviewMap);
 </script>
 
 {% endblock %}
