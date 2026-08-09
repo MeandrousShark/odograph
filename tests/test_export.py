@@ -174,6 +174,34 @@ def test_xlsx_opens_and_has_totals_row():
     assert totals_row[HEADERS.index("Deduction ($)")] == round(0.725, 2)
 
 
+def test_report_xlsx_trips_and_summary_deduction_totals_agree():
+    # Sub-cent-fraction distances (irregular increments, not round mileage)
+    # so that summing already-cent-rounded per-trip deductions drifts from
+    # rounding the unrounded sum once -- the exact defect this guards
+    # against. 60 trips is comfortably past the >=50 the drift needs to show
+    # up reliably.
+    trips = [
+        _trip(
+            category="business",
+            distance_m=(10 + i * 0.13237) * 1609.344,
+            started_at=datetime(2026, 6, 15, 15, i % 59, tzinfo=timezone.utc),
+            ended_at=datetime(2026, 6, 15, 15, (i % 59) + 1, tzinfo=timezone.utc),
+        )
+        for i in range(60)
+    ]
+    report = build_annual_report(trips, RATES, TZ, 2026)
+    raw = to_report_xlsx(report, trips, RATES, TZ)
+    wb = load_workbook(io.BytesIO(raw))
+
+    summary_total = float(wb["Summary"]["B8"].value.lstrip("$").replace(",", ""))
+    trips_ws = wb["Trips"]
+    trips_total = trips_ws.cell(trips_ws.max_row, HEADERS.index("Deduction ($)") + 1).value
+
+    expected = round(report.total_deduction, 2)
+    assert summary_total == expected
+    assert trips_total == expected
+
+
 def test_report_xlsx_has_summary_and_trips_sheets():
     # started_at is 15:00 UTC == 08:00 local (TZ), so this trip's local month
     # is June regardless of any UTC/local boundary subtlety — not the case

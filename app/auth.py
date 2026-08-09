@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
 import secrets
@@ -38,7 +39,7 @@ def check_form_csrf(request: Request, token: str) -> None:
     automatically but a bare HTML <form> POST cannot.
     """
     expected = request.session.get("csrf") or ""
-    if not (expected and hmac.compare_digest(expected, token or "")):
+    if not (expected and hmac.compare_digest(expected.encode("utf-8"), (token or "").encode("utf-8"))):
         raise HTTPException(status_code=403, detail="CSRF token missing or invalid")
 
 
@@ -57,7 +58,7 @@ def require_user(request: Request) -> dict:
 def require_csrf(request: Request) -> None:
     expected = request.session.get("csrf") or ""
     provided = request.headers.get("x-csrf-token") or ""
-    if not (expected and hmac.compare_digest(expected, provided)):
+    if not (expected and hmac.compare_digest(expected.encode("utf-8"), provided.encode("utf-8"))):
         raise HTTPException(status_code=403, detail="CSRF token missing or invalid")
 
 
@@ -174,8 +175,8 @@ def make_router() -> APIRouter:
         # email, or wrong password must all look identical to the caller.
         ok = (
             admin is not None
-            and hmac.compare_digest(email_norm, admin["email"])
-            and verify_password(password, admin["password_hash"])
+            and hmac.compare_digest(email_norm.encode("utf-8"), admin["email"].encode("utf-8"))
+            and await asyncio.to_thread(verify_password, password, admin["password_hash"])
         )
         if not ok:
             limiter.record_failure(ip)
@@ -224,7 +225,7 @@ def make_router() -> APIRouter:
                 request, admin, error="Too many failed attempts. Try again later.", status_code=429
             )
 
-        if not hmac.compare_digest(token, cfg.admin_token):
+        if not hmac.compare_digest(token.encode("utf-8"), cfg.admin_token.encode("utf-8")):
             limiter.record_failure(ip)
             return await _render_setup(request, admin, error="Invalid setup token.", status_code=401)
 
@@ -248,12 +249,16 @@ def make_router() -> APIRouter:
                 status_code=400,
             )
 
-        password_hash = hash_password(password)
+        password_hash = await asyncio.to_thread(hash_password, password)
 
         if admin is None:
             email_norm = email.strip().lower()
             if not email_norm:
                 return await _render_setup(request, admin, error="Email is required.", status_code=400)
+            if not email_norm.isascii():
+                return await _render_setup(
+                    request, admin, error="Email must use ASCII characters.", status_code=400
+                )
             try:
                 async with pool.connection() as conn:
                     await conn.execute(
@@ -339,6 +344,11 @@ def make_router() -> APIRouter:
             log.warning("Rejected OIDC login from unauthorized email: %s", email)
             raise HTTPException(status_code=403, detail="This instance is not configured for your account.")
 
+        # Session fixation defense, mirroring login_local: a fresh session
+        # (and CSRF token), not just an updated `user` key in the pre-login
+        # one. Must come after authorize_access_token above, which reads the
+        # OAuth state/nonce out of the pre-login session.
+        request.session.clear()
         request.session["user"] = {
             "sub": userinfo.get("sub"),
             "name": userinfo.get("name") or userinfo.get("preferred_username"),

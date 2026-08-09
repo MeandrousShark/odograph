@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.db import make_pool, run_migrations
+from app.detector.runner import reprocess_places
 from app.main import make_templates
 from app.ui import _fetch_recent_purposes, make_router
 
@@ -94,3 +95,57 @@ async def _scenario():
 
 def test_purpose_migration_crud_manual_entry_and_recent_reuse():
     asyncio.run(_scenario())
+
+
+async def _purpose_edit_claims_human_ownership_scenario():
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        async with pool.connection() as conn:
+            await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+        await run_migrations(pool)
+
+        async with pool.connection() as conn:
+            # A rule-owned detected trip -- no geometry needed since there
+            # are no tag_rules or places in this scenario, and the point is
+            # only what happens to an already-rule-tagged trip.
+            cur = await conn.execute(
+                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
+                " category, tag_source) "
+                "VALUES ('A', 'detected', '2026-01-01T09:00:00Z', "
+                "'2026-01-01T09:30:00Z', 1000, 'business', 'rule') RETURNING id"
+            )
+            trip_id = (await cur.fetchone())[0]
+
+        await PURPOSE(_request(pool), trip_id, "  Client visit  ", {"sub": "test"})
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT purpose, category::text, tag_source::text FROM trips WHERE id=%s",
+                (trip_id,),
+            )
+            assert await cur.fetchone() == ("Client visit", "business", "human"), (
+                "editing purpose must claim human ownership, not just change the text"
+            )
+
+        # No tag_rules exist, so reprocess_places would revert a still
+        # rule-owned trip's category to unclassified. If tag_source is
+        # 'human' as asserted above, plan_autotags must skip it entirely.
+        await reprocess_places(pool)
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT category::text, tag_source::text FROM trips WHERE id=%s",
+                (trip_id,),
+            )
+            assert await cur.fetchone() == ("business", "human"), (
+                "a human-owned trip must survive reprocess_places untouched, "
+                "even with no matching rule"
+            )
+    finally:
+        await pool.close()
+
+
+def test_purpose_edit_claims_human_ownership_and_survives_reprocess():
+    """A rule-owned trip whose purpose the user edits must stop being
+    rule-owned, or the autotagger could later revert it out from under the
+    user with no rule change of their own."""
+    asyncio.run(_purpose_edit_claims_human_ownership_scenario())

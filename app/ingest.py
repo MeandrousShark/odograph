@@ -100,9 +100,9 @@ def _check_basic_auth(request: Request) -> bool:
         username, _, password = decoded.partition(":")
     except (binascii.Error, UnicodeDecodeError):
         return False
-    return hmac.compare_digest(username, cfg.ingest_username) & hmac.compare_digest(
-        password, cfg.ingest_password
-    )
+    return hmac.compare_digest(
+        username.encode("utf-8"), cfg.ingest_username.encode("utf-8")
+    ) & hmac.compare_digest(password.encode("utf-8"), cfg.ingest_password.encode("utf-8"))
 
 
 def _ok() -> Response:

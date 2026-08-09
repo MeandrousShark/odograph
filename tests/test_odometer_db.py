@@ -267,6 +267,52 @@ def test_report_page_and_export_include_odometer_coverage_when_readings_exist():
     asyncio.run(_report_page_scenario())
 
 
+async def _fully_bracketed_scenario():
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        await _reset_schema(pool)
+        async with pool.connection() as conn:
+            truck_id = await _create_vehicle(conn, "Truck")
+            await _insert_trip(
+                conn, truck_id, datetime(2026, 6, 15, 12, tzinfo=timezone.utc), 60 * 1609.344
+            )
+            # Readings exactly at the report year's local start and the
+            # following year's local start -- the boundary case the
+            # `<= next_year_start` fetch (rather than `<`) exists to include.
+            await conn.execute(
+                "INSERT INTO odometer_readings (vehicle_id, recorded_at, odometer_m) "
+                "VALUES (%s, %s, %s), (%s, %s, %s)",
+                (
+                    truck_id, datetime(2026, 1, 1, tzinfo=TZ), 1000 * 1609.344,
+                    truck_id, datetime(2027, 1, 1, tzinfo=TZ), 1100 * 1609.344,
+                ),
+            )
+
+        from app.ui import _fetch_year_odometer_coverage
+        trips = [{
+            "vehicle_id": truck_id, "vehicle_name": "Truck",
+            "started_at": datetime(2026, 6, 15, 12, tzinfo=timezone.utc),
+            "display_distance_m": 60 * 1609.344,
+        }]
+        coverage = await _fetch_year_odometer_coverage(pool, TZ, 2026, trips)
+        assert len(coverage) == 1
+        assert coverage[0].fully_bracketed is True
+
+        report_page = _endpoint("/report/{year}")
+        request = _request(pool)
+        response = await report_page(request, year=2026, user=USER)
+        body = response.body.decode()
+        assert "GPS captured 60.0% of odometer miles (40.0 mi unaccounted)" in body
+        assert "partial-year" not in body
+    finally:
+        await pool.close()
+
+
+def test_odometer_coverage_fully_bracketed_when_readings_land_on_year_boundaries():
+    asyncio.run(_fully_bracketed_scenario())
+
+
 async def _report_page_no_readings_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)

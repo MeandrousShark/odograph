@@ -312,3 +312,107 @@ def test_merge_vehicle_tristate():
     longest-trip inheritance already put there. A nonexistent vehicle id
     400s without applying any part of the merge."""
     asyncio.run(_vehicle_tristate_scenario())
+
+
+async def _set_category(conn, trip_id, category, tag_source=None):
+    await conn.execute(
+        "UPDATE trips SET category = %s, tag_source = %s WHERE id = %s",
+        (category, tag_source, trip_id),
+    )
+
+
+async def _category_tristate_scenario():
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        async with pool.connection() as conn:
+            await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+        await run_migrations(pool)
+
+        def _two_trip_track():
+            return build_track([
+                Stationary(900), Drive(km=2), Stationary(1200), Drive(km=2), Stationary(900),
+            ])
+
+        devices = ["K", "P", "Z"]
+        async with pool.connection() as conn:
+            for device in devices:
+                await _insert_points(conn, _two_trip_track(), device)
+
+        runner = DetectorRunner(pool, Params())
+        assert await runner.run_once() is True
+
+        handler = _endpoint()
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+            pool=pool, detector_runner=runner
+        )))
+
+        async with pool.connection() as conn:
+            trips_by_device = {d: await _trips(conn, d) for d in devices}
+            for d in devices:
+                assert len(trips_by_device[d]) == 2
+
+        # "keep" must reproduce reconcile's own longest-trip inheritance
+        # untouched -- neither category nor tag_source is written. The merge
+        # path's own reprocess_device_in also re-runs auto-tagging, which
+        # would revert a tag_source='rule' trip with no matching rule back
+        # to unclassified regardless of this fix; tag_source=NULL here
+        # isolates what's actually under test, that the merge's final
+        # UPDATE alone doesn't human-lock a trip the user didn't reclassify.
+        k_ids = [r[0] for r in trips_by_device["K"]]
+        async with pool.connection() as conn:
+            for trip_id in k_ids:
+                await _set_category(conn, trip_id, "business", None)
+        response = await handler(
+            request, k_ids, "keep", "", "", "keep", {"sub": "test"},
+        )
+        k_merged = json.loads(response.body)["trip_id"]
+
+        # An explicit real category still joins the same UPDATE the
+        # purpose/notes already use and claims human ownership, unchanged
+        # from before category became tri-state.
+        p_ids = [r[0] for r in trips_by_device["P"]]
+        response = await handler(
+            request, p_ids, "personal", "", "", "keep", {"sub": "test"},
+        )
+        p_merged = json.loads(response.body)["trip_id"]
+
+        async with pool.connection() as conn:
+            rows = await conn.execute(
+                "SELECT id, category::text, tag_source::text FROM trips WHERE id = ANY(%s)",
+                ([k_merged, p_merged],),
+            )
+            by_id = {r[0]: (r[1], r[2]) for r in await rows.fetchall()}
+        assert by_id[k_merged] == ("business", None), (
+            "keep must preserve both the inherited category and its tag_source, "
+            "not human-lock it"
+        )
+        assert by_id[p_merged] == ("personal", "human")
+
+        # An unknown category (not "keep", not a real CATEGORIES value) must
+        # still 400 and leave the merge entirely unapplied.
+        z_ids = [r[0] for r in trips_by_device["Z"]]
+        async with pool.connection() as conn:
+            before_overrides = await _override_rows(conn, "Z")
+            before_trips = await _trips(conn, "Z")
+        with pytest.raises(HTTPException, match="Unknown category"):
+            await handler(
+                request, z_ids, "not-a-real-category", "", "", "keep", {"sub": "test"},
+            )
+        async with pool.connection() as conn:
+            after_overrides = await _override_rows(conn, "Z")
+            after_trips = await _trips(conn, "Z")
+        assert after_overrides == before_overrides
+        assert after_trips == before_trips
+    finally:
+        await pool.close()
+
+
+def test_merge_category_tristate():
+    """A real category value sets it and claims human ownership; "keep"
+    (the endpoints' own Form default) leaves whatever reconcile's
+    longest-trip inheritance already put there -- category AND tag_source
+    both untouched, so a merge alone can never human-lock a trip the user
+    didn't actually reclassify. An unrecognized category still 400s
+    without applying any part of the merge."""
+    asyncio.run(_category_tristate_scenario())

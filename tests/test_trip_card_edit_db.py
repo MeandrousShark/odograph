@@ -152,8 +152,9 @@ async def _scenario():
                 "UPDATE trips SET category = 'unclassified', purpose = NULL, tag_source = 'rule' "
                 "WHERE id = %s", (detected_id,)
             )
+        # Notes and vehicle aren't tax-classification decisions, so editing
+        # them stays narrow: no tag_source write, unlike purpose/tag below.
         for response in (
-            await PURPOSE(request, detected_id, "Narrow purpose", USER),
             await NOTES(request, detected_id, "Narrow notes", USER),
             await VEHICLE(request, detected_id, str(active_id), USER),
         ):
@@ -163,6 +164,20 @@ async def _scenario():
                 "SELECT tag_source::text FROM trips WHERE id = %s", (detected_id,)
             )).fetchone()
         assert narrow_owner == ("rule",)
+
+        # Purpose is a human decision the autotagger must never silently
+        # revert, so editing it claims ownership the same way tag/save/
+        # batch-update already do.
+        purpose_response = await PURPOSE(request, detected_id, "Narrow purpose", USER)
+        assert f'<article id="trip-{detected_id}"' in purpose_response.body.decode()
+        async with pool.connection() as conn:
+            purpose_owner = await (await conn.execute(
+                "SELECT tag_source::text FROM trips WHERE id = %s", (detected_id,)
+            )).fetchone()
+        assert purpose_owner == ("human",)
+
+        async with pool.connection() as conn:
+            await conn.execute("UPDATE trips SET tag_source = 'rule' WHERE id = %s", (detected_id,))
         tagged = await TAG(request, detected_id, "business", USER)
         assert f'<article id="trip-{detected_id}"' in tagged.body.decode()
         async with pool.connection() as conn:

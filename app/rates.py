@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
+
+from app.validation import parse_finite_number
+
+log = logging.getLogger(__name__)
 
 METERS_PER_MILE = 1609.344
 
@@ -74,7 +79,16 @@ async def load_rates(conn) -> dict[int, YearRate]:
             continue
         try:
             year = int(key[len(ENV_PREFIX):])
-            rates[year] = YearRate(rate_per_mi=float(value))
+            numeric = float(value)
         except ValueError:
             continue
+        # This is config load with no request to reject: an override that's
+        # non-finite (nan, inf) or non-positive is logged and skipped so any
+        # rate already on file for the year still applies, rather than
+        # crashing the process or installing a non-finite rate.
+        rate = parse_finite_number(numeric)
+        if rate is None or rate <= 0:
+            log.warning("ignoring invalid %s%s override: %r", ENV_PREFIX, year, value)
+            continue
+        rates[year] = YearRate(rate_per_mi=rate)
     return rates

@@ -49,3 +49,29 @@ def test_manual_input_rejects_non_finite_or_non_positive_distance(distance):
     with pytest.raises(ManualTripValidationError) as exc:
         parse_manual_trip_input("2026-07-14", "09:00", "10:00", distance, TZ)
     assert "distance" in exc.value.errors
+
+
+def test_manual_input_rejects_spring_forward_gap_start_time():
+    # Clocks in America/Los_Angeles jump from 02:00 to 03:00 on 2026-03-08,
+    # so 02:30 never occurs and must not be silently reinterpreted.
+    with pytest.raises(ManualTripValidationError) as exc:
+        parse_manual_trip_input("2026-03-08", "02:30", "04:00", "1", TZ)
+    assert "start_time" in exc.value.errors
+
+
+def test_manual_input_rejects_spring_forward_gap_end_time():
+    with pytest.raises(ManualTripValidationError) as exc:
+        parse_manual_trip_input("2026-03-08", "01:00", "02:30", "1", TZ)
+    assert "end_time" in exc.value.errors
+
+
+def test_manual_input_accepts_fall_back_ambiguous_time():
+    # 01:30 occurs twice on 2026-11-01 when America/Los_Angeles falls back;
+    # this must still be accepted and resolve to the first (fold=0) instant.
+    started, ended, _ = parse_manual_trip_input(
+        "2026-11-01", "01:30", "02:00", "1", TZ
+    )
+
+    assert started.fold == 0
+    assert started.hour == 1 and started.minute == 30
+    assert ended - started == timedelta(minutes=30)

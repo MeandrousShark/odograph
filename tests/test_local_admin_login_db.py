@@ -211,3 +211,27 @@ async def _shared_limiter_with_setup_scenario():
 
 def test_setup_and_login_local_share_the_same_per_ip_limiter():
     asyncio.run(_shared_limiter_with_setup_scenario())
+
+
+async def _non_ascii_email_scenario():
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        await _reset_schema(pool)
+        await _seed_admin(pool)
+        limiter = FailedAuthLimiter(1, 900.0)
+
+        # hmac.compare_digest raises TypeError on non-ASCII str operands --
+        # this must land on the normal generic-failure path (401, limiter
+        # charged), not crash into a 500 that skips the limiter entirely.
+        request = _request(pool, limiter=limiter)
+        response = await _login_local(request, email="évil@example.com")
+        assert response.status_code == 401
+        assert "user" not in request.session
+        assert limiter.blocked(request.client.host)
+    finally:
+        await pool.close()
+
+
+def test_login_local_rejects_non_ascii_email_with_401_and_charges_the_limiter():
+    asyncio.run(_non_ascii_email_scenario())

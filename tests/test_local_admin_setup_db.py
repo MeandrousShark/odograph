@@ -312,3 +312,22 @@ async def _limiter_throttling_scenario():
 
 def test_setup_limiter_throttles_repeated_wrong_tokens_from_one_ip():
     asyncio.run(_limiter_throttling_scenario())
+
+
+async def _non_ascii_email_scenario():
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        await _reset_schema(pool)
+
+        request = _request(pool)
+        response = await _setup_post(request, email="évil@example.com")
+        assert response.status_code == 400
+        assert b"ASCII" in response.body
+        assert await _local_admin_row(pool) is None
+    finally:
+        await pool.close()
+
+
+def test_setup_rejects_non_ascii_email_without_creating_admin():
+    asyncio.run(_non_ascii_email_scenario())

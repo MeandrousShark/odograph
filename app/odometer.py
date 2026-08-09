@@ -129,13 +129,14 @@ def vehicle_coverage_for_report(
     empty/misleading row) rather than shown with nothing to say.
 
     `fully_bracketed` is true only when the earliest reading lands exactly
-    at `year_start` and the latest at/after `next_year_start` — since
-    `readings_by_vehicle` is expected to already be filtered to readings
-    *within* the report year, in practice this is almost always false
-    (a reading exactly at midnight Jan 1 both years is rare), which is the
-    honest answer: an annual coverage % is normally over a partial span, and
-    the caller surfaces that rather than implying full-year coverage it
-    can't back up.
+    at `year_start` and the latest at/after `next_year_start`. The caller
+    (`app.ui._fetch_year_odometer_coverage`) fetches readings from
+    `year_start` through `next_year_start` inclusive, so a reading recorded
+    exactly at midnight Jan 1 of the following year, the one that actually
+    brackets the end of the report year, is included here and can make this
+    true; readings past that boundary are never handed in, so a coverage %
+    over a genuinely partial span still reports as such rather than implying
+    full-year coverage it can't back up.
     """
     lines: list[VehicleCoverage] = []
     for vehicle_key in sorted(readings_by_vehicle, key=str):

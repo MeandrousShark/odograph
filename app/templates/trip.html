@@ -96,6 +96,7 @@
       <form hx-post="/trips/{{ trip.id }}/merge_prev">
         <label>Category
           <select name="category">
+            <option value="keep" selected>Keep</option>
             {% for c in categories %}<option value="{{ c }}">{{ c | capitalize }}</option>{% endfor %}
           </select>
         </label>
@@ -120,6 +121,7 @@
       <form hx-post="/trips/{{ trip.id }}/merge_next">
         <label>Category
           <select name="category">
+            <option value="keep" selected>Keep</option>
             {% for c in categories %}<option value="{{ c }}">{{ c | capitalize }}</option>{% endfor %}
           </select>
         </label>

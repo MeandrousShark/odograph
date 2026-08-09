@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -43,6 +42,7 @@ from app.auth import check_form_csrf, require_user
 from app.detector.runner import ADVISORY_LOCK_KEY
 from app.expenses import EXPENSE_CATEGORIES, EXPENSE_TREATMENTS
 from app.places_desc import PLACE_KINDS
+from app.validation import parse_finite_number as _parse_finite_number
 
 log = logging.getLogger(__name__)
 
@@ -310,32 +310,6 @@ def _parse_amount(value: Any) -> Decimal | None:
     # that carries more than 2 decimal places.
     quantized = raw.quantize(Decimal("0.01"))
     return quantized if quantized == raw else None
-
-
-def _parse_finite_number(
-    value: Any, *, minimum: float | None = None, maximum: float | None = None
-) -> float | None:
-    """Extends `_parse_amount`'s `is_finite()` rule to every float field
-    below: `json.loads` accepts the bare `NaN`/`Infinity` tokens JSON itself
-    doesn't allow, and a plain `< 0`/`<= 0` bound check lets a non-finite
-    value straight through (Postgres even sorts NaN as greater than every
-    real number, so a `CHECK (x > 0)` column doesn't catch it either).
-    `minimum`/`maximum` are an inclusive floor/ceiling: distance_m and
-    odometer_m use only `minimum=0`, while place lat/lon use both to enforce
-    the `[-180 -90, 180 90]` range PostGIS's geography cast also enforces, so
-    an out-of-range coordinate is a named issue here instead of an opaque
-    insert_failed at the geography cast.
-    """
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    value = float(value)
-    if not math.isfinite(value):
-        return None
-    if minimum is not None and value < minimum:
-        return None
-    if maximum is not None and value > maximum:
-        return None
-    return value
 
 
 def _is_optional_str(value: Any) -> bool:

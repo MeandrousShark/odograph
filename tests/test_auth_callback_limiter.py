@@ -19,8 +19,9 @@ from types import SimpleNamespace
 
 import httpx
 from authlib.integrations.base_client import OAuthError
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.responses import JSONResponse
 
 from app.auth import make_router
 from app.ingest import FailedAuthLimiter
@@ -74,6 +75,21 @@ def _app(oauth_client, *, allowed_email: str = ""):
     app.state.config = SimpleNamespace(dev_no_auth=False, allowed_email=allowed_email)
     app.state.oauth = SimpleNamespace(pocketid=oauth_client)
     app.state.login_limiter = FailedAuthLimiter(max_failures=MAX_FAILURES, window_s=900)
+
+    # Test-only routes to plant and inspect session content around the
+    # callback, same approach tests/test_auth_logout.py uses -- the real
+    # session is only reachable through actual dispatch, not by calling the
+    # handler function directly.
+    @app.post("/test/plant-session")
+    async def plant(request: Request):
+        request.session["csrf"] = "preplanted-csrf"
+        request.session["evil"] = "sneaky-preplanted-value"
+        return Response(status_code=204)
+
+    @app.get("/test/session")
+    async def read_session(request: Request):
+        return JSONResponse(dict(request.session))
+
     app.include_router(make_router())
     return app
 
@@ -173,3 +189,27 @@ def test_non_oauth_error_failure_is_not_charged_to_the_callers_ledger():
     # rejected credential) -- none of them ever gets blocked.
     assert results == [500] * (MAX_FAILURES + 2)
     assert oauth_client.calls == MAX_FAILURES + 2
+
+
+def test_successful_callback_clears_pre_login_session_and_remints_csrf():
+    oauth_client = _SucceedingOAuthClient({"email": "admin@example.com", "sub": "1"})
+    app = _app(oauth_client, allowed_email="admin@example.com")
+
+    async def run():
+        transport = httpx.ASGITransport(app=app, client=("203.0.113.5", 51000))
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver", follow_redirects=False
+        ) as client:
+            await client.post("/test/plant-session")
+            callback_response = await client.get("/auth/callback?code=garbage&state=whatever")
+            assert callback_response.status_code == 303
+
+            session = (await client.get("/test/session")).json()
+            # session.clear() ran: the pre-planted key is gone and the CSRF
+            # token minted for the now-authenticated session is a fresh one,
+            # not the pre-login value a fixation attack would have planted.
+            assert "evil" not in session
+            assert session["user"]["email"] == "admin@example.com"
+            assert session["csrf"] != "preplanted-csrf"
+
+    asyncio.run(run())

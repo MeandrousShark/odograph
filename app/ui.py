@@ -4,7 +4,7 @@ import json
 import logging
 import math
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Literal
 from urllib.parse import urlencode
@@ -50,6 +50,7 @@ from app.report import (
 )
 from app.snap import route_distance_m
 from app.stats import build_dashboard
+from app.validation import parse_finite_number
 from app.vehicles import (
     create_vehicle,
     deactivate_vehicle,
@@ -216,6 +217,16 @@ class ManualTripValidationError(ValueError):
         self.errors = errors
 
 
+def _local_time_is_real(naive: datetime, tz: ZoneInfo) -> bool:
+    """A spring-forward gap wall time (e.g. 02:30 when clocks jump 02:00 to
+    03:00) has no corresponding instant, so attaching a timezone to it and
+    normalizing through UTC changes the wall clock. A fall-back ambiguous
+    time (occurs twice) round-trips unchanged and must stay accepted.
+    """
+    aware = naive.replace(tzinfo=tz)
+    return aware.astimezone(timezone.utc).astimezone(tz).replace(tzinfo=None) == naive
+
+
 def parse_manual_trip_input(
     date_value: str,
     start_time: str,
@@ -234,20 +245,34 @@ def parse_manual_trip_input(
     """
     errors: dict[str, str] = {}
     try:
-        started_at = datetime.fromisoformat(f"{date_value}T{start_time}").replace(tzinfo=tz)
+        naive_start = datetime.fromisoformat(f"{date_value}T{start_time}")
     except ValueError:
-        started_at = None
+        naive_start = None
         if not date_value:
             errors["date"] = "Enter a date."
         elif not start_time:
             errors["start_time"] = "Enter a start time."
         else:
             errors["date"] = "Enter a valid date and start time."
+    else:
+        if not _local_time_is_real(naive_start, tz):
+            errors["start_time"] = (
+                "That time does not exist on this date (clocks skip forward for "
+                "daylight saving). Enter a later time."
+            )
+    started_at = naive_start.replace(tzinfo=tz) if naive_start is not None else None
     try:
-        ended_at = datetime.fromisoformat(f"{date_value}T{end_time}").replace(tzinfo=tz)
+        naive_end = datetime.fromisoformat(f"{date_value}T{end_time}")
     except ValueError:
-        ended_at = None
+        naive_end = None
         errors["end_time"] = "Enter a valid end time."
+    else:
+        if not _local_time_is_real(naive_end, tz):
+            errors["end_time"] = (
+                "That time does not exist on this date (clocks skip forward for "
+                "daylight saving). Enter a later time."
+            )
+    ended_at = naive_end.replace(tzinfo=tz) if naive_end is not None else None
     try:
         distance_miles = float(distance)
     except (TypeError, ValueError):
@@ -408,7 +433,11 @@ async def _fetch_range_trips(pool, tz: ZoneInfo, start: date, end: date) -> tupl
 async def _fetch_year_odometer_coverage(pool, tz: ZoneInfo, year: int, trips: list[dict]) -> list:
     """Per-vehicle odometer coverage for the report year, computed outside
     `build_annual_report` from the same `trips` the report already fetched —
-    only the year's readings need a query.
+    only the year's readings need a query. The upper bound is `<=
+    next_year_start` (not `<`) so a reading recorded exactly at midnight
+    Jan 1 of the following year, the one reading that actually brackets the
+    end of the report year, is included; anything after that boundary is
+    still excluded so the reconciliation span stays within the report year.
     """
     year_start = datetime(year, 1, 1, tzinfo=tz)
     next_year_start = datetime(year + 1, 1, 1, tzinfo=tz)
@@ -418,7 +447,7 @@ async def _fetch_year_odometer_coverage(pool, tz: ZoneInfo, year: int, trips: li
             "SELECT odometer_readings.vehicle_id, odometer_readings.recorded_at, "
             "odometer_readings.odometer_m, vehicles.name AS vehicle_name "
             "FROM odometer_readings JOIN vehicles ON vehicles.id = odometer_readings.vehicle_id "
-            "WHERE recorded_at >= %s AND recorded_at < %s",
+            "WHERE recorded_at >= %s AND recorded_at <= %s",
             (year_start, next_year_start),
         )
         rows = await cur.fetchall()
@@ -1830,7 +1859,8 @@ def make_router() -> APIRouter:
         pool = request.app.state.pool
         async with pool.connection() as conn:
             cur = await conn.execute(
-                "UPDATE trips SET purpose = %s, updated_at = now() WHERE id = %s",
+                "UPDATE trips SET purpose = %s, tag_source = 'human', updated_at = now() "
+                "WHERE id = %s",
                 (purpose.strip() or None, trip_id),
             )
             if cur.rowcount == 0:
@@ -1914,8 +1944,8 @@ def make_router() -> APIRouter:
         return Response(status_code=204, headers={"HX-Redirect": "/trips"})
 
     async def _merge_trips_core(
-        request: Request, trip_ids: list[int], category: str, purpose: str, notes: str,
-        vehicle: str = "keep",
+        request: Request, trip_ids: list[int], category: str = "keep", purpose: str = "",
+        notes: str = "", vehicle: str = "keep",
     ) -> int:
         """Shared by merge_next/merge_prev and merge_selected: validates the
         selection is a contiguous run of detected trips for one device,
@@ -1925,11 +1955,15 @@ def make_router() -> APIRouter:
         *longest* original trip's fields, an implementation detail the user
         shouldn't have to think about. Returns the merged trip's id.
 
-        `vehicle` is tri-state: "keep" (default) preserves whatever
-        reconcile's longest-trip inheritance left, "" clears to NULL, a
-        digit string assigns. A concrete default would silently reassign
-        the vehicle on merges from callers that don't know the parameter
-        exists (e.g. a cached old form post); "keep" makes silence safe.
+        `category` and `vehicle` are both tri-state: "keep" (default)
+        preserves whatever reconcile's longest-trip inheritance left,
+        including the existing `tag_source`, without human-locking it; a
+        real category, or "" / a digit string for vehicle, assigns and (for
+        category) also claims human ownership. A concrete category default
+        would silently human-lock every merge from callers that don't
+        supply one (e.g. a cached old form post, or an untouched select
+        whose first option the browser auto-submits); "keep" makes silence
+        safe and mirrors `vehicle`.
 
         Runs on one connection/transaction: the
         override writes, reprocess, and final UPDATE used to span three
@@ -1939,7 +1973,8 @@ def make_router() -> APIRouter:
         concurrent detector run; `reprocess_device_in` re-taking it later is
         a no-op (advisory locks are reentrant within one session).
         """
-        if category not in CATEGORIES:
+        keep_category = category == "keep"
+        if not keep_category and category not in CATEGORIES:
             raise HTTPException(status_code=400, detail="Unknown category")
         keep_vehicle = vehicle == "keep"
         parsed_vehicle_id = None if keep_vehicle else _parse_vehicle_form(vehicle)
@@ -2030,8 +2065,11 @@ def make_router() -> APIRouter:
             if not row:
                 raise HTTPException(status_code=500, detail="Merge did not produce the expected trip")
             merged_id = row[0]
-            set_clause = "category = %s, purpose = %s, notes = %s, tag_source = 'human'"
-            update_params = [category, purpose.strip() or None, notes.strip() or None]
+            set_clause = "purpose = %s, notes = %s"
+            update_params = [purpose.strip() or None, notes.strip() or None]
+            if not keep_category:
+                set_clause += ", category = %s, tag_source = 'human'"
+                update_params.append(category)
             if not keep_vehicle:
                 set_clause += ", vehicle_id = %s"
                 update_params.append(parsed_vehicle_id)
@@ -2095,7 +2133,7 @@ def make_router() -> APIRouter:
     async def merge_trip_next(
         request: Request,
         trip_id: int,
-        category: str = Form("unclassified"),
+        category: str = Form("keep"),
         purpose: str = Form(""),
         notes: str = Form(""),
         vehicle_id: str = Form("keep"),
@@ -2109,7 +2147,7 @@ def make_router() -> APIRouter:
     async def merge_trip_prev(
         request: Request,
         trip_id: int,
-        category: str = Form("unclassified"),
+        category: str = Form("keep"),
         purpose: str = Form(""),
         notes: str = Form(""),
         vehicle_id: str = Form("keep"),
@@ -2123,7 +2161,7 @@ def make_router() -> APIRouter:
     async def merge_selected_trips(
         request: Request,
         trip_ids: list[int] = Form(...),
-        category: str = Form("unclassified"),
+        category: str = Form("keep"),
         purpose: str = Form(""),
         notes: str = Form(""),
         vehicle_id: str = Form("keep"),
@@ -2437,9 +2475,12 @@ def make_router() -> APIRouter:
             recorded_at = datetime.fromisoformat(f"{date}T{time}").replace(tzinfo=tz)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date/time")
-        if value <= 0:
+        # parse_finite_number(minimum=0) alone would newly accept 0, so the
+        # strict "> 0" check stays separate from the finite check.
+        parsed_value = parse_finite_number(value)
+        if parsed_value is None or parsed_value <= 0:
             raise HTTPException(status_code=400, detail="Invalid odometer value")
-        odometer_m = value * METERS_PER_MILE
+        odometer_m = parsed_value * METERS_PER_MILE
 
         pool = request.app.state.pool
         async with pool.connection() as conn:
@@ -2482,8 +2523,10 @@ def make_router() -> APIRouter:
         h2_start_month: int = Form(7),
         user: dict = Depends(require_user),
     ):
-        if rate_per_mi <= 0:
+        parsed_rate = parse_finite_number(rate_per_mi)
+        if parsed_rate is None or parsed_rate <= 0:
             raise HTTPException(status_code=400, detail="Rate must be positive")
+        rate_per_mi = parsed_rate
         # Mid-year change is opt-in per year: when the toggle is off the year
         # keeps a single flat rate (both split columns NULL). When on, a valid
         # second-half rate and month are required (DB CHECK enforces the pair).
@@ -2497,8 +2540,10 @@ def make_router() -> APIRouter:
                     status_code=400,
                     detail="Second-half rate is required when mid-year change is on",
                 )
-            if h2_rate <= 0:
+            parsed_h2_rate = parse_finite_number(h2_rate)
+            if parsed_h2_rate is None or parsed_h2_rate <= 0:
                 raise HTTPException(status_code=400, detail="Second-half rate must be positive")
+            h2_rate = parsed_h2_rate
             if not (1 <= h2_start_month <= 12):
                 raise HTTPException(status_code=400, detail="Invalid mid-year start month")
             h2_month = h2_start_month
@@ -2553,8 +2598,18 @@ def make_router() -> APIRouter:
             raise HTTPException(status_code=400, detail="Name required")
         if kind not in PLACE_KINDS:
             raise HTTPException(status_code=400, detail="Unknown kind")
-        if radius_m <= 0:
+        parsed_radius = parse_finite_number(radius_m)
+        if parsed_radius is None or parsed_radius <= 0:
             raise HTTPException(status_code=400, detail="Radius must be positive")
+        radius_m = parsed_radius
+        # The geography cast below silently coerces an out-of-range
+        # coordinate rather than rejecting it, so the range must be enforced
+        # here or a bad lat/lon reaches the database wrong instead of refused.
+        parsed_lat = parse_finite_number(lat, minimum=-90, maximum=90)
+        parsed_lon = parse_finite_number(lon, minimum=-180, maximum=180)
+        if parsed_lat is None or parsed_lon is None:
+            raise HTTPException(status_code=400, detail="Invalid coordinates")
+        lat, lon = parsed_lat, parsed_lon
         pool = request.app.state.pool
         async with pool.connection() as conn:
             try:
@@ -2584,8 +2639,18 @@ def make_router() -> APIRouter:
             raise HTTPException(status_code=400, detail="Name required")
         if kind not in PLACE_KINDS:
             raise HTTPException(status_code=400, detail="Unknown kind")
-        if radius_m <= 0:
+        parsed_radius = parse_finite_number(radius_m)
+        if parsed_radius is None or parsed_radius <= 0:
             raise HTTPException(status_code=400, detail="Radius must be positive")
+        radius_m = parsed_radius
+        # The geography cast below silently coerces an out-of-range
+        # coordinate rather than rejecting it, so the range must be enforced
+        # here or a bad lat/lon reaches the database wrong instead of refused.
+        parsed_lat = parse_finite_number(lat, minimum=-90, maximum=90)
+        parsed_lon = parse_finite_number(lon, minimum=-180, maximum=180)
+        if parsed_lat is None or parsed_lon is None:
+            raise HTTPException(status_code=400, detail="Invalid coordinates")
+        lat, lon = parsed_lat, parsed_lon
         pool = request.app.state.pool
         async with pool.connection() as conn:
             try:

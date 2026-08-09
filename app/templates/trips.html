@@ -584,7 +584,7 @@
     const body = new URLSearchParams();
     for (const id of selection) body.append('trip_ids', id);
     const category = mergeCategorySelect.value;
-    body.append('category', category === 'keep' ? 'unclassified' : category);
+    body.append('category', category);
     body.append('purpose', mergePurposeInput.value);
     body.append('notes', mergeNotesInput.value);
     body.append('vehicle_id', mergeVehicleSelect.value);

@@ -38,6 +38,26 @@ def _duration_str(started_at, ended_at) -> str:
     return f"{h}h {m:02d}m" if h else f"{m}m"
 
 
+def _trip_distance_and_deduction(t: dict, rates: dict[int, YearRate], tz: ZoneInfo):
+    """The unrounded `(distance_m, deduction_or_None)` a trip contributes,
+    shared by `build_export_rows` (which rounds each for per-row display)
+    and `_populate_trips_sheet`'s total row (which sums these unrounded
+    values before rounding once), so the Trips-sheet total can't drift
+    from the Summary sheet's own unrounded-then-rounded total by instead
+    summing already-rounded per-row cells. `distance_m` is
+    `display_distance_m` (snapped-or-raw), and `ded` is business-only,
+    matching every other deduction figure in the app.
+    """
+    local_start = t["started_at"].astimezone(tz)
+    distance_m = t["display_distance_m"]
+    is_business = t["category"] == "business"
+    ded = (
+        deduction(distance_m, local_start.year, rates, local_start.month)
+        if is_business else None
+    )
+    return distance_m, ded
+
+
 def build_export_rows(trips: list[dict], rates: dict[int, YearRate], tz: ZoneInfo) -> list[list]:
     """One row per trip, in `HEADERS` order. `trips` rows are expected to
     carry the same keys `TRIP_COLUMNS` selects (including start/end place
@@ -49,12 +69,7 @@ def build_export_rows(trips: list[dict], rates: dict[int, YearRate], tz: ZoneInf
     for t in trips:
         local_start = t["started_at"].astimezone(tz)
         local_end = t["ended_at"].astimezone(tz)
-        distance_m = t["display_distance_m"]
-        is_business = t["category"] == "business"
-        ded = (
-            deduction(distance_m, local_start.year, rates, local_start.month)
-            if is_business else None
-        )
+        distance_m, ded = _trip_distance_and_deduction(t, rates, tz)
         rows.append([
             local_start.strftime("%Y-%m-%d"),
             local_start.strftime("%H:%M"),
@@ -101,14 +116,27 @@ def _populate_trips_sheet(ws, trips: list[dict], rates: dict[int, YearRate], tz:
     for row in rows:
         ws.append(row)
 
+    # The total row is derived from each trip's unrounded distance/deduction
+    # (via `_trip_distance_and_deduction`, the same helper `build_export_rows`
+    # rounds per-row), not by summing the already-rounded row cells above.
+    # Summing pre-rounded per-trip cells drifted from the Summary sheet's own
+    # unrounded-then-rounded `total_deduction`, so one workbook could show two
+    # different deduction totals for the same trips. Mi/km totals are rounded
+    # the same way, once, for internal consistency, even though they cover
+    # every category (not just business) and so aren't expected to match the
+    # Summary's business+personal-only "Total miles".
     mi_col, km_col, ded_col = 7, 8, 15
-    total_mi = sum(r[mi_col - 1] for r in rows)
-    total_km = sum(r[km_col - 1] for r in rows)
-    total_ded = sum(r[ded_col - 1] for r in rows if isinstance(r[ded_col - 1], (int, float)))
+    total_m = 0.0
+    total_ded = 0.0
+    for t in trips:
+        distance_m, ded = _trip_distance_and_deduction(t, rates, tz)
+        total_m += distance_m
+        if ded is not None:
+            total_ded += ded
     totals = [""] * len(HEADERS)
     totals[0] = "Total"
-    totals[mi_col - 1] = round(total_mi, 1)
-    totals[km_col - 1] = round(total_km, 1)
+    totals[mi_col - 1] = round(total_m / METERS_PER_MILE, 1)
+    totals[km_col - 1] = round(total_m / 1000.0, 1)
     totals[ded_col - 1] = round(total_ded, 2)
     ws.append(totals)
     for cell in ws[ws.max_row]:

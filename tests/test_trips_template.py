@@ -177,7 +177,11 @@ def test_dialog_submitters_each_send_only_their_own_field():
 
     merge_handler = body.split("mergeConfirm.addEventListener('click'")[1]
     assert "fetch('/trips/merge_selected'" in merge_handler
-    assert "category === 'keep' ? 'unclassified' : category" in merge_handler
+    # "keep" must reach the server as-is: the server's own tri-state
+    # handling is what decides whether to preserve or reclassify, so the
+    # client rewriting "keep" to a real category here would silently
+    # human-lock a merge the user asked to leave alone.
+    assert "body.append('category', category);" in merge_handler
     assert "window.location.href = '/trips/' + data.trip_id" in merge_handler
     assert "if (selection.size < 2) return" in merge_handler
 

@@ -27,6 +27,80 @@ reproduced here.
 - Complete before release: list every application, database, configuration,
   and operational break, or state explicitly that there are none.
 
+## [0.7.4] - 2026-08-08
+
+### Fixed
+
+- **Numeric fields no longer accept the special values "not a number" or
+  "infinity".** A mileage rate, an odometer reading, or a place radius could
+  be submitted as one of these values and slip past the "must be positive"
+  check, because neither that check nor the database catches them. They then
+  produced blank or nonsensical figures in reports and exports. Each of these
+  fields now rejects such a value with a validation error. A place's
+  latitude or longitude that falls outside the valid range is likewise
+  rejected now, rather than being silently adjusted to a different location,
+  and a mileage rate set through the optional per-year environment variable is
+  ignored with a logged warning if it is not a positive finite number.
+
+- **Merging trips no longer silently changes a trip's business or personal
+  classification.** Choosing "Keep" when merging now genuinely keeps each
+  trip's existing category and its manual-or-automatic ownership, instead of
+  quietly resetting the merged trip to unclassified and locking it. Merging
+  from a trip's own page no longer defaults to reclassifying the result as
+  business. And editing a trip's purpose now marks that trip as classified by
+  hand, so a later automatic re-tag cannot revert the change.
+
+- **The exported spreadsheet's two mileage-deduction totals now always
+  agree.** The Trips sheet added up each trip's already-rounded deduction
+  while the Summary sheet rounded once at the end, so the same workbook could
+  show two totals that differed by a cent. Both are now derived the same way
+  and match exactly.
+
+- **The annual odometer coverage summary now recognises a fully covered
+  year.** When a vehicle had odometer readings on the year's opening and
+  closing boundaries, the report still described the coverage as spanning only
+  part of the year, because the boundary reading was left out of the
+  calculation. That reading is now included, so a fully bracketed year is
+  reported as such.
+
+- **A manual trip time that does not exist because of the spring
+  daylight-saving change is now rejected.** On the day clocks jump forward,
+  the skipped hour (for example 02:30 where the clock goes straight from 02:00
+  to 03:00) has no real moment. Entering such a time used to store a different
+  instant and display an hour off what was typed. It is now rejected with a
+  clear message so the recorded time is always the one entered. Times during
+  the autumn change, and overnight trips, are unaffected.
+
+### Security
+
+- **Sign-in, setup, ingest, and form submissions no longer fail with a server
+  error on non-ASCII input.** A password, setup token, ingest credential, or
+  security token containing non-ASCII characters caused an internal error
+  instead of a clean rejection. That error also skipped the failed-attempt
+  rate limiter, and an administrator email containing non-ASCII characters
+  saved during first-run setup could permanently prevent sign-in. These inputs
+  are now compared correctly and rejected cleanly, the rate limiter records
+  the attempt, and a non-ASCII administrator email is refused at setup.
+
+- **Signing in through the identity provider now starts a fresh session.** The
+  callback that completes single sign-on now discards any pre-existing session
+  contents and issues a new security token before establishing the signed-in
+  session, closing a session-fixation vector and matching the local sign-in
+  path.
+
+- **Password hashing and verification now run off the main request loop**, so
+  a sign-in or first-run setup can no longer briefly stall other requests
+  while the password is processed.
+
+### Supported upgrade path
+
+- `v0.7.0`, `v0.7.1`, `v0.7.2`, and `v0.7.3` may upgrade directly to `v0.7.4`.
+
+### Breaking changes
+
+- None. There is no migration; the schema stays at 19. No configuration
+  changes, and no operational changes beyond the usual image pin bump.
+
 ## [0.7.3] - 2026-08-08
 
 ### Fixed
