@@ -306,6 +306,11 @@ compose_dir() {
     fi
 }
 
+db_query() {
+    local dir="$1"; shift
+    compose_dir "$dir" exec -T db psql -U mileage -d mileage -Atc "$@"
+}
+
 wait_for_healthz() {
     local timeout_s="$1" deadline
     deadline=$(( $(date +%s) + timeout_s ))
@@ -339,7 +344,7 @@ wait_for_detected_trip() {
     local dir="$1" device="$2" timeout_s="$3" deadline count
     deadline=$(( $(date +%s) + timeout_s ))
     while [ "$(date +%s)" -lt "$deadline" ]; do
-        count="$(compose_dir "$dir" exec -T db psql -U mileage -d mileage -Atc \
+        count="$(db_query "$dir" \
             "SELECT count(*) FROM trips WHERE device = '${device}' AND source = 'detected'")"
         [ "${count:-0}" -ge 1 ] && return 0
         sleep 5
@@ -362,7 +367,7 @@ PYEOF
 }
 
 schema_version() {
-    compose_dir "$1" exec -T db psql -U mileage -d mileage -Atc \
+    db_query "$1" \
         "SELECT COALESCE(max(version), 0) FROM schema_migrations"
 }
 
@@ -376,7 +381,7 @@ migration_count() {
 }
 
 count_points() {
-    compose_dir "$1" exec -T db psql -U mileage -d mileage -Atc \
+    db_query "$1" \
         "SELECT count(*) FROM points WHERE device = '$2'"
 }
 
@@ -392,47 +397,47 @@ capture_manifest() {
         schema_version "$dir"
 
         echo "== local_admin =="
-        compose_dir "$dir" exec -T db psql -U mileage -d mileage -Atc \
+        db_query "$dir" \
             "SELECT email FROM local_admin ORDER BY id"
 
         echo "== trips_by_source_category =="
-        compose_dir "$dir" exec -T db psql -U mileage -d mileage -Atc \
+        db_query "$dir" \
             "SELECT source::text, category::text, count(*), round(coalesce(sum(distance_m),0)::numeric, -2) FROM trips GROUP BY 1, 2 ORDER BY 1, 2"
 
         echo "== trip_points =="
-        compose_dir "$dir" exec -T db psql -U mileage -d mileage -Atc \
+        db_query "$dir" \
             "SELECT device, source::text, point_count, (path IS NOT NULL) FROM trips ORDER BY device, started_at, id"
 
         echo "== places =="
-        compose_dir "$dir" exec -T db psql -U mileage -d mileage -Atc \
+        db_query "$dir" \
             "SELECT name, kind::text, round(radius_m::numeric, 0) FROM places ORDER BY name"
 
         echo "== tag_rules =="
-        compose_dir "$dir" exec -T db psql -U mileage -d mileage -Atc \
+        db_query "$dir" \
             "SELECT coalesce(a_kind::text,'-'), (a_place IS NOT NULL), coalesce(b_kind::text,'-'), (b_place IS NOT NULL), category::text FROM tag_rules ORDER BY 1, 2, 3, 4, 5"
 
         echo "== vehicles =="
-        compose_dir "$dir" exec -T db psql -U mileage -d mileage -Atc \
+        db_query "$dir" \
             "SELECT name, coalesce(make,'-'), coalesce(model,'-'), is_default, active FROM vehicles ORDER BY name, id"
 
         echo "== expenses =="
-        compose_dir "$dir" exec -T db psql -U mileage -d mileage -Atc \
+        db_query "$dir" \
             "SELECT category::text, treatment::text, count(*), round(coalesce(sum(amount),0)::numeric, 0) FROM expenses GROUP BY 1, 2 ORDER BY 1, 2"
 
         echo "== odometer_readings =="
-        compose_dir "$dir" exec -T db psql -U mileage -d mileage -Atc \
+        db_query "$dir" \
             "SELECT count(*), round(coalesce(min(odometer_m),0)::numeric, -3), round(coalesce(max(odometer_m),0)::numeric, -3) FROM odometer_readings"
 
         echo "== trip_boundary_overrides =="
-        compose_dir "$dir" exec -T db psql -U mileage -d mileage -Atc \
+        db_query "$dir" \
             "SELECT kind::text, count(*) FROM trip_boundary_overrides GROUP BY 1 ORDER BY 1"
 
         echo "== reference_rows =="
-        compose_dir "$dir" exec -T db psql -U mileage -d mileage -Atc \
+        db_query "$dir" \
             "SELECT 'mileage_rates', count(*) FROM mileage_rates ORDER BY 1"
 
         echo "== worker_ledgers =="
-        compose_dir "$dir" exec -T db psql -U mileage -d mileage -Atc \
+        db_query "$dir" \
             "SELECT 'geocode_cache', count(*) FROM geocode_cache
              UNION ALL SELECT 'raw_messages', count(*) FROM raw_messages
              UNION ALL SELECT 'nudge_delivery_windows', count(*) FROM nudge_delivery_windows

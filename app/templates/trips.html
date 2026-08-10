@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% from "_purpose_field.html" import purpose_field %}
-{% block title %}Trips — Odograph{% endblock %}
+{% block title %}Trips: Odograph{% endblock %}
 {% block content %}
 
 {% if ytd_deduction is not none %}
 <p class="ytd-deduction">Year-to-date ({{ ytd_year }}) business deduction:
   <strong>{{ ytd_deduction | usd }}</strong></p>
 {% else %}
-<p class="ytd-deduction muted">No mileage rate on file for {{ ytd_year }} yet —
+<p class="ytd-deduction muted">No mileage rate on file for {{ ytd_year }} yet;
   deduction estimates are unavailable. <a href="/settings">Add one</a>.</p>
 {% endif %}
 
@@ -93,14 +93,14 @@
     {% endif %}
     <label>Category
       <select name="category">
-        <option value="unclassified">—</option>
+        <option value="unclassified">--</option>
         <option value="business">Business</option>
         <option value="personal">Personal</option>
       </select>
     </label>
     <label>Vehicle
       <select name="vehicle_id">
-        <option value="">—</option>
+        <option value="">--</option>
         {% for v in vehicles %}
         <option value="{{ v.id }}" {{ 'selected' if v.is_default or vehicles | length == 1 }}>{{ v.name }}</option>
         {% endfor %}
@@ -233,7 +233,7 @@
     <label>Category
       <select id="merge-dialog-category">
         <option value="keep" selected>Keep</option>
-        <option value="unclassified">—</option>
+        <option value="unclassified">--</option>
         <option value="business">Business</option>
         <option value="personal">Personal</option>
       </select>
@@ -264,7 +264,7 @@
   const CSRF_TOKEN = "{{ csrf }}";
 
   // The manual-trip "now" buttons fill a time input with the current clock
-  // reading in the app's display timezone — not the browser's — so the value
+  // reading in the app's display timezone, not the browser's, so the value
   // agrees with how /trips/manual interprets the submitted naive time (it
   // stamps display_tz onto it). formatToParts avoids the "24:00-at-midnight"
   // quirk some engines emit for hour12:false hour formatting.
@@ -436,8 +436,8 @@
   });
 
   // Each dialog's content is a <form> (for fieldset/label semantics), so a
-  // lone text input — the purpose dialog's free-text field, or the merge
-  // dialog's purpose/notes fields — implicitly submits on Enter. Native
+  // lone text input (the purpose dialog's free-text field, or the merge
+  // dialog's purpose/notes fields) implicitly submits on Enter. Native
   // submission would navigate the page to "?field=value" and drop the
   // selection instead of running the fetch-based batch/merge request, so
   // every submit is caught here and redirected to the dialog's own confirm

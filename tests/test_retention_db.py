@@ -6,7 +6,7 @@ retention window (using explicit `received_at` values rather than relying on
 `now()` at insert time, since the window is computed relative to `now()` at
 delete time) and asserts run_once() deletes exactly the rows older than the
 window while leaving recent rows untouched, and that a second run_once() is a
-no-op (idempotent — nothing left to prune).
+no-op (idempotent, with nothing left to prune).
 """
 from __future__ import annotations
 

@@ -1,7 +1,7 @@
 """Pure kind-based auto-tagging logic.
 
 A trip's start/end are each either a resolved place `(place_id, kind)` or
-`None` (unresolved — no place within radius, or a manual trip with no
+`None` (unresolved -- no place within radius, or a manual trip with no
 geometry at all). A rule matches a trip if its two sides can be paired with
 the trip's two ends in either order (direction-agnostic); the side that
 requires a specific place is worth more than one that only requires a kind,
@@ -90,7 +90,7 @@ def match_rule(rules: list[Rule], start: PlaceRef, end: PlaceRef) -> Rule | None
 def plan_autotags(trips: list[AutotagTrip], rules: list[Rule]) -> list[AutotagResult]:
     """Decide category/tag_source changes for trips whose tag isn't
     human-owned. A trip with `tag_source == 'human'` is never touched, even
-    if passed in here — that's the one line the human-tag-supremacy
+    if passed in here -- that's the one line the human-tag-supremacy
     invariant rests on, so it's enforced defensively at this layer too, not
     just by the caller filtering its input.
     """

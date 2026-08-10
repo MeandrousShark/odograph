@@ -40,9 +40,10 @@ from starlette.datastructures import UploadFile
 from starlette.responses import JSONResponse, Response
 
 from app.auth import check_form_csrf, require_user
-from app.detector.runner import ADVISORY_LOCK_KEY
+from app.db import DETECTOR_ADVISORY_LOCK_KEY, _fetch_schema_version
 from app.expenses import EXPENSE_CATEGORIES, EXPENSE_TREATMENTS
 from app.places_desc import PLACE_KINDS
+from app.trip_queries import DISPLAY_DISTANCE_SQL
 from app.validation import parse_finite_number as _parse_finite_number
 
 log = logging.getLogger(__name__)
@@ -188,12 +189,6 @@ def _export_odometer_reading(row: dict) -> dict:
 # Export: DB fetch helpers
 # ---------------------------------------------------------------------------
 
-async def _fetch_schema_version(conn) -> int:
-    cur = await conn.execute("SELECT COALESCE(max(version), 0) FROM schema_migrations")
-    row = await cur.fetchone()
-    return row[0]
-
-
 async def _fetch_export_vehicles(conn) -> list[dict]:
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
@@ -241,7 +236,7 @@ async def _fetch_export_trips(conn) -> list[dict]:
         # without that geometry isn't possible, and re-exporting the raw
         # figure instead would silently change a source instance's own
         # report totals on round trip.
-        " COALESCE(distance_snapped_m, distance_m) AS distance_m, has_gap, "
+        f" {DISPLAY_DISTANCE_SQL} AS distance_m, has_gap, "
         " category::text AS category, purpose, notes, vehicle_id, "
         " start_place_id, end_place_id, tag_source::text AS tag_source "
         "FROM trips ORDER BY id"
@@ -956,7 +951,9 @@ async def _apply_import(conn, bundle: dict) -> dict:
     # trips after _check_clean_target's count returns 0 but before this
     # transaction commits, producing exactly the interleaved state the
     # clean-target precondition exists to prevent.
-    await conn.execute("SELECT pg_advisory_xact_lock(%s)", (ADVISORY_LOCK_KEY,))
+    await conn.execute(
+        "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
+    )
 
     target_schema_version = await _fetch_schema_version(conn)
     if bundle["schema_version"] != target_schema_version:

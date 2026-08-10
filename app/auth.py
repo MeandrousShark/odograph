@@ -64,7 +64,7 @@ def require_csrf(request: Request) -> None:
 
 def build_oauth(config) -> OAuth | None:
     if config.dev_no_auth:
-        log.warning("DEV_NO_AUTH=1 — UI authentication is DISABLED. Never deploy like this.")
+        log.warning("DEV_NO_AUTH=1: UI authentication is DISABLED. Never deploy like this.")
         return None
     if not config.oidc_configured:
         # OIDC is optional now (local-login mode) -- no client to register.
@@ -236,7 +236,7 @@ def make_router() -> APIRouter:
         if admin is not None and hmac.compare_digest(token_hash, admin["consumed_token_hash"]):
             return await _render_setup(
                 request, admin,
-                error="This token was already used — generate a fresh one.",
+                error="This token was already used. Generate a fresh one.",
                 status_code=400,
             )
 
@@ -290,7 +290,7 @@ def make_router() -> APIRouter:
                     admin = await _get_local_admin(conn)
                     return await _render_setup(
                         request, admin,
-                        error="This token was already used — generate a fresh one.",
+                        error="This token was already used. Generate a fresh one.",
                         status_code=400,
                     )
 

@@ -94,11 +94,11 @@ def test_below_half_overlap_is_not_a_match():
 def test_manual_trips_never_enter_reconciliation():
     """Case 15: the runner feeds only source='detected' rows into the plan
     (SQL filter); given that, an overlapping manual trip can never be matched
-    or deleted — reconciliation literally cannot see it. This test pins the
+    or deleted, since reconciliation literally cannot see it. This test pins the
     contract: the plan touches exactly what it was given."""
     detected = [ExistingTrip(id=1, started_at=_ts(0), ended_at=_ts(30), category="personal")]
     # A manual trip covering the same window exists in the DB but is excluded
-    # upstream — it must not appear in matches or deletes.
+    # upstream, so it must not appear in matches or deletes.
     new = [(_ts(0), _ts(30))]
     plan = plan_reconcile(detected, new)
     assert plan.matches == [(1, 0)]

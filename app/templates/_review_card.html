@@ -60,7 +60,7 @@
     Vehicle
     <select hx-post="/trips/{{ trip.id }}/vehicle" hx-trigger="change"
             hx-swap="none" name="vehicle_id">
-      <option value="">—</option>
+      <option value="">--</option>
       {% for v in vehicles %}
       <option value="{{ v.id }}" {{ 'selected' if trip.vehicle_id == v.id }}>{{ v.name }}</option>
       {% endfor %}

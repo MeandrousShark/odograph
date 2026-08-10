@@ -116,7 +116,7 @@ def test_reconcile_unsorted_readings_are_sorted_first():
 def test_reconcile_boundary_trip_attributed_by_started_at():
     r1, r2, r3 = _reading(1, 1000), _reading(10, 1100), _reading(20, 1200)
     # A trip starting exactly at r2's timestamp belongs to the SECOND
-    # interval ([r2, r3)), not the first ([r1, r2)) — start is inclusive on
+    # interval ([r2, r3)), not the first ([r1, r2)); start is inclusive on
     # its own interval only.
     boundary_trip = (r2.recorded_at, 30 * METERS_PER_MILE)
     result = reconcile([r1, r2, r3], [boundary_trip])
@@ -200,7 +200,7 @@ def test_coverage_line_handles_none_coverage():
         vehicle_name="Truck", span_start=datetime(2026, 1, 1, tzinfo=TZ),
         span_end=datetime(2026, 1, 1, tzinfo=TZ), coverage=None, gap_m=0.0, fully_bracketed=True,
     )
-    assert "—" in coverage_line(line)
+    assert "--" in coverage_line(line)
 
 
 # ---- latest_quarter_start ----

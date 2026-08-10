@@ -37,7 +37,7 @@ class YearRate:
 def rate_for(rates: dict[int, YearRate], year: int, month: int = 1) -> float | None:
     """The rate in force for `year`/`month`. Exact year if published (honoring
     any mid-year split), else the most recent earlier year's *latest* rate
-    (covers January before that year's IRS notice — if the prior year had a
+    (covers January before that year's IRS notice -- if the prior year had a
     mid-year bump, its second-half rate is the best proxy), else None if no
     rate has ever been published at or before `year`.
     """

@@ -1,5 +1,5 @@
 -- Reverse-geocode cache, keyed by rounded coordinate rather than by
--- trip/place FK — deliberately decoupled so it works for both trip
+-- trip/place FK, deliberately decoupled so it works for both trip
 -- endpoints and (later, if useful) place search results.
 --
 -- numeric(8,4) precision (~11m at this latitude) must stay in sync with
@@ -7,7 +7,7 @@
 -- constant directly).
 --
 -- A NULL address is a cached "we tried, nothing usable" (e.g. a coordinate
--- in the middle of a lake, or a transient API error) — its existence is the
+-- in the middle of a lake, or a transient API error). Its existence is the
 -- "don't retry every sweep" signal, same role fetched_at plays here as
 -- snapped_at does for trips.snap_status.
 CREATE TABLE geocode_cache (

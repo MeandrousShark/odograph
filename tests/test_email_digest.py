@@ -12,8 +12,6 @@ import pytest
 
 from app.email_digest import (
     EmailDigestWorker,
-    _fmt_mi,
-    _fmt_usd,
     _parse_mmdd,
     _render,
     _url,
@@ -135,15 +133,6 @@ def test_url_is_empty_when_app_url_unset():
 
 def test_url_joins_app_url_and_path():
     assert _url("https://miles.example.com", "/review") == "https://miles.example.com/review"
-
-
-def test_fmt_mi_converts_meters_to_one_decimal_miles():
-    assert _fmt_mi(1609.344) == "1.0"
-
-
-def test_fmt_usd_renders_dash_for_none_and_dollars_otherwise():
-    assert _fmt_usd(None) == "—"
-    assert _fmt_usd(1234.5) == "$1,234.50"
 
 
 def test_weekly_nudge_template_omits_link_when_review_url_empty():

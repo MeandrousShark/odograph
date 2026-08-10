@@ -1,5 +1,5 @@
 """CSV/XLSX export and the annual/range report workbooks.
-`build_export_rows` is pure — no I/O, no DB/openpyxl imports — so it's
+`build_export_rows` is pure -- no I/O, no DB/openpyxl imports -- so it's
 unit-testable without a workbook or a filesystem. `to_csv`/`to_xlsx` are thin,
 in-memory writers around it; `to_report_xlsx` adds a Summary sheet ahead
 of the same Trips sheet, so the report carries its own audit-appendix detail.
@@ -20,6 +20,7 @@ from app.expenses import (
     comparison_caveat_lines,
     comparison_status,
 )
+from app.formatting import format_duration
 from app.odometer import VehicleCoverage, coverage_line
 from app.places_desc import describe_endpoint
 from app.rates import METERS_PER_MILE, YearRate, deduction
@@ -30,13 +31,6 @@ HEADERS = (
     "Distance (mi)", "Distance (km)", "Category", "Vehicle", "Purpose", "Notes", "Gap", "Source",
     "Deduction ($)",
 )
-
-
-def _duration_str(started_at, ended_at) -> str:
-    secs = int((ended_at - started_at).total_seconds())
-    h, m = divmod(secs // 60, 60)
-    return f"{h}h {m:02d}m" if h else f"{m}m"
-
 
 def _trip_distance_and_deduction(t: dict, rates: dict[int, YearRate], tz: ZoneInfo):
     """The unrounded `(distance_m, deduction_or_None)` a trip contributes,
@@ -61,8 +55,8 @@ def _trip_distance_and_deduction(t: dict, rates: dict[int, YearRate], tz: ZoneIn
 def build_export_rows(trips: list[dict], rates: dict[int, YearRate], tz: ZoneInfo) -> list[list]:
     """One row per trip, in `HEADERS` order. `trips` rows are expected to
     carry the same keys `TRIP_COLUMNS` selects (including start/end place
-    names). Uses `display_distance_m` — snapped distance when available,
-    raw `distance_m` as fallback — so exports match what's shown on the
+    names). Uses `display_distance_m` -- snapped distance when available,
+    raw `distance_m` as fallback -- so exports match what's shown on the
     trip list.
     """
     rows = []
@@ -74,7 +68,7 @@ def build_export_rows(trips: list[dict], rates: dict[int, YearRate], tz: ZoneInf
             local_start.strftime("%Y-%m-%d"),
             local_start.strftime("%H:%M"),
             local_end.strftime("%H:%M"),
-            _duration_str(t["started_at"], t["ended_at"]),
+            format_duration(t["started_at"], t["ended_at"]),
             describe_endpoint(
                 t.get("start_place_name"), t.get("start_lat"), t.get("start_lon"),
                 t.get("start_address"),
@@ -167,14 +161,14 @@ def _write_summary_sheet(
     expense_report: ExpenseReport | None = None, title: str | None = None,
 ) -> None:
     """The report's headline numbers, laid out for a quick read rather than
-    as a data table — a distinct shape from the Trips sheet's per-row detail.
+    as a data table -- a distinct shape from the Trips sheet's per-row detail.
     `title` defaults to the annual report's own heading; `to_range_report_xlsx`
     passes a `range_label`-derived one instead, so the two exports share this
     writer without the range report's Summary sheet ever calling itself annual.
     """
     from openpyxl.styles import Font
 
-    ws.append([title or f"Annual Mileage Report — {report.year}"])
+    ws.append([title or f"Annual Mileage Report: {report.year}"])
     ws["A1"].font = Font(bold=True, size=14)
     ws.append([])
     ws.append(["Business miles", round(report.business_m / METERS_PER_MILE, 1)])
@@ -182,12 +176,12 @@ def _write_summary_sheet(
     ws.append(["Total miles", round(report.total_m / METERS_PER_MILE, 1)])
     ws.append([
         "Business share",
-        f"{report.business_pct:.1f}%" if report.business_pct is not None else "—",
+        f"{report.business_pct:.1f}%" if report.business_pct is not None else "--",
     ])
     ws.append(["Rate(s) applied", format_rate_periods(report.rate_periods)])
     ws.append([
         "Total deduction",
-        f"${report.total_deduction:,.2f}" if report.total_deduction is not None else "—",
+        f"${report.total_deduction:,.2f}" if report.total_deduction is not None else "--",
     ])
     ws.append(["Trip count", report.trip_count])
     ws.append([])
@@ -201,13 +195,13 @@ def _write_summary_sheet(
             MONTH_ABBR[month.month],
             month.trip_count,
             round(month.business_m / METERS_PER_MILE, 1),
-            round(month.rate_per_mi, 4) if month.rate_per_mi is not None else "—",
-            round(month.deduction, 2) if month.deduction is not None else "—",
+            round(month.rate_per_mi, 4) if month.rate_per_mi is not None else "--",
+            round(month.deduction, 2) if month.deduction is not None else "--",
         ])
 
     if report.caveats.any:
         ws.append([])
-        ws.append(["Caveats — review before filing"])
+        ws.append(["Caveats: review before filing"])
         ws[f"A{ws.max_row}"].font = Font(bold=True)
         for line in caveat_lines(report.caveats, report.year):
             ws.append([line])
@@ -227,7 +221,7 @@ def _write_summary_sheet(
                 v.vehicle_name,
                 round(v.business_m / METERS_PER_MILE, 1),
                 round(v.total_m / METERS_PER_MILE, 1),
-                round(v.deduction, 2) if v.deduction is not None else "—",
+                round(v.deduction, 2) if v.deduction is not None else "--",
             ])
 
     # Appended after "By vehicle" for the same fixed-row-position reason;
@@ -259,22 +253,22 @@ def _write_summary_sheet(
                 if line.provisional:
                     larger += " (provisional)"
             else:
-                larger = "—"
+                larger = "--"
             ws.append([
                 line.vehicle_name,
                 round(line.business_m / METERS_PER_MILE, 1),
                 round(line.denominator_m / METERS_PER_MILE, 1),
-                f"{line.business_pct * 100:.1f}%" if line.business_pct is not None else "—",
+                f"{line.business_pct * 100:.1f}%" if line.business_pct is not None else "--",
                 "Odometer" if line.denominator_source == "odometer" else "GPS detected",
                 float(line.allocated_expenses),
                 float(line.fully_business_expenses),
-                float(line.standard_total) if line.standard_total is not None else "—",
-                float(line.actual_total) if line.actual_total is not None else "—",
+                float(line.standard_total) if line.standard_total is not None else "--",
+                float(line.actual_total) if line.actual_total is not None else "--",
                 larger,
                 comparison_status(line),
             ])
         ws.append([])
-        ws.append(["Actual-expense caveats — review before filing"])
+        ws.append(["Actual-expense caveats: review before filing"])
         ws[f"A{ws.max_row}"].font = Font(bold=True)
         for line in comparison_caveat_lines(expense_report.comparisons):
             ws.append([line])
@@ -323,7 +317,7 @@ def to_report_xlsx(
     year) as an audit appendix backing the summary. When an expense report is
     supplied, an Expenses sheet carries the ledger behind the comparison.
     `odometer_coverage` is computed by the caller (app.ui's report routes),
-    same as `report` itself — kept a plain parameter here rather than folded
+    same as `report` itself -- kept a plain parameter here rather than folded
     into `AnnualReport` so `build_annual_report`'s signature stays untouched.
     """
     from openpyxl import Workbook
@@ -348,15 +342,15 @@ def to_report_xlsx(
 def to_range_report_xlsx(
     report: RangeReport, trips: list[dict], rates: dict[int, YearRate], tz: ZoneInfo
 ) -> bytes:
-    """Range-report analog of `to_report_xlsx` — reuses the same
+    """Range-report analog of `to_report_xlsx` -- reuses the same
     `_write_summary_sheet`/`_populate_trips_sheet` writers so the two exports
     can't drift on layout, with no `odometer_coverage`/`expense_report`
     arguments to pass through (the range report deliberately carries no
     odometer-coverage or standard-vs-actual section, so there's nothing
     app/ui.py's range routes need to fetch for those sheets).
     `trips` is filtered here to those whose local start date falls in
-    `[report.start, report.end]` — the same rule `build_range_report` used to
-    fold the summary numbers above — so every Trips-sheet row backs a row
+    `[report.start, report.end]` -- the same rule `build_range_report` used to
+    fold the summary numbers above -- so every Trips-sheet row backs a row
     already counted in the summary, even though the caller's DB query only
     coarsely pre-filters (see `app/ui.py`'s `_fetch_range_trips`).
     """
@@ -366,7 +360,7 @@ def to_range_report_xlsx(
     summary_ws = wb.active
     summary_ws.title = "Summary"
     _write_summary_sheet(
-        summary_ws, report, title=f"Mileage Report — {range_label(report.start, report.end)}"
+        summary_ws, report, title=f"Mileage Report: {range_label(report.start, report.end)}"
     )
 
     trips_ws = wb.create_sheet("Trips")

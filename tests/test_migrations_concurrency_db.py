@@ -1,7 +1,7 @@
 """DB-backed regression test: two processes racing run_migrations at startup
-must not double-apply a migration (app/db.py's RUN_MIGRATIONS_LOCK_KEY).
+must not double-apply a migration (app/db.py's migration advisory lock).
 
-Set TEST_DATABASE_URL only to a throwaway Postgres/PostGIS instance — the
+Set TEST_DATABASE_URL only to a throwaway Postgres/PostGIS instance -- the
 target database's public schema is dropped and recreated.
 """
 from __future__ import annotations

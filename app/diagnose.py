@@ -204,19 +204,14 @@ def config_presence(cfg: Config) -> dict[str, bool]:
 
 
 def _worker_gates_from_config(cfg: Config) -> dict[str, bool]:
-    """Same gating `app/main.py`'s lifespan uses to decide which workers to
-    construct, duplicated here (not imported) because the CLI path has no
-    live app to ask -- see `WorkerReport.state_available`.
-    """
+    """Read the same Config predicates used by the application lifespan."""
     return {
         "detector": True,
-        "snap": bool(cfg.osrm_url),
+        "snap": cfg.snap_enabled,
         "geocode": _geocode_configured(cfg),
-        "retention": cfg.raw_message_retention_days > 0,
-        "nudge": bool(cfg.ntfy_url and cfg.ntfy_topic),
-        "odometer_reminder": bool(
-            cfg.ntfy_url and cfg.ntfy_topic and cfg.odometer_reminder_enabled
-        ),
+        "retention": cfg.retention_enabled,
+        "nudge": cfg.nudge_enabled,
+        "odometer_reminder": cfg.odometer_reminder_enabled,
         "email_digest": cfg.email_enabled,
     }
 

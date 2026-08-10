@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ report.year }} Report — Odograph{% endblock %}
+{% block title %}{{ report.year }} Report: Odograph{% endblock %}
 {% block content %}
 
 <p>
@@ -37,29 +37,7 @@
   <p class="empty">No trips recorded in {{ report.year }}.</p>
 {% else %}
 
-<div class="report-summary">
-  <div><span class="muted">Business miles</span><strong>{{ report.business_m | mi }} mi</strong></div>
-  <div><span class="muted">Personal miles</span><strong>{{ report.personal_m | mi }} mi</strong></div>
-  <div><span class="muted">Business share</span>
-    <strong>{{ "%.1f"|format(report.business_pct) if report.business_pct is not none else "—" }}%</strong></div>
-  <div><span class="muted">Total deduction</span>
-    <strong>{{ report.total_deduction | usd }}</strong></div>
-</div>
-
-{% if report.rate_periods %}
-<p class="muted">Rate{{ "s" if report.rate_periods|length > 1 }} applied: {{ format_rate_periods(report.rate_periods) }}</p>
-{% endif %}
-
-{% if report.caveats.any %}
-<div class="report-caveats">
-  <strong>Review before filing:</strong>
-  <ul>
-    {% for line in caveat_lines(report.caveats, report.year) %}
-    <li>{{ line }}{% if loop.last and report.caveats.missing_rate %} <a href="/settings">Add one</a>.{% endif %}</li>
-    {% endfor %}
-  </ul>
-</div>
-{% endif %}
+{% include "_report_summary.html" %}
 
 {% include "_report_tables.html" %}
 
@@ -95,7 +73,7 @@
       <td class="num">{{ line.business_m | mi }} mi</td>
       <td class="num">{{ line.denominator_m | mi }} mi<br>
         <small class="muted">{{ "odometer" if line.denominator_source == "odometer" else "GPS detected" }}</small></td>
-      <td class="num">{{ "%.1f%%"|format(line.business_pct * 100) if line.business_pct is not none else "—" }}</td>
+      <td class="num">{{ "%.1f%%"|format(line.business_pct * 100) if line.business_pct is not none else "--" }}</td>
       <td class="num">{{ line.allocated_expenses | usd }}</td>
       <td class="num">{{ line.fully_business_expenses | usd }}</td>
       <td class="num">{{ line.standard_total | usd }}</td>
@@ -104,7 +82,7 @@
         {% if line.larger_estimate == "standard" %}Standard by {{ line.difference | usd }}
         {% elif line.larger_estimate == "actual" %}Actual by {{ line.difference | usd }}
         {% elif line.larger_estimate == "tie" %}Tie
-        {% else %}—{% endif %}
+        {% else %}--{% endif %}
         {% if line.provisional and line.larger_estimate %}<small class="muted"> (provisional)</small>{% endif %}
       </td>
       <td>{{ comparison_status(line) }}</td>

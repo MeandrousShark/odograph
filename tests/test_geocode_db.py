@@ -54,7 +54,7 @@ async def _insert_trip(
 
 
 class _FakeHTTP:
-    """Stands in for httpx.AsyncClient in GeocodeWorker tests — no real
+    """Stands in for httpx.AsyncClient in GeocodeWorker tests -- no real
     network call, just enough of the interface GeoapifyProvider.reverse() uses.
     """
 

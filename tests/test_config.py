@@ -4,15 +4,30 @@ OIDC becoming optional must not touch the pre-existing required-vars check.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
 import pytest
 
-from app.config import Config
+from app.config import (
+    DEFAULT_MAP_TILE_ATTRIBUTION,
+    DEFAULT_MAP_TILE_URL,
+    DEFAULT_MISSING_TRIP_GAP_M,
+    Config,
+)
+from app.diagnose import worker_reports_from_config
 from app.geocode import GeoapifyProvider, NominatimProvider
+from app.main import make_templates
 
 REQUIRED_VARS = ("DATABASE_URL", "INGEST_PASSWORD", "SESSION_SECRET")
 OIDC_VARS = ("OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET")
 ALL_OPTIONAL_AUTH_VARS = OIDC_VARS + ("ADMIN_TOKEN", "DEV_NO_AUTH")
 RUNTIME_IDENTITY_VARS = ("APP_VERSION", "APP_GIT_REVISION")
+WORKER_ENV_VARS = (
+    "OSRM_URL", "RAW_MESSAGE_RETENTION_DAYS", "NTFY_URL", "NTFY_TOPIC",
+    "ODOMETER_REMINDER", "SMTP_HOST", "EMAIL_FROM", "EMAIL_TO",
+    "GEOCODE_API_KEY", "GEOCODE_PROVIDER", "GEOCODE_NOMINATIM_URL",
+)
 
 
 @pytest.fixture
@@ -122,12 +137,91 @@ def test_map_tile_and_hsts_default_to_todays_values(clean_env):
 
     cfg = Config.from_env()
 
-    assert cfg.map_tile_url == "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-    assert cfg.map_tile_attribution == (
-        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-    )
+    assert cfg.map_tile_url == DEFAULT_MAP_TILE_URL
+    assert cfg.map_tile_attribution == DEFAULT_MAP_TILE_ATTRIBUTION
+    assert cfg.missing_trip_gap_m == DEFAULT_MISSING_TRIP_GAP_M
     assert cfg.map_tile_host == "https://tile.openstreetmap.org"
     assert cfg.hsts_max_age == 0
+
+
+def test_template_only_config_uses_shared_map_and_missing_trip_defaults():
+    templates = make_templates(SimpleNamespace(display_tz=timezone.utc, app_version="test"))
+
+    assert templates.env.globals["map_tile_url"] == DEFAULT_MAP_TILE_URL
+    assert templates.env.globals["map_tile_attribution"] == DEFAULT_MAP_TILE_ATTRIBUTION
+
+    trip = {
+        "id": 2,
+        "started_at": datetime(2026, 8, 10, 12, tzinfo=timezone.utc),
+        "prev_trip_ended_at": datetime(2026, 8, 10, 11, tzinfo=timezone.utc),
+        "prev_end_gap_m": DEFAULT_MISSING_TRIP_GAP_M + 1,
+        "prev_trip_end_lat": 47.0,
+        "prev_trip_end_lon": -122.0,
+        "prev_trip_end_place_name": None,
+        "missing_trip_covered": False,
+    }
+    assert templates.env.globals["missing_trip_badge"](trip) is not None
+
+
+@pytest.mark.parametrize(
+    ("environment", "expected"),
+    [
+        ({}, (False, True, False, False, False)),
+        ({"OSRM_URL": "http://osrm.internal:5000"}, (True, True, False, False, False)),
+        ({"RAW_MESSAGE_RETENTION_DAYS": "0"}, (False, False, False, False, False)),
+        ({"NTFY_URL": "http://ntfy.internal"}, (False, True, False, False, False)),
+        ({"NTFY_TOPIC": "trips"}, (False, True, False, False, False)),
+        (
+            {"NTFY_URL": "http://ntfy.internal", "NTFY_TOPIC": "trips"},
+            (False, True, True, True, False),
+        ),
+        (
+            {
+                "NTFY_URL": "http://ntfy.internal", "NTFY_TOPIC": "trips",
+                "ODOMETER_REMINDER": "0",
+            },
+            (False, True, True, False, False),
+        ),
+        (
+            {"NTFY_URL": "http://ntfy.internal", "ODOMETER_REMINDER": "1"},
+            (False, True, False, False, False),
+        ),
+        (
+            {"SMTP_HOST": "smtp.internal", "EMAIL_FROM": "from@example.com"},
+            (False, True, False, False, False),
+        ),
+        (
+            {
+                "SMTP_HOST": "smtp.internal", "EMAIL_FROM": "from@example.com",
+                "EMAIL_TO": "to@example.com",
+            },
+            (False, True, False, False, True),
+        ),
+    ],
+)
+def test_config_and_diagnostics_worker_enablement_matrix(clean_env, environment, expected):
+    for name in WORKER_ENV_VARS:
+        clean_env.delenv(name, raising=False)
+    for name, value in environment.items():
+        clean_env.setenv(name, value)
+
+    cfg = Config.from_env()
+
+    assert (
+        cfg.snap_enabled,
+        cfg.retention_enabled,
+        cfg.nudge_enabled,
+        cfg.odometer_reminder_enabled,
+        cfg.email_enabled,
+    ) == expected
+    reports = {report.name: report.enabled for report in worker_reports_from_config(cfg)}
+    assert (
+        reports["snap"],
+        reports["retention"],
+        reports["nudge"],
+        reports["odometer_reminder"],
+        reports["email_digest"],
+    ) == expected
 
 
 def test_map_tile_host_follows_a_configured_map_tile_url(clean_env):

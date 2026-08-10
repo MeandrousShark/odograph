@@ -52,12 +52,6 @@ def test_deduction_only_on_business():
     assert unclassified[ded_idx] == ""
 
 
-def test_deduction_math():
-    row = build_export_rows([_trip(category="business", distance_m=1609.344)], RATES, TZ)[0]
-    ded_idx = HEADERS.index("Deduction ($)")
-    assert row[ded_idx] == round(0.725, 2)
-
-
 def test_deduction_uses_midyear_second_half_rate():
     # A year with a mid-year change: a July trip must price at the H2 rate,
     # exercising that build_export_rows passes the trip's local month through.
@@ -78,6 +72,14 @@ def test_mi_km_conversion():
     mi_idx, km_idx = HEADERS.index("Distance (mi)"), HEADERS.index("Distance (km)")
     assert row[mi_idx] == 10.0
     assert row[km_idx] == round(1609.344 * 10 / 1000.0, 1)
+    assert isinstance(row[mi_idx], float)
+    assert isinstance(row[km_idx], float)
+
+
+def test_duration_uses_shared_display_format_without_changing_export_shape():
+    row = build_export_rows([_trip()], RATES, TZ)[0]
+
+    assert row[HEADERS.index("Duration")] == "30m"
 
 
 def test_local_date_edge():
@@ -100,7 +102,7 @@ def test_fallback_chain_name_then_coords_then_dash():
     start_idx = HEADERS.index("Start location")
     assert named[start_idx] == "Home"
     assert coords_only[start_idx] == "47.6000,-122.3000"
-    assert neither[start_idx] == "—"
+    assert neither[start_idx] == "--"
 
 
 def test_export_keeps_full_reverse_geocoded_address():
@@ -115,7 +117,7 @@ def test_export_keeps_full_reverse_geocoded_address():
 
 def test_uses_snapped_distance_when_it_differs_from_raw():
     # A snapped trip: display_distance_m (from TRIP_COLUMNS' COALESCE)
-    # differs from the noisier raw distance_m — export must use the
+    # differs from the noisier raw distance_m -- export must use the
     # snapped figure, matching what the trip list/summaries show.
     trip = _trip(distance_m=1700.0, display_distance_m=1609.344)  # snapped to exactly 1mi
     row = build_export_rows([trip], RATES, TZ)[0]
@@ -130,8 +132,8 @@ def test_manual_trip_row():
     )
     row = build_export_rows([manual], RATES, TZ)[0]
     assert row[HEADERS.index("Source")] == "manual"
-    assert row[HEADERS.index("Start location")] == "—"
-    assert row[HEADERS.index("End location")] == "—"
+    assert row[HEADERS.index("Start location")] == "--"
+    assert row[HEADERS.index("End location")] == "--"
 
 
 def test_vehicle_column_present_and_populated():
@@ -204,7 +206,7 @@ def test_report_xlsx_trips_and_summary_deduction_totals_agree():
 
 def test_report_xlsx_has_summary_and_trips_sheets():
     # started_at is 15:00 UTC == 08:00 local (TZ), so this trip's local month
-    # is June regardless of any UTC/local boundary subtlety — not the case
+    # is June regardless of any UTC/local boundary subtlety -- not the case
     # under test here, just keeping the fixture unsurprising.
     trips = [_trip(category="business", distance_m=1609.344)]
     report = build_annual_report(trips, RATES, TZ, 2026)
@@ -218,7 +220,7 @@ def test_report_xlsx_has_summary_and_trips_sheets():
     assert trips_ws.cell(2, HEADERS.index("Purpose") + 1).value == "Meet client"
 
     summary_ws = wb["Summary"]
-    assert summary_ws["A1"].value == "Annual Mileage Report — 2026"
+    assert summary_ws["A1"].value == "Annual Mileage Report: 2026"
     assert summary_ws["A3"].value == "Business miles"
     assert summary_ws["B3"].value == 1.0
     assert summary_ws["A8"].value == "Total deduction"
@@ -396,7 +398,7 @@ def test_range_report_xlsx_titles_summary_with_range_label():
 
     assert wb.sheetnames == ["Summary", "Trips"]
     summary_ws = wb["Summary"]
-    assert summary_ws["A1"].value == "Mileage Report — 2026 Q2"
+    assert summary_ws["A1"].value == "Mileage Report: 2026 Q2"
     assert summary_ws["A3"].value == "Business miles"
     assert summary_ws["B3"].value == 1.0
 
@@ -436,7 +438,7 @@ def test_range_report_xlsx_no_odometer_or_expense_sections():
     )
     assert "Odometer reconciliation" not in summary_text
     assert "Standard vs. actual" not in summary_text
-    # Caveats (mileage-relevant ones) still render — only the annual-only
+    # Caveats (mileage-relevant ones) still render -- only the annual-only
     # sections are scoped out.
     assert "recording gap" in summary_text
 

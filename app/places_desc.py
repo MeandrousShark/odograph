@@ -11,7 +11,7 @@ def describe_endpoint(
     name: str | None, lat: float | None, lon: float | None, address: str | None = None
 ) -> str:
     """Human label for a trip endpoint. Fallback order: named place →
-    reverse-geocoded address → rounded coordinate → em dash.
+    reverse-geocoded address → rounded coordinate → double hyphen.
 
     Kept as the one place the full-label decision lives: review, detail,
     exports, the annual report's audit appendix, and the trip list's tooltip
@@ -25,7 +25,7 @@ def describe_endpoint(
         return address
     if lat is not None and lon is not None:
         return f"{lat:.4f},{lon:.4f}"
-    return "—"
+    return "--"
 
 
 def describe_compact_endpoint(

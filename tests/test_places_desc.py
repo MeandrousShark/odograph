@@ -20,7 +20,7 @@ def test_coord_fallback_when_no_name_or_address():
 
 
 def test_dash_when_nothing_available():
-    assert describe_endpoint(None, None, None, None) == "—"
+    assert describe_endpoint(None, None, None, None) == "--"
 
 
 def test_compact_named_place_wins_without_truncating_its_comma():
@@ -45,4 +45,4 @@ def test_compact_malformed_address_does_not_hide_coordinate_or_address():
 
 def test_compact_coordinate_and_dash_fallbacks_match_full_description():
     assert describe_compact_endpoint(None, 47.6, -122.3) == "47.6000,-122.3000"
-    assert describe_compact_endpoint(None, None, None) == "—"
+    assert describe_compact_endpoint(None, None, None) == "--"

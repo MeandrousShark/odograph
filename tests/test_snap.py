@@ -74,7 +74,7 @@ def test_radiuses_default_floor_absorbs_centerline_offset():
     # Regression: a pinpoint-accurate fix must still get a search radius wide
     # enough to clear the OSM centerline/lane offset, or OSRM drops it as a
     # null tracepoint and truncates the route (trip 17). The default floor
-    # is deliberately well above real GPS accuracy — don't lower it to match
+    # is deliberately well above real GPS accuracy -- don't lower it to match
     # accuracy_m.
     pts = [MatchPoint(t=datetime.now(timezone.utc), lat=0, lon=0, accuracy_m=3.0)]
     assert radiuses(pts) == [20.0]

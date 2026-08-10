@@ -238,7 +238,7 @@ jobs:
     runs-on: ubuntu-latest
     # Generous on purpose: the SBOM and signing steps run after the manifest
     # is already published, so a timeout here would strand a released, tagged
-    # image that is unsigned — and release tags are immutable, so recovering
+    # image that is unsigned. Release tags are immutable, so recovering
     # means a new patch tag, not a re-run.
     timeout-minutes: 25
     permissions:

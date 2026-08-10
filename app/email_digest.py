@@ -1,6 +1,6 @@
 """Hourly email digests: weekly unclassified-trip nudge, monthly summary,
 year-end filing reminder, and quarterly odometer reminder. One worker, one
-ledger (`email_deliveries`), four kinds — two near-identical ledgers made
+ledger (`email_deliveries`), four kinds -- two near-identical ledgers made
 sense for the first two ntfy reminders (app/nudge.py,
 app/odometer_reminder.py), but the third-through-sixth reminder generalizes
 instead of copying the pattern again.
@@ -27,10 +27,12 @@ from datetime import date, datetime, timedelta
 import jinja2
 from psycopg_pool import AsyncConnectionPool
 
+from app.db import EMAIL_DIGEST_ADVISORY_LOCK_KEY
+from app.formatting import format_miles, format_usd
 from app.mailer import Mailer
+from app.notifications import count_unclassified_trips, odometer_reminder_vehicles
 from app.nudge import latest_window_end
-from app.odometer import latest_quarter_start, vehicles_due_for_reminder
-from app.rates import METERS_PER_MILE
+from app.odometer import latest_quarter_start
 from app.report import build_annual_report, build_range_report
 from app.ui import _fetch_range_trips_in
 from app.worker import IntervalWorker
@@ -38,7 +40,6 @@ from app.worker import IntervalWorker
 log = logging.getLogger(__name__)
 
 RUN_INTERVAL_S = 60 * 60.0
-ADVISORY_LOCK_KEY = 901407  # nudge 901405, odometer 901406 taken
 
 TEMPLATES_DIR = pathlib.Path(__file__).resolve().parent / "templates" / "email"
 _ENV = jinja2.Environment(
@@ -61,15 +62,7 @@ def _url(app_url: str, path: str) -> str:
     return f"{app_url}{path}" if app_url else ""
 
 
-def _fmt_mi(meters: float) -> str:
-    return f"{meters / METERS_PER_MILE:.1f}"
-
-
-def _fmt_usd(amount: float | None) -> str:
-    return "—" if amount is None else f"${amount:,.2f}"
-
-
-def _month_bounds(year: int, month: int) -> tuple[date, date]:
+def _calendar_month_days(year: int, month: int) -> tuple[date, date]:
     last_day = calendar.monthrange(year, month)[1]
     return date(year, month, 1), date(year, month, last_day)
 
@@ -222,7 +215,9 @@ class EmailDigestWorker(IntervalWorker):
         the lock (their transaction) through send + `_record_delivery`, which
         is what serializes concurrent replicas through the insert.
         """
-        await conn.execute("SELECT pg_advisory_xact_lock(%s)", (ADVISORY_LOCK_KEY,))
+        await conn.execute(
+            "SELECT pg_advisory_xact_lock(%s)", (EMAIL_DIGEST_ADVISORY_LOCK_KEY,)
+        )
         cur = await conn.execute(
             "SELECT 1 FROM email_deliveries WHERE kind = %s AND period_end = %s",
             (kind, period_end),
@@ -242,12 +237,9 @@ class EmailDigestWorker(IntervalWorker):
             async with conn.transaction():
                 if await self._already_delivered(conn, "weekly_nudge", window_end):
                     return
-                count_cur = await conn.execute(
-                    "SELECT count(*) FROM trips WHERE category = 'unclassified' "
-                    "AND started_at >= %s AND started_at < %s",
-                    (window_start, window_end),
+                trip_count = await count_unclassified_trips(
+                    conn, window_start, window_end
                 )
-                trip_count = (await count_cur.fetchone())[0]
                 if trip_count:
                     body = _render(
                         "weekly_nudge.txt",
@@ -267,7 +259,7 @@ class EmailDigestWorker(IntervalWorker):
     async def _run_monthly_summary(self, now: datetime) -> None:
         period_end = latest_month_boundary(now, self.digest_hour)
         year, month = covered_month(period_end)
-        month_start, month_end = _month_bounds(year, month)
+        month_start, month_end = _calendar_month_days(year, month)
         async with self.pool.connection() as conn:
             async with conn.transaction():
                 if await self._already_delivered(conn, "monthly_summary", period_end):
@@ -277,8 +269,8 @@ class EmailDigestWorker(IntervalWorker):
                 body = _render(
                     "monthly_summary.txt",
                     month_label=f"{MONTH_ABBR[month]} {year}",
-                    business_mi=_fmt_mi(report.business_m),
-                    deduction=_fmt_usd(report.total_deduction),
+                    business_mi=format_miles(report.business_m),
+                    deduction=format_usd(report.total_deduction),
                     unclassified=report.caveats.unclassified_trips,
                     report_url=_url(
                         self.app_url,
@@ -305,8 +297,8 @@ class EmailDigestWorker(IntervalWorker):
                 body = _render(
                     "filing_reminder.txt",
                     year=year,
-                    business_mi=_fmt_mi(report.business_m),
-                    deduction=_fmt_usd(report.total_deduction),
+                    business_mi=format_miles(report.business_m),
+                    deduction=format_usd(report.total_deduction),
                     report_url=_url(self.app_url, f"/report/{year}"),
                     export_url=_url(self.app_url, f"/report/{year}/export"),
                 )
@@ -322,16 +314,7 @@ class EmailDigestWorker(IntervalWorker):
             async with conn.transaction():
                 if await self._already_delivered(conn, "quarterly_odometer", quarter_start):
                     return
-                vehicles_cur = await conn.execute(
-                    "SELECT id, name FROM vehicles WHERE active ORDER BY name"
-                )
-                active_vehicles = await vehicles_cur.fetchall()
-                readings_cur = await conn.execute(
-                    "SELECT DISTINCT vehicle_id FROM odometer_readings WHERE recorded_at >= %s",
-                    (quarter_start,),
-                )
-                logged_ids = {row[0] for row in await readings_cur.fetchall()}
-                due = vehicles_due_for_reminder(active_vehicles, logged_ids)
+                due = await odometer_reminder_vehicles(conn, quarter_start)
                 if due:
                     body = _render(
                         "quarterly_odometer.txt",

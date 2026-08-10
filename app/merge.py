@@ -1,7 +1,7 @@
 """Pure validation for the trip-list "merge selected" feature.
 
 Merging is only possible between trips already adjacent through a real
-detected stay — an arbitrary, non-contiguous
+detected stay -- an arbitrary, non-contiguous
 selection can't be bridged by the suppress-override mechanism
 (app/detector/core.py), since a suppress override only removes one real stay
 between two trips that are already next to each other. This validates a
@@ -26,7 +26,7 @@ def plan_merge_selected(
     """`in_range` is every detected trip for the same device whose
     started_at falls within the selected trips' overall span (the caller
     fetches this from the DB). If it doesn't exactly match the selection,
-    some other trip sits between two selected ones — a gap this mechanism
+    some other trip sits between two selected ones -- a gap this mechanism
     can't bridge. Returns the suppress range for each consecutive pair in
     the (sorted) selection, ready to insert as trip_boundary_overrides rows.
     """

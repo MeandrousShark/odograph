@@ -258,7 +258,7 @@ def test_selection_mode_enters_clears_and_finishes_without_expanding_m3_scope():
     assert "document.body.classList.toggle('selection-mode', selectionMode)" in body
     assert "selectionDone.hidden = !selectionMode" in body
     # The bar hides only when selection mode itself is off, not merely when
-    # the current selection is empty — that's what keeps "Clear selection"
+    # the current selection is empty -- that's what keeps "Clear selection"
     # (bar stays open, buttons grey out) visibly distinct from "Done" (bar
     # and per-card checkboxes disappear).
     assert "selectionBar.hidden = !selectionMode;" in body
@@ -359,11 +359,9 @@ def test_trip_pager_is_block_markup_with_stable_next_url():
 
 
 def test_trip_list_has_no_thumbnail_attribution():
-    first_render = _render_index()
-    second_render = _render_index()
+    rendered = _render_index()
 
-    assert "openstreetmap.org/copyright" not in first_render
-    assert "openstreetmap.org/copyright" not in second_render
+    assert "openstreetmap.org/copyright" not in rendered
 
 
 def test_trip_filters_use_native_disclosure_and_open_for_every_active_filter():

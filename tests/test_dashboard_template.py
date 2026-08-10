@@ -97,7 +97,10 @@ def test_metrics_render_trip_count_distance_and_expenses():
 
 def test_exact_date_range_heading():
     body = _render(_dashboard())
-    assert "2026-07-13 – 2026-07-19" in body
+    assert (
+        '<h2 class="dashboard-heading">Jul 13, 2026 - Jul 19, 2026</h2>'
+        in body
+    )
 
 
 def test_next_week_disabled_on_current_week():

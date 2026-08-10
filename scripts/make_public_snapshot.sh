@@ -213,7 +213,7 @@ fi
 # that link would dangle in the public repo since the target never ships.
 # Also catches bare internal milestone markers like "(M6)", bare
 # work-item markers like "W6", and the bare filenames (HANDOFF.md,
-# DESIGN.md, PHASE3-M3.md, PUBLIC.md, PUBLIC-M1.md, ...) without a docs/
+# DESIGN.md, PHASE3.md, PUBLIC.md, PUBLIC-M1.md, ...) without a docs/
 # prefix -- a real audit pass found these forms leaking into migration
 # comments, template comments, and even user-facing settings.html copy,
 # including at least one bare filename a docs/-prefixed pattern alone

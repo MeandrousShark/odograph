@@ -11,6 +11,12 @@ from app.geocode import GeocodeProvider, build_geocode_provider, resolve_geocode
 
 log = logging.getLogger(__name__)
 
+DEFAULT_MAP_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+DEFAULT_MAP_TILE_ATTRIBUTION = (
+    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+)
+DEFAULT_MISSING_TRIP_GAP_M = 1000.0
+
 
 def _f(name: str, default: float) -> float:
     return float(os.environ.get(name, default))
@@ -59,7 +65,7 @@ class Config:
     ntfy_password: str
     app_url: str
     nudge_weekly_hour: int
-    odometer_reminder_enabled: bool
+    odometer_reminder_requested: bool
     odometer_reminder_hour: int
     trips_page_size: int
     full_reprocess_warn_points: int
@@ -93,10 +99,26 @@ class Config:
         return f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme else parsed.netloc
 
     @property
+    def snap_enabled(self) -> bool:
+        return bool(self.osrm_url)
+
+    @property
+    def retention_enabled(self) -> bool:
+        return self.raw_message_retention_days > 0
+
+    @property
+    def nudge_enabled(self) -> bool:
+        return bool(self.ntfy_url and self.ntfy_topic)
+
+    @property
+    def odometer_reminder_enabled(self) -> bool:
+        return self.nudge_enabled and self.odometer_reminder_requested
+
+    @property
     def email_enabled(self) -> bool:
         """Email capability is gated on all three of host/from/to being set,
-        mirroring the ntfy gate (`NTFY_URL` and `NTFY_TOPIC` both required)
-        — an operator who sets only some of these almost certainly meant to
+        mirroring the ntfy gate (`NTFY_URL` and `NTFY_TOPIC` both required) --
+        an operator who sets only some of these almost certainly meant to
         finish the job, not silently get a half-configured mailer.
         """
         return bool(self.smtp_host and self.email_from and self.email_to)
@@ -240,7 +262,7 @@ class Config:
             # Default on whenever ntfy is configured (same gate the weekly
             # nudge itself uses in app/main.py), but independently
             # disableable -- an explicit ODOMETER_REMINDER always wins.
-            odometer_reminder_enabled=os.environ.get(
+            odometer_reminder_requested=os.environ.get(
                 "ODOMETER_REMINDER",
                 "1" if (os.environ.get("NTFY_URL") and os.environ.get("NTFY_TOPIC")) else "0",
             ) == "1",
@@ -253,7 +275,7 @@ class Config:
             # just "parked overnight", while a large spatial gap is
             # suspicious at any duration. `0` disables the feature entirely
             # rather than needing a separate on/off switch.
-            missing_trip_gap_m=_f("MISSING_TRIP_GAP_M", 1000.0),
+            missing_trip_gap_m=_f("MISSING_TRIP_GAP_M", DEFAULT_MISSING_TRIP_GAP_M),
             smtp_host=os.environ.get("SMTP_HOST", ""),
             smtp_port=int(os.environ.get("SMTP_PORT", 587)),
             smtp_username=os.environ.get("SMTP_USERNAME", ""),
@@ -274,12 +296,9 @@ class Config:
             email_odometer_reminder=os.environ.get("EMAIL_ODOMETER_REMINDER", "0") == "1",
             email_digest_hour=int(os.environ.get("EMAIL_DIGEST_HOUR", 9)),
             email_filing_reminder_mmdd=os.environ.get("EMAIL_FILING_REMINDER_MMDD", "01-15"),
-            map_tile_url=os.environ.get(
-                "MAP_TILE_URL", "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-            ),
+            map_tile_url=os.environ.get("MAP_TILE_URL", DEFAULT_MAP_TILE_URL),
             map_tile_attribution=os.environ.get(
-                "MAP_TILE_ATTRIBUTION",
-                '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+                "MAP_TILE_ATTRIBUTION", DEFAULT_MAP_TILE_ATTRIBUTION
             ),
             # 0/unset means no HSTS header at all -- see the SecurityHeadersMiddleware
             # docstring in app/main.py for why this stays opt-in.

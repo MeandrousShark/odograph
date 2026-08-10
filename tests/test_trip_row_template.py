@@ -275,7 +275,7 @@ def test_merge_forms_include_vehicle_picker_defaulted_to_keep():
     for form in (merge_prev_form, merge_next_form):
         picker = form.split('name="vehicle_id"')[1].split("</select>")[0]
         assert '<option value="keep" selected>Keep</option>' in picker
-        assert '<option value="">—</option>' in picker
+        assert '<option value="">--</option>' in picker
         assert '<option value="1">Car A</option>' in picker
         assert '<option value="2">Car B</option>' in picker
 

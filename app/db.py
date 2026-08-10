@@ -12,9 +12,13 @@ MIGRATIONS_DIR = pathlib.Path(__file__).resolve().parent.parent / "migrations"
 
 MIGRATION_FILENAME_RE = re.compile(r"^\d+_")
 
-# Distinct from other advisory-lock keys in this codebase: nudge.py 901405,
-# odometer_reminder.py 901406, email_digest.py 901407.
-RUN_MIGRATIONS_LOCK_KEY = 901408
+# PostgreSQL advisory locks share one global integer namespace. Keep every key
+# here so adding a new lock cannot silently collide with an existing workflow.
+DETECTOR_ADVISORY_LOCK_KEY = 0x6D696C6531  # "mile1"
+NUDGE_ADVISORY_LOCK_KEY = 901405
+ODOMETER_REMINDER_ADVISORY_LOCK_KEY = 901406
+EMAIL_DIGEST_ADVISORY_LOCK_KEY = 901407
+RUN_MIGRATIONS_ADVISORY_LOCK_KEY = 901408
 
 
 def make_pool(database_url: str) -> AsyncConnectionPool:
@@ -22,6 +26,12 @@ def make_pool(database_url: str) -> AsyncConnectionPool:
     # worker run, an in-flight UI request), each potentially wanting more
     # than one connection briefly.
     return AsyncConnectionPool(database_url, min_size=1, max_size=6, open=False)
+
+
+async def _fetch_schema_version(conn) -> int:
+    cur = await conn.execute("SELECT COALESCE(max(version), 0) FROM schema_migrations")
+    row = await cur.fetchone()
+    return row[0]
 
 
 async def run_migrations(pool: AsyncConnectionPool) -> None:
@@ -38,14 +48,14 @@ async def run_migrations(pool: AsyncConnectionPool) -> None:
         # releases automatically on commit *or* rollback, so a migration
         # that fails mid-loop can never leave the lock held and wedge every
         # later process's startup (same reasoning as app/detector/runner.py's
-        # ADVISORY_LOCK_KEY docstring). Blocking, not try-lock, because two
+        # detector lock docstring). Blocking, not try-lock, because two
         # app processes starting simultaneously must both come up correctly:
         # the second blocks here until the first's transaction commits, then
         # finds every migration already recorded in schema_migrations below
         # and applies none, rather than racing the version check and
         # double-applying one.
         await conn.execute(
-            "SELECT pg_advisory_xact_lock(%s)", (RUN_MIGRATIONS_LOCK_KEY,)
+            "SELECT pg_advisory_xact_lock(%s)", (RUN_MIGRATIONS_ADVISORY_LOCK_KEY,)
         )
         await conn.execute(
             "CREATE TABLE IF NOT EXISTS schema_migrations ("

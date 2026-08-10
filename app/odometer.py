@@ -1,11 +1,11 @@
-"""Odometer readings + GPS-vs-odometer reconciliation. Pure core, no I/O —
+"""Odometer readings + GPS-vs-odometer reconciliation. Pure core, no I/O --
 unit-testable the same way `app/report.py`/`app/stats.py` are; `app/ui.py`
 fetches readings/trips with plain SQL and hands them here, and
 `app/report.py`'s `build_annual_report` is deliberately untouched
 (reconciliation is computed separately and passed to the report
 template/export as its own object).
 
-Deliberately not named near `app/detector/reconcile.py` — that module
+Deliberately not named near `app/detector/reconcile.py` -- that module
 reconciles detected trip *segments* against each other (a different,
 unrelated meaning of "reconcile").
 """
@@ -47,7 +47,7 @@ def reconcile(
 ) -> ReconResult:
     """Diff consecutive odometer readings against the GPS-detected distance
     driven in between. `trip_starts_dists` is `(started_at, display_distance_m)`
-    for every trip to consider — the caller is responsible for restricting
+    for every trip to consider -- the caller is responsible for restricting
     that list to one vehicle (this function has no vehicle concept at all,
     so vehicle isolation is entirely a caller-side filter) and for using the
     display distance (snapped-or-raw, `TRIP_COLUMNS`' `display_distance_m`)
@@ -57,16 +57,16 @@ def reconcile(
     (`[start, end)`), consistent with how the rest of the app buckets trips
     by their start; a trip straddling a reading lands wholly in the earlier
     interval. Fewer than two readings produces no intervals at all (nothing
-    to diff) rather than raising — the settings page shows a hint instead of
+    to diff) rather than raising -- the settings page shows a hint instead of
     a table in that case.
 
     `odometer_delta <= 0` (the reading went backwards, or a duplicate
     timestamp collapsed to the same value) is flagged `data_error=True` with
     `coverage=None` rather than computing a division-by-zero or a nonsense
-    negative percentage — an odometer should never decrease, so this is
+    negative percentage -- an odometer should never decrease, so this is
     treated as bad data to surface, not driving to explain.
 
-    `coverage > 1.0` (GPS distance exceeding the odometer delta — road-
+    `coverage > 1.0` (GPS distance exceeding the odometer delta -- road-
     snapping error, or a trip whose start-time attribution pulled it into
     the wrong interval) is deliberately **not** clamped to 100%: an
     over-read is a real signal about data quality that clamping would hide.
@@ -105,7 +105,7 @@ def reconcile(
 @dataclass(frozen=True)
 class VehicleCoverage:
     """One report-year coverage line, spanning whichever of the year's
-    readings exist (not necessarily the full year — `fully_bracketed`
+    readings exist (not necessarily the full year -- `fully_bracketed`
     says whether they do).
     """
     vehicle_name: str
@@ -122,8 +122,8 @@ def vehicle_coverage_for_report(
     year_start: datetime, next_year_start: datetime,
 ) -> list[VehicleCoverage]:
     """Per-vehicle coverage summary for the annual report, computed entirely
-    outside `build_annual_report` so that function's signature/behavior —
-    and the report/export paths that lean on it — never
+    outside `build_annual_report` so that function's signature/behavior --
+    and the report/export paths that lean on it -- never
     change here. Only vehicles with >=2 readings *in the report year*
     produce a line; a vehicle with 0 or 1 is silently omitted (no crash, no
     empty/misleading row) rather than shown with nothing to say.
@@ -163,20 +163,20 @@ def vehicle_coverage_for_report(
 def coverage_line(line: VehicleCoverage) -> str:
     """"GPS captured X% of odometer miles (Y mi unaccounted)" wording,
     shared by the HTML report and its XLSX export so the two can't drift on
-    phrasing — the same convention `app.report.format_rate_periods`/
+    phrasing -- the same convention `app.report.format_rate_periods`/
     `caveat_lines` already follow for their own shared sentences.
     """
-    pct = f"{line.coverage * 100:.1f}%" if line.coverage is not None else "—"
+    pct = f"{line.coverage * 100:.1f}%" if line.coverage is not None else "--"
     gap_mi = line.gap_m / METERS_PER_MILE
     text = f"{line.vehicle_name}: GPS captured {pct} of odometer miles ({gap_mi:.1f} mi unaccounted)"
     if not line.fully_bracketed:
-        text += " — based on a partial-year reading span, not the full year"
+        text += ", based on a partial-year reading span, not the full year"
     return text
 
 
 def latest_quarter_start(now: datetime, hour: int) -> datetime:
     """Return the latest calendar-quarter start (Jan/Apr/Jul/Oct 1st at
-    `hour`, in `now`'s timezone) that is <= `now` — the same "latest local
+    `hour`, in `now`'s timezone) that is <= `now` -- the same "latest local
     boundary <= now" shape as `app.nudge.latest_window_end`, factored out
     here so the odometer reminder worker can stay a thin DB/ntfy wrapper
     around a pure decision.
@@ -201,7 +201,7 @@ def vehicles_due_for_reminder(
     """Active vehicles with no odometer reading dated on/after the current
     quarter start, sorted by name. Pure so the worker's two small DB reads
     (active vehicle id/name pairs, and which of those ids already logged a
-    reading this quarter) can be exercised without a database — only the
+    reading this quarter) can be exercised without a database -- only the
     reads themselves, and the ntfy POST, are I/O.
     """
     return sorted(name for vid, name in active_vehicles if vid not in vehicle_ids_with_reading)

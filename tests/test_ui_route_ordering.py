@@ -3,20 +3,20 @@
 `/report/{year}/export` in `app.ui.make_router()`'s route list.
 
 There's no `:int` Starlette path convertor on `{year}` (FastAPI's own int
-validation happens later, via dependency injection) — so Starlette's
+validation happens later, via dependency injection), so Starlette's
 router matches a bare `{year}` segment against *any* single path component,
 `"range"` included, purely on regex shape, before FastAPI ever tries to
 parse it as an int. A `/report/{year}` route registered ahead of
 `/report/range` therefore swallows the request and 422s on `int("range")`
-instead of ever reaching the range handler — confirmed by QA reproducing it
+instead of ever reaching the range handler. QA confirmed this by reproducing it
 with the order flipped.
 
 `tests/test_report_range_db.py`'s `_endpoint()` helper looks routes up by
 exact `route.path` string equality and calls the endpoint function
 directly, which bypasses Starlette's dispatch order entirely and so can't
 catch a regression here (e.g. someone alphabetizing the routes). This test
-instead drives real `Route.matches()` resolution — the same mechanism the
-live ASGI app uses per request — with no DB or running server needed, so a
+instead drives real `Route.matches()` resolution, the same mechanism the
+live ASGI app uses per request, with no DB or running server needed, so a
 reordering fails loudly here.
 """
 from __future__ import annotations
@@ -52,8 +52,8 @@ def test_report_range_export_route_is_not_swallowed_by_report_year_export():
 
 
 def test_report_year_route_still_matches_numeric_years():
-    # The ordering fix must not come at the cost of the annual route itself
-    # — a real year should still resolve to /report/{year}, not get
+    # The ordering fix must not come at the cost of the annual route itself.
+    # A real year should still resolve to /report/{year}, not get
     # accidentally shadowed by the more specific range routes.
     route = _first_matching_route("GET", "/report/2026")
     assert route is not None

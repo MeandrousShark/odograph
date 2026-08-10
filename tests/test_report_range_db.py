@@ -211,7 +211,7 @@ async def _range_export_scenario():
 
         wb = load_workbook(BytesIO(response.body))
         assert wb.sheetnames == ["Summary", "Trips"]
-        assert wb["Summary"]["A1"].value == "Mileage Report — 2026 Q2"
+        assert wb["Summary"]["A1"].value == "Mileage Report: 2026 Q2"
 
         trips_ws = wb["Trips"]
         dates = [

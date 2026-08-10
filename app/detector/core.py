@@ -39,7 +39,7 @@ class Params:
     min_trip_distance_m: float = 300.0
     gap_flag_threshold_s: float = 600.0
     # A sustained span below this speed is a stay even if it wanders beyond
-    # stay_radius_m — this is what makes "park, then hike/walk" end a trip
+    # stay_radius_m: this is what makes "park, then hike/walk" end a trip
     # instead of bundling the drives on either side.
     # 2.0 m/s = 7.2 km/h sits above hiking/brisk-walking pace but well below
     # any driving, including slow city traffic.
@@ -72,13 +72,13 @@ class Trip:
 
 @dataclass(frozen=True)
 class Override:
-    """A durable detector-output instruction — replayed on
+    """A durable detector-output instruction, replayed on
     every detect() call for a device rather than written once, since the
     dirty-window reprocess regenerates stays/trips from scratch on every
     run and would otherwise silently undo a one-off edit.
 
     'suppress' drops a real stay overlapping [range_start, range_end] (a
-    merge — the stay used to separate two trips). 'force' pins point_id to
+    merge, the stay used to separate two trips). 'force' pins point_id to
     act as a 1-point stay boundary even though no real stay was detected
     there (a split). 'discard' drops an assembled trip only when its span
     mutually overlaps the stored range by at least half of both durations;
@@ -138,13 +138,13 @@ def find_stays(pts: list[Point], params: Params) -> list[Stay]:
     - *stationary*: points staying within stay_radius_m of an anchor (parked);
     - *on-foot*: a sustained span below walk_max_speed_ms, which may wander
       far from any anchor (walking/hiking) and so is invisible to the radius
-      test — this is what stops a drive-park-hike-drive sequence from
+      test. This is what stops a drive-park-hike-drive sequence from
       collapsing into one bundled trip.
 
     The two passes overlap (a parked stay is also low-speed); their index
     ranges are unioned, then near-touching stays split only by GPS jitter are
     merged. Dwell is always wall time between first and last point, never a
-    point count — a two-point cluster hours apart (OwnTracks silent while
+    point count. A two-point cluster hours apart (OwnTracks silent while
     parked) is a valid stay.
     """
     ranges = _stationary_ranges(pts, params) + _on_foot_ranges(pts, params)
@@ -219,7 +219,7 @@ def _merge_boundary_splits(pts: list[Point], stays: list[Stay], params: Params) 
     the stationary cloud riding the radius boundary; jitter then splits one
     physical stay into two clusters a few meters apart. If the path between
     two stays is within the stay radius, it isn't a trip leaving and coming
-    back — it's the same stay.
+    back, since it's the same stay.
     """
     if not stays:
         return stays
@@ -246,7 +246,7 @@ def _merge_boundary_splits(pts: list[Point], stays: list[Stay], params: Params) 
 
 def _apply_overrides(pts: list[Point], stays: list[Stay], overrides: list[Override]) -> list[Stay]:
     """Merge/split overrides, applied strictly after find_stays()'s full
-    output — including its internal _merge_boundary_splits jitter-merge —
+    output, including its internal _merge_boundary_splits jitter-merge,
     and deliberately never followed by another jitter-merge pass. A user
     typically picks a split point at exactly the kind of brief, sub-radius
     stop that jitter-merging exists to collapse; re-running that pass here
@@ -264,7 +264,7 @@ def _apply_overrides(pts: list[Point], stays: list[Stay], overrides: list[Overri
     for o in force:
         idx = next((i for i, p in enumerate(pts) if p.id == o.point_id), None)
         if idx is None:
-            continue  # point not in this run's window — no-op, not an error
+            continue  # point not in this run's window, a no-op rather than an error
         p = pts[idx]
         if any(o.range_start <= p.t <= o.range_end for o in suppress):
             continue  # a suppress range covering this point means the merge wins
@@ -282,7 +282,7 @@ def assemble_trips(pts: list[Point], stays: list[Stay], params: Params) -> list[
     """Trips are the segments between consecutive stays.
 
     Leading/trailing segments (before the first stay, after the last) are not
-    emitted — they are incomplete by construction and resolve on a later run.
+    emitted, since they are incomplete by construction and resolve on a later run.
     """
     trips: list[Trip] = []
     for origin, dest in zip(stays, stays[1:]):

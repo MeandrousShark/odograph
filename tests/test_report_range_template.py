@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 from app.main import make_templates
 from app.rates import YearRate
-from app.report import build_annual_report, build_range_report
+from app.report import AnnualReport, ReportCaveats, build_annual_report, build_range_report
 
 TZ = ZoneInfo("America/Los_Angeles")
 MILE = 1609.344
@@ -36,6 +36,59 @@ def _trip(month: int, category: str = "business", miles: float = 1) -> dict:
 def _render(name: str, **context) -> str:
     templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     return templates.env.get_template(name).render(**context)
+
+
+def test_report_summary_partial_renders_metrics_rates_and_caveats():
+    report = AnnualReport(
+        year=2026,
+        business_m=2 * MILE,
+        personal_m=MILE,
+        business_pct=200 / 3,
+        total_deduction=1.45,
+        rate_periods=[(0.67, 1, 6), (0.70, 7, 12)],
+        trip_count=7,
+        caveats=ReportCaveats(
+            gap_trips=1,
+            low_conf_trips=2,
+            manual_trips=3,
+            unclassified_trips=4,
+            business_missing_purpose=5,
+            missing_rate=True,
+        ),
+    )
+    body = _render("_report_summary.html", report=report)
+
+    for expected in (
+        "Business miles", "2.0 mi", "Personal miles", "1.0 mi",
+        "Business share", "66.7%", "Total deduction", "$1.45",
+    ):
+        assert expected in body
+    assert "Rates applied: $0.6700/mi Jan-Jun, $0.7000/mi Jul-Dec" in body
+    assert "4 trip(s) still unclassified" in body
+    assert "5 business trip(s) have no purpose recorded." in body
+    assert "1 trip(s) have a recording gap; distance may under-read." in body
+    assert "2 trip(s) have a low-confidence road-snapped distance." in body
+    assert "3 trip(s) were entered manually." in body
+    assert "No IRS mileage rate on file for 2026; deduction is unavailable." in body
+    assert '<a href="/settings">Add one</a>.' in body
+
+    other_caveat_body = _render(
+        "_report_summary.html",
+        report=AnnualReport(
+            year=2026, trip_count=1, caveats=ReportCaveats(gap_trips=1)
+        ),
+    )
+    assert 'href="/settings"' not in other_caveat_body
+
+
+def test_report_html_renders_shared_summary_for_non_empty_report():
+    report = build_annual_report([_trip(1)], RATES, TZ, 2026)
+    body = _render(
+        "report.html", report=report, odometer_coverage=[], expenses=[],
+        expense_report=SimpleNamespace(comparisons=[]), user=USER, csrf="token",
+        next_year_disabled=False,
+    )
+    assert body.count('<div class="report-summary">') == 1
 
 
 def test_report_html_has_q1_through_q4_preset_links_for_displayed_year():
@@ -91,6 +144,7 @@ def test_report_range_html_has_no_odometer_or_expense_sections():
         [_trip(4), _trip(5)], RATES, TZ, date(2026, 4, 1), date(2026, 6, 30)
     )
     body = _render("report_range.html", report=report, user=USER, csrf="token")
+    assert body.count('<div class="report-summary">') == 1
     assert "2026 Q2" in body
     assert "Odometer coverage" not in body
     assert "Odometer reconciliation" not in body
@@ -101,6 +155,19 @@ def test_report_range_html_empty_state_has_no_tables():
     report = build_range_report([], RATES, TZ, date(2026, 4, 1), date(2026, 6, 30))
     body = _render("report_range.html", report=report, user=USER, csrf="token")
     assert "No trips recorded" in body
+    assert "report-summary" not in body
+    assert "<table>" not in body
+
+
+def test_report_html_empty_state_has_no_summary_or_tables():
+    report = build_annual_report([], RATES, TZ, 2026)
+    body = _render(
+        "report.html", report=report, odometer_coverage=[], expenses=[],
+        expense_report=SimpleNamespace(comparisons=[]), user=USER, csrf="token",
+        next_year_disabled=False,
+    )
+    assert "No trips recorded in 2026." in body
+    assert "report-summary" not in body
     assert "<table>" not in body
 
 

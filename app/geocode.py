@@ -72,7 +72,7 @@ GEOAPIFY_AUTOCOMPLETE_URL = "https://api.geoapify.com/v1/geocode/autocomplete"
 def parse_geoapify_reverse_response(body: dict, omit_country: str) -> str | None:
     """Extract a display address from Geoapify's Reverse Geocoding GeoJSON
     response. `None` if `features` is empty (matches the "cache the miss"
-    policy in `GeocodeWorker`) — a coordinate in the middle of a lake is a
+    policy in `GeocodeWorker`) -- a coordinate in the middle of a lake is a
     legitimate, permanent non-result, not an error.
     """
     features = body.get("features") or []
@@ -104,7 +104,7 @@ def parse_geoapify_autocomplete_response(body: dict, omit_country: str) -> list[
 class GeoapifyProvider:
     """Thin I/O wrapper around Geoapify's Reverse Geocoding + Autocomplete
     APIs. Holds only its own configuration (API key, country-suffix
-    setting) — never an httpx client; see `GeocodeProvider`'s docstring.
+    setting) -- never an httpx client; see `GeocodeProvider`'s docstring.
     """
 
     name = "geoapify"
@@ -116,7 +116,7 @@ class GeoapifyProvider:
     async def reverse(self, client: httpx.AsyncClient, lat: float, lon: float) -> str | None:
         """Raises on transport failure or a non-2xx status (auth/rate-limit
         errors included) so the caller can distinguish "ask again later"
-        from a genuine empty result — Geoapify signals those errors via
+        from a genuine empty result -- Geoapify signals those errors via
         HTTP status, not via an empty `features` list, so
         `raise_for_status()` here (unlike OSRM's `/match` in
         `app/snap.py`, which encodes failure in a 200 body) is what keeps
@@ -290,11 +290,11 @@ class GeocodeWorker(PokeSweepWorker):
     address. Lighter than `SnapWorker`: "needs geocoding" is a pure SQL
     query over `trips` LEFT JOIN-equivalent (an `EXCEPT`) against
     `geocode_cache`, not a stored per-trip status column, so there's no
-    terminal-failure enum to manage — a cache row's existence (even with a
+    terminal-failure enum to manage -- a cache row's existence (even with a
     NULL address) *is* the "don't retry" signal.
 
     The poke/debounce/sweep loop, `start`/`stop`, and guarded-run wrapper
-    live in `PokeSweepWorker` (app/worker.py) — shared with
+    live in `PokeSweepWorker` (app/worker.py) -- shared with
     `DetectorScheduler` and `SnapWorker`; this class only supplies
     `run_once()`.
 

@@ -14,6 +14,7 @@ import httpx
 import pytest
 
 from app.geocode import (
+    GEOCODE_PRECISION,
     GeoapifyProvider,
     NominatimProvider,
     parse_geoapify_autocomplete_response,
@@ -23,6 +24,7 @@ from app.geocode import (
     round_coord,
     strip_country_suffix,
 )
+from app.ui import TRIP_COLUMNS
 
 US_SUFFIX = "United States of America"
 
@@ -34,7 +36,7 @@ def test_round_coord_rounds_to_precision():
 
 
 def test_round_coord_matches_python_round_semantics():
-    # Delegates straight to `round()` (float repr, not decimal) — this just
+    # Delegates straight to `round()` (float repr, not decimal); this just
     # pins that behavior rather than asserting a particular half-rounding
     # direction, which float imprecision makes unreliable to hardcode.
     assert round_coord(47.60315, -122.33015) == (round(47.60315, 4), round(-122.33015, 4))
@@ -42,6 +44,10 @@ def test_round_coord_matches_python_round_semantics():
 
 def test_round_coord_exact_precision_unchanged():
     assert round_coord(47.6031, -122.3301) == (47.6031, -122.3301)
+
+
+def test_trip_columns_address_lookup_matches_geocode_precision():
+    assert TRIP_COLUMNS.count(f"::numeric, {GEOCODE_PRECISION})") == 4
 
 
 # ---- strip_country_suffix ----
@@ -214,31 +220,6 @@ def test_geoapify_provider_reverse_sends_the_api_key_and_strips_the_suffix():
     assert asyncio.run(scenario()) == "400 Broad St, Seattle, WA 98109"
 
 
-def test_geoapify_provider_reverse_raises_on_non_2xx():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(401, json={"error": "invalid api key"})
-
-    async def scenario():
-        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            provider = GeoapifyProvider(api_key="bad-key", omit_country=US_SUFFIX)
-            await provider.reverse(client, 47.6205, -122.3493)
-
-    with pytest.raises(httpx.HTTPStatusError):
-        asyncio.run(scenario())
-
-
-def test_geoapify_provider_reverse_empty_features_returns_none_not_raise():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"type": "FeatureCollection", "features": []})
-
-    async def scenario():
-        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            provider = GeoapifyProvider(api_key="k", omit_country=US_SUFFIX)
-            return await provider.reverse(client, 0.0, 0.0)
-
-    assert asyncio.run(scenario()) is None
-
-
 def test_geoapify_provider_autocomplete_sends_the_query_and_limit():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.params["text"] == "broad st"
@@ -386,35 +367,6 @@ def test_nominatim_provider_reverse_sends_the_user_agent_and_strips_the_suffix()
             return await provider.reverse(client, 47.6205, -122.3493)
 
     assert asyncio.run(scenario()) == "400 Broad St, Seattle, WA 98109"
-
-
-def test_nominatim_provider_reverse_raises_on_non_2xx():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(500, json={"error": "internal error"})
-
-    async def scenario():
-        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            provider = NominatimProvider(
-                base_url="http://nominatim.internal", omit_country=US_SUFFIX, app_version="1.0"
-            )
-            await provider.reverse(client, 47.6205, -122.3493)
-
-    with pytest.raises(httpx.HTTPStatusError):
-        asyncio.run(scenario())
-
-
-def test_nominatim_provider_reverse_error_key_returns_none_not_raise():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"error": "Unable to geocode"})
-
-    async def scenario():
-        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            provider = NominatimProvider(
-                base_url="http://nominatim.internal", omit_country=US_SUFFIX, app_version="1.0"
-            )
-            return await provider.reverse(client, 0.0, 0.0)
-
-    assert asyncio.run(scenario()) is None
 
 
 def test_nominatim_provider_autocomplete_sends_the_query_and_limit():

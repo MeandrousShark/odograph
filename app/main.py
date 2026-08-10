@@ -17,11 +17,18 @@ from starlette.staticfiles import StaticFiles
 
 from app import auth, ingest, portable, ui
 from app.auth import AuthRedirect
-from app.config import Config
+from app.config import (
+    DEFAULT_MAP_TILE_ATTRIBUTION,
+    DEFAULT_MAP_TILE_URL,
+    DEFAULT_MISSING_TRIP_GAP_M,
+    Config,
+)
+from app.dashboard import format_week_range
 from app.db import make_pool, run_migrations
 from app.detector.runner import DetectorRunner, DetectorScheduler
 from app.email_digest import EmailDigestWorker
 from app.expenses import comparison_caveat_lines, comparison_status
+from app.formatting import format_duration, format_miles, format_usd
 from app.geocode import GeocodeWorker
 from app.ingest import FailedAuthLimiter
 from app.mailer import Mailer
@@ -30,7 +37,6 @@ from app.nudge import NudgeWorker
 from app.odometer import coverage_line
 from app.odometer_reminder import OdometerReminderWorker
 from app.places_desc import describe_compact_endpoint, describe_endpoint
-from app.rates import METERS_PER_MILE
 from app.report import caveat_lines, format_rate_periods, quarter_bounds, range_label
 from app.retention import RetentionWorker
 from app.snap import SnapWorker
@@ -39,7 +45,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname
 
 # httpx logs each request's full URL at INFO by default, which would put a
 # geocode provider's API key (a query param on every Geoapify call, per
-# app/geocode.py) in plaintext in the logs — secrets from .env must never
+# app/geocode.py) in plaintext in the logs -- secrets from .env must never
 # be logged in full.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
@@ -49,7 +55,7 @@ BASE_DIR = pathlib.Path(__file__).resolve().parent.parent
 
 class RevalidatingStaticFiles(StaticFiles):
     """StaticFiles serves no Cache-Control at all by default, which makes
-    browsers fall back to RFC 7234 heuristic caching — a client can decide
+    browsers fall back to RFC 7234 heuristic caching -- a client can decide
     on its own, with no way for us to intervene, to treat a months-old
     style.css as fresh for hours or days after a deploy changes it. `no-cache`
     forces a conditional revalidation (an If-None-Match round trip) on every
@@ -156,18 +162,10 @@ def make_templates(config: Config) -> Jinja2Templates:
         return dt.astimezone(tz).strftime("%a %b %-d")
 
     def duration(trip):
-        secs = int((trip["ended_at"] - trip["started_at"]).total_seconds())
-        h, m = divmod(secs // 60, 60)
-        return f"{h}h {m:02d}m" if h else f"{m}m"
+        return format_duration(trip["started_at"], trip["ended_at"])
 
     def km(meters):
         return f"{meters / 1000.0:.1f}"
-
-    def mi(meters):
-        return f"{meters / METERS_PER_MILE:.1f}"
-
-    def usd(amount):
-        return "—" if amount is None else f"${amount:,.2f}"
 
     def now_local():
         """Current instant in the display timezone, for prefilling date/time
@@ -179,7 +177,7 @@ def make_templates(config: Config) -> Jinja2Templates:
 
     templates.env.filters.update(
         local_dt=local_dt, local_time=local_time, local_date=local_date,
-        duration=duration, km=km, mi=mi, usd=usd,
+        duration=duration, km=km, mi=format_miles, usd=format_usd,
     )
     templates.env.globals["now_local"] = now_local
     templates.env.globals["display_tz"] = str(tz)
@@ -194,6 +192,7 @@ def make_templates(config: Config) -> Jinja2Templates:
     templates.env.globals["caveat_lines"] = caveat_lines
     templates.env.globals["quarter_bounds"] = quarter_bounds
     templates.env.globals["range_label"] = range_label
+    templates.env.globals["format_week_range"] = format_week_range
     templates.env.globals["coverage_line"] = coverage_line
     templates.env.globals["comparison_status"] = comparison_status
     templates.env.globals["comparison_caveat_lines"] = comparison_caveat_lines
@@ -201,29 +200,32 @@ def make_templates(config: Config) -> Jinja2Templates:
     # Same bare-SimpleNamespace-config fallback reasoning as missing_trip_gap_m
     # below -- the map templates are exercised by template-only tests too.
     templates.env.globals["map_tile_url"] = getattr(
-        config, "map_tile_url", "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+        config, "map_tile_url", DEFAULT_MAP_TILE_URL
     )
     templates.env.globals["map_tile_attribution"] = getattr(
-        config, "map_tile_attribution",
-        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+        config, "map_tile_attribution", DEFAULT_MAP_TILE_ATTRIBUTION,
     )
     # getattr, not config.missing_trip_gap_m directly: several template-only
     # tests build a bare SimpleNamespace(display_tz=...) config fake (no
     # other Config fields), and missing_trip_badge() already degrades to no
     # badge whenever a trip dict lacks the predecessor TRIP_COLUMNS keys
     # regardless of the threshold, so a fallback here can't mask a real bug.
-    threshold_m = getattr(config, "missing_trip_gap_m", 1000.0)
+    threshold_m = getattr(config, "missing_trip_gap_m", DEFAULT_MISSING_TRIP_GAP_M)
     templates.env.globals["missing_trip_badge"] = (
         lambda trip: missing_trip_badge(trip, threshold_m, tz)
     )
     # A query-string version, not the Cache-Control header alone, is what
     # actually unsticks a browser that cached style.css *before* this
-    # value existed on a response — that old cache entry's freshness was
+    # value existed on a response -- that old cache entry's freshness was
     # decided at fetch time and won't re-check the server just because a
     # later deploy adds headers. Bumping the URL makes it a different
     # resource, forcing a fetch regardless of what was cached before.
     templates.env.globals["static_version"] = int((static_dir / "style.css").stat().st_mtime)
     return templates
+
+
+def _make_worker_http_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0))
 
 
 def create_app(config: Config | None = None) -> FastAPI:
@@ -246,8 +248,8 @@ def create_app(config: Config | None = None) -> FastAPI:
 
             http_client = None
             snap_worker = None
-            if cfg.osrm_url:
-                http_client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0))
+            if cfg.snap_enabled:
+                http_client = _make_worker_http_client()
                 stack.push_async_callback(http_client.aclose)
                 snap_worker = SnapWorker(
                     pool, http_client, cfg.osrm_url, cfg.osrm_min_confidence,
@@ -260,7 +262,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             geocode_worker = None
             geocode_provider = cfg.geocode_provider
             if geocode_provider is not None:
-                geocode_http_client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0))
+                geocode_http_client = _make_worker_http_client()
                 stack.push_async_callback(geocode_http_client.aclose)
                 geocode_worker = GeocodeWorker(
                     pool, geocode_http_client, geocode_provider, cfg.geocode_min_interval_s,
@@ -278,15 +280,15 @@ def create_app(config: Config | None = None) -> FastAPI:
             )
 
             retention_worker = None
-            if cfg.raw_message_retention_days > 0:
+            if cfg.retention_enabled:
                 retention_worker = RetentionWorker(pool, cfg.raw_message_retention_days)
                 await retention_worker.start()
                 stack.push_async_callback(retention_worker.stop)
 
             nudge_http_client = None
             nudge_worker = None
-            if cfg.ntfy_url and cfg.ntfy_topic:
-                nudge_http_client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0))
+            if cfg.nudge_enabled:
+                nudge_http_client = _make_worker_http_client()
                 stack.push_async_callback(nudge_http_client.aclose)
                 nudge_worker = NudgeWorker(
                     pool, nudge_http_client, cfg.ntfy_url, cfg.ntfy_topic, cfg.ntfy_token,
@@ -299,8 +301,8 @@ def create_app(config: Config | None = None) -> FastAPI:
 
             odometer_reminder_http_client = None
             odometer_reminder_worker = None
-            if cfg.ntfy_url and cfg.ntfy_topic and cfg.odometer_reminder_enabled:
-                odometer_reminder_http_client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0))
+            if cfg.odometer_reminder_enabled:
+                odometer_reminder_http_client = _make_worker_http_client()
                 stack.push_async_callback(odometer_reminder_http_client.aclose)
                 odometer_reminder_worker = OdometerReminderWorker(
                     pool, odometer_reminder_http_client, cfg.ntfy_url, cfg.ntfy_topic, cfg.ntfy_token,

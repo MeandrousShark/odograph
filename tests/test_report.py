@@ -16,6 +16,7 @@ from app.report import (
     default_report_year,
     next_year_disabled,
     quarter_bounds,
+    range_filename_slug,
     range_label,
 )
 
@@ -51,7 +52,7 @@ def test_single_rate_year_totals():
 
 
 def test_midyear_split_prices_each_month_at_its_own_rate():
-    # 2022-style: 58.5c/mi Jan-Jun, 62.5c/mi from Jul 1 — the load-bearing case.
+    # 2022-style: 58.5c/mi Jan-Jun, 62.5c/mi from Jul 1, the load-bearing case.
     rates = {2026: YearRate(0.585, rate_h2_per_mi=0.625, h2_start_month=7)}
     trips = [
         _at(6, display_distance_m=1609.344),  # June: first-half rate
@@ -129,7 +130,7 @@ def test_empty_year_no_crash():
 
 
 def test_year_attribution_at_utc_local_boundary():
-    # 2026-01-01 04:00 UTC is still 2025-12-31 20:00 in Los Angeles — must be
+    # 2026-01-01 04:00 UTC is still 2025-12-31 20:00 in Los Angeles, so it must be
     # excluded from the 2026 report (and would price at the 2025 rate if it
     # were included in a 2025 report), not silently counted into the wrong
     # year via UTC's own month/year.
@@ -188,7 +189,7 @@ def test_by_vehicle_total_m_includes_personal_but_not_unclassified():
 
 def test_by_vehicle_split_year_two_vehicles_price_at_their_own_months_rate():
     # The load-bearing case: Truck only drives in H1 (58.5c/mi), Sedan only
-    # drives in H2 (62.5c/mi) — each vehicle's deduction must reflect the
+    # drives in H2 (62.5c/mi); each vehicle's deduction must reflect the
     # rate in force during *its own* months, not a blended year rate.
     rates = {2026: YearRate(0.585, rate_h2_per_mi=0.625, h2_start_month=7)}
     trips = [
@@ -301,7 +302,7 @@ def test_range_report_mid_year_split_straddle_prices_each_month_at_its_own_rate(
 
 
 def test_range_report_local_midnight_boundary_inclusion():
-    # 2026-05-15 00:30 Los Angeles is 2026-05-15 07:30 UTC — included when
+    # 2026-05-15 00:30 Los Angeles is 2026-05-15 07:30 UTC, included when
     # start == 2026-05-15, excluded when start == 2026-05-16 (still the same
     # instant, only the local calendar date changed).
     trip = _trip(
@@ -314,7 +315,7 @@ def test_range_report_local_midnight_boundary_inclusion():
     assert excluded.trip_count == 0
 
     # Same check at the *end* boundary: 2026-08-15 23:30 Los Angeles is
-    # 2026-08-16 06:30 UTC — included when end == 2026-08-15 (local date),
+    # 2026-08-16 06:30 UTC, included when end == 2026-08-15 (local date),
     # excluded once the range ends the day before.
     trip2 = _trip(
         started_at=datetime(2026, 8, 16, 6, 30, tzinfo=timezone.utc),
@@ -367,4 +368,10 @@ def test_range_label_exact_year():
 
 
 def test_range_label_arbitrary_span():
-    assert range_label(date(2026, 5, 15), date(2026, 8, 15)) == "2026-05-15 – 2026-08-15"
+    assert range_label(date(2026, 5, 15), date(2026, 8, 15)) == "2026-05-15 - 2026-08-15"
+
+
+def test_range_filename_slug_replaces_ascii_separator():
+    assert range_filename_slug(date(2026, 5, 15), date(2026, 8, 15)) == (
+        "2026-05-15_2026-08-15"
+    )

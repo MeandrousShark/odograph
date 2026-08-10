@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "_purpose_field.html" import purpose_field %}
 {% from "_trip_delete_dialog.html" import trip_delete_dialog %}
-{% block title %}Trip {{ trip.started_at | local_dt }} — Odograph{% endblock %}
+{% block title %}Trip {{ trip.started_at | local_dt }}: Odograph{% endblock %}
 {% block head %}
   <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
   <script src="/static/vendor/leaflet/leaflet.js"></script>
@@ -22,11 +22,11 @@
 <p>
   {{ trip.display_distance_m | mi }} mi ({{ trip.display_distance_m | km }} km)
   {% if trip.snap_status in ('ok', 'low_confidence') %}
-    <span class="muted" style="font-size:.8rem">— road-snapped{% if trip.snap_status == 'low_confidence' %} (low confidence){% endif %}, raw GPS {{ trip.distance_m | mi }} mi</span>
+    <span class="muted" style="font-size:.8rem">(road-snapped{% if trip.snap_status == 'low_confidence' %}, low confidence{% endif %}; raw GPS {{ trip.distance_m | mi }} mi)</span>
   {% elif trip.snap_status == 'pending' %}
-    <span class="muted" style="font-size:.8rem">— not yet road-snapped</span>
+    <span class="muted" style="font-size:.8rem">(not yet road-snapped)</span>
   {% elif trip.snap_status == 'failed' %}
-    <span class="muted" style="font-size:.8rem">— road-snap failed, showing raw GPS distance</span>
+    <span class="muted" style="font-size:.8rem">(road-snap failed, showing raw GPS distance)</span>
   {% endif %}
   ·
   {{ trip | duration }} · {{ trip.point_count }} points ·
@@ -67,7 +67,7 @@
            there's nothing this page needs to re-render from the response body. -->
       <select hx-post="/trips/{{ trip.id }}/vehicle" hx-trigger="change"
               hx-swap="none" name="vehicle_id">
-        <option value="">—</option>
+        <option value="">--</option>
         {% for v in vehicles %}
         <option value="{{ v.id }}" {{ 'selected' if trip.vehicle_id == v.id }}>{{ v.name }}</option>
         {% endfor %}
@@ -105,7 +105,7 @@
         <label>Vehicle
           <select name="vehicle_id">
             <option value="keep" selected>Keep</option>
-            <option value="">—</option>
+            <option value="">--</option>
             {% for v in vehicles %}
             <option value="{{ v.id }}">{{ v.name }}</option>
             {% endfor %}
@@ -130,7 +130,7 @@
         <label>Vehicle
           <select name="vehicle_id">
             <option value="keep" selected>Keep</option>
-            <option value="">—</option>
+            <option value="">--</option>
             {% for v in vehicles %}
             <option value="{{ v.id }}">{{ v.name }}</option>
             {% endfor %}
@@ -221,7 +221,7 @@
   // The map MUST have a view before any vector layer (polyline/circle) is
   // added. Adding a path to a viewless map leaves its pixel bounds undefined;
   // the next redraw then calls Leaflet's bounds.intersects(), which reads
-  // `.min` off that undefined and throws — killing the whole script so the
+  // `.min` off that undefined and throws, killing the whole script so the
   // route and markers never render (only the tiles, added first, survive).
   // This is why the map appeared but the route didn't, and only on trips that
   // had stay circles. Establish the view first, then layer everything on.
@@ -246,7 +246,7 @@
     const rawLine = L.geoJSON(path, { style: rawStyle }).addTo(map);
     bounds = rawLine.getBounds();
   } else if (!hasSnapped) {
-    // No stored path at all (e.g. a very short trip simplified away) —
+    // No stored path at all (e.g. a very short trip simplified away),
     // fall back to a straight start→end line so the route is always
     // visibly represented.
     L.polyline([start, end], { color: routeColor, weight: 3, dashArray: '6' }).addTo(map);
@@ -266,7 +266,7 @@
 
   // Split mode: a third, exclusive click-mode alongside the place-naming
   // one below. While armed, clicking the map picks the nearest *real* GPS
-  // point (never the raw click coordinate — the split anchor must be an
+  // point (never the raw click coordinate, since the split anchor must be an
   // actual points.id) and shows a confirmation before submitting.
   let splitMode = false;
   let tripPoints = null;
@@ -307,7 +307,7 @@
   });
 
   // Lets a "name this place" form be corrected to the actual building entrance
-  // rather than the raw GPS fix — clicking the map fills whichever naming
+  // rather than the raw GPS fix. Clicking the map fills whichever naming
   // form is currently open (if exactly one is; ambiguous otherwise, so a
   // click does nothing rather than guessing).
   map.on('click', function (e) {
@@ -321,7 +321,7 @@
       const first = tripPoints[0], last = tripPoints[tripPoints.length - 1];
       if (!nearest || nearest.id === first.id || nearest.id === last.id) {
         splitConfirm.style.display = 'block';
-        splitConfirm.textContent = 'That point is already this trip\'s boundary — pick a point further along the route.';
+        splitConfirm.textContent = 'That point is already this trip\'s boundary. Pick a point further along the route.';
         return;
       }
       const idx = tripPoints.indexOf(nearest);
@@ -330,7 +330,7 @@
       if (fromStart < minTripDistanceM || fromEnd < minTripDistanceM) {
         splitConfirm.style.display = 'block';
         splitConfirm.textContent = `That point is too close to the start or end of the trip ` +
-          `(each half must be at least ${Math.round(minTripDistanceM)}m) — pick a point further along the route.`;
+          `(each half must be at least ${Math.round(minTripDistanceM)}m). Pick a point further along the route.`;
         return;
       }
       window.__splitPointId = nearest.id;
@@ -368,7 +368,7 @@
   }
 
   // ResizeObserver fires when the container actually gets its dimensions,
-  // regardless of how late the browser lays it out — the reliable signal.
+  // regardless of how late the browser lays it out. This is the reliable signal.
   if (window.ResizeObserver) {
     const ro = new ResizeObserver(() => {
       fit();

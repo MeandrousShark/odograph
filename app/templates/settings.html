@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Settings — Odograph{% endblock %}
+{% block title %}Settings: Odograph{% endblock %}
 {% block content %}
 
 <h2>Appearance</h2>
@@ -14,7 +14,7 @@
 </fieldset>
 <script nonce="{{ csp_nonce }}">
 (function () {
-  // Client-side only — no server state. Keeping System as an explicit choice
+  // Client-side only, with no server state. Keeping System as an explicit choice
   // is what lets a browser return to following the OS after a persisted
   // light or dark override.
   var picker = document.getElementById("theme-picker");
@@ -66,7 +66,7 @@
 
 <h2>Odometer readings</h2>
 <p class="muted">Log a dashboard odometer value now and then to reconcile it against GPS-
-  detected distance — this catches driving the tracker missed (dead zones, app not
+  detected distance. This catches driving the tracker missed (dead zones, app not
   running) and supplies the total-miles figure the actual-expense comparison needs.
   It doesn't change the standard-mileage deduction shown elsewhere in the app.</p>
 
@@ -150,7 +150,7 @@ document.addEventListener('click', function (event) {
 <h2>Auto-tag rules</h2>
 <p class="muted">Rules match a trip's start/end locations to auto-set a category
   when neither side has been tagged by hand. Commuting between home and a regular
-  workplace is generally not tax-deductible per IRS guidance — that's why the
+  workplace is generally not tax-deductible per IRS guidance. That's why the
   seeded <strong>home ↔ work</strong> rule tags trips personal.</p>
 
 <div class="settings-table-scroll settings-table-scroll-rules">
@@ -317,7 +317,7 @@ document.addEventListener('click', function (event) {
   </dl>
 
   <h3>Workers</h3>
-  <p class="muted">State lives in this process's memory only and resets on every restart —
+  <p class="muted">State lives in this process's memory only and resets on every restart;
     timestamps below are since process start, not since the worker was first enabled.</p>
   <table class="settings-table">
     <thead>
@@ -345,7 +345,7 @@ document.addEventListener('click', function (event) {
   </table>
 
   <h3>Configuration presence</h3>
-  <p class="muted">Whether a setting is present — never its value.</p>
+  <p class="muted">Whether a setting is present, never its value.</p>
   <dl class="diagnostics-list">
     {% for key, value in report.config_presence.items() | sort %}
     <div><dt>{{ key }}</dt><dd>{{ "yes" if value else "no" }}</dd></div>
@@ -353,7 +353,7 @@ document.addEventListener('click', function (event) {
   </dl>
 
   <h3>Connectivity</h3>
-  <p class="muted">OSRM, the geocoder, ntfy, and SMTP are only probed when you click below —
+  <p class="muted">OSRM, the geocoder, ntfy, and SMTP are only probed when you click below;
     never automatically, so an outage here never becomes background traffic against a
     third-party service.</p>
   <button type="button" hx-post="/settings/diagnostics/check"
@@ -366,7 +366,7 @@ document.addEventListener('click', function (event) {
 
   <h2>Device status</h2>
   <p class="muted">Newest location fix received from each device that has posted to
-    <code>/ingest</code>, and how many it has sent in total — the fastest way to tell
+    <code>/ingest</code>, and how many it has sent in total. This is the fastest way to tell
     whether a phone is actually reaching this instance. No coordinates are shown here.</p>
 
   {% if device_fixes %}

@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from psycopg_pool import AsyncConnectionPool
 
 from app.autotag import AutotagTrip, Rule, plan_autotags
+from app.db import DETECTOR_ADVISORY_LOCK_KEY
 from app.detector.core import Override, Params, Point, Trip, detect
 from app.detector.reconcile import ExistingTrip, plan_reconcile
 from app.worker import PokeSweepWorker, RUN_SKIPPED
@@ -26,7 +27,6 @@ from app.worker import PokeSweepWorker, RUN_SKIPPED
 log = logging.getLogger(__name__)
 
 DETECTOR_VERSION = 2  # v2: on-foot (low-speed) stay detection
-ADVISORY_LOCK_KEY = 0x6D696C6531  # 'mile1'
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 # last_run_at is set to now() minus this margin, so a point whose inserting
@@ -72,19 +72,19 @@ class DetectorRunner:
         scoped `pg_try_advisory_lock` this used to take: a *session* lock
         needs an explicit unlock, and if `_run()` fails with a SQL error the
         transaction is left aborted, so that unlock itself raises
-        `InFailedSqlTransaction` — masking the real error in the log — while
+        `InFailedSqlTransaction`, masking the real error in the log, while
         the lock survives the pool's rollback of the connection and never
         gets released. Every later background run then skips forever
         ("advisory lock busy"), and every blocking `pg_advisory_xact_lock`
-        caller (merge/split/places CRUD, all sharing `ADVISORY_LOCK_KEY`)
+        caller (merge/split/places CRUD, all sharing the detector lock)
         hangs indefinitely. The transaction-scoped lock sidesteps all of
         that: it releases automatically on commit *or* rollback, so no
-        matching unlock call is needed here at all — same reasoning as
+        matching unlock call is needed here at all, for the same reasoning as
         `reprocess_device_now`'s blocking variant below.
         """
         async with self.pool.connection() as conn:
             cur = await conn.execute(
-                "SELECT pg_try_advisory_xact_lock(%s)", (ADVISORY_LOCK_KEY,)
+                "SELECT pg_try_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
             )
             locked = (await cur.fetchone())[0]
             if not locked:
@@ -96,13 +96,13 @@ class DetectorRunner:
 
     async def reprocess_device_in(self, conn, device: str) -> None:
         """`conn`-accepting single-device reprocess (app/ui.py's merge/split
-        UI endpoints) — a deliberate user action should show its result
+        UI endpoints). A deliberate user action should show its result
         immediately rather than wait on the debounce/sweep.
 
         Takes the caller's connection instead of opening its own, so a
         caller with other writes to make around the reprocess (merge:
         override writes before, a tag/purpose/notes UPDATE after) can run all
-        of it in one transaction — a failure anywhere rolls the whole thing
+        of it in one transaction. A failure anywhere rolls the whole thing
         back instead of leaving, say, committed suppress-overrides with no
         corresponding merged trip. `reprocess_device_now` below is the thin
         pool-owning wrapper for callers that don't need that.
@@ -111,19 +111,21 @@ class DetectorRunner:
         window: this is a full re-detect for exactly one device (cheap at
         this app's per-device point volume), which sidesteps having to work
         out a rewind point that's guaranteed to precede the boundary being
-        edited — the same "full reprocess" path a DETECTOR_VERSION bump
+        edited, using the same "full reprocess" path a DETECTOR_VERSION bump
         takes, just scoped to one device instead of all of them.
 
         Blocking `pg_advisory_xact_lock`, not `run_once`'s try-lock: a user
         click can afford to wait briefly for an in-flight background run to
         finish, whereas a skipped background run just retries later.
-        Transaction-scoped, releasing automatically on commit or rollback —
+        Transaction-scoped, releasing automatically on commit or rollback,
         no matching unlock call needed. Taking it here is a no-op if the
         caller already holds it (Postgres advisory locks are reentrant
         within one session/transaction), so a caller that must serialize
         earlier writes too can safely take it again before this call.
         """
-        await conn.execute("SELECT pg_advisory_xact_lock(%s)", (ADVISORY_LOCK_KEY,))
+        await conn.execute(
+            "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
+        )
         await self._process_device(conn, device, EPOCH, full=True)
 
     async def reprocess_device_now(self, device: str) -> None:
@@ -214,7 +216,7 @@ class DetectorRunner:
         ]
 
         # All of a device's durable detector overrides, not just those inside
-        # this window — trivial volume at this app's scale, and it sidesteps
+        # this window. This is trivial volume at this app's scale and sidesteps
         # any off-by-one risk in trying to cleverly scope the fetch to the
         # window. Overrides whose anchors fall outside `points` are harmless
         # no-ops in detect(); discard ranges are likewise matched against only
@@ -258,7 +260,7 @@ class DetectorRunner:
         previous_snap_inputs = await self._load_previous_snap_inputs(conn, existing)
 
         # NOTE: strictly `>` t0, not `>=`. t0 is the opening stay's started_at,
-        # which is the *first point of that stay* — i.e. the arrival boundary of
+        # which is the *first point of that stay*, i.e. the arrival boundary of
         # the trip that ended at this stay. That trip started before t0, so it
         # is not in this window and is never re-emitted below; nulling its
         # arrival point here would orphan it permanently (its trip_id would stay
@@ -436,7 +438,7 @@ async def load_trip_points(conn, trip_id: int) -> list[tuple]:
     """A trip's full point sequence, sourced by the trip's own
     [started_at, ended_at] time range rather than `points.trip_id`.
 
-    When two adjacent trips share a boundary fix (a single-point stay —
+    When two adjacent trips share a boundary fix (a single-point stay,
     common in OwnTracks' battery-saving mode, and every user-driven split
     deliberately recreates this pattern), `points.trip_id` is single-valued,
     so the trip written second silently steals the shared point from the
@@ -444,7 +446,7 @@ async def load_trip_points(conn, trip_id: int) -> list[tuple]:
     boundary points for both trips. `trip_id IS NOT NULL` still excludes
     the detector's filter-rejected fixes (accuracy/teleport gates).
 
-    Returns raw rows `(id, recorded_at, lat, lon, accuracy_m)` — shared by
+    Returns raw rows `(id, recorded_at, lat, lon, accuracy_m)`, shared by
     `SnapWorker` (which adapts them into its own `MatchPoint`) and the
     split-point-picker endpoint (`app/ui.py`), so neither has to depend on
     the other's types.
@@ -466,7 +468,7 @@ async def resolve_and_autotag(conn, trip_ids: list[int]) -> None:
     trips isn't human-tagged. Shared by the detector's post-write hook and
     the UI's places/rules CRUD endpoints (via `reprocess_places`) so both
     paths run the identical logic. `source = 'detected'` restricts this to
-    trips with geometry — manual trips have none, so they'd never resolve a
+    trips with geometry. Manual trips have none, so they'd never resolve a
     place anyway, but the filter keeps intent explicit. `NOT imported`
     excludes portable-imported trips: they carry no start_geom/end_geom (the
     bundle format has no geometry), so re-resolving would null out the
@@ -542,13 +544,15 @@ async def reprocess_places_in(conn) -> None:
     transaction (holding `pg_try_advisory_xact_lock`) commits or rolls back and
     releases it, then holds the lock for this transaction (auto-released on
     commit); a detector run starting meanwhile finds the lock busy and skips,
-    re-running on its next debounce/sweep — the same safe skip path the
+    re-running on its next debounce/sweep, the same safe skip path the
     detector already relies on. At single-instance scale the detector's runs
     are short, so the block here is brief. Taking it here is a no-op if the
     caller already holds it (advisory locks are reentrant within one
     session/transaction).
     """
-    await conn.execute("SELECT pg_advisory_xact_lock(%s)", (ADVISORY_LOCK_KEY,))
+    await conn.execute(
+        "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
+    )
     cur = await conn.execute(
         "SELECT id FROM trips WHERE source = 'detected' AND NOT imported"
     )
@@ -575,11 +579,11 @@ class DetectorScheduler(PokeSweepWorker):
     poke() (from ingest) resets a debounce deadline; independently, a sweep
     fires every sweep_s to catch anything a crashed/skipped run left behind.
     The loop itself, `start`/`stop`, and the guarded-run wrapper live in
-    `PokeSweepWorker` (app/worker.py) — shared with
+    `PokeSweepWorker` (app/worker.py), shared with
     `SnapWorker`/`GeocodeWorker`; this class supplies `run_once()` and
     overrides `after_run_once()` to poke the snap/geocode workers once a
     detector run actually happens (not one skipped for advisory-lock
-    contention) — the poke that turns "trip geometry just changed" into
+    contention), the poke that turns "trip geometry just changed" into
     "go re-snap/re-geocode it soon" without either worker waiting for its
     own sweep.
     """

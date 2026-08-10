@@ -29,7 +29,7 @@
 /* Active flavor mapping. Three layers, lowest to highest priority:
    1. Latte by default (below).
    2. System dark preference (@media block).
-   3. Explicit user choice via Settings — a `data-theme` attribute
+   3. Explicit user choice via Settings -- a `data-theme` attribute
       on <html>, set by JS and persisted in localStorage. Attribute selectors
       out-specificity the bare `:root` rules below regardless of source
       order, so an explicit choice always wins over system preference. */
@@ -70,7 +70,7 @@
   --border: var(--macchiato-surface0);
 }
 
-/* Semantic layer — everything else references these, never a flavor color
+/* Semantic layer -- everything else references these, never a flavor color
    directly, so a future flavor swap only touches the blocks above. */
 :root {
   --bg: var(--base);
@@ -150,8 +150,8 @@ h2 { font-size: 1.05rem; margin: 1.5rem 0 .25rem; }
 /* Tables crush their columns to min-content before .table-wrapper's
    overflow-x ever engages, so the global `summary { overflow-wrap: anywhere }`
    rule (kept above for other long-content controls) squeezes a table-cell
-   <summary>Edit</summary> down to its narrowest legal wrap point — one
-   letter per line — well before the table would actually need to scroll.
+   <summary>Edit</summary> down to its narrowest legal wrap point -- one
+   letter per line -- well before the table would actually need to scroll.
    Scoping summaries back to normal wrapping here keeps the action word
    intact and lets the table grow past its wrapper instead of its cells. */
 .table-wrapper summary { overflow-wrap: normal; white-space: nowrap; }
@@ -387,12 +387,12 @@ details.add-manual legend { font-size: .75rem; opacity: .7; padding: 0 .3rem; }
    disclosure, so it gets its own positioned popup instead of
    .trip-page-disclosure's inline-expansion layout. It deliberately has no
    position of its own: .selection-more's position inside the bar shifts
-   with viewport width — under the flex layout above (live-measured off-
+   with viewport width -- under the flex layout above (live-measured off-
    screen ~536-621px when the menu anchored left:0 to .selection-more
    directly) and just as much under the narrow-width grid layout below,
-   where .selection-more can land in any column — so the menu instead
+   where .selection-more can land in any column -- so the menu instead
    escalates to .selection-action-bar's own containing block (position:
-   fixed) and anchors right:0 there — the bar's right edge stays inside the
+   fixed) and anchors right:0 there -- the bar's right edge stays inside the
    viewport at every width and layout mode the bar itself supports, which
    the menu's right edge can then never pass. */
 .selection-more > summary {
@@ -519,14 +519,14 @@ a { color: inherit; }
 .place-naming { margin: .75rem 0; font-size: .9rem; }
 .place-naming p { margin: .35rem 0; }
 /* auto-fit computes its repetition count from the track's definite MAX,
-   not the min — so a fixed max on the track (previously 14rem) undercounts
+   not the min -- so a fixed max on the track (previously 14rem) undercounts
    columns at narrow widths: a ~495px phone needs two 224px maxes to fit
    side by side, but auto-fit only tries 224px-wide columns and settles for
    one, leaving the row half-empty. Moving the max off the track (`1fr`, so
    counting is driven by the 11rem min) and onto the container as a
    max-width fixes both ends: report.html/report_range.html's handful of
    stats still stay compact rather than stretching edge-to-edge across the
-   1100px body — the 1052px content column caps at 60.5rem (4 x 14rem
+   1100px body -- the 1052px content column caps at 60.5rem (4 x 14rem
    tracks + 3 x 1.5rem gaps), so floor((968+24)/(176+24)) is 4, giving the
    same four-per-row look (and 4+4+2 on the fuller expenses page) as
    before. At phone widths, auto-fit now counts by the 11rem floor: ~430-
@@ -550,7 +550,7 @@ a { color: inherit; }
 .stats-summary strong { font-size: 1.15rem; font-variant-numeric: tabular-nums; }
 .stats-section { margin: 1.5rem 0; }
 /* The weekly/monthly SVGs render a fixed 720-unit viewBox at width: 100%,
-   so on narrow phones the whole chart — including its 11px axis text —
+   so on narrow phones the whole chart -- including its 11px axis text --
    scales down with the container and becomes unreadable. Wrapping each
    chart in .chart-scroll and giving .stats-chart a min-width equal to its
    native viewBox width keeps text at its designed size and lets narrow
@@ -689,7 +689,7 @@ a { color: inherit; }
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
 
-/* Dark map tiles: no dark tile provider needed — invert+hue-rotate keeps
+/* Dark map tiles: no dark tile provider needed -- invert+hue-rotate keeps
    water/parks plausible. Markers, route line, and stay circles live in
    separate Leaflet panes, so this filter never touches them. Same
    priority order as the palette above: system preference, overridable by

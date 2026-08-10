@@ -10,8 +10,7 @@ import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import httpx
-
+import app.odometer_reminder as reminder_module
 from app.odometer_reminder import publish_reminder, reminder_message
 
 TZ = ZoneInfo("America/Los_Angeles")
@@ -37,47 +36,22 @@ def test_reminder_message_appends_settings_link_when_app_url_set():
     )
 
 
-async def _publish_scenario():
+def test_publish_reminder_passes_its_exact_message_to_shared_transport(monkeypatch):
     captured = {}
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured["url"] = str(request.url)
-        captured["headers"] = request.headers
-        captured["content"] = request.content.decode()
-        return httpx.Response(200, json={"id": "test"})
+    async def capture(*args):
+        captured["message"] = args[-1]
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+    monkeypatch.setattr(reminder_module, "publish_ntfy", capture)
+
+    async def scenario():
         await publish_reminder(
-            client, "https://ntfy.example.com/", "mileage-reminders", "secret-token", "", "",
+            None, "https://ntfy.example.com", "alerts", "token", "", "",
             ["Truck"], "https://miles.example.com",
         )
-    assert captured["url"] == "https://ntfy.example.com/mileage-reminders"
-    assert captured["headers"]["authorization"] == "Bearer secret-token"
-    assert captured["headers"]["title"] == "Odograph"
-    assert captured["content"] == (
+
+    asyncio.run(scenario())
+    assert captured["message"] == (
         "Odograph: log an odometer reading for Truck (vehicle).\n"
         "https://miles.example.com/settings"
     )
-
-
-def test_publish_reminder_posts_vehicle_names_with_bearer_auth():
-    asyncio.run(_publish_scenario())
-
-
-async def _basic_auth_publish_scenario():
-    captured = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured["headers"] = request.headers
-        return httpx.Response(200, json={"id": "test"})
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        await publish_reminder(
-            client, "https://ntfy.example.com", "alerts", "ignored-token", "testuser", "password",
-            ["Truck"], "",
-        )
-    assert captured["headers"]["authorization"] == "Basic dGVzdHVzZXI6cGFzc3dvcmQ="
-
-
-def test_publish_reminder_uses_basic_auth_when_configured():
-    asyncio.run(_basic_auth_publish_scenario())

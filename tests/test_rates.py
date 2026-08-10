@@ -62,7 +62,7 @@ def test_fallback_uses_prior_year_latest_rate():
 
 
 def test_year_attribution_at_utc_local_boundary():
-    # 2026-01-01 00:30 UTC is still 2025-12-31 16:30 in Los Angeles — the
+    # 2026-01-01 00:30 UTC is still 2025-12-31 16:30 in Los Angeles, so the
     # trip must be attributed to 2025 (and priced at the 2025 rate), not
     # 2026, so month/YTD bucketing must use the local year, not UTC's.
     tz = ZoneInfo("America/Los_Angeles")

@@ -1,8 +1,8 @@
 {% extends "base.html" %}
-{% block title %}Dashboard — Odograph{% endblock %}
+{% block title %}Dashboard: Odograph{% endblock %}
 {% block content %}
 
-<h2 class="dashboard-heading">{{ range_label(dashboard.nav.week_start, dashboard.nav.week_end) }}</h2>
+<h2 class="dashboard-heading">{{ format_week_range(dashboard.nav.week_start, dashboard.nav.week_end) }}</h2>
 
 <nav class="week-nav" aria-label="Week navigation">
   <a class="week-nav-link" href="/?week={{ dashboard.nav.prev_week_start.isoformat() }}">&laquo; Previous week</a>
@@ -31,7 +31,7 @@
   <div class="metric-card">
     <span class="metric-label">Expenses recorded</span>
     <strong class="metric-value">{{ dashboard.expense_total | usd }}</strong>
-    <small class="metric-detail">Spending this week, not a deduction —
+    <small class="metric-detail">Spending this week, not a deduction;
       <a href="/expenses">view expenses</a>.</small>
   </div>
   <div class="metric-card">
@@ -40,7 +40,7 @@
     <strong class="metric-value">{{ dashboard.deduction.amount | usd }}</strong>
     {% else %}
     <strong class="metric-value metric-unavailable">Unavailable</strong>
-    <small class="metric-detail">No mileage rate on file for part of this week —
+    <small class="metric-detail">No mileage rate on file for part of this week;
       <a href="/settings">add one</a>.</small>
     {% endif %}
   </div>
@@ -68,7 +68,7 @@
 
 {% for day_group in dashboard.day_groups %}
   <h3 class="dashboard-day-heading">
-    {{ day_group.day.strftime('%a %b %-d') }}{% if day_group.is_today %} — Today{% elif day_group.is_yesterday %} — Yesterday{% endif %}
+    {{ day_group.day.strftime('%a %b %-d') }}{% if day_group.is_today %}: Today{% elif day_group.is_yesterday %}: Yesterday{% endif %}
   </h3>
   <div class="trip-card-list">
     {% for trip in day_group.trips %}{% include "_trip_card.html" %}{% endfor %}

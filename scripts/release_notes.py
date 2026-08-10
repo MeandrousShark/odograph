@@ -8,14 +8,12 @@ from pathlib import Path
 TAG_RE = re.compile(r"^v(?P<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$")
 HEADING_RE = re.compile(r"^## \[(?P<version>[^]]+)](?: - \d{4}-\d{2}-\d{2})?\s*$")
 ACCEPTANCE_TOKEN = "Security scan acceptance"
-# Either separator parses. The em dash form is the published syntax that
-# existing entries use, so it must keep working; a colon is accepted because an
-# em dash is awkward to type on most keyboards, and a release gate that hard
-# fails on a character the author cannot enter is a bad gate.
+# A colon is the only accepted separator, keeping the release gate's syntax
+# typeable and unambiguous.
 ACCEPTANCE_RE = re.compile(
     r"^- \*\*Security scan acceptance \("
     r"(?P<scanner>pip-audit|Trivy (?P<scope>linux/amd64|linux/arm64|all))"
-    r"\):\*\* `(?P<vulnerability>[^`]+)`(?: — |: )(?P<reason>\S(?:.*\S)?)$"
+    r"\):\*\* `(?P<vulnerability>[^`]+)`: (?P<reason>\S(?:.*\S)?)$"
 )
 VULNERABILITY_RE = re.compile(
     r"^(?:CVE-\d{4}-\d{4,}|PYSEC-\d{4}-\d+|GHSA-[0-9A-Za-z]{4}-[0-9A-Za-z]{4}-[0-9A-Za-z]{4})$"

@@ -11,6 +11,7 @@ template to render.
 """
 from __future__ import annotations
 
+import calendar
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -87,6 +88,14 @@ class WeekDashboard:
     day_groups: list[DayGroup]
     attention: AttentionStrip | None
     nav: WeekNav
+
+
+def format_week_range(start: date, end: date) -> str:
+    """Format a dashboard week as a friendly US date range."""
+    return (
+        f"{calendar.month_abbr[start.month]} {start.day}, {start.year} - "
+        f"{calendar.month_abbr[end.month]} {end.day}, {end.year}"
+    )
 
 
 def parse_week_anchor(week_str: str, tz: ZoneInfo, now: datetime) -> date:

@@ -2,7 +2,7 @@
 -- deduction is computed per vehicle (each has its own basis/depreciation
 -- history in the taxpayer's own records), so trips need to say which vehicle
 -- they were driven in even though the detector itself stays vehicle-unaware
--- (DETECTOR_VERSION does not change here — assignment is a UI/tagging
+-- (DETECTOR_VERSION does not change here, since assignment is a UI/tagging
 -- concern layered on top, same as places/categories).
 --
 -- `is_default` marks the vehicle pre-selected for new/unassigned trips; the

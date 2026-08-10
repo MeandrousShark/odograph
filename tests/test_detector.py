@@ -1,6 +1,6 @@
 """Trip-detection unit tests against synthetic tracks.
 
-Boundary assertions use a tolerance of two sample intervals — exact-timestamp
+Boundary assertions use a tolerance of two sample intervals -- exact-timestamp
 assertions on clustered output are how these tests rot.
 """
 from __future__ import annotations
@@ -119,7 +119,7 @@ def test_long_stop_splits():
 def test_sub_minimum_movement_discarded():
     """Case 7: shuffling 200 m between two stays is not a trip. The first
     cluster swallows most of the short hop, so the boundary-split merge folds
-    both stops into one spanning stay — either way, the contract is no trip."""
+    both stops into one spanning stay -- either way, the contract is no trip."""
     pts = build_track([
         Stationary(duration_s=900),
         Drive(km=0.2, speed_kmh=10),
@@ -133,7 +133,7 @@ def test_sub_minimum_movement_discarded():
 
 
 def test_silent_stay_two_points():
-    """Case 8: significant-changes mode — a 2h silent stay of two points
+    """Case 8: significant-changes mode -- a 2h silent stay of two points
     splits the surrounding movement into two trips, not one."""
     pts = build_track([
         Stationary(duration_s=600),
@@ -302,7 +302,7 @@ def test_suppress_override_merges_two_trips():
     assert len(trips1) == 1
     # The merged trip's path now crosses the former stay's dwell, whose many
     # jittered legs (Stationary's default jitter_m=8) add real accumulated
-    # distance on top of the 7 km of actual driving — a bigger tolerance
+    # distance on top of the 7 km of actual driving -- a bigger tolerance
     # than the 5% used for pure-drive assertions elsewhere in this file.
     assert abs(trips1[0].distance_m - 7000) / 7000 < 0.15
 
@@ -355,7 +355,7 @@ def test_force_override_survives_accuracy_gate():
 def test_force_override_survives_teleport_gate():
     """Case 19: a pinned point that would normally fail the teleport gate is
     dropped as usual with no override, but still forces a split once pinned
-    (even though the resulting geometry is nonsensical — this tests the
+    (even though the resulting geometry is nonsensical -- this tests the
     filtering mechanism, not physical realism)."""
     pts = _with_ids(build_track([
         Stationary(duration_s=1200),
@@ -474,7 +474,7 @@ def test_overrides_matching_nothing_are_a_noop():
 
 
 def test_overrides_none_empty_and_omitted_are_identical():
-    """Case 24: back-compat guard — every existing call site (overrides
+    """Case 24: back-compat guard -- every existing call site (overrides
     omitted) must behave identically to overrides=None and overrides=[]."""
     pts = build_track([
         Stationary(duration_s=1200),

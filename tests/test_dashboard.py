@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.dashboard import build_week_dashboard, parse_week_anchor, week_bounds
+from app.dashboard import build_week_dashboard, format_week_range, parse_week_anchor, week_bounds
 from app.rates import YearRate
 
 LA = ZoneInfo("America/Los_Angeles")
@@ -43,6 +43,14 @@ def _trip(trip_id: int, started_at: datetime, category: str, distance_m: float, 
     }
     trip.update(overrides)
     return trip
+
+
+# --- format_week_range ------------------------------------------------
+
+def test_format_week_range_uses_friendly_us_dates():
+    assert format_week_range(date(2026, 7, 13), date(2026, 7, 19)) == (
+        "Jul 13, 2026 - Jul 19, 2026"
+    )
 
 
 # --- parse_week_anchor -------------------------------------------------

@@ -2,7 +2,7 @@
 """Seed a DISPOSABLE dev/QA database with synthetic data.
 
 **For throwaway Postgres/PostGIS instances only.** This script wipes and
-reseeds every data table it touches (see `_WIPE_TABLES` below) — never point
+reseeds every data table it touches (see `_WIPE_TABLES` below) -- never point
 it at production or any database whose contents matter. It refuses any
 `--database-url` whose host isn't a loopback address, as a cheap guard
 against an obvious mistake; that check is not a substitute for pointing this
@@ -15,7 +15,7 @@ plausible speeds) for one synthetic device and runs the *real* detector
 (`app.detector.runner.DetectorRunner`) over them, the same way
 `tests/test_runner_db.py` drives it. That gives every detected trip genuine
 points, geometry, boundaries, and detector ownership, so the QA site can
-exercise the detail map, merge, split, and snapping states end to end — not
+exercise the detail map, merge, split, and snapping states end to end -- not
 just category/purpose text fields on a bare row.
 
 The trace-generation segment types and math (`Stationary`/`Drive`/`Gap`,
@@ -118,7 +118,7 @@ class Drive:
 
 @dataclass
 class Gap:
-    """No emissions; time passes and (optionally) position changes — used
+    """No emissions; time passes and (optionally) position changes -- used
     both for multi-week "parked, nothing recorded" idle spans between daily
     traces and, mid-drive with a nonzero `move_km`, for a deliberate
     recording-gap trip.
@@ -142,7 +142,7 @@ def _travel(lat: float, lon: float, dist_m: float, bearing_deg: float) -> tuple[
 
 def _bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Standard initial-bearing (forward azimuth) formula, using the same
-    0=north/90=east-clockwise convention as `_travel`'s `bearing_deg` — lets
+    0=north/90=east-clockwise convention as `_travel`'s `bearing_deg` -- lets
     `leg()` below compute an exact course between any two named coordinates
     without ever needing to hand-derive a "reverse" bearing.
     """
@@ -156,7 +156,7 @@ def _bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 def leg(a: tuple[float, float], b: tuple[float, float], speed_kmh: float = 45.0) -> Drive:
     """A `Drive` segment from named point `a` to named point `b`, with the
     distance/bearing computed fresh from their coordinates rather than
-    tracked through however each point was originally derived — this is what
+    tracked through however each point was originally derived -- this is what
     lets every block below just say "drive from X to Y" regardless of
     whether X or Y was defined relative to the other.
     """
@@ -245,7 +245,7 @@ def _block_segments():
     Each block starts where the previous one ended (always HOME, except
     block 4 which resolves its own return leg with `leg(AWAY_2, HOME)`), so
     the multi-day/week idle span between blocks always collapses into one
-    long stay rather than surfacing as a spurious cross-block "trip" — the
+    long stay rather than surfacing as a spurious cross-block "trip" -- the
     detector's stay-merge logic (`_merge_boundary_splits`,
     app/detector/core.py) only tells two nearby-in-space stays apart from one
     long one by physical distance, not by which script call produced the
@@ -253,14 +253,14 @@ def _block_segments():
 
     Block 3's HOME->ERRAND leg is deliberately split with a mid-drive `Gap`
     whose speed stays well above `walk_max_speed_ms` (so it isn't mistaken
-    for an on-foot stay) but represents an 11-minute recording dropout —
+    for an on-foot stay) but represents an 11-minute recording dropout --
     the one required "recording-gap trip" (`has_gap=True`).
 
     Block 4's WORK->AWAY `Gap` is the deliberate spatial-gap scenario: it
     produces a real (if silly-looking, hour-long) detected trip bridging
     two real places, which `_discard_missing_trip_bridge` explicitly discards
     via a `trip_boundary_overrides` 'discard' row right after the first
-    detection pass — modeling a user deleting an obviously-bogus GPS artifact and
+    detection pass -- modeling a user deleting an obviously-bogus GPS artifact and
     leaving behind exactly the kind of spatial gap the missing-trip badge
     (app/missing_trip.py) exists to flag on the very next real trip.
     """
@@ -346,7 +346,7 @@ async def _insert_points(conn, points: list[Point]) -> None:
 async def _wipe(conn) -> None:
     await conn.execute(f"TRUNCATE {', '.join(_WIPE_TABLES)} RESTART IDENTITY CASCADE")
     # Re-seed the same two default kind-based rules migration 003 installs
-    # once on a fresh DB — `tag_rules` is in `_WIPE_TABLES` so this script
+    # once on a fresh DB -- `tag_rules` is in `_WIPE_TABLES` so this script
     # can reseed it identically on every run rather than depending on
     # whichever rows happened to survive from a prior run.
     await conn.execute(
@@ -458,7 +458,7 @@ async def _apply_trip_overrides(conn, trips: list[dict], v1: int, v2: int) -> No
 
     Applied only after detection has fully settled (including the discard
     reprocess above) so nothing here risks being touched by a later
-    `_process_device` pass — which only ever rewrites detector-owned columns
+    `_process_device` pass -- which only ever rewrites detector-owned columns
     (`app/detector/runner.py`'s `_write_trip` docstring), never
     category/tag_source/purpose/vehicle_id, but keeping the ordering
     explicit avoids having to reason about that on every future edit here.

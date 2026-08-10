@@ -5,7 +5,7 @@ skipped unless TEST_DATABASE_URL is set. It manufactures the documented
 boundary-point steal (two adjacent trips sharing one stay fix, where the
 single-valued points.trip_id ends up owned by the *second* trip) and asserts
 SnapWorker._load_points still recovers the first trip's complete point
-sequence — the fix for the route being snapped 1-3km short (the
+sequence, which fixes the route being snapped 1-3km short (the
 boundary-point postmortem).
 """
 from __future__ import annotations
@@ -153,7 +153,7 @@ async def _tidy_disabled_scenario():
         assert "tidy=false" in captured["url"], (
             "tidy=true lets OSRM drop closely-spaced points as 'redundant', "
             "which come back as null tracepoints indistinguishable from a "
-            "genuine no-match to the match_fraction gate — this misclassified "
+            "genuine no-match to the match_fraction gate; this misclassified "
             "every trip on a dense (~2-4s) OwnTracks ping interval as "
             "low_confidence despite ~0.98 real matching confidence"
         )

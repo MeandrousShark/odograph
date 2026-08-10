@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{% block title %}Setup — Odograph{% endblock %}
+{% block title %}Setup: Odograph{% endblock %}
 {% block content %}
 
 <h2>{{ 'Reset administrator password' if mode == 'reset' else 'Create administrator' }}</h2>
 
 {% if mode == 'reset' %}
 <p class="muted">An administrator already exists ({{ admin_email }}). Submitting this form
-  resets that administrator's password — it can never create a second one.</p>
+  resets that administrator's password; it can never create a second one.</p>
 {% else %}
 <p class="muted">No administrator exists yet. This form creates the sole administrator
   for this instance.</p>

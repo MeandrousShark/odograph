@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import os
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Literal
@@ -18,10 +19,11 @@ from psycopg.rows import dict_row
 from starlette.responses import JSONResponse, RedirectResponse, Response
 
 from app.auth import require_csrf, require_user
+from app.config import DEFAULT_MISSING_TRIP_GAP_M
+from app.db import DETECTOR_ADVISORY_LOCK_KEY, _fetch_schema_version
 from app.dashboard import build_week_dashboard, parse_week_anchor, week_bounds
 from app.detector.core import haversine_m
 from app.detector.runner import (
-    ADVISORY_LOCK_KEY,
     DETECTOR_VERSION,
     load_trip_points,
     reprocess_places_in,
@@ -33,15 +35,20 @@ from app.expenses import (
     CATEGORY_LABELS,
     EXPENSE_CATEGORIES,
     EXPENSE_TREATMENTS,
+    ExpenseReport,
     TREATMENT_LABELS,
     build_expense_report,
     default_treatment,
 )
+from app.formatting import format_miles
+from app.geocode import GEOCODE_PRECISION
 from app.missing_trip import missing_trip_badge
-from app.odometer import OdometerReading, reconcile, vehicle_coverage_for_report
+from app.odometer import OdometerReading, VehicleCoverage, reconcile, vehicle_coverage_for_report
 from app.places_desc import PLACE_KINDS
-from app.rates import ENV_PREFIX, METERS_PER_MILE, deduction, load_rates
+from app.rates import ENV_PREFIX, METERS_PER_MILE, YearRate, deduction, load_rates
 from app.report import (
+    AnnualReport,
+    RangeReport,
     build_annual_report,
     build_range_report,
     default_report_year,
@@ -51,6 +58,7 @@ from app.report import (
 )
 from app.snap import route_distance_m
 from app.stats import build_dashboard
+from app.trip_queries import DISPLAY_DISTANCE_SQL
 from app.validation import parse_finite_number
 from app.vehicles import (
     create_vehicle,
@@ -69,9 +77,9 @@ log = logging.getLogger(__name__)
 # display_distance_m is the canonical "distance to show": snapped when
 # available, raw as fallback (raw distance_m stays selected as the pre-snap
 # baseline).
-TRIP_COLUMNS = """
+TRIP_COLUMNS = f"""
     id, device, source::text AS source, started_at, ended_at, distance_m,
-    COALESCE(distance_snapped_m, distance_m) AS display_distance_m,
+    {DISPLAY_DISTANCE_SQL} AS display_distance_m,
     snap_status::text AS snap_status,
     point_count, has_gap, imported, category::text AS category, purpose, notes,
     ST_Y(start_geom::geometry) AS start_lat, ST_X(start_geom::geometry) AS start_lon,
@@ -84,18 +92,18 @@ TRIP_COLUMNS = """
     (SELECT name FROM vehicles WHERE id = trips.vehicle_id) AS vehicle_name,
     (path IS NOT NULL OR path_snapped IS NOT NULL) AS has_route_geometry,
     (SELECT address FROM geocode_cache
-     WHERE lat = ROUND(ST_Y(trips.start_geom::geometry)::numeric, 4)
-       AND lon = ROUND(ST_X(trips.start_geom::geometry)::numeric, 4)) AS start_address,
+     WHERE lat = ROUND(ST_Y(trips.start_geom::geometry)::numeric, {GEOCODE_PRECISION})
+       AND lon = ROUND(ST_X(trips.start_geom::geometry)::numeric, {GEOCODE_PRECISION})) AS start_address,
     (SELECT address FROM geocode_cache
-     WHERE lat = ROUND(ST_Y(trips.end_geom::geometry)::numeric, 4)
-       AND lon = ROUND(ST_X(trips.end_geom::geometry)::numeric, 4)) AS end_address,
+     WHERE lat = ROUND(ST_Y(trips.end_geom::geometry)::numeric, {GEOCODE_PRECISION})
+       AND lon = ROUND(ST_X(trips.end_geom::geometry)::numeric, {GEOCODE_PRECISION})) AS end_address,
     -- Missing-trip detection: four near-identical subselects for the
     -- predecessor trip, because one SELECT item can't reference another's
     -- alias (and a LATERAL join would mean touching every FROM clause that
     -- embeds TRIP_COLUMNS; deferred until this scales past "acceptable").
     -- No `end_geom IS NOT NULL` filter: skipping a predecessor that lacks
     -- end_geom would silently pick an even older trip, while ST_Distance
-    -- against NULL is NULL — exactly "no badge".
+    -- against NULL is NULL, exactly "no badge".
     (SELECT ST_Distance(p.end_geom, trips.start_geom) FROM trips p
      WHERE p.device = trips.device AND p.source = 'detected'
        AND p.started_at < trips.started_at
@@ -139,6 +147,33 @@ EXPORT_MEDIA_TYPES = {
     "csv": "text/csv",
     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 }
+_EXPENSE_SELECT_JOIN = (
+    "SELECT expenses.id, expenses.vehicle_id, vehicles.name AS vehicle_name, "
+    "expenses.incurred_on, expenses.category::text AS category, expenses.amount, "
+    "expenses.treatment::text AS treatment, expenses.notes "
+    "FROM expenses JOIN vehicles ON vehicles.id = expenses.vehicle_id "
+)
+
+
+@dataclass(frozen=True)
+class _RangeReportData:
+    tz: ZoneInfo
+    start: date
+    end: date
+    report: RangeReport
+    trips: list[dict]
+    rates: dict[int, YearRate]
+
+
+@dataclass(frozen=True)
+class _AnnualReportData:
+    tz: ZoneInfo
+    report: AnnualReport
+    trips: list[dict]
+    rates: dict[int, YearRate]
+    odometer_coverage: list[VehicleCoverage]
+    expenses: list[dict]
+    expense_report: ExpenseReport
 
 
 def parse_date_range(
@@ -168,14 +203,14 @@ def _parse_range_query_dates(from_str: str, to_str: str) -> tuple[date, date]:
     """Strict `from`/`to` (`YYYY-MM-DD`) parsing for the range-report
     routes. Unlike `parse_date_range`'s open-ended-on-junk trip-list filter
     (a bad date there just means "no filter"), there's no sensible default
-    range for a report to fall back to — malformed or missing `from`/`to`
+    range for a report to fall back to. Malformed or missing `from`/`to`
     is a plain 400, never a silently empty or year-wide report.
     """
     try:
         return date.fromisoformat(from_str), date.fromisoformat(to_str)
     except ValueError:
         raise HTTPException(
-            status_code=400, detail="Invalid date — 'from' and 'to' must both be YYYY-MM-DD"
+            status_code=400, detail="Invalid date: 'from' and 'to' must both be YYYY-MM-DD"
         )
 
 
@@ -204,7 +239,7 @@ def _parse_vehicle_id(vehicle: str) -> int | None | Literal["none"]:
 def _parse_vehicle_form(vehicle_id: str) -> int | None:
     """Form-field counterpart of `_parse_vehicle_id`: empty means "no
     vehicle" (NULL), but junk in a POSTed field is a 400 rather than being
-    silently treated as unset — a write should never guess.
+    silently treated as unset. A write should never guess.
     """
     try:
         return int(vehicle_id) if vehicle_id else None
@@ -337,22 +372,6 @@ def _url_with_filters(path: str, from_str: str, to_str: str, vehicle_str: str, *
     return f"{path}?{urlencode(params)}" if params else path
 
 
-def _filter_url_factory(from_str: str, to_str: str, vehicle_str: str):
-    """Template-callable building the category pills' `/trips` links."""
-    return lambda category: _url_with_filters(
-        "/trips", from_str, to_str, vehicle_str, category=category
-    )
-
-
-def _export_url_factory(category: str, from_str: str, to_str: str, vehicle_str: str):
-    """Template-callable building `/export` links carrying the current
-    filter, so an export always matches what's on screen.
-    """
-    return lambda fmt: _url_with_filters(
-        "/export", from_str, to_str, vehicle_str, format=fmt, category=category
-    )
-
-
 def _month_bounds(year: int, month: int, tz: ZoneInfo) -> tuple[datetime, datetime]:
     start = datetime(year, month, 1, tzinfo=tz)
     end = (
@@ -419,7 +438,7 @@ async def _fetch_range_trips_in(conn, tz: ZoneInfo, start: date, end: date) -> t
     so a trip near the boundary can only be excluded, never mis-attributed.
     `end + 1 day` is computed on the plain `date` (not by adding a timedelta
     to an aware datetime) so a DST transition can't shift the boundary's
-    local day — same reason `_month_bounds` builds its boundary directly.
+    local day, for the same reason `_month_bounds` builds its boundary directly.
     """
     range_start = datetime(start.year, start.month, start.day, tzinfo=tz)
     next_day = end + timedelta(days=1)
@@ -445,7 +464,7 @@ async def _fetch_range_trips(pool, tz: ZoneInfo, start: date, end: date) -> tupl
 
 async def _fetch_year_odometer_coverage(pool, tz: ZoneInfo, year: int, trips: list[dict]) -> list:
     """Per-vehicle odometer coverage for the report year, computed outside
-    `build_annual_report` from the same `trips` the report already fetched —
+    `build_annual_report` from the same `trips` the report already fetched,
     only the year's readings need a query. The upper bound is `<=
     next_year_start` (not `<`) so a reading recorded exactly at midnight
     Jan 1 of the following year, the one reading that actually brackets the
@@ -496,11 +515,8 @@ async def _fetch_year_expense_report(pool, tz: ZoneInfo, year: int, trips: list[
     async with pool.connection() as conn:
         expense_cur = conn.cursor(row_factory=dict_row)
         await expense_cur.execute(
-            "SELECT expenses.id, expenses.vehicle_id, vehicles.name AS vehicle_name, "
-            "expenses.incurred_on, expenses.category::text AS category, expenses.amount, "
-            "expenses.treatment::text AS treatment, expenses.notes "
-            "FROM expenses JOIN vehicles ON vehicles.id = expenses.vehicle_id "
-            "WHERE expenses.incurred_on >= %s AND expenses.incurred_on < %s "
+            _EXPENSE_SELECT_JOIN
+            + "WHERE expenses.incurred_on >= %s AND expenses.incurred_on < %s "
             "ORDER BY expenses.incurred_on, expenses.id",
             (date(year, 1, 1), date(year + 1, 1, 1)),
         )
@@ -514,6 +530,33 @@ async def _fetch_year_expense_report(pool, tz: ZoneInfo, year: int, trips: list[
         )
         readings = await reading_cur.fetchall()
     return expenses, build_expense_report(year, trips, expenses, readings, rates, tz)
+
+
+async def _build_range_report_data(
+    request: Request, from_str: str, to_str: str,
+) -> _RangeReportData:
+    tz = request.app.state.config.display_tz
+    start, end = _parse_range_query_dates(from_str, to_str)
+    trips, rates = await _fetch_range_trips(request.app.state.pool, tz, start, end)
+    try:
+        report = build_range_report(trips, rates, tz, start, end)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return _RangeReportData(tz, start, end, report, trips, rates)
+
+
+async def _build_annual_report_data(request: Request, year: int) -> _AnnualReportData:
+    pool = request.app.state.pool
+    tz = request.app.state.config.display_tz
+    trips, rates = await _fetch_range_trips(
+        pool, tz, date(year, 1, 1), date(year, 12, 31)
+    )
+    report = build_annual_report(trips, rates, tz, year)
+    odometer_coverage = await _fetch_year_odometer_coverage(pool, tz, year, trips)
+    expenses, expense_report = await _fetch_year_expense_report(pool, tz, year, trips, rates)
+    return _AnnualReportData(
+        tz, report, trips, rates, odometer_coverage, expenses, expense_report
+    )
 
 
 def _parse_expense_input(
@@ -556,7 +599,7 @@ async def _fetch_trip(pool, trip_id: int) -> dict:
 
 async def _resolve_missing_trip_osrm_hint(request: Request, bridge_trip: str) -> str | None:
     """The missing-trip badge's road-distance suggestion, resolved only when
-    a badge's prefill link is followed — never per trip-list row. `bridge_trip`
+    a badge's prefill link is followed, never per trip-list row. `bridge_trip`
     carries the later trip's id so this can re-fetch the coordinates itself
     rather than trusting lat/lon round-tripped through the URL. Degrades to
     `None` (no hint, not an error) on a malformed/stale id, missing OSRM
@@ -591,7 +634,7 @@ async def _resolve_missing_trip_osrm_hint(request: Request, bridge_trip: str) ->
         return None
     if distance_m is None:
         return None
-    return f"~{distance_m / METERS_PER_MILE:.1f} mi by road"
+    return f"~{format_miles(distance_m)} mi by road"
 
 
 async def _fetch_trip_card_context(pool, trip_id: int) -> dict:
@@ -619,7 +662,7 @@ def _trip_edit_values(trip: dict, tz: ZoneInfo) -> dict[str, str]:
         "date": started_at.strftime("%Y-%m-%d"),
         "start_time": started_at.strftime("%H:%M"),
         "end_time": ended_at.strftime("%H:%M"),
-        "distance": f"{float(trip['distance_m']) / METERS_PER_MILE:.1f}",
+        "distance": format_miles(float(trip["distance_m"])),
     }
 
 
@@ -682,8 +725,8 @@ async def _fetch_odometer_context(conn) -> list[dict]:
     itself), each with its readings (newest first) and, once it has >=2,
     the `ReconInterval` table between them. Grouped in Python rather than
     with a per-vehicle query or a window-function join: the vehicle/reading
-    counts here are small, and this keeps `app.odometer.reconcile` — the
-    part that actually needs to be correct — entirely out of SQL.
+    counts here are small, and this keeps `app.odometer.reconcile` (the
+    part that actually needs to be correct) entirely out of SQL.
     """
     vehicles = await list_vehicles(conn, include_inactive=True)
 
@@ -696,11 +739,11 @@ async def _fetch_odometer_context(conn) -> list[dict]:
     for row in await reading_cur.fetchall():
         readings_by_vehicle.setdefault(row["vehicle_id"], []).append(row)
 
-    # Every trip with a vehicle, not just the report year — this view is a
+    # Every trip with a vehicle, not just the report year. This view is a
     # running ledger, unlike the annual report's year-scoped coverage.
     trip_cur = conn.cursor(row_factory=dict_row)
     await trip_cur.execute(
-        "SELECT vehicle_id, started_at, COALESCE(distance_snapped_m, distance_m) AS display_distance_m "
+        f"SELECT vehicle_id, started_at, {DISPLAY_DISTANCE_SQL} AS display_distance_m "
         "FROM trips WHERE vehicle_id IS NOT NULL"
     )
     trips_by_vehicle: dict[int, list[tuple]] = {}
@@ -722,6 +765,21 @@ async def _fetch_odometer_context(conn) -> list[dict]:
     return result
 
 
+async def _render_vehicles_table(request: Request, conn):
+    vehicles = await list_vehicles(conn, include_inactive=True)
+    return request.app.state.templates.TemplateResponse(
+        request, "_vehicles_table.html", {"vehicles": vehicles}
+    )
+
+
+async def _render_odometer_table(request: Request, conn):
+    vehicles = await list_vehicles(conn, include_inactive=True)
+    odometer = await _fetch_odometer_context(conn)
+    return request.app.state.templates.TemplateResponse(
+        request, "_odometer_table.html", {"vehicles": vehicles, "odometer": odometer}
+    )
+
+
 async def _fetch_device_fixes(conn) -> list[dict]:
     """One row per device that has ever posted a point, so a misconfigured
     phone (wrong tid, stale credentials, app killed by the OS) is visible on
@@ -736,12 +794,6 @@ async def _fetch_device_fixes(conn) -> list[dict]:
         "FROM points GROUP BY device ORDER BY device"
     )
     return await cur.fetchall()
-
-
-async def _fetch_schema_version(conn) -> int:
-    cur = await conn.execute("SELECT COALESCE(max(version), 0) FROM schema_migrations")
-    row = await cur.fetchone()
-    return row[0]
 
 
 def _side_desc(place_id: int | None, kind: str | None, place_names: dict[int, str]) -> str:
@@ -804,7 +856,7 @@ async def _apply_human_tag(
     *, update_purpose: bool = False,
 ) -> None:
     """Set tag_source='human' unconditionally, even on a clear back to
-    'unclassified' — the load-bearing line for human-tag supremacy: the
+    'unclassified'. This is the load-bearing line for human-tag supremacy: the
     auto-tagger (app.autotag) only touches rows with tag_source NULL or
     'rule', so a deliberate human choice can never be overwritten by a rule.
     Shared by the list-view tag buttons and /review's tag-and-advance so the
@@ -841,7 +893,7 @@ def _review_url(from_str: str, to_str: str, vehicle_str: str) -> str:
 async def _trip_position(conn, trip_id: int) -> tuple[datetime, int] | None:
     """The `(started_at, id)` cursor a review pass advances past. Deliberately
     not filtered by category: tag-and-advance calls this on a trip that has
-    just left the unclassified set. None means the trip vanished mid-pass —
+    just left the unclassified set. None means the trip vanished mid-pass,
     callers fall back to no cursor, restarting from the oldest trip rather
     than 404ing.
     """
@@ -861,7 +913,9 @@ async def _delete_trip_in(conn, trip_id: int) -> tuple[datetime, int]:
     later detector passes honor the override without rewriting unrelated trips.
     Manual trips remain a direct row DELETE.
     """
-    await conn.execute("SELECT pg_advisory_xact_lock(%s)", (ADVISORY_LOCK_KEY,))
+    await conn.execute(
+        "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
+    )
     cur = await conn.execute(
         "SELECT device, source::text, started_at, ended_at "
         "FROM trips WHERE id = %s FOR UPDATE",
@@ -892,7 +946,7 @@ async def _fetch_review_card(
     load). `remaining` counts matches at or after the returned trip, so
     "N remaining" includes the trip on screen. `state` distinguishes an
     empty filtered set ("empty": nothing ever matched) from an exhausted
-    pass ("done": the cursor ran out but a fresh load would find trips) —
+    pass ("done": the cursor ran out but a fresh load would find trips),
     review.html renders the two differently.
     """
     extra_where, extra_params = "", []
@@ -1010,20 +1064,20 @@ def make_router() -> APIRouter:
         weekly_start = max(year_start, week_start)
         async with pool.connection() as conn:
             category_cur = await conn.execute(
-                "SELECT category::text, count(*), COALESCE(SUM(COALESCE(distance_snapped_m, distance_m)), 0) "
+                f"SELECT category::text, count(*), COALESCE(SUM({DISPLAY_DISTANCE_SQL}), 0) "
                 "FROM trips WHERE started_at >= %s AND started_at < %s GROUP BY category",
                 (year_start, next_year_start),
             )
             weekly_cur = await conn.execute(
                 "SELECT date_trunc('week', started_at AT TIME ZONE %s)::date, category::text, count(*), "
-                "COALESCE(SUM(COALESCE(distance_snapped_m, distance_m)), 0) "
+                f"COALESCE(SUM({DISPLAY_DISTANCE_SQL}), 0) "
                 "FROM trips WHERE started_at >= %s AND started_at < %s "
                 "GROUP BY 1, 2 ORDER BY 1",
                 (tz.key, weekly_start, next_year_start),
             )
             monthly_cur = await conn.execute(
                 "SELECT date_trunc('month', started_at AT TIME ZONE %s)::date, category::text, count(*), "
-                "COALESCE(SUM(COALESCE(distance_snapped_m, distance_m)), 0) "
+                f"COALESCE(SUM({DISPLAY_DISTANCE_SQL}), 0) "
                 "FROM trips WHERE started_at >= %s AND started_at < %s "
                 "GROUP BY 1, 2 ORDER BY 1",
                 (tz.key, year_start, next_year_start),
@@ -1031,7 +1085,7 @@ def make_router() -> APIRouter:
             routes_cur = await conn.execute(
                 "WITH named_routes AS ("
                 " SELECT LEAST(start_place_id, end_place_id) AS a_id, GREATEST(start_place_id, end_place_id) AS b_id, "
-                " count(*) AS trip_count, COALESCE(SUM(COALESCE(distance_snapped_m, distance_m)), 0) AS total_m "
+                f" count(*) AS trip_count, COALESCE(SUM({DISPLAY_DISTANCE_SQL}), 0) AS total_m "
                 " FROM trips WHERE started_at >= %s AND started_at < %s "
                 " AND start_place_id IS NOT NULL AND end_place_id IS NOT NULL "
                 " GROUP BY 1, 2) "
@@ -1076,7 +1130,7 @@ def make_router() -> APIRouter:
         week: str = Query(""),
     ):
         """The bounded weekly dashboard. `week` is an anchor, not a trusted
-        Monday — `parse_week_anchor`/`week_bounds` normalize it forgivingly
+        Monday. `parse_week_anchor`/`week_bounds` normalize it forgivingly
         so a stale `?week=` link never 400s.
 
         Only two queries: one `TRIP_COLUMNS` fetch for the week and one
@@ -1116,7 +1170,9 @@ def make_router() -> APIRouter:
         # Same getattr-with-default as app/main.py's missing_trip_badge Jinja
         # global: one source for this threshold, not a second knob that could
         # drift from what the trip-card badges use.
-        threshold_m = getattr(config, "missing_trip_gap_m", 1000.0)
+        threshold_m = getattr(
+            config, "missing_trip_gap_m", DEFAULT_MISSING_TRIP_GAP_M
+        )
         dashboard = build_week_dashboard(
             trips, expense_total, rates, anchor, tz, now, threshold_m,
         )
@@ -1157,8 +1213,8 @@ def make_router() -> APIRouter:
             await aggregate_cur.execute(
                 "SELECT date_trunc('month', started_at AT TIME ZONE %s)::date AS local_month, "
                 "count(*) AS trip_count, "
-                "COALESCE(SUM(COALESCE(distance_snapped_m, distance_m)), 0) AS total_m, "
-                "COALESCE(SUM(COALESCE(distance_snapped_m, distance_m)) "
+                f"COALESCE(SUM({DISPLAY_DISTANCE_SQL}), 0) AS total_m, "
+                f"COALESCE(SUM({DISPLAY_DISTANCE_SQL}) "
                 "FILTER (WHERE category = 'business'), 0) AS business_m "
                 f"FROM trips {where} GROUP BY local_month ORDER BY local_month DESC",
                 [tz.key, *params],
@@ -1185,7 +1241,7 @@ def make_router() -> APIRouter:
             # half at its own rate (see sum_month_deductions).
             ytd_cur = await conn.execute(
                 "SELECT EXTRACT(MONTH FROM started_at AT TIME ZONE %s)::int AS m,"
-                " COALESCE(SUM(COALESCE(distance_snapped_m, distance_m)), 0) FROM trips"
+                f" COALESCE(SUM({DISPLAY_DISTANCE_SQL}), 0) FROM trips"
                 " WHERE category = 'business' AND started_at >= %s AND started_at < %s"
                 " GROUP BY m",
                 (tz.key, year_start, next_year_start),
@@ -1240,8 +1296,9 @@ def make_router() -> APIRouter:
                 "user": user, "csrf": request.session.get("csrf", ""),
                 "filter_category": category, "filter_from": from_, "filter_to": to,
                 "filter_vehicle": vehicle,
-                "filter_url": _filter_url_factory(from_, to, vehicle),
-                "export_url": _export_url_factory(category, from_, to, vehicle),
+                "filter_url": lambda category: _url_with_filters("/trips", from_, to, vehicle, category=category),
+                # export link must carry the current filter so an export matches what is on screen
+                "export_url": lambda fmt: _url_with_filters("/export", from_, to, vehicle, format=fmt, category=category),
                 "review_url": _review_url(from_, to, vehicle),
                 "ytd_year": ytd_year,
                 "ytd_deduction": sum_month_deductions(ytd_by_month, ytd_year, rates),
@@ -1280,7 +1337,7 @@ def make_router() -> APIRouter:
         vehicle: str = Query(""),
     ):
         """Next-card partial, used by Skip. `after` is the currently displayed
-        trip's id — its own `(started_at, id)` becomes the cursor, so a
+        trip's id. Its own `(started_at, id)` becomes the cursor, so a
         skipped trip can't reappear within this pass.
         """
         where, params = _review_filter_sql(request, from_, to, vehicle)
@@ -1332,7 +1389,7 @@ def make_router() -> APIRouter:
         user: dict = Depends(require_user),
     ):
         """Tag-and-advance in one round trip. Unlike
-        the list-view `tag_trip`, a review card is by definition unclassified —
+        the list-view `tag_trip`, a review card is by definition unclassified,
         there's nothing to clear, so category is restricted to the two real
         tags. The just-tagged trip's own position becomes the next cursor: it
         has left the unclassified set, so cursor-forward and "next remaining"
@@ -1458,7 +1515,7 @@ def make_router() -> APIRouter:
         year = default_report_year(datetime.now(tz))
         return RedirectResponse(f"/report/{year}", status_code=302)
 
-    # Registered ahead of "/report/{year}" (and its /export) — FastAPI/
+    # Registered ahead of "/report/{year}" (and its /export). FastAPI/
     # Starlette match a bare "{year}" path segment structurally before ever
     # trying to convert it to int, so "/report/range" would otherwise be
     # swallowed by "/report/{year}" and 422 on int-parsing "range" instead of
@@ -1470,18 +1527,11 @@ def make_router() -> APIRouter:
         to: str = Query(""),
         user: dict = Depends(require_user),
     ):
-        tz = request.app.state.config.display_tz
-        start, end = _parse_range_query_dates(from_, to)
-        pool = request.app.state.pool
-        trips, rates = await _fetch_range_trips(pool, tz, start, end)
-        try:
-            report = build_range_report(trips, rates, tz, start, end)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+        data = await _build_range_report_data(request, from_, to)
         return request.app.state.templates.TemplateResponse(
             request, "report_range.html",
             {
-                "report": report,
+                "report": data.report,
                 "user": user, "csrf": request.session.get("csrf", ""),
             },
         )
@@ -1493,18 +1543,17 @@ def make_router() -> APIRouter:
         to: str = Query(""),
         user: dict = Depends(require_user),
     ):
-        tz = request.app.state.config.display_tz
-        start, end = _parse_range_query_dates(from_, to)
-        pool = request.app.state.pool
-        trips, rates = await _fetch_range_trips(pool, tz, start, end)
-        try:
-            report = build_range_report(trips, rates, tz, start, end)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+        data = await _build_range_report_data(request, from_, to)
         # XLSX serialization is CPU-bound; offload so it doesn't block the
         # event loop for other requests while the report builds.
-        content = await asyncio.to_thread(to_range_report_xlsx, report, trips, rates, tz)
-        filename = f"mileage-report-{range_filename_slug(start, end)}.xlsx"
+        content = await asyncio.to_thread(
+            to_range_report_xlsx,
+            data.report,
+            data.trips,
+            data.rates,
+            data.tz,
+        )
+        filename = f"mileage-report-{range_filename_slug(data.start, data.end)}.xlsx"
         return Response(
             content=content,
             media_type=EXPORT_MEDIA_TYPES["xlsx"],
@@ -1517,19 +1566,16 @@ def make_router() -> APIRouter:
         year: int = Path(ge=1, le=9998),  # +1 must also stay in datetime's 1-9999 range
         user: dict = Depends(require_user),
     ):
-        pool = request.app.state.pool
-        tz = request.app.state.config.display_tz
-        trips, rates = await _fetch_range_trips(pool, tz, date(year, 1, 1), date(year, 12, 31))
-        report = build_annual_report(trips, rates, tz, year)
-        odometer_coverage = await _fetch_year_odometer_coverage(pool, tz, year, trips)
-        expenses, expense_report = await _fetch_year_expense_report(pool, tz, year, trips, rates)
+        data = await _build_annual_report_data(request, year)
         return request.app.state.templates.TemplateResponse(
             request, "report.html",
             {
-                "report": report, "odometer_coverage": odometer_coverage,
-                "expenses": expenses, "expense_report": expense_report,
+                "report": data.report, "odometer_coverage": data.odometer_coverage,
+                "expenses": data.expenses, "expense_report": data.expense_report,
                 "user": user, "csrf": request.session.get("csrf", ""),
-                "next_year_disabled": next_year_disabled(report.year, datetime.now(tz)),
+                "next_year_disabled": next_year_disabled(
+                    data.report.year, datetime.now(data.tz)
+                ),
             },
         )
 
@@ -1539,16 +1585,18 @@ def make_router() -> APIRouter:
         year: int = Path(ge=1, le=9998),
         user: dict = Depends(require_user),
     ):
-        pool = request.app.state.pool
-        tz = request.app.state.config.display_tz
-        trips, rates = await _fetch_range_trips(pool, tz, date(year, 1, 1), date(year, 12, 31))
-        report = build_annual_report(trips, rates, tz, year)
-        odometer_coverage = await _fetch_year_odometer_coverage(pool, tz, year, trips)
-        expenses, expense_report = await _fetch_year_expense_report(pool, tz, year, trips, rates)
+        data = await _build_annual_report_data(request, year)
         # XLSX serialization is CPU-bound; offload so it doesn't block the
         # event loop for other requests while the report builds.
         content = await asyncio.to_thread(
-            to_report_xlsx, report, trips, rates, tz, odometer_coverage, expense_report, expenses
+            to_report_xlsx,
+            data.report,
+            data.trips,
+            data.rates,
+            data.tz,
+            data.odometer_coverage,
+            data.expense_report,
+            data.expenses,
         )
         return Response(
             content=content,
@@ -1579,10 +1627,8 @@ def make_router() -> APIRouter:
                 clauses.append("expenses.vehicle_id = %s")
                 params.append(vehicle_id)
             await cur.execute(
-                "SELECT expenses.id, expenses.vehicle_id, vehicles.name AS vehicle_name, "
-                "expenses.incurred_on, expenses.category::text AS category, expenses.amount, "
-                "expenses.treatment::text AS treatment, expenses.notes "
-                "FROM expenses JOIN vehicles ON vehicles.id = expenses.vehicle_id WHERE "
+                _EXPENSE_SELECT_JOIN
+                + "WHERE "
                 + " AND ".join(clauses)
                 + " ORDER BY expenses.incurred_on DESC, expenses.id DESC",
                 params,
@@ -1983,7 +2029,7 @@ def make_router() -> APIRouter:
         selection is a contiguous run of detected trips for one device,
         suppresses the real stay between each consecutive pair, reprocesses
         the device once, then overwrites the resulting trip's
-        tag/purpose/notes with what the user submitted — reconcile keeps the
+        tag/purpose/notes with what the user submitted. Reconcile keeps the
         *longest* original trip's fields, an implementation detail the user
         shouldn't have to think about. Returns the merged trip's id.
 
@@ -2015,7 +2061,9 @@ def make_router() -> APIRouter:
         pool = request.app.state.pool
         runner = request.app.state.detector_runner
         async with pool.connection() as conn:
-            await conn.execute("SELECT pg_advisory_xact_lock(%s)", (ADVISORY_LOCK_KEY,))
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
+            )
 
             # Checked before the trip-selection query below excludes imported
             # trips (AND NOT imported): that exclusion alone would just make
@@ -2137,21 +2185,17 @@ def make_router() -> APIRouter:
                 "this instance, so it cannot be merged.",
             )
 
+        # direction is validated upstream to "next"/"prev" before this point,
+        # so interpolating op/order (rather than %s-parameterizing them) is
+        # safe here; device and started_at stay as %s params.
+        op, order = (">", "ASC") if direction == "next" else ("<", "DESC")
         async with pool.connection() as conn:
-            if direction == "next":
-                cur = await conn.execute(
-                    "SELECT id FROM trips WHERE device = %s "
-                    "AND source = 'detected' AND NOT imported AND started_at > %s "
-                    "ORDER BY started_at ASC LIMIT 1",
-                    (trip["device"], trip["started_at"]),
-                )
-            else:
-                cur = await conn.execute(
-                    "SELECT id FROM trips WHERE device = %s "
-                    "AND source = 'detected' AND NOT imported AND started_at < %s "
-                    "ORDER BY started_at DESC LIMIT 1",
-                    (trip["device"], trip["started_at"]),
-                )
+            cur = await conn.execute(
+                "SELECT id FROM trips WHERE device = %s "
+                f"AND source = 'detected' AND NOT imported AND started_at {op} %s "
+                f"ORDER BY started_at {order} LIMIT 1",
+                (trip["device"], trip["started_at"]),
+            )
             neighbor = await cur.fetchone()
             if not neighbor:
                 raise HTTPException(status_code=400, detail="No adjacent trip to merge with")
@@ -2294,7 +2338,9 @@ def make_router() -> APIRouter:
         pool = request.app.state.pool
         runner = request.app.state.detector_runner
         async with pool.connection() as conn:
-            await conn.execute("SELECT pg_advisory_xact_lock(%s)", (ADVISORY_LOCK_KEY,))
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
+            )
             cur = await conn.execute(
                 "SELECT device, source::text, started_at, ended_at "
                 "FROM trips WHERE id = %s FOR UPDATE",
@@ -2433,10 +2479,7 @@ def make_router() -> APIRouter:
                 conn, name, make.strip() or None, model.strip() or None,
                 plate.strip() or None, is_default=(is_default == "1"),
             )
-            vehicles = await list_vehicles(conn, include_inactive=True)
-        return request.app.state.templates.TemplateResponse(
-            request, "_vehicles_table.html", {"vehicles": vehicles}
-        )
+            return await _render_vehicles_table(request, conn)
 
     @router.post("/settings/vehicles/{vehicle_id}/update", dependencies=[Depends(require_csrf)])
     async def edit_vehicle(
@@ -2457,10 +2500,7 @@ def make_router() -> APIRouter:
                 conn, vehicle_id, name, make.strip() or None,
                 model.strip() or None, plate.strip() or None,
             )
-            vehicles = await list_vehicles(conn, include_inactive=True)
-        return request.app.state.templates.TemplateResponse(
-            request, "_vehicles_table.html", {"vehicles": vehicles}
-        )
+            return await _render_vehicles_table(request, conn)
 
     @router.post("/settings/vehicles/{vehicle_id}/default", dependencies=[Depends(require_csrf)])
     async def make_vehicle_default(
@@ -2469,10 +2509,7 @@ def make_router() -> APIRouter:
         pool = request.app.state.pool
         async with pool.connection() as conn:
             await set_default_vehicle(conn, vehicle_id)
-            vehicles = await list_vehicles(conn, include_inactive=True)
-        return request.app.state.templates.TemplateResponse(
-            request, "_vehicles_table.html", {"vehicles": vehicles}
-        )
+            return await _render_vehicles_table(request, conn)
 
     @router.post("/settings/vehicles/{vehicle_id}/deactivate", dependencies=[Depends(require_csrf)])
     async def deactivate_vehicle_route(
@@ -2481,10 +2518,7 @@ def make_router() -> APIRouter:
         pool = request.app.state.pool
         async with pool.connection() as conn:
             await deactivate_vehicle(conn, vehicle_id)
-            vehicles = await list_vehicles(conn, include_inactive=True)
-        return request.app.state.templates.TemplateResponse(
-            request, "_vehicles_table.html", {"vehicles": vehicles}
-        )
+            return await _render_vehicles_table(request, conn)
 
     @router.post("/settings/vehicles/auto_assign", dependencies=[Depends(require_csrf)])
     async def set_auto_assign_default_vehicle_route(
@@ -2512,7 +2546,7 @@ def make_router() -> APIRouter:
         user: dict = Depends(require_user),
     ):
         """Same date/time parse path and mi->meters conversion as
-        `add_manual_trip`, so a 100 mi entry stores 160934.4 m — one
+        `add_manual_trip`, so a 100 mi entry stores 160934.4 m, one
         canonical-meters convention across the whole app.
         """
         tz = request.app.state.config.display_tz
@@ -2539,11 +2573,7 @@ def make_router() -> APIRouter:
                 raise HTTPException(status_code=400, detail="No such vehicle")
             except errors.UniqueViolation:
                 raise HTTPException(status_code=400, detail="A reading already exists at that date/time")
-            vehicles = await list_vehicles(conn, include_inactive=True)
-            odometer = await _fetch_odometer_context(conn)
-        return request.app.state.templates.TemplateResponse(
-            request, "_odometer_table.html", {"vehicles": vehicles, "odometer": odometer}
-        )
+            return await _render_odometer_table(request, conn)
 
     @router.post("/settings/odometer/{reading_id}/delete", dependencies=[Depends(require_csrf)])
     async def delete_odometer_reading(
@@ -2552,11 +2582,7 @@ def make_router() -> APIRouter:
         pool = request.app.state.pool
         async with pool.connection() as conn:
             await conn.execute("DELETE FROM odometer_readings WHERE id = %s", (reading_id,))
-            vehicles = await list_vehicles(conn, include_inactive=True)
-            odometer = await _fetch_odometer_context(conn)
-        return request.app.state.templates.TemplateResponse(
-            request, "_odometer_table.html", {"vehicles": vehicles, "odometer": odometer}
-        )
+            return await _render_odometer_table(request, conn)
 
     @router.post("/settings/rates", dependencies=[Depends(require_csrf)])
     async def upsert_rate(

@@ -9,9 +9,9 @@ import httpx
 
 import app.ui as ui
 from app.config import Config
+from app.db import _fetch_schema_version
 from app.detector.runner import DETECTOR_VERSION
 from app.main import create_app, make_templates
-from app.ui import _fetch_schema_version
 
 ROOT = Path(__file__).parents[1]
 TZ = ZoneInfo("UTC")

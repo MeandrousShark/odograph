@@ -92,9 +92,20 @@ def _config(**overrides) -> SimpleNamespace:
         email_enabled=False, smtp_username="", smtp_password="",
         smtp_host="", smtp_port=587, smtp_security="starttls", smtp_tls_insecure=False,
         oidc_configured=False, admin_token="", app_url="", dev_no_auth=False,
-        raw_message_retention_days=365.0, odometer_reminder_enabled=False,
+        raw_message_retention_days=365.0, odometer_reminder_requested=False,
     )
     defaults.update(overrides)
+    defaults.setdefault("snap_enabled", bool(defaults["osrm_url"]))
+    defaults.setdefault(
+        "retention_enabled", defaults["raw_message_retention_days"] > 0
+    )
+    defaults.setdefault(
+        "nudge_enabled", bool(defaults["ntfy_url"] and defaults["ntfy_topic"])
+    )
+    defaults.setdefault(
+        "odometer_reminder_enabled",
+        defaults["nudge_enabled"] and defaults["odometer_reminder_requested"],
+    )
     return SimpleNamespace(**defaults)
 
 

@@ -28,9 +28,10 @@ import pytest
 
 import app.main as main_module
 from app.config import Config
-from app.db import make_pool, run_migrations
+from app.db import DETECTOR_ADVISORY_LOCK_KEY, make_pool, run_migrations
 from app.detector.core import Params
-from app.detector.runner import ADVISORY_LOCK_KEY, DetectorRunner, DetectorScheduler
+from app.detector.runner import DetectorRunner, DetectorScheduler
+from app.diagnose import worker_reports_from_config
 from app.main import create_app
 from app.worker import RUN_SKIPPED, IntervalWorker, PokeSweepWorker
 
@@ -93,7 +94,9 @@ async def _run_detector_scheduler_records_skip_scenario():
         # Hold the detector's advisory lock in an uncommitted transaction on
         # a second connection, mimicking a concurrent instance's in-flight
         # run -- same technique as test_runner_db.py's lock tests.
-        await holder.execute("SELECT pg_advisory_xact_lock(%s)", (ADVISORY_LOCK_KEY,))
+        await holder.execute(
+            "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
+        )
 
         runner = DetectorRunner(pool, Params())
         scheduler = DetectorScheduler(runner, debounce_s=60.0, sweep_s=900.0)
@@ -189,6 +192,102 @@ OPTIONAL_ENV_TO_CLEAR = (
     "NTFY_URL", "NTFY_TOPIC", "SMTP_HOST", "EMAIL_FROM", "EMAIL_TO",
     "ODOMETER_REMINDER", "OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET",
 )
+
+
+class _FakeLifespanResource:
+    def __init__(self, *args, **kwargs):
+        self.closed = False
+
+    async def open(self, wait=True):
+        pass
+
+    async def start(self):
+        pass
+
+    async def stop(self):
+        pass
+
+    async def close(self):
+        self.closed = True
+
+    async def aclose(self):
+        self.closed = True
+
+
+@pytest.mark.parametrize(
+    ("environment", "expected"),
+    [
+        ({}, (False, True, False, False, False)),
+        (
+            {
+                "OSRM_URL": "http://osrm.internal:5000",
+                "RAW_MESSAGE_RETENTION_DAYS": "0",
+                "NTFY_URL": "http://ntfy.internal",
+                "NTFY_TOPIC": "trips",
+                "SMTP_HOST": "smtp.internal",
+                "EMAIL_FROM": "from@example.com",
+                "EMAIL_TO": "to@example.com",
+            },
+            (True, False, True, True, True),
+        ),
+    ],
+)
+def test_lifespan_and_diagnostics_agree_on_config_worker_predicates(
+    monkeypatch, environment, expected,
+):
+    for key, value in REQUIRED_ENV.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused/unused")
+    monkeypatch.setenv("DEV_NO_AUTH", "1")
+    for key in OPTIONAL_ENV_TO_CLEAR + (
+        "RAW_MESSAGE_RETENTION_DAYS", "EMAIL_FROM", "EMAIL_TO",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in environment.items():
+        monkeypatch.setenv(key, value)
+    cfg = Config.from_env()
+
+    pool = _FakeLifespanResource()
+    monkeypatch.setattr(main_module, "make_pool", lambda url: pool)
+
+    async def _run_migrations(pool):
+        pass
+
+    monkeypatch.setattr(main_module, "run_migrations", _run_migrations)
+    monkeypatch.setattr(main_module.httpx, "AsyncClient", _FakeLifespanResource)
+    for name in (
+        "SnapWorker", "GeocodeWorker", "RetentionWorker", "NudgeWorker",
+        "OdometerReminderWorker", "EmailDigestWorker", "DetectorScheduler",
+    ):
+        monkeypatch.setattr(main_module, name, _FakeLifespanResource)
+    monkeypatch.setattr(main_module, "DetectorRunner", _FakeLifespanResource)
+    monkeypatch.setattr(main_module, "Mailer", _FakeLifespanResource)
+
+    app = create_app(cfg)
+
+    async def scenario():
+        async with app.router.lifespan_context(app):
+            startup = (
+                app.state.snap_worker is not None,
+                app.state.retention_worker is not None,
+                app.state.nudge_worker is not None,
+                app.state.odometer_reminder_worker is not None,
+                app.state.email_digest_worker is not None,
+            )
+            diagnostics = {
+                report.name: report.enabled for report in worker_reports_from_config(cfg)
+            }
+            reported = (
+                diagnostics["snap"],
+                diagnostics["retention"],
+                diagnostics["nudge"],
+                diagnostics["odometer_reminder"],
+                diagnostics["email_digest"],
+            )
+            assert startup == reported == expected
+
+    asyncio.run(scenario())
+    assert pool.closed is True
 
 
 def _configure_env(monkeypatch, **overrides) -> Config:

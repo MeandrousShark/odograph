@@ -13,9 +13,9 @@ import psycopg
 import pytest
 from fastapi import HTTPException
 
-from app.db import make_pool, run_migrations
+from app.db import DETECTOR_ADVISORY_LOCK_KEY, make_pool, run_migrations
 from app.detector.core import Params
-from app.detector.runner import ADVISORY_LOCK_KEY, DetectorRunner, load_trip_points
+from app.detector.runner import DetectorRunner, load_trip_points
 from app.ui import make_router
 from tests.synth import Drive, Stationary, build_track
 
@@ -88,7 +88,8 @@ async def _split_holds_lock_scenario() -> None:
             holder = await psycopg.AsyncConnection.connect(TEST_DB, autocommit=True)
             try:
                 cur = await holder.execute(
-                    "SELECT pg_try_advisory_xact_lock(%s)", (ADVISORY_LOCK_KEY,)
+                    "SELECT pg_try_advisory_xact_lock(%s)",
+                    (DETECTOR_ADVISORY_LOCK_KEY,),
                 )
                 got_lock = (await cur.fetchone())[0]
             finally:
@@ -113,7 +114,8 @@ async def _split_holds_lock_scenario() -> None:
         holder = await psycopg.AsyncConnection.connect(TEST_DB, autocommit=True)
         try:
             cur = await holder.execute(
-                "SELECT pg_try_advisory_xact_lock(%s)", (ADVISORY_LOCK_KEY,)
+                "SELECT pg_try_advisory_xact_lock(%s)",
+                (DETECTOR_ADVISORY_LOCK_KEY,),
             )
             assert (await cur.fetchone())[0] is True
         finally:
@@ -165,7 +167,9 @@ async def _split_reads_trip_fresh_under_lock_scenario() -> None:
         # races past a plain read.
         holder = await psycopg.AsyncConnection.connect(TEST_DB)
         try:
-            await holder.execute("SELECT pg_advisory_xact_lock(%s)", (ADVISORY_LOCK_KEY,))
+            await holder.execute(
+                "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
+            )
 
             split = _endpoint("/trips/{trip_id}/split")
             task = asyncio.create_task(

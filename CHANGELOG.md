@@ -27,6 +27,34 @@ reproduced here.
 - Complete before release: list every application, database, configuration,
   and operational break, or state explicitly that there are none.
 
+## [0.7.6] - 2026-08-10
+
+Maintenance release: punctuation consistency in the interface and exported
+files, plus a large internal refactor and test cleanup. No user-facing feature
+and no database migration; the schema stays at 19.
+
+### Changed
+
+- **Standard punctuation across the interface and exported files.** En and em
+  dashes in on-screen text and in exported CSV and spreadsheet files are
+  replaced with plain ASCII punctuation, so text renders consistently across
+  fonts, terminals, and spreadsheet tools.
+
+- **Substantial internal code consolidation.** Duplicated formatting, query,
+  notification, report, and structural code now each have a single owner, and
+  the test suite was audited and de-duplicated. These are internal changes with
+  no effect on behavior.
+
+### Supported upgrade path
+
+- `v0.7.0`, `v0.7.1`, `v0.7.2`, `v0.7.3`, `v0.7.4`, and `v0.7.5` may upgrade
+  directly to `v0.7.6`.
+
+### Breaking changes
+
+- None. There is no migration; the schema stays at 19. No configuration
+  changes, and no operational changes beyond the usual image pin bump.
+
 ## [0.7.5] - 2026-08-09
 
 Internal robustness release: concurrency correctness, background-worker

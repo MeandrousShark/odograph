@@ -1,11 +1,11 @@
 """Vehicle CRUD. Trips carry a nullable
 `vehicle_id` (migrations/008_vehicles.sql) so the per-vehicle IRS mileage
-deduction can be priced correctly — each vehicle has its own basis/
+deduction can be priced correctly -- each vehicle has its own basis/
 depreciation history in the taxpayer's own records, so lumping all trips
 into one deduction would be wrong once a second vehicle is in the mix.
 
 These helpers all take an already-open `conn` (not the pool) so a caller
-that needs several of them — e.g. `set_default_vehicle`'s two UPDATEs —
+that needs several of them -- e.g. `set_default_vehicle`'s two UPDATEs --
 gets them in the same transaction for free, the same convention
 `app/rates.py`'s `load_rates(conn)` uses.
 """
@@ -15,7 +15,7 @@ from psycopg.rows import dict_row
 
 
 async def list_vehicles(conn, include_inactive: bool = False) -> list[dict]:
-    """Active vehicles by default — the picker for *new* trip assignment
+    """Active vehicles by default -- the picker for *new* trip assignment
     (settings' add form, the manual-trip form, the filter bar) shouldn't
     offer a vehicle the user has retired. Callers that also need to render
     a trip's already-assigned (possibly inactive) vehicle pass
@@ -80,7 +80,7 @@ async def set_default_vehicle(conn, vehicle_id: int) -> None:
 async def deactivate_vehicle(conn, vehicle_id: int) -> None:
     """Soft-delete: `active = false` drops the vehicle from `list_vehicles`'
     default (new-selection) picker while leaving it, and every trip still
-    pointing at it, untouched — trips keep their vehicle_name via the
+    pointing at it, untouched -- trips keep their vehicle_name via the
     TRIP_COLUMNS subselect regardless of `active`.
 
     Also clears `is_default`: a retired vehicle staying flagged default

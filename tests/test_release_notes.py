@@ -27,18 +27,16 @@ CHANGELOG = """\
 ### Added
 
 - Tagged release artifacts.
-- **Security scan acceptance (pip-audit):** `GHSA-abcd-1234-wxyz` — No patched dependency release exists; exposure is not reachable in this deployment.
-- **Security scan acceptance (pip-audit):** `PYSEC-2026-42` — The affected optional code path is not installed.
-- **Security scan acceptance (pip-audit):** `CVE-2026-12345` — The vulnerable extra is not enabled.
-- **Security scan acceptance (Trivy linux/amd64):** `CVE-2026-22222` — The vulnerable binary is not invoked by the application.
-- **Security scan acceptance (Trivy all):** `CVE-2026-33333` — The base-image vendor fix is pending and the service is not exposed.
+- **Security scan acceptance (pip-audit):** `GHSA-abcd-1234-wxyz`: No patched dependency release exists; exposure is not reachable in this deployment.
+- **Security scan acceptance (pip-audit):** `PYSEC-2026-42`: The affected optional code path is not installed.
+- **Security scan acceptance (pip-audit):** `CVE-2026-12345`: The vulnerable extra is not enabled.
+- **Security scan acceptance (Trivy linux/amd64):** `CVE-2026-22222`: The vulnerable binary is not invoked by the application.
+- **Security scan acceptance (Trivy all):** `CVE-2026-33333`: The base-image vendor fix is pending and the service is not exposed.
 
 ## [0.5.1] - 2026-07-01
 
-- **Security scan acceptance (Trivy linux/arm64):** `CVE-2026-99999` — Applies only to the older release.
+- **Security scan acceptance (Trivy linux/arm64):** `CVE-2026-99999`: Applies only to the older release.
 """
-
-COLON_CHANGELOG = CHANGELOG.replace("` — ", "`: ")
 
 
 def test_extracts_exact_tag_notes_and_scoped_acceptances():
@@ -58,18 +56,15 @@ def test_extracts_exact_tag_notes_and_scoped_acceptances():
     assert result.trivy_ignores("linux/arm64") == ("CVE-2026-33333",)
 
 
-def test_colon_separated_acceptances_parse_identically_to_em_dash():
-    em_dash = release_notes.extract_release_notes(CHANGELOG, "v0.6.0-rc.2")
-    colon = release_notes.extract_release_notes(COLON_CHANGELOG, "v0.6.0-rc.2")
+def test_legacy_dash_separator_is_rejected():
+    legacy_changelog = CHANGELOG.replace("`: ", f"` {chr(0x2014)} ", 1)
 
-    assert colon.acceptances == em_dash.acceptances
-    assert colon.pip_audit_ignores == em_dash.pip_audit_ignores
-    assert colon.trivy_ignores("linux/amd64") == em_dash.trivy_ignores("linux/amd64")
-    assert colon.trivy_ignores("linux/arm64") == em_dash.trivy_ignores("linux/arm64")
+    with pytest.raises(release_notes.ReleaseNotesError, match="scan acceptance"):
+        release_notes.extract_release_notes(legacy_changelog, "v0.6.0-rc.2")
 
 
 def test_colon_acceptance_from_wrong_version_is_not_applied():
-    result = release_notes.extract_release_notes(COLON_CHANGELOG, "v0.5.1")
+    result = release_notes.extract_release_notes(CHANGELOG, "v0.5.1")
 
     assert result.pip_audit_ignores == ()
     assert result.trivy_ignores("linux/amd64") == ()
@@ -89,10 +84,6 @@ def test_no_acceptances_keeps_every_gate_fully_blocking():
 @pytest.mark.parametrize(
     "line",
     [
-        "- **Security scan acceptance (pip-audit):** `CVE-2026-12345` —",
-        "- **Security scan acceptance (Trivy):** `CVE-2026-12345` — A reason.",
-        "- **Security scan acceptance (Trivy linux/s390x):** `CVE-2026-12345` — A reason.",
-        "- **Security scan acceptance (pip-audit):** `NOT-A-NATIVE-ID` — A reason.",
         "- **Security scan acceptance (pip-audit):** `CVE-2026-12345`:",
         "- **Security scan acceptance (Trivy):** `CVE-2026-12345`: A reason.",
         "- **Security scan acceptance (Trivy linux/s390x):** `CVE-2026-12345`: A reason.",

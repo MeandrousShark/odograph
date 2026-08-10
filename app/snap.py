@@ -29,7 +29,7 @@ class MatchPoint:
 
 @dataclass(frozen=True)
 class SnapResult:
-    """`status` is never "pending" — pending is the DB default / the
+    """`status` is never "pending" -- pending is the DB default / the
     outcome of a transport error, neither of which ever reaches
     `parse_match_response` (illegal states unrepresentable).
     """
@@ -72,15 +72,15 @@ def downsample(points: list[MatchPoint], max_coords: int) -> list[MatchPoint]:
 
 def radiuses(points: list[MatchPoint], min_r: float = 20.0, max_r: float = 50.0) -> list[float]:
     """Per-point OSRM `radiuses` values, clamping accuracy_m into
-    [min_r, max_r]. A missing accuracy_m maps to max_r — treat "unknown"
+    [min_r, max_r]. A missing accuracy_m maps to max_r -- treat "unknown"
     as "least confident," not "perfectly accurate": guessing optimistic
     would let OSRM silently snap a bad fix to the wrong nearby road.
 
     The `radiuses` value is OSRM's *search radius* for candidate roads, not
     the GPS error itself, so the floor is deliberately well above real GPS
     accuracy. A fix's distance to the OSM road centerline is GPS error PLUS
-    a systematic baseline — lane offset, divided-carriageway half-width, and
-    OSM digitization error — that runs ~10-15m even for a pinpoint 2-5m fix.
+    a systematic baseline -- lane offset, divided-carriageway half-width, and
+    OSM digitization error -- that runs ~10-15m even for a pinpoint 2-5m fix.
     A tight floor (the original 5m) made OSRM find no candidate road for
     accurate fixes sitting just off the centerline and silently drop them as
     null tracepoints, truncating the snapped route partway to the
@@ -88,7 +88,7 @@ def radiuses(points: list[MatchPoint], min_r: float = 20.0, max_r: float = 50.0)
     ~12m of radius to match at all). 20m clears that with headroom while
     staying tight enough to not snap onto a wrong parallel road.
 
-    Deliberately independent of `app.config`/`MAX_ACCURACY_M` — the
+    Deliberately independent of `app.config`/`MAX_ACCURACY_M` -- the
     detector's accuracy gate and this clamp are two separately-tunable
     numbers that shouldn't be spuriously coupled. 50m as a ceiling is
     tighter than the detector's 100m gate on purpose: accuracy_m near
@@ -106,7 +106,7 @@ async def route_distance_m(
     from_lat: float, from_lon: float, to_lat: float, to_lon: float,
 ) -> Optional[float]:
     """One-shot OSRM `/route` call for the missing-trip bridging
-    suggestion — unlike `/match` above, this never runs per row on the trip
+    suggestion -- unlike `/match` above, this never runs per row on the trip
     list (no O(rows) OSRM calls on page load), only once when a missing-trip
     badge's prefill link is actually followed. A dedicated short timeout,
     not `SnapWorker`'s shared 10s client default, because this blocks a page
@@ -114,7 +114,7 @@ async def route_distance_m(
     own loop.
 
     Raises on transport failure or a non-2xx status, like
-    `GeocodeProvider.reverse` (app/geocode.py) — the caller (app/ui.py)
+    `GeocodeProvider.reverse` (app/geocode.py) -- the caller (app/ui.py)
     catches broadly and degrades to no suggestion, since a missing hint is
     never worse than the badge/prefill flow it's decorating.
     """
@@ -169,7 +169,7 @@ def parse_match_response(response_json: dict, min_confidence: float, input_count
     # all" (OSRM tends to drop unmatchable spans as null tracepoints
     # rather than emit them as a separate low-confidence matching, so
     # this is likely the gate that fires more often in practice). 0.8 is
-    # a starting heuristic, untuned against real data so far — revisit
+    # a starting heuristic, untuned against real data so far -- revisit
     # once there's a backlog of real low_confidence results to eyeball.
     low_conf = worst_confidence < min_confidence or match_fraction < 0.8
     if low_conf:
@@ -193,25 +193,25 @@ class SnapWorker(PokeSweepWorker):
     """Poke+sweep background worker draining `snap_status='pending'` trips
     against a self-hosted OSRM instance. The poke/debounce/sweep loop,
     `start`/`stop`, and guarded-run wrapper live in `PokeSweepWorker`
-    (app/worker.py) — shared with `DetectorScheduler` and `GeocodeWorker`,
+    (app/worker.py) -- shared with `DetectorScheduler` and `GeocodeWorker`,
     which need the identical machinery; this class only supplies `run_once()`.
 
     No advisory lock and no cross-process claim (unlike the detector, which
     needs a lock because a *skipped* run must never falsely advance its
     checkpoint or a dirty window gets silently dropped). A pending row just
     stays pending until a terminal UPDATE lands it, which is what removes it
-    from the pending set — nothing else needs to coordinate at this app's
+    from the pending set -- nothing else needs to coordinate at this app's
     single-instance scale. The batch SELECT deliberately does NOT hold a
     `FOR UPDATE` lock across processing: the claiming connection is released
     back to the pool before any OSRM call, so a row lock taken there would be
     gone during the work it was meant to protect (an earlier version took one
     here, which did nothing). If a second replica were ever added the two
-    could double-process an overlapping batch — wasteful, but not unsafe,
+    could double-process an overlapping batch -- wasteful, but not unsafe,
     since each trip's terminal UPDATE is idempotent. A real claim (a transient
     status, or a lock genuinely held across the multi-second OSRM request) is
     left until that scale actually exists.
 
-    Snapping never blocks or shares a transaction with the detector's —
+    Snapping never blocks or shares a transaction with the detector's --
     each DB write below is its own short connection borrow, and the OSRM
     HTTP call happens between borrows, never while holding one.
     """
@@ -256,7 +256,7 @@ class SnapWorker(PokeSweepWorker):
 
     async def _load_points(self, conn, trip_id: int) -> list[MatchPoint]:
         """Adapts the shared time-range point query (`load_trip_points`,
-        app/detector/runner.py — see its docstring for why this isn't a
+        app/detector/runner.py -- see its docstring for why this isn't a
         plain `points.trip_id = trip_id` query) into this module's own
         `MatchPoint` shape.
         """
@@ -333,7 +333,7 @@ class SnapWorker(PokeSweepWorker):
         except (httpx.HTTPError, ValueError) as e:
             # Connection/timeout error, or a response we can't even parse as
             # JSON: leave pending, retry later. Deliberately does NOT call
-            # resp.raise_for_status() first — confirmed live against a real
+            # resp.raise_for_status() first -- confirmed live against a real
             # OSRM instance that /match answers a genuine "can't match this
             # trace" with HTTP 400 + a proper {"code": "NoMatch", ...} body,
             # not 200. Gating on status here would misclassify that as a

@@ -5,9 +5,9 @@ import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import httpx
 import pytest
 
+import app.nudge as nudge_module
 from app.nudge import latest_window_end, nudge_date_range, nudge_message, publish_nudge
 
 TZ = ZoneInfo("America/Los_Angeles")
@@ -48,44 +48,22 @@ def test_nudge_date_range_is_the_seven_days_ending_at_window_boundary():
     assert end.isoformat() == "2026-07-12"
 
 
-async def _publish_scenario():
+def test_publish_nudge_passes_its_exact_message_to_shared_transport(monkeypatch):
     captured = {}
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured["url"] = str(request.url)
-        captured["headers"] = request.headers
-        captured["content"] = request.content.decode()
-        return httpx.Response(200, json={"id": "test"})
+    async def capture(*args):
+        captured["message"] = args[-1]
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+    monkeypatch.setattr(nudge_module, "publish_ntfy", capture)
+
+    async def scenario():
         await publish_nudge(
-            client, "https://ntfy.example.com/", "mileage-reminders", "secret-token", "", "", 3,
+            None, "https://ntfy.example.com", "alerts", "token", "", "", 3,
             datetime(2026, 7, 12, 18, tzinfo=TZ), "https://miles.example.com",
         )
-    assert captured["url"] == "https://ntfy.example.com/mileage-reminders"
-    assert captured["headers"]["authorization"] == "Bearer secret-token"
-    assert captured["headers"]["title"] == "Odograph"
-    assert captured["content"].startswith("Odograph: 3 unclassified trips")
 
-
-def test_publish_nudge_posts_count_only_notification_with_auth():
-    asyncio.run(_publish_scenario())
-
-
-async def _basic_auth_publish_scenario():
-    captured = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured["headers"] = request.headers
-        return httpx.Response(200, json={"id": "test"})
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        await publish_nudge(
-            client, "https://ntfy.example.com", "alerts", "ignored-token", "testuser", "password", 1,
-            datetime(2026, 7, 12, 18, tzinfo=TZ), "",
-        )
-    assert captured["headers"]["authorization"] == "Basic dGVzdHVzZXI6cGFzc3dvcmQ="
-
-
-def test_publish_nudge_uses_basic_auth_when_configured():
-    asyncio.run(_basic_auth_publish_scenario())
+    asyncio.run(scenario())
+    assert captured["message"] == (
+        "Odograph: 3 unclassified trips in the past week.\n"
+        "https://miles.example.com/review"
+    )

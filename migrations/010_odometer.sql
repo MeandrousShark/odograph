@@ -2,7 +2,7 @@
 -- nudges the user to log one. A reading is an absolute dashboard value at
 -- a point in time; app/odometer.py's `reconcile` diffs consecutive
 -- readings against the GPS-detected distance in between, surfacing how
--- much real driving the detector didn't capture (informational only — no
+-- much real driving the detector didn't capture (informational only, with no
 -- deduction math changes).
 --
 -- `double precision`, not `real`. trips.distance_m is `real`, fine for a
@@ -11,15 +11,15 @@
 -- Reconciliation subtracts two readings, so precision on the absolute
 -- value matters; `double precision` keeps the delta exact at this scale.
 --
--- `odometer_m` (meters) though entered in miles — same canonical-unit
+-- `odometer_m` (meters) though entered in miles, following the same canonical-unit
 -- reasoning as `distance_m`; keeps all reconciliation math in one unit.
 --
--- `ON DELETE CASCADE` — vehicles are soft-deleted (deactivate) today, so
+-- `ON DELETE CASCADE`, since vehicles are soft-deleted (deactivate) today, so
 -- this rarely fires; if a vehicle is ever hard-deleted, its readings go
--- with it rather than dangling (unlike trips.vehicle_id, which is SET NULL
--- — a reading has no meaning detached from the vehicle it measured).
+-- with it rather than dangling. A reading has no meaning detached from the
+-- vehicle it measured, unlike a trip, whose vehicle_id is SET NULL.
 --
--- `UNIQUE (vehicle_id, recorded_at)` — one reading per vehicle per instant.
+-- `UNIQUE (vehicle_id, recorded_at)`: one reading per vehicle per instant.
 CREATE TABLE odometer_readings (
     id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     vehicle_id  bigint NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,

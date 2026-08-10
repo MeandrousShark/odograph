@@ -15,7 +15,7 @@
       </label>
       <div>
         <strong>{{ trip.started_at | local_date }}</strong>
-        <span class="trip-card-time">{{ trip.started_at | local_time }}–{{ trip.ended_at | local_time }}</span>
+        <span class="trip-card-time">{{ trip.started_at | local_time }} - {{ trip.ended_at | local_time }}</span>
       </div>
     </div>
     <strong class="trip-card-distance">{{ trip.display_distance_m | mi }} mi</strong>

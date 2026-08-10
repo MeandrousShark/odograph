@@ -3,13 +3,13 @@
 Unlike the rest of the suite, these need a real Postgres+PostGIS instance and
 are skipped unless ``TEST_DATABASE_URL`` is set, so a plain ``pytest`` on a
 machine without a database still runs everything else. The target database is
-wiped (``DROP SCHEMA public``) on each run — point it at a throwaway DB only.
+wiped (``DROP SCHEMA public``) on each run -- point it at a throwaway DB only.
 
     TEST_DATABASE_URL=postgresql://mileage:pw@127.0.0.1:5432/mileage pytest tests/test_runner_db.py
 
 Why a DB test at all when detector logic is otherwise pure: the bug covered
-here lives in the *orchestration* — how `_process_device` nulls and reassigns
-`points.trip_id` across an incremental reprocess window — which the pure
+here lives in the *orchestration* -- how `_process_device` nulls and reassigns
+`points.trip_id` across an incremental reprocess window -- which the pure
 `detect()` tests structurally cannot reach.
 """
 from __future__ import annotations
@@ -25,10 +25,10 @@ from fastapi import HTTPException
 
 import app.detector.runner as runner_module
 from app.autotag import AutotagResult
-from app.db import make_pool, run_migrations
+from app.db import DETECTOR_ADVISORY_LOCK_KEY, make_pool, run_migrations
 from app.detector.core import Params
 from app.detector.runner import (
-    ADVISORY_LOCK_KEY, DetectorRunner, load_trip_points, reprocess_places, resolve_and_autotag,
+    DetectorRunner, load_trip_points, reprocess_places, resolve_and_autotag,
 )
 from app.ui import _validate_split_distance
 from app.vehicles import deactivate_vehicle, list_vehicles, set_auto_assign_default_vehicle
@@ -211,7 +211,7 @@ async def _run_incremental_reprocess_scenario():
 
         # Now a late point lands in the LAST stay (its received_at becomes
         # "now", after the run we just committed). The next run is incremental
-        # and its window rewinds to the start of the MIDDLE stay — whose first
+        # and its window rewinds to the start of the MIDDLE stay -- whose first
         # point is exactly the first trip's arrival boundary. That trip is not
         # in the window and is never re-emitted, so the reset must not orphan
         # its arrival point.
@@ -258,17 +258,21 @@ async def _run_reprocess_places_lock_scenario():
         # Hold the detector's advisory lock on a separate session, mimicking an
         # in-flight detector run. reprocess_places must block on it, not barge
         # in and race the concurrent trips.category writes.
-        await holder.execute("SELECT pg_advisory_lock(%s)", (ADVISORY_LOCK_KEY,))
+        await holder.execute(
+            "SELECT pg_advisory_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
+        )
 
         task = asyncio.create_task(reprocess_places(pool))
         await asyncio.sleep(0.5)
         assert not task.done(), (
-            "reprocess_places ran while the detector lock was held — it must "
+            "reprocess_places ran while the detector lock was held, but it must "
             "wait for the detector to finish before re-tagging trips"
         )
 
         # Releasing the lock lets it proceed and finish promptly.
-        await holder.execute("SELECT pg_advisory_unlock(%s)", (ADVISORY_LOCK_KEY,))
+        await holder.execute(
+            "SELECT pg_advisory_unlock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
+        )
         await asyncio.wait_for(task, timeout=5)
         assert task.done() and task.exception() is None
     finally:
@@ -314,11 +318,15 @@ async def _run_lock_released_on_sql_error_scenario():
         # connection proves it didn't leak.
         holder = await psycopg.AsyncConnection.connect(TEST_DB, autocommit=True)
         try:
-            cur = await holder.execute("SELECT pg_try_advisory_lock(%s)", (ADVISORY_LOCK_KEY,))
+            cur = await holder.execute(
+                "SELECT pg_try_advisory_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
+            )
             assert (await cur.fetchone())[0] is True, (
                 "advisory lock leaked after a SQL error mid-_run"
             )
-            await holder.execute("SELECT pg_advisory_unlock(%s)", (ADVISORY_LOCK_KEY,))
+            await holder.execute(
+                "SELECT pg_advisory_unlock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
+            )
         finally:
             await holder.close()
 
@@ -443,7 +451,7 @@ async def _run_split_via_override_scenario():
         assert len(points_b) == after[1][1]
         # points_a/points_b double-count the shared boundary point (one
         # query per side); trip_id is single-valued, so the naive live
-        # count from _trip_counts can only ever credit it to one side —
+        # count from _trip_counts can only ever credit it to one side --
         # this is exactly the boundary-point-stealing bug load_trip_points
         # (not `WHERE trip_id = X`) fixes.
         naive_a, naive_b = after[0][2], after[1][2]
