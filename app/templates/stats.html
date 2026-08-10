@@ -9,7 +9,7 @@
   <div><span>Total miles</span><strong>{{ stats.total_m | mi }}</strong><small>{{ stats.trip_count }} trips</small></div>
   <div><span>Business</span><strong>{{ stats.business_m | mi }} mi</strong><small>{% if stats.business_share is not none %}{{ "%.0f" | format(stats.business_share * 100) }}% of classified miles{% else %}No classified miles yet{% endif %}</small></div>
   <div><span>Personal</span><strong>{{ stats.personal_m | mi }} mi</strong></div>
-  <div><span>Unclassified</span><strong>{{ stats.unclassified_m | mi }} mi</strong><small>{{ stats.unclassified_trips }} trips · <a href="/?category=unclassified">Review</a></small></div>
+  <div><span>Unclassified</span><strong>{{ stats.unclassified_m | mi }} mi</strong><small>{{ stats.unclassified_trips }} trips · <a href="/review">Review</a></small></div>
 </div>
 
 <section class="stats-section">

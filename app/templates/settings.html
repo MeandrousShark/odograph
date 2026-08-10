@@ -321,7 +321,7 @@ document.addEventListener('click', function (event) {
     timestamps below are since process start, not since the worker was first enabled.</p>
   <table class="settings-table">
     <thead>
-      <tr><th>Worker</th><th>Enabled</th><th>Last run</th><th>Last success</th><th>Last failure</th><th>Next run</th></tr>
+      <tr><th>Worker</th><th>Enabled</th><th>Last run</th><th>Last success</th><th>Last skip</th><th>Last failure</th><th>Next run</th></tr>
     </thead>
     <tbody>
       {% for worker in report.workers %}
@@ -329,12 +329,13 @@ document.addEventListener('click', function (event) {
         <td>{{ worker.name }}</td>
         <td>{{ "yes" if worker.enabled else "no" }}</td>
         {% if not worker.enabled %}
-        <td colspan="4" class="muted">disabled</td>
+        <td colspan="5" class="muted">disabled</td>
         {% elif not worker.state_available %}
-        <td colspan="4" class="muted">unavailable outside the running app process</td>
+        <td colspan="5" class="muted">unavailable outside the running app process</td>
         {% else %}
         <td>{{ worker.last_run_at | local_dt if worker.last_run_at else "unknown" }}</td>
         <td>{{ worker.last_success_at | local_dt if worker.last_success_at else "none since process start" }}</td>
+        <td>{{ worker.last_skip_at | local_dt if worker.last_skip_at else "none since process start" }}</td>
         <td>{% if worker.last_failure_at %}{{ worker.last_failure_at | local_dt }} ({{ worker.last_failure_type }}){% else %}none since process start{% endif %}</td>
         <td>{{ worker.next_run_at | local_dt if worker.next_run_at else "unknown" }}</td>
         {% endif %}

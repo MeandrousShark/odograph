@@ -47,6 +47,13 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# A run_once() return value meaning "deliberately skipped, e.g. lost the
+# advisory lock" -- _run_guarded records this as a skip, not a success, so
+# diagnostics can tell "nothing needed doing" apart from "lost a race with
+# another instance/process and did not run at all".
+RUN_SKIPPED = object()
+
+
 @dataclass
 class WorkerStatus:
     """In-memory run history for one worker -- diagnostics-only, reset on
@@ -60,6 +67,7 @@ class WorkerStatus:
     label: str
     last_run_at: datetime | None = None
     last_success_at: datetime | None = None
+    last_skip_at: datetime | None = None
     last_failure_at: datetime | None = None
     last_failure_type: str | None = None
     next_run_at: datetime | None = None
@@ -69,6 +77,9 @@ class WorkerStatus:
 
     def record_success(self) -> None:
         self.last_success_at = _utcnow()
+
+    def record_skip(self) -> None:
+        self.last_skip_at = _utcnow()
 
     def record_failure(self, exc: BaseException) -> None:
         self.last_failure_at = _utcnow()
@@ -89,15 +100,41 @@ class _LoopWorker:
         self.status = WorkerStatus(label=task_name)
 
     async def start(self) -> None:
+        if self._task is not None and not self._task.done():
+            return
         self._task = asyncio.create_task(self._loop(), name=self._task_name)
+        self._task.add_done_callback(self._on_task_done)
+
+    def _on_task_done(self, task: asyncio.Task) -> None:
+        if task.cancelled():
+            return  # normal shutdown via stop()
+        exc = task.exception()
+        if exc is not None:
+            # _run_guarded already catches Exception, so only a BaseException
+            # (or a bug in the loop machinery itself) can get the task here --
+            # either way this worker is now dead until the process restarts,
+            # which is worth shouting about. Calling .exception() also
+            # retrieves it, so asyncio doesn't separately log "exception was
+            # never retrieved".
+            self._log.critical(
+                "%s: worker task exited unexpectedly and will not run again "
+                "until restart", self._task_name, exc_info=exc,
+            )
 
     async def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+        if self._task is None:
+            return
+        self._task.cancel()
+        try:
+            await self._task
+        except asyncio.CancelledError:
+            # Swallow the worker task's own cancellation, but a cancellation
+            # delivered to THIS coroutine belongs to our caller and must
+            # propagate (Task.cancelling() counts requests against us).
+            if asyncio.current_task().cancelling() > 0:
+                raise
+        finally:
+            self._task = None
 
     async def run_once(self) -> Any:
         raise NotImplementedError
@@ -111,6 +148,9 @@ class _LoopWorker:
         self.status.record_run()
         try:
             result = await self.run_once()
+            if result is RUN_SKIPPED:
+                self.status.record_skip()
+                return
             await self.after_run_once(result)
         except Exception as exc:
             self.status.record_failure(exc)

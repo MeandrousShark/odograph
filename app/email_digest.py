@@ -32,7 +32,7 @@ from app.nudge import latest_window_end
 from app.odometer import latest_quarter_start, vehicles_due_for_reminder
 from app.rates import METERS_PER_MILE
 from app.report import build_annual_report, build_range_report
-from app.ui import _fetch_range_trips
+from app.ui import _fetch_range_trips_in
 from app.worker import IntervalWorker
 
 log = logging.getLogger(__name__)
@@ -272,7 +272,7 @@ class EmailDigestWorker(IntervalWorker):
             async with conn.transaction():
                 if await self._already_delivered(conn, "monthly_summary", period_end):
                     return
-                trips, rates = await _fetch_range_trips(self.pool, self.display_tz, month_start, month_end)
+                trips, rates = await _fetch_range_trips_in(conn, self.display_tz, month_start, month_end)
                 report = build_range_report(trips, rates, self.display_tz, month_start, month_end)
                 body = _render(
                     "monthly_summary.txt",
@@ -298,8 +298,8 @@ class EmailDigestWorker(IntervalWorker):
             async with conn.transaction():
                 if await self._already_delivered(conn, "filing_reminder", period_end):
                     return
-                trips, rates = await _fetch_range_trips(
-                    self.pool, self.display_tz, date(year, 1, 1), date(year, 12, 31)
+                trips, rates = await _fetch_range_trips_in(
+                    conn, self.display_tz, date(year, 1, 1), date(year, 12, 31)
                 )
                 report = build_annual_report(trips, rates, self.display_tz, year)
                 body = _render(

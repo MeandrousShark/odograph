@@ -27,6 +27,75 @@ reproduced here.
 - Complete before release: list every application, database, configuration,
   and operational break, or state explicitly that there are none.
 
+## [0.7.5] - 2026-08-09
+
+Internal robustness release: concurrency correctness, background-worker
+resilience, and event-loop responsiveness. No user-facing feature and no
+database migration; the schema stays at 19.
+
+### Changed
+
+- **Large exports and trip detection no longer block other requests.**
+  Building a large CSV or spreadsheet export, serialising a full-data JSON
+  export, and running a trip-detection pass now happen off the main
+  request-handling thread, so the app stays responsive to other requests
+  while that work runs.
+
+- **The Settings workers table shows a new "Last skip" column.** A background
+  worker run that is skipped because another run already holds its lock is now
+  recorded and shown separately, instead of being indistinguishable from a
+  successful run.
+
+### Fixed
+
+- **A trip's snapped route can no longer be overwritten with a stale result.**
+  If a trip's points changed through a background detection pass while its
+  route was being matched to roads, the finished match could overwrite the
+  updated trip with an out-of-date route. The result is now discarded when the
+  trip changed underneath it, and the trip is re-matched on the next pass.
+
+- **A hand classification can no longer be silently lost to a background
+  detection pass.** Classifying a trip as business or personal at the moment a
+  detection pass replaced that trip used to report success while dropping the
+  classification. It now reports a clear error so the classification can be
+  re-applied, and automatic rule-based tagging can never overwrite a trip that
+  was classified by hand.
+
+- **Splitting a trip and editing places or tagging rules are now fully
+  transactional.** A trip split now holds the detector lock across its whole
+  operation and reads the trip fresh under that lock, and a place or
+  tagging-rule change now applies its re-tagging in the same transaction, so a
+  failure part way through can no longer leave settings and trip
+  classifications inconsistent.
+
+- **The monthly summary and filing-reminder emails no longer risk stalling.**
+  Each of these digests used to borrow a second database connection while
+  already holding one, which could stall when the connection pool was busy.
+  They now do all their work on the single connection they already hold.
+
+- **Background workers fail more safely.** A worker that stops unexpectedly is
+  now logged rather than disappearing silently, a failure during application
+  startup now cleanly shuts down the database pool and any workers already
+  started, and a run skipped for lock contention is no longer counted as a
+  success.
+
+- **Several invalid inputs now return a validation error instead of a server
+  error.** A tagging rule referring to a non-numeric or since-deleted place,
+  and an invalid vehicle filter on the expenses page, now return a clear
+  rejection rather than an internal error. The diagnostics command no longer
+  aborts when the geocoder is misconfigured; it names the misconfiguration
+  instead. The statistics page's "Review" link now points at the review page.
+
+### Supported upgrade path
+
+- `v0.7.0`, `v0.7.1`, `v0.7.2`, `v0.7.3`, and `v0.7.4` may upgrade directly to
+  `v0.7.5`.
+
+### Breaking changes
+
+- None. There is no migration; the schema stays at 19. No configuration
+  changes, and no operational changes beyond the usual image pin bump.
+
 ## [0.7.4] - 2026-08-08
 
 ### Fixed

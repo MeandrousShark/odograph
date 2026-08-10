@@ -19,6 +19,7 @@ from app.diagnose import (
     _check_osrm,
     _check_smtp,
     _expected_migration_versions,
+    _geocode_configured,
     build_report,
     config_presence,
     render_report_text,
@@ -95,6 +96,24 @@ def _config(**overrides) -> SimpleNamespace:
     )
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
+
+
+def _misconfigured_nominatim_config(monkeypatch) -> Config:
+    """A real `Config` (not a `SimpleNamespace` double) whose
+    `geocode_provider` property raises RuntimeError on every access --
+    GEOCODE_PROVIDER=nominatim set with no GEOCODE_NOMINATIM_URL, the same
+    scenario tests/test_config.py's `test_geocode_provider_nominatim_without_
+    url_fails_fast` exercises against `build_geocode_provider` directly.
+    """
+    for key, value in zip(REQUIRED_VARS, ("postgresql://x/x", "ingest-pw", "session-secret")):
+        monkeypatch.setenv(key, value)
+    for key in (
+        "GEOCODE_API_KEY", "GEOCODE_OMIT_COUNTRY", "GEOCODE_NOMINATIM_URL",
+        "OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET", "DEV_NO_AUTH",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("GEOCODE_PROVIDER", "nominatim")
+    return Config.from_env()
 
 
 # ---- build_report: database + migrations ----
@@ -214,6 +233,39 @@ def test_config_presence_tolerates_a_partial_config_double():
     assert presence["dev_no_auth"] is False
 
 
+# ---- geocode misconfiguration must name the fault, never crash the report ----
+
+def test_geocode_configured_treats_a_build_failure_as_configured_but_broken(monkeypatch):
+    # cfg.geocode_provider raises RuntimeError for GEOCODE_PROVIDER=nominatim
+    # with no GEOCODE_NOMINATIM_URL -- _geocode_configured must swallow that
+    # and report True (configured, just broken), not let it propagate and
+    # crash config_presence/worker_gates.
+    cfg = _misconfigured_nominatim_config(monkeypatch)
+    assert _geocode_configured(cfg) is True
+
+
+def test_config_presence_does_not_crash_on_geocode_misconfiguration(monkeypatch):
+    cfg = _misconfigured_nominatim_config(monkeypatch)
+    presence = config_presence(cfg)
+    assert presence["geocode_configured"] is True
+
+
+def test_worker_reports_from_config_does_not_crash_on_geocode_misconfiguration(monkeypatch):
+    cfg = _misconfigured_nominatim_config(monkeypatch)
+    reports = worker_reports_from_config(cfg)
+    by_name = {w.name: w for w in reports}
+    assert by_name["geocode"].enabled is True
+
+
+def test_build_report_does_not_crash_on_geocode_misconfiguration(monkeypatch):
+    # The end-to-end path `python -m app.diagnose` drives: a misconfigured
+    # geocoder must not turn "run diagnostics" into a stack trace.
+    cfg = _misconfigured_nominatim_config(monkeypatch)
+    pool = _Pool(connection=_Connection(rows=[(v,) for v in _expected_migration_versions()]))
+    report = asyncio.run(build_report(cfg, pool, state=None))
+    assert report.config_presence["geocode_configured"] is True
+
+
 # ---- on-demand connectivity checks against stubbed failures ----
 
 def test_check_osrm_not_configured_when_url_unset():
@@ -277,6 +329,17 @@ def test_check_geocode_reports_http_401_and_never_leaks_the_api_key():
     assert result.ok is False
     assert result.detail == "geoapify: http 401"
     assert secret_key not in result.detail
+
+
+def test_check_geocode_names_a_build_misconfiguration_instead_of_crashing(monkeypatch):
+    cfg = _misconfigured_nominatim_config(monkeypatch)
+
+    result = asyncio.run(_check_geocode(cfg, httpx.AsyncClient()))
+
+    assert result.configured is True
+    assert result.ok is False
+    assert "misconfigured" in result.detail
+    assert "GEOCODE_NOMINATIM_URL" in result.detail
 
 
 def test_check_ntfy_not_configured_when_unset():

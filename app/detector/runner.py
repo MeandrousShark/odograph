@@ -8,6 +8,7 @@ Concurrency model:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import resource
@@ -20,7 +21,7 @@ from psycopg_pool import AsyncConnectionPool
 from app.autotag import AutotagTrip, Rule, plan_autotags
 from app.detector.core import Override, Params, Point, Trip, detect
 from app.detector.reconcile import ExistingTrip, plan_reconcile
-from app.worker import PokeSweepWorker
+from app.worker import PokeSweepWorker, RUN_SKIPPED
 
 log = logging.getLogger(__name__)
 
@@ -228,7 +229,10 @@ class DetectorRunner:
             for r in await cur.fetchall()
         ]
 
-        stays, trips = detect(points, self.params, overrides)
+        # detect() is CPU-bound and pure over its (immutable) inputs, so it
+        # runs off the event loop; the held connection stays idle during the
+        # thread and is used again for the writes that follow.
+        stays, trips = await asyncio.to_thread(detect, points, self.params, overrides)
 
         await conn.execute(
             "DELETE FROM stays WHERE device = %s AND started_at >= %s", (device, t0)
@@ -511,17 +515,26 @@ async def resolve_and_autotag(conn, trip_ids: list[int]) -> None:
     rules = [Rule(*r) for r in await cur.fetchall()]
 
     for result in plan_autotags(autotag_trips, rules):
+        # tag_source IS DISTINCT FROM 'human' (not <>: tag_source is often
+        # NULL, and NULL <> 'human' is NULL/false, which would silently skip
+        # every untagged trip) makes the human-tag-supremacy invariant robust
+        # here too, not just at plan_autotags' filter: the rows read above
+        # aren't locked, so a concurrent human-tag write landing after that
+        # read and before this UPDATE would otherwise be silently clobbered
+        # back to a rule category.
         await conn.execute(
-            "UPDATE trips SET category = %s, tag_source = %s, updated_at = now() WHERE id = %s",
+            "UPDATE trips SET category = %s, tag_source = %s, updated_at = now() "
+            "WHERE id = %s AND tag_source IS DISTINCT FROM 'human'",
             (result.category, result.tag_source, result.trip_id),
         )
 
 
-async def reprocess_places(pool: AsyncConnectionPool) -> None:
-    """Re-resolve places and re-apply auto-tag rules for every detected trip.
-    Called after any places/rules CRUD from the UI, so existing trips reflect
-    the new configuration immediately rather than waiting for their next
-    detector reprocess.
+async def reprocess_places_in(conn) -> None:
+    """`conn`-accepting variant of `reprocess_places`, for callers (the UI's
+    places/rules CRUD handlers) that have a config-row mutation to share a
+    transaction with: a failure here must roll back that mutation too,
+    rather than leave it committed with trip tags now inconsistent with it.
+    Same reasoning as `reprocess_device_in` vs. `reprocess_device_now`.
 
     Serialized against the detector on the same advisory lock: both this and a
     detector run UPDATE trips.category, so they must not interleave on the same
@@ -531,15 +544,29 @@ async def reprocess_places(pool: AsyncConnectionPool) -> None:
     commit); a detector run starting meanwhile finds the lock busy and skips,
     re-running on its next debounce/sweep — the same safe skip path the
     detector already relies on. At single-instance scale the detector's runs
-    are short, so the block here is brief.
+    are short, so the block here is brief. Taking it here is a no-op if the
+    caller already holds it (advisory locks are reentrant within one
+    session/transaction).
+    """
+    await conn.execute("SELECT pg_advisory_xact_lock(%s)", (ADVISORY_LOCK_KEY,))
+    cur = await conn.execute(
+        "SELECT id FROM trips WHERE source = 'detected' AND NOT imported"
+    )
+    trip_ids = [r[0] for r in await cur.fetchall()]
+    await resolve_and_autotag(conn, trip_ids)
+
+
+async def reprocess_places(pool: AsyncConnectionPool) -> None:
+    """Re-resolve places and re-apply auto-tag rules for every detected trip.
+    Called after any places/rules CRUD from the UI, so existing trips reflect
+    the new configuration immediately rather than waiting for their next
+    detector reprocess.
+
+    Thin pool-owning wrapper around `reprocess_places_in` for callers that
+    have no other writes to share a transaction with.
     """
     async with pool.connection() as conn:
-        await conn.execute("SELECT pg_advisory_xact_lock(%s)", (ADVISORY_LOCK_KEY,))
-        cur = await conn.execute(
-            "SELECT id FROM trips WHERE source = 'detected' AND NOT imported"
-        )
-        trip_ids = [r[0] for r in await cur.fetchall()]
-        await resolve_and_autotag(conn, trip_ids)
+        await reprocess_places_in(conn)
 
 
 class DetectorScheduler(PokeSweepWorker):
@@ -573,7 +600,11 @@ class DetectorScheduler(PokeSweepWorker):
         self.geocode_worker = geocode_worker  # None when no geocode provider is configured
 
     async def run_once(self) -> bool:
-        return await self.runner.run_once()
+        # Translate DetectorRunner's own False-means-skipped bool into the
+        # shared RUN_SKIPPED sentinel so _run_guarded (app/worker.py) records
+        # a lock-contended run as a skip, not a success.
+        ran = await self.runner.run_once()
+        return ran if ran else RUN_SKIPPED
 
     async def after_run_once(self, ran: bool) -> None:
         if ran and self.snap_worker is not None:

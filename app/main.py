@@ -4,7 +4,7 @@ import calendar
 import logging
 import pathlib
 import secrets
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import datetime
 
 import httpx
@@ -231,126 +231,127 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        pool = make_pool(cfg.database_url)
-        await pool.open(wait=True)
-        await run_migrations(pool)
+        # AsyncExitStack, not a bare try/finally after yield: if any startup
+        # step below raises (a worker's start(), run_migrations, a bad
+        # config), the pool and every resource already opened/started must
+        # still be torn down in reverse order, the same as a normal
+        # shutdown. Each push_async_callback is registered immediately after
+        # its resource is successfully created, so a resource that never
+        # came up is never torn down.
+        async with AsyncExitStack() as stack:
+            pool = make_pool(cfg.database_url)
+            await pool.open(wait=True)
+            stack.push_async_callback(pool.close)
+            await run_migrations(pool)
 
-        http_client = None
-        snap_worker = None
-        if cfg.osrm_url:
-            http_client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0))
-            snap_worker = SnapWorker(
-                pool, http_client, cfg.osrm_url, cfg.osrm_min_confidence,
-                cfg.osrm_max_coords, cfg.snap_debounce_s, cfg.snap_sweep_s,
+            http_client = None
+            snap_worker = None
+            if cfg.osrm_url:
+                http_client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0))
+                stack.push_async_callback(http_client.aclose)
+                snap_worker = SnapWorker(
+                    pool, http_client, cfg.osrm_url, cfg.osrm_min_confidence,
+                    cfg.osrm_max_coords, cfg.snap_debounce_s, cfg.snap_sweep_s,
+                )
+                await snap_worker.start()
+                stack.push_async_callback(snap_worker.stop)
+
+            geocode_http_client = None
+            geocode_worker = None
+            geocode_provider = cfg.geocode_provider
+            if geocode_provider is not None:
+                geocode_http_client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0))
+                stack.push_async_callback(geocode_http_client.aclose)
+                geocode_worker = GeocodeWorker(
+                    pool, geocode_http_client, geocode_provider, cfg.geocode_min_interval_s,
+                    cfg.geocode_debounce_s, cfg.geocode_sweep_s,
+                )
+                await geocode_worker.start()
+                stack.push_async_callback(geocode_worker.stop)
+
+            runner = DetectorRunner(
+                pool, cfg.detector_params, cfg.full_reprocess_warn_points
             )
-            await snap_worker.start()
-
-        geocode_http_client = None
-        geocode_worker = None
-        geocode_provider = cfg.geocode_provider
-        if geocode_provider is not None:
-            geocode_http_client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0))
-            geocode_worker = GeocodeWorker(
-                pool, geocode_http_client, geocode_provider, cfg.geocode_min_interval_s,
-                cfg.geocode_debounce_s, cfg.geocode_sweep_s,
+            scheduler = DetectorScheduler(
+                runner, cfg.detect_debounce_s, cfg.detect_sweep_s,
+                snap_worker=snap_worker, geocode_worker=geocode_worker,
             )
-            await geocode_worker.start()
 
-        runner = DetectorRunner(
-            pool, cfg.detector_params, cfg.full_reprocess_warn_points
-        )
-        scheduler = DetectorScheduler(
-            runner, cfg.detect_debounce_s, cfg.detect_sweep_s,
-            snap_worker=snap_worker, geocode_worker=geocode_worker,
-        )
+            retention_worker = None
+            if cfg.raw_message_retention_days > 0:
+                retention_worker = RetentionWorker(pool, cfg.raw_message_retention_days)
+                await retention_worker.start()
+                stack.push_async_callback(retention_worker.stop)
 
-        retention_worker = None
-        if cfg.raw_message_retention_days > 0:
-            retention_worker = RetentionWorker(pool, cfg.raw_message_retention_days)
-            await retention_worker.start()
+            nudge_http_client = None
+            nudge_worker = None
+            if cfg.ntfy_url and cfg.ntfy_topic:
+                nudge_http_client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0))
+                stack.push_async_callback(nudge_http_client.aclose)
+                nudge_worker = NudgeWorker(
+                    pool, nudge_http_client, cfg.ntfy_url, cfg.ntfy_topic, cfg.ntfy_token,
+                    cfg.ntfy_username, cfg.ntfy_password,
+                    cfg.app_url, cfg.display_tz, cfg.nudge_weekly_hour,
+                )
+                await nudge_worker.start()
+                stack.push_async_callback(nudge_worker.stop)
+                log.info("nudge worker enabled")
 
-        nudge_http_client = None
-        nudge_worker = None
-        if cfg.ntfy_url and cfg.ntfy_topic:
-            nudge_http_client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0))
-            nudge_worker = NudgeWorker(
-                pool, nudge_http_client, cfg.ntfy_url, cfg.ntfy_topic, cfg.ntfy_token,
-                cfg.ntfy_username, cfg.ntfy_password,
-                cfg.app_url, cfg.display_tz, cfg.nudge_weekly_hour,
-            )
-            await nudge_worker.start()
-            log.info("nudge worker enabled")
+            odometer_reminder_http_client = None
+            odometer_reminder_worker = None
+            if cfg.ntfy_url and cfg.ntfy_topic and cfg.odometer_reminder_enabled:
+                odometer_reminder_http_client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0))
+                stack.push_async_callback(odometer_reminder_http_client.aclose)
+                odometer_reminder_worker = OdometerReminderWorker(
+                    pool, odometer_reminder_http_client, cfg.ntfy_url, cfg.ntfy_topic, cfg.ntfy_token,
+                    cfg.ntfy_username, cfg.ntfy_password,
+                    cfg.app_url, cfg.display_tz, cfg.odometer_reminder_hour,
+                )
+                await odometer_reminder_worker.start()
+                stack.push_async_callback(odometer_reminder_worker.stop)
+                log.info("odometer reminder worker enabled")
 
-        odometer_reminder_http_client = None
-        odometer_reminder_worker = None
-        if cfg.ntfy_url and cfg.ntfy_topic and cfg.odometer_reminder_enabled:
-            odometer_reminder_http_client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0))
-            odometer_reminder_worker = OdometerReminderWorker(
-                pool, odometer_reminder_http_client, cfg.ntfy_url, cfg.ntfy_topic, cfg.ntfy_token,
-                cfg.ntfy_username, cfg.ntfy_password,
-                cfg.app_url, cfg.display_tz, cfg.odometer_reminder_hour,
-            )
-            await odometer_reminder_worker.start()
-            log.info("odometer reminder worker enabled")
+            email_digest_worker = None
+            if cfg.email_enabled:
+                mailer = Mailer(
+                    cfg.smtp_host, cfg.smtp_port, cfg.smtp_username, cfg.smtp_password,
+                    cfg.smtp_security, cfg.smtp_tls_insecure, cfg.email_from, cfg.email_to,
+                )
+                email_digest_worker = EmailDigestWorker(
+                    pool, mailer, cfg.app_url, cfg.display_tz,
+                    cfg.nudge_weekly_hour, cfg.odometer_reminder_hour, cfg.email_digest_hour,
+                    cfg.email_filing_reminder_mmdd,
+                    cfg.email_weekly_nudge, cfg.email_monthly_summary,
+                    cfg.email_filing_reminder, cfg.email_odometer_reminder,
+                )
+                await email_digest_worker.start()
+                stack.push_async_callback(email_digest_worker.stop)
+                log.info("email digest worker enabled")
 
-        email_digest_worker = None
-        if cfg.email_enabled:
-            mailer = Mailer(
-                cfg.smtp_host, cfg.smtp_port, cfg.smtp_username, cfg.smtp_password,
-                cfg.smtp_security, cfg.smtp_tls_insecure, cfg.email_from, cfg.email_to,
-            )
-            email_digest_worker = EmailDigestWorker(
-                pool, mailer, cfg.app_url, cfg.display_tz,
-                cfg.nudge_weekly_hour, cfg.odometer_reminder_hour, cfg.email_digest_hour,
-                cfg.email_filing_reminder_mmdd,
-                cfg.email_weekly_nudge, cfg.email_monthly_summary,
-                cfg.email_filing_reminder, cfg.email_odometer_reminder,
-            )
-            await email_digest_worker.start()
-            log.info("email digest worker enabled")
-
-        app.state.pool = pool
-        app.state.detector_runner = runner
-        app.state.detector_scheduler = scheduler
-        app.state.snap_worker = snap_worker
-        # Reused directly (not just by SnapWorker) for the missing-trip
-        # OSRM `/route` suggestion (app/ui.py) -- same pattern as
-        # geocode_http_client below, which /places/search already calls
-        # on-demand outside its worker.
-        app.state.osrm_http_client = http_client
-        app.state.geocode_http_client = geocode_http_client
-        # Needed for its WorkerStatus (app/worker.py), read by the
-        # diagnostics report builder (app/diagnose.py) -- previously only
-        # its http client was kept on app.state.
-        app.state.geocode_worker = geocode_worker
-        app.state.retention_worker = retention_worker
-        app.state.nudge_worker = nudge_worker
-        app.state.odometer_reminder_worker = odometer_reminder_worker
-        app.state.email_digest_worker = email_digest_worker
-        await scheduler.start()
-        yield
-        await scheduler.stop()
-        if snap_worker is not None:
-            await snap_worker.stop()
-        if geocode_worker is not None:
-            await geocode_worker.stop()
-        if retention_worker is not None:
-            await retention_worker.stop()
-        if nudge_worker is not None:
-            await nudge_worker.stop()
-        if odometer_reminder_worker is not None:
-            await odometer_reminder_worker.stop()
-        if email_digest_worker is not None:
-            await email_digest_worker.stop()
-        if http_client is not None:
-            await http_client.aclose()
-        if geocode_http_client is not None:
-            await geocode_http_client.aclose()
-        if nudge_http_client is not None:
-            await nudge_http_client.aclose()
-        if odometer_reminder_http_client is not None:
-            await odometer_reminder_http_client.aclose()
-        await pool.close()
+            app.state.pool = pool
+            app.state.detector_runner = runner
+            app.state.detector_scheduler = scheduler
+            app.state.snap_worker = snap_worker
+            # Reused directly (not just by SnapWorker) for the missing-trip
+            # OSRM `/route` suggestion (app/ui.py) -- same pattern as
+            # geocode_http_client below, which /places/search already calls
+            # on-demand outside its worker.
+            app.state.osrm_http_client = http_client
+            app.state.geocode_http_client = geocode_http_client
+            # Needed for its WorkerStatus (app/worker.py), read by the
+            # diagnostics report builder (app/diagnose.py) -- previously only
+            # its http client was kept on app.state.
+            app.state.geocode_worker = geocode_worker
+            app.state.retention_worker = retention_worker
+            app.state.nudge_worker = nudge_worker
+            app.state.odometer_reminder_worker = odometer_reminder_worker
+            app.state.email_digest_worker = email_digest_worker
+            await scheduler.start()
+            # Registered last, so it stops first on the way out -- LIFO
+            # matches the pre-AsyncExitStack teardown order, where the
+            # scheduler always stopped before any other worker.
+            stack.push_async_callback(scheduler.stop)
+            yield
 
     # FastAPI's /docs and openapi.json disabled: they'd be reachable without OIDC
     app = FastAPI(

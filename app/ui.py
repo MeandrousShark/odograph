@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -23,7 +24,7 @@ from app.detector.runner import (
     ADVISORY_LOCK_KEY,
     DETECTOR_VERSION,
     load_trip_points,
-    reprocess_places,
+    reprocess_places_in,
 )
 from app.diagnose import build_report, run_connectivity_checks
 from app.merge import TripSpan, plan_merge_selected
@@ -405,8 +406,13 @@ async def _fetch_month_page(
     return rows[:page_size], len(rows) > page_size
 
 
-async def _fetch_range_trips(pool, tz: ZoneInfo, start: date, end: date) -> tuple[list[dict], dict]:
-    """Trips + rates for a `start`..`end` span (both inclusive, local to `tz`),
+async def _fetch_range_trips_in(conn, tz: ZoneInfo, start: date, end: date) -> tuple[list[dict], dict]:
+    """`conn`-accepting variant of `_fetch_range_trips`, for callers (the
+    email digest worker) that already hold a connection and must not
+    acquire a second one from the pool inside the same run -- with a
+    pool of size 1 that would deadlock.
+
+    Trips + rates for a `start`..`end` span (both inclusive, local to `tz`),
     shared by the annual/range report pages and their exports so they can't
     drift apart. The DB-side range is only a coarse UTC pre-filter;
     `build_range_report` re-localizes and drops anything outside `[start, end]`,
@@ -418,16 +424,23 @@ async def _fetch_range_trips(pool, tz: ZoneInfo, start: date, end: date) -> tupl
     range_start = datetime(start.year, start.month, start.day, tzinfo=tz)
     next_day = end + timedelta(days=1)
     range_end = datetime(next_day.year, next_day.month, next_day.day, tzinfo=tz)
-    async with pool.connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        await cur.execute(
-            f"SELECT {TRIP_COLUMNS} FROM trips WHERE started_at >= %s AND started_at < %s"
-            " ORDER BY started_at",
-            (range_start, range_end),
-        )
-        trips = await cur.fetchall()
-        rates = await load_rates(conn)
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(
+        f"SELECT {TRIP_COLUMNS} FROM trips WHERE started_at >= %s AND started_at < %s"
+        " ORDER BY started_at",
+        (range_start, range_end),
+    )
+    trips = await cur.fetchall()
+    rates = await load_rates(conn)
     return trips, rates
+
+
+async def _fetch_range_trips(pool, tz: ZoneInfo, start: date, end: date) -> tuple[list[dict], dict]:
+    """Thin pool-owning wrapper around `_fetch_range_trips_in` for callers
+    that have no other work to share a connection with.
+    """
+    async with pool.connection() as conn:
+        return await _fetch_range_trips_in(conn, tz, start, end)
 
 
 async def _fetch_year_odometer_coverage(pool, tz: ZoneInfo, year: int, trips: list[dict]) -> list:
@@ -797,19 +810,25 @@ async def _apply_human_tag(
     Shared by the list-view tag buttons and /review's tag-and-advance so the
     guarantee lives in one place; category validation stays with each caller
     (the list view allows clearing to 'unclassified', review does not).
+
+    Checks rowcount and 404s if the row is gone: the detector's reconcile
+    deletes and reinserts trips it replaces, and without this guard a human
+    tag racing that delete would silently match zero rows and report success.
     """
     if update_purpose:
-        await conn.execute(
+        cur = await conn.execute(
             "UPDATE trips SET category = %s, purpose = %s, tag_source = 'human', "
             "updated_at = now() WHERE id = %s",
             (category, (purpose or "").strip() or None, trip_id),
         )
     else:
-        await conn.execute(
+        cur = await conn.execute(
             "UPDATE trips SET category = %s, tag_source = 'human', updated_at = now() "
             "WHERE id = %s",
             (category, trip_id),
         )
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="No such trip")
 
 
 def _review_url(from_str: str, to_str: str, vehicle_str: str) -> str:
@@ -1421,7 +1440,12 @@ def make_router() -> APIRouter:
             trips = await cur.fetchall()
             rates = await load_rates(conn)
 
-        content = to_csv(trips, rates, tz) if format == "csv" else to_xlsx(trips, rates, tz)
+        # CSV/XLSX serialization is CPU-bound; offload so it doesn't block
+        # the event loop for other requests while a large export builds.
+        if format == "csv":
+            content = await asyncio.to_thread(to_csv, trips, rates, tz)
+        else:
+            content = await asyncio.to_thread(to_xlsx, trips, rates, tz)
         return Response(
             content=content,
             media_type=EXPORT_MEDIA_TYPES[format],
@@ -1477,7 +1501,9 @@ def make_router() -> APIRouter:
             report = build_range_report(trips, rates, tz, start, end)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        content = to_range_report_xlsx(report, trips, rates, tz)
+        # XLSX serialization is CPU-bound; offload so it doesn't block the
+        # event loop for other requests while the report builds.
+        content = await asyncio.to_thread(to_range_report_xlsx, report, trips, rates, tz)
         filename = f"mileage-report-{range_filename_slug(start, end)}.xlsx"
         return Response(
             content=content,
@@ -1519,8 +1545,10 @@ def make_router() -> APIRouter:
         report = build_annual_report(trips, rates, tz, year)
         odometer_coverage = await _fetch_year_odometer_coverage(pool, tz, year, trips)
         expenses, expense_report = await _fetch_year_expense_report(pool, tz, year, trips, rates)
-        content = to_report_xlsx(
-            report, trips, rates, tz, odometer_coverage, expense_report, expenses
+        # XLSX serialization is CPU-bound; offload so it doesn't block the
+        # event loop for other requests while the report builds.
+        content = await asyncio.to_thread(
+            to_report_xlsx, report, trips, rates, tz, odometer_coverage, expense_report, expenses
         )
         return Response(
             content=content,
@@ -1538,6 +1566,10 @@ def make_router() -> APIRouter:
         tz = request.app.state.config.display_tz
         selected_year = year or datetime.now(tz).year
         vehicle_id = _parse_vehicle_id(vehicle)
+        if vehicle_id == VEHICLE_FILTER_UNASSIGNED:
+            # expenses.vehicle_id is NOT NULL (migration 011), so there is no
+            # unassigned bucket to filter to -- unlike trips.
+            raise HTTPException(status_code=400, detail="Invalid vehicle")
         async with request.app.state.pool.connection() as conn:
             vehicles = await list_vehicles(conn, include_inactive=True)
             cur = conn.cursor(row_factory=dict_row)
@@ -2252,19 +2284,32 @@ def make_router() -> APIRouter:
         user: dict = Depends(require_user),
     ):
         """The override insert and the reprocess share one
-        connection/transaction, same reasoning as `_merge_trips_core`.
+        connection/transaction, same reasoning as `_merge_trips_core`. The
+        advisory lock is taken first, before the trip is read, and the trip
+        is re-read fresh under the lock rather than trusting a pre-lock
+        fetch, so a concurrent detector run can't rewrite the trip's
+        boundaries out from under this split between the read and the
+        override write -- same reasoning as `_delete_trip_in`.
         """
         pool = request.app.state.pool
-        trip = await _fetch_trip(pool, trip_id)
-        if trip["source"] != "detected":
-            raise HTTPException(status_code=400, detail="Only detected trips can be split")
-
         runner = request.app.state.detector_runner
         async with pool.connection() as conn:
+            await conn.execute("SELECT pg_advisory_xact_lock(%s)", (ADVISORY_LOCK_KEY,))
+            cur = await conn.execute(
+                "SELECT device, source::text, started_at, ended_at "
+                "FROM trips WHERE id = %s FOR UPDATE",
+                (trip_id,),
+            )
+            row = await cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="No such trip")
+            device, source, started_at, ended_at = row
+            if source != "detected":
+                raise HTTPException(status_code=400, detail="Only detected trips can be split")
             cur = await conn.execute(
                 "SELECT 1 FROM points WHERE id = %s AND device = %s "
                 "AND recorded_at > %s AND recorded_at < %s",
-                (point_id, trip["device"], trip["started_at"], trip["ended_at"]),
+                (point_id, device, started_at, ended_at),
             )
             if not await cur.fetchone():
                 raise HTTPException(
@@ -2281,9 +2326,9 @@ def make_router() -> APIRouter:
             await conn.execute(
                 "INSERT INTO trip_boundary_overrides (device, kind, point_id) "
                 "VALUES (%s, 'force', %s) ON CONFLICT DO NOTHING",
-                (trip["device"], point_id),
+                (device, point_id),
             )
-            await runner.reprocess_device_in(conn, trip["device"])
+            await runner.reprocess_device_in(conn, device)
         _poke_snap_worker(request)
         return Response(status_code=204, headers={"HX-Redirect": "/trips"})
 
@@ -2620,7 +2665,7 @@ def make_router() -> APIRouter:
                 )
             except errors.UniqueViolation:
                 raise HTTPException(status_code=400, detail="A place with that name already exists")
-        await reprocess_places(pool)
+            await reprocess_places_in(conn)
         return _redirect_back(request)
 
     @router.post("/places/{place_id}/update", dependencies=[Depends(require_csrf)])
@@ -2662,7 +2707,7 @@ def make_router() -> APIRouter:
                 )
             except errors.UniqueViolation:
                 raise HTTPException(status_code=400, detail="A place with that name already exists")
-        await reprocess_places(pool)
+            await reprocess_places_in(conn)
         return _redirect_back(request)
 
     @router.post("/places/{place_id}/delete", dependencies=[Depends(require_csrf)])
@@ -2670,7 +2715,7 @@ def make_router() -> APIRouter:
         pool = request.app.state.pool
         async with pool.connection() as conn:
             await conn.execute("DELETE FROM places WHERE id = %s", (place_id,))
-        await reprocess_places(pool)
+            await reprocess_places_in(conn)
         return _redirect_back(request)
 
     @router.post("/rules", dependencies=[Depends(require_csrf)])
@@ -2692,7 +2737,10 @@ def make_router() -> APIRouter:
             if mode == "place":
                 if not place:
                     raise HTTPException(status_code=400, detail="Select a place")
-                return int(place), None
+                try:
+                    return int(place), None
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="Invalid place")
             if mode == "kind":
                 if kind not in PLACE_KINDS:
                     raise HTTPException(status_code=400, detail="Unknown kind")
@@ -2708,12 +2756,15 @@ def make_router() -> APIRouter:
 
         pool = request.app.state.pool
         async with pool.connection() as conn:
-            await conn.execute(
-                "INSERT INTO tag_rules (a_place, a_kind, b_place, b_kind, category) "
-                "VALUES (%s, %s, %s, %s, %s)",
-                (a_place_id, a_kind_val, b_place_id, b_kind_val, category),
-            )
-        await reprocess_places(pool)
+            try:
+                await conn.execute(
+                    "INSERT INTO tag_rules (a_place, a_kind, b_place, b_kind, category) "
+                    "VALUES (%s, %s, %s, %s, %s)",
+                    (a_place_id, a_kind_val, b_place_id, b_kind_val, category),
+                )
+            except errors.ForeignKeyViolation:
+                raise HTTPException(status_code=400, detail="No such place")
+            await reprocess_places_in(conn)
         return _redirect_back(request)
 
     @router.post("/rules/{rule_id}/delete", dependencies=[Depends(require_csrf)])
@@ -2721,7 +2772,7 @@ def make_router() -> APIRouter:
         pool = request.app.state.pool
         async with pool.connection() as conn:
             await conn.execute("DELETE FROM tag_rules WHERE id = %s", (rule_id,))
-        await reprocess_places(pool)
+            await reprocess_places_in(conn)
         return _redirect_back(request)
 
     return router

@@ -13,7 +13,7 @@ CANONICAL_COMPOSE = ROOT / "compose.yaml"
 BUILD_OVERRIDE = ROOT / "compose.build.override.yml"
 ENV_EXAMPLE = ROOT / ".env.example"
 GENERATE_ENV = ROOT / "scripts" / "generate_env.sh"
-RELEASE_IMAGE = "ghcr.io/meandrousshark/odograph:v0.7.4"
+RELEASE_IMAGE = "ghcr.io/meandrousshark/odograph:v0.7.5"
 
 REQUIRED_VARIABLE_GUARD = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*):\?")
 

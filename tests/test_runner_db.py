@@ -23,10 +23,12 @@ import pytest
 import psycopg
 from fastapi import HTTPException
 
+import app.detector.runner as runner_module
+from app.autotag import AutotagResult
 from app.db import make_pool, run_migrations
 from app.detector.core import Params
 from app.detector.runner import (
-    ADVISORY_LOCK_KEY, DetectorRunner, load_trip_points, reprocess_places,
+    ADVISORY_LOCK_KEY, DetectorRunner, load_trip_points, reprocess_places, resolve_and_autotag,
 )
 from app.ui import _validate_split_distance
 from app.vehicles import deactivate_vehicle, list_vehicles, set_auto_assign_default_vehicle
@@ -796,3 +798,101 @@ def test_reprocess_places_skips_imported_trips_but_still_resolves_live_ones():
     test for that guard, alongside proof that a genuine non-imported trip is
     still processed normally in the same reprocess_places call."""
     asyncio.run(_run_reprocess_places_imported_guard_scenario())
+
+
+async def _run_reprocess_places_human_tag_survives_matching_rule_scenario():
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        await _reset_schema(pool)
+        async with pool.connection() as conn:
+            await conn.execute(
+                "INSERT INTO places (name, kind, geom) VALUES "
+                "('Home', 'home', ST_SetSRID(ST_MakePoint(-122.33, 47.60), 4326)::geography), "
+                "('Work', 'work', ST_SetSRID(ST_MakePoint(-122.30, 47.62), 4326)::geography)"
+            )
+            await conn.execute(
+                "INSERT INTO tag_rules (a_kind, b_kind, category) VALUES ('home', 'work', 'business')"
+            )
+            # A human-classified trip whose endpoints resolve to exactly this
+            # rule's places, so plan_autotags would reclassify it to
+            # 'business'/'rule' if the human tag weren't protected.
+            cur = await conn.execute(
+                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
+                " start_geom, end_geom, category, tag_source) "
+                "VALUES (%s, 'detected', %s, %s, 1000, "
+                " ST_SetSRID(ST_MakePoint(-122.33, 47.60), 4326)::geography, "
+                " ST_SetSRID(ST_MakePoint(-122.30, 47.62), 4326)::geography, "
+                " 'personal', 'human') RETURNING id",
+                (DEVICE, T0, T0 + timedelta(minutes=20)),
+            )
+            trip_id = (await cur.fetchone())[0]
+
+        await reprocess_places(pool)
+
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT category::text, tag_source::text FROM trips WHERE id = %s", (trip_id,)
+            )
+            assert await cur.fetchone() == ("personal", "human"), (
+                "a human classification must never be overwritten by autotag, "
+                "even when a rule matches"
+            )
+    finally:
+        await pool.close()
+
+
+def test_reprocess_places_never_overwrites_human_tag_even_with_matching_rule():
+    """The rider fix to resolve_and_autotag's apply-loop UPDATE (AND
+    tag_source IS DISTINCT FROM 'human'): plan_autotags already skips
+    human-tagged trips in Python, but this proves the invariant holds at the
+    SQL layer too, for a trip whose start/end genuinely match a real rule."""
+    asyncio.run(_run_reprocess_places_human_tag_survives_matching_rule_scenario())
+
+
+async def _run_apply_loop_sql_guard_scenario():
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        await _reset_schema(pool)
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
+                " category, tag_source) "
+                "VALUES (%s, 'detected', %s, %s, 1000, 'personal', 'human') RETURNING id",
+                (DEVICE, T0, T0 + timedelta(minutes=20)),
+            )
+            trip_id = (await cur.fetchone())[0]
+
+            # Bypass plan_autotags' own human-tag_source filter (already
+            # covered by tests/test_autotag.py) to isolate the apply loop's
+            # SQL WHERE clause as the thing actually under test here: a
+            # stale row read (e.g. one taken just before a concurrent
+            # human-tag write commits) must not let a forced "rule" result
+            # overwrite a trip that is, at UPDATE time, tag_source='human'.
+            original_plan_autotags = runner_module.plan_autotags
+            runner_module.plan_autotags = lambda trips, rules: [
+                AutotagResult(trip_id=trip_id, category="business", tag_source="rule")
+            ]
+            try:
+                await resolve_and_autotag(conn, [trip_id])
+            finally:
+                runner_module.plan_autotags = original_plan_autotags
+
+            cur = await conn.execute(
+                "SELECT category::text, tag_source::text FROM trips WHERE id = %s", (trip_id,)
+            )
+            assert await cur.fetchone() == ("personal", "human"), (
+                "the apply loop's UPDATE must refuse to overwrite tag_source='human' "
+                "on its own, independent of plan_autotags' own filtering"
+            )
+    finally:
+        await pool.close()
+
+
+def test_resolve_and_autotag_apply_loop_sql_guard_blocks_stale_rule_result():
+    """Isolates the new `AND tag_source IS DISTINCT FROM 'human'` guard from
+    plan_autotags' pre-existing Python-level filter by forcing plan_autotags
+    to (unrealistically) hand back a 'rule' result for an already
+    human-tagged trip -- the guard must still refuse the UPDATE."""
+    asyncio.run(_run_apply_loop_sql_guard_scenario())

@@ -26,6 +26,7 @@ are at different values than the source.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import date, datetime, timezone
@@ -1091,13 +1092,19 @@ def make_router() -> APIRouter:
                 schema_version=await _fetch_schema_version(conn),
                 exported_at=datetime.now(timezone.utc),
             )
-        try:
+
+        def _serialize_bundle() -> bytes:
             # allow_nan=False: json.dumps otherwise writes a bare NaN/Infinity
             # token for any non-finite value already in the ledger, which
             # Python's own json.loads accepts back but isn't valid JSON per
             # RFC 8259 -- JS JSON.parse, jq, and Go's encoding/json all
             # reject it, making the file unreadable by anything but this app.
-            content = json.dumps(bundle, indent=2, allow_nan=False).encode("utf-8")
+            return json.dumps(bundle, indent=2, allow_nan=False).encode("utf-8")
+
+        try:
+            # Serializing the whole database is CPU-bound and can be large;
+            # offload so it doesn't block the event loop for other requests.
+            content = await asyncio.to_thread(_serialize_bundle)
         except ValueError:
             log.exception("portable export: bundle contains a non-finite value")
             return JSONResponse(

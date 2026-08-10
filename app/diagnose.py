@@ -57,12 +57,27 @@ WORKER_SPECS = [
 ]
 
 
+def _geocode_configured(cfg) -> bool:
+    """cfg.geocode_provider builds the provider and raises RuntimeError on
+    a misconfiguration (e.g. GEOCODE_PROVIDER=nominatim with no URL). The
+    diagnostics report has to run in exactly that broken state, so treat a
+    build failure as configured-but-broken rather than letting the
+    RuntimeError abort the whole report; the connectivity check below names
+    the specific fault.
+    """
+    try:
+        return bool(getattr(cfg, "geocode_provider", None))
+    except RuntimeError:
+        return True
+
+
 @dataclass
 class WorkerReport:
     name: str
     enabled: bool
     last_run_at: datetime | None = None
     last_success_at: datetime | None = None
+    last_skip_at: datetime | None = None
     last_failure_at: datetime | None = None
     last_failure_type: str | None = None
     next_run_at: datetime | None = None
@@ -165,7 +180,6 @@ def config_presence(cfg: Config) -> dict[str, bool]:
     changes production behavior.
     """
     osrm_url = getattr(cfg, "osrm_url", "")
-    geocode_provider = getattr(cfg, "geocode_provider", None)
     ntfy_url = getattr(cfg, "ntfy_url", "")
     ntfy_topic = getattr(cfg, "ntfy_topic", "")
     ntfy_token = getattr(cfg, "ntfy_token", "")
@@ -177,7 +191,7 @@ def config_presence(cfg: Config) -> dict[str, bool]:
     app_url = getattr(cfg, "app_url", "")
     return {
         "osrm_configured": bool(osrm_url),
-        "geocode_configured": bool(geocode_provider),
+        "geocode_configured": _geocode_configured(cfg),
         "ntfy_configured": bool(ntfy_url and ntfy_topic),
         "ntfy_auth_configured": bool(ntfy_token or (ntfy_username and ntfy_password)),
         "smtp_configured": bool(getattr(cfg, "email_enabled", False)),
@@ -197,7 +211,7 @@ def _worker_gates_from_config(cfg: Config) -> dict[str, bool]:
     return {
         "detector": True,
         "snap": bool(cfg.osrm_url),
-        "geocode": bool(cfg.geocode_provider),
+        "geocode": _geocode_configured(cfg),
         "retention": cfg.raw_message_retention_days > 0,
         "nudge": bool(cfg.ntfy_url and cfg.ntfy_topic),
         "odometer_reminder": bool(
@@ -223,6 +237,7 @@ def worker_reports_from_state(state) -> list[WorkerReport]:
             name=label, enabled=True,
             last_run_at=status.last_run_at,
             last_success_at=status.last_success_at,
+            last_skip_at=status.last_skip_at,
             last_failure_at=status.last_failure_at,
             last_failure_type=status.last_failure_type,
             next_run_at=status.next_run_at,
@@ -290,7 +305,10 @@ async def _check_geocode(cfg: Config, client: httpx.AsyncClient) -> Connectivity
     # "which provider" requirement) without adding a field only this one
     # service uses -- config_presence/render_report_text stay shaped the
     # same across every service.
-    provider = cfg.geocode_provider
+    try:
+        provider = cfg.geocode_provider
+    except RuntimeError as exc:
+        return ConnectivityResult("geocode", configured=True, ok=False, detail=f"misconfigured: {exc}")
     if provider is None:
         return ConnectivityResult("geocode", configured=False, detail="GEOCODE_PROVIDER not set")
     try:
@@ -422,6 +440,7 @@ def render_report_text(
         lines.append(
             f"  {worker.name}: enabled"
             f" last_run={worker.last_run_at} last_success={worker.last_success_at}"
+            f" last_skip={worker.last_skip_at}"
             f" last_failure={worker.last_failure_at} ({worker.last_failure_type})"
             f" next_run={worker.next_run_at}"
         )

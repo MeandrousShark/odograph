@@ -265,17 +265,45 @@ class SnapWorker(PokeSweepWorker):
 
     async def _snap_one(self, trip_id: int) -> None:
         async with self.pool.connection() as conn:
+            # Read BEFORE loading points, not after: the pool runs at READ
+            # COMMITTED, so each statement on this connection gets its own
+            # snapshot, and a detector rewrite (app/detector/runner.py) could
+            # commit between two statements here. Reading updated_at first
+            # means a rewrite landing during or after the point load can only
+            # make `generation` older than the row's current value by the
+            # time we reach the terminal write below, never newer/matching -
+            # so the residual race falls in the safe direction (an
+            # unnecessary discard, re-snapped next sweep) rather than letting
+            # a stale result through. `updated_at` doubles as a generation
+            # token: the rewrite always bumps it, but this worker's own
+            # terminal UPDATEs below never do, so a mismatch at write time
+            # means a rewrite superseded the points this result was computed
+            # from.
+            cur = await conn.execute(
+                "SELECT updated_at FROM trips WHERE id = %s", (trip_id,)
+            )
+            row = await cur.fetchone()
+            generation = row[0] if row else None
             points = await self._load_points(conn, trip_id)
         if len(points) < 2:
             # A detected trip should always have >= 2 points; if one somehow
             # doesn't, OSRM can never match it, so mark it terminally failed
             # rather than leaving it pending to be re-queried every sweep
-            # forever.
+            # forever. Same CAS guard as the terminal write below: a rewrite
+            # landing here means the point count itself may be stale
+            # (e.g. the rewrite's own point set is >= 2), so don't clobber it.
             async with self.pool.connection() as conn:
-                await conn.execute(
-                    "UPDATE trips SET snap_status = 'failed', snapped_at = now() WHERE id = %s",
-                    (trip_id,),
+                cur = await conn.execute(
+                    "UPDATE trips SET snap_status = 'failed', snapped_at = now() "
+                    "WHERE id = %s AND updated_at = %s",
+                    (trip_id, generation),
                 )
+            if cur.rowcount == 0:
+                log.info(
+                    "snap: trip %s was rewritten mid-snap, discarding stale "
+                    "<2-point result", trip_id,
+                )
+                return
             log.warning("snap: trip %s has < 2 usable points, marking failed", trip_id)
             return
 
@@ -320,14 +348,25 @@ class SnapWorker(PokeSweepWorker):
 
         result = parse_match_response(body, self.min_confidence, len(sampled))
         async with self.pool.connection() as conn:
-            await conn.execute(
+            cur = await conn.execute(
                 "UPDATE trips SET path_snapped = ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326), "
                 " distance_snapped_m = %s, snap_status = %s, snapped_at = now() "
-                "WHERE id = %s",
+                "WHERE id = %s AND updated_at = %s",
                 (
                     json.dumps(result.path_geojson) if result.path_geojson else None,
-                    result.distance_m, result.status, trip_id,
+                    result.distance_m, result.status, trip_id, generation,
                 ),
             )
+        if cur.rowcount == 0:
+            # A detector rewrite landed between the point load and this write
+            # (or the trip vanished). It already reset snap_status back to
+            # 'pending' with a fresh updated_at, so the next sweep re-snaps
+            # against the current geometry; applying this result now would
+            # silently attach a road-snapped path computed from stale points.
+            log.info(
+                "snap: trip %s was rewritten mid-snap, discarding stale result "
+                "(would have been %s)", trip_id, result.status,
+            )
+            return
         if result.status != "ok":
             log.info("snap: trip %s -> %s (%s)", trip_id, result.status, result.reason)
