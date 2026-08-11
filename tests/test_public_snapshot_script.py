@@ -29,12 +29,13 @@ _FAKE_AWS_KEY = "AK" + "IAABCDEFGHIJKLMNOP"
 _INTERNAL_DOC_REFERENCE = "docs/HAND" + "OFF" + ".md"
 _PRIVATE_HOSTNAME = "sap" + "poro"
 
-# The docs allowlist check hard-requires exactly these eight paths to exist
+# The docs allowlist check hard-requires exactly these paths to exist
 # at HEAD -- any fixture repo used to drive the real script needs all of
 # them committed, or the script fails before ever reaching publish-mode
 # behaviour.
 DOC_STUBS = {
     "docs/backups.md": "# Backups\n",
+    "docs/configuration.md": "# Configuration\n",
     "docs/osrm.md": "# OSRM\n",
     "docs/owntracks.md": "# OwnTracks\n",
     "docs/privacy.md": "# Privacy\n",

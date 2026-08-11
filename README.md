@@ -50,117 +50,130 @@ to help track a problem down; I just don't test them ahead of time. Note that
 the phone posts location fixes continuously, so whatever the operating system,
 a machine that sleeps makes a poor host.
 
-### Clean-host quickstart
+### Clean-host quickstart: critical path
 
-Clone the repository and check out the latest release tag shown on the GitHub
-Releases page. Keeping the checkout on an exact tag makes the installed source
-reproducible:
+Choose the version shown on the GitHub Releases page. Clone the repository and
+check out that exact tag, replacing `vX.Y.Z` below with the chosen release:
 
 ```sh
 git clone https://github.com/MeandrousShark/odograph.git
 cd odograph
-git checkout "$(git tag --sort=-v:refname | head -n 1)"
+git checkout vX.Y.Z
 scripts/generate_env.sh
 ```
 
 Edit `.env` and set `DISPLAY_TZ` to your
 [IANA timezone name](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones).
-The generated file is already a working local-login configuration: its three
-OIDC variables are unset and its four required secrets are populated. Leave
+The generated file is already a working local-login configuration: all three
+required secrets are populated, optional integrations are disabled, and
+first-account signup is enabled. See the
+[configuration reference](docs/configuration.md) only when you want to change
+the baseline or enable an integration. Leave
 `FORWARDED_ALLOW_IPS=*` unchanged only while the compose port remains bound to
 host loopback as shipped.
 
-Pull the image pinned by the checked-out release and start the baseline stack
-with one of the supported Compose commands:
+Start the baseline stack with exactly one of these commands. Compose pulls the
+immutable image tag pinned by the checked-out release automatically:
 
 ```sh
 # Docker Compose v2
-docker compose pull app
 docker compose up -d
-docker compose ps
 
 # Or Podman Compose
-podman-compose pull app
 podman-compose up -d
-podman-compose ps
 ```
 
-Only run one pair. The database and application should report healthy; this
-local diagnostic should then succeed:
+Then verify both services and the local health endpoint with the matching
+frontend:
 
 ```sh
+docker compose ps
+# or: podman-compose ps
 curl -fsS http://127.0.0.1:8077/healthz
 ```
 
 Next, configure your domain and TLS reverse proxy to send traffic to
 `127.0.0.1:8077`, following [the reverse-proxy guide](docs/reverse-proxy.md).
 Confirm `https://mileage.example.com/healthz` works before browser setup.
-Do not use the plain-HTTP loopback URL for `/setup` or `/login`: production
+Do not use the plain-HTTP loopback URL for `/signup` or `/login`: production
 session cookies are intentionally Secure and will not work there.
 
-Read the generated setup token without copying any other secret:
+Open `https://mileage.example.com/signup` and create the single administrator.
+The stored account closes signup permanently, so no environment cleanup or app
+recreation is needed. Sign in with the email and password you chose, then open
+Account Security at `/settings/account`.
 
-```sh
-sed -n 's/^ADMIN_TOKEN=//p' .env
-```
+Compose stores the account and application data in the named `dbdata` volume.
+Ordinary restarts, recreates, and `down`/`up` cycles without `-v` preserve it,
+and signup stays closed. Do not use `down -v` unless you intend to delete the
+database.
 
-Open `https://mileage.example.com/setup`, enter that token, and create the
-single local administrator. Sign in with the email and password you chose.
-The token is automatically consumed on success. For defense in depth, set
-`ADMIN_TOKEN=` in `.env`, then recreate the app so it loads the change:
+### Post-install checklist
 
-```sh
-# Docker Compose v2
-docker compose up -d --force-recreate app
+These steps are important operations, but none is a prerequisite for starting
+a brand-new empty instance:
 
-# Or Podman Compose
-podman-compose up -d --force-recreate app
-```
+1. Confirm the public HTTPS health endpoint and review
+   [reverse-proxy trust](docs/reverse-proxy.md#trusting-forwarded-headers).
+2. In Account Security, optionally configure and link an
+   [OIDC provider](docs/configuration.md#authentication-and-ingest).
+3. Follow [Connecting OwnTracks](docs/owntracks.md), send the removable
+   synthetic track, verify it in the UI, and clean it up.
+4. Take and verify a one-off database backup:
 
-Again, run only the command for your runtime. `/setup` returns 404 after the
-token is removed and the app is recreated. Compose stores database data in the
-named `dbdata` volume, so ordinary restarts, recreates, and `down`/`up` cycles
-without `-v` preserve it; see [Backups and disaster recovery](docs/backups.md)
-for tested backup, restore, and recovery procedures. Do not use `down -v`
-unless you intend to delete the database.
+   ```sh
+   scripts/backup_database.sh --output backups/first-install.dump
+   scripts/restore_database.sh --verify-only backups/first-install.dump
+   ```
 
-When a new release comes out, see [Upgrading](docs/upgrading.md) and take and
-verify a fresh backup before changing the checkout or pulling the new image.
+   Then choose encrypted, off-host storage and a schedule in
+   [Backups and disaster recovery](docs/backups.md).
+5. Enable only the optional services you want: [OSRM](docs/osrm.md), reverse
+   geocoding, ntfy, or email. Their settings are in the
+   [configuration reference](docs/configuration.md#external-services), and
+   their data-sharing behavior is in the [privacy guide](docs/privacy.md).
+6. Complete the [security hardening checklist](docs/security.md#hardening-checklist).
 
-Finally, follow [Connecting OwnTracks](docs/owntracks.md) to configure the
-phone, send a synthetic test track, verify the first fix on Settings, and
-remove the test data.
-
-Before relying on the instance day to day, run through
-[the security hardening checklist](docs/security.md#hardening-checklist)
-against this exact installation.
+For later releases, follow [Upgrading](docs/upgrading.md). Every upgrade starts
+with a fresh verified backup and continues from an exact release tag.
 
 ### Password recovery and session revocation
 
-To reset the local administrator password, put a new high-entropy value in
-`ADMIN_TOKEN` and recreate the app so it loads the changed `.env`. Open
-`/setup`, reset the password, clear `ADMIN_TOKEN`, and recreate the app again.
-Each successful setup token can be used only once.
+To change the password while signed in, open Account Security. If you lose
+access, run the appropriate command for your Compose frontend and enter the new
+password interactively:
 
-A password reset does not invalidate an already-issued signed session cookie.
-Recreating or restarting the app with the same `SESSION_SECRET` does not
-invalidate it either. If you need to revoke every existing browser session,
-also replace `SESSION_SECRET` with a new high-entropy value before the final
-app recreation. This signs everyone out; it does not affect stored data.
+```sh
+docker compose exec app python -m app.manage_account reset-password
+# or: podman-compose exec app python -m app.manage_account reset-password
+```
+
+Use `create-admin` instead of `reset-password` only when no account exists and
+public first-account signup is disabled. Both password changes and operator
+resets revoke previously issued application sessions. The browser completing a
+signed-in password change receives a fresh valid session.
 
 Logging out ends the application's own session and returns you to the login
 page, but it does not end the identity provider's session. With OIDC,
 signing back in afterward may not prompt for credentials at all, because the
 provider still considers you signed in. To fully sign out, also sign out of
-the identity provider directly.
+the identity provider directly. Odograph does not retain OIDC access, refresh,
+or ID tokens after the callback.
 
 ### Optional integrations
 
-The baseline stack needs none of these:
+The baseline stack needs none of these. The
+[configuration reference](docs/configuration.md#external-services) lists every
+setting and default:
 
-- OIDC can be enabled as an alternative login by setting all three OIDC
-  variables together. Register
-  `https://mileage.example.com/auth/callback` with the provider.
+- OIDC is an optional login method for the same administrator account. Register
+  `https://mileage.example.com/auth/callback` with the provider, configure all
+  three OIDC variables, then open Account Security while signed in locally.
+  Linking requires the current local password and a fresh provider authorization.
+  Later OIDC logins resolve the provider's exact issuer and subject, not its
+  email claim, and reach the same account as local login. `ALLOWED_EMAIL` does
+  not control linked login. It applies only to the one-time transition for an
+  existing OIDC-only installation described in [Upgrading](docs/upgrading.md).
 - Reverse geocoding and address search are enabled by setting
   `GEOCODE_PROVIDER` to `geoapify` (hosted; also needs `GEOCODE_API_KEY`) or
   `nominatim` (self-hosted only; also needs `GEOCODE_NOMINATIM_URL`, which

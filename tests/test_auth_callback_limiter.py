@@ -18,6 +18,7 @@ import asyncio
 from types import SimpleNamespace
 
 import httpx
+import pytest
 from authlib.integrations.base_client import OAuthError
 from fastapi import FastAPI, Request, Response
 from starlette.middleware.sessions import SessionMiddleware
@@ -67,13 +68,55 @@ class _SucceedingOAuthClient:
         return {"userinfo": self.userinfo}
 
 
+class _NoAccountCursor:
+    def __init__(self):
+        self.query = ""
+
+    async def execute(self, *args, **kwargs):
+        self.query = args[0] if args else ""
+        return self
+
+    async def fetchone(self):
+        if "SELECT EXISTS" in self.query:
+            return (False,)
+        return None
+
+
+class _NoAccountConn:
+    def cursor(self, row_factory=None):
+        return _NoAccountCursor()
+
+    async def execute(self, *args, **kwargs):
+        cursor = _NoAccountCursor()
+        return await cursor.execute(*args, **kwargs)
+
+
+class _NoAccountContext:
+    async def __aenter__(self):
+        return _NoAccountConn()
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
+class _NoAccountPool:
+    def connection(self):
+        return _NoAccountContext()
+
+
 def _app(oauth_client, *, allowed_email: str = ""):
     app = FastAPI()
     app.add_middleware(
         SessionMiddleware, secret_key="test-secret", same_site="lax", https_only=False
     )
-    app.state.config = SimpleNamespace(dev_no_auth=False, allowed_email=allowed_email)
+    app.state.config = SimpleNamespace(
+        dev_no_auth=False,
+        initial_admin_signup=False,
+        allowed_email=allowed_email,
+        oidc_issuer="https://idp.example.com",
+    )
     app.state.oauth = SimpleNamespace(pocketid=oauth_client)
+    app.state.pool = _NoAccountPool()
     app.state.login_limiter = FailedAuthLimiter(max_failures=MAX_FAILURES, window_s=900)
 
     # Test-only routes to plant and inspect session content around the
@@ -99,7 +142,7 @@ async def _get_callback(app, *, peer=("203.0.113.5", 51000)):
     async with httpx.AsyncClient(
         transport=transport, base_url="http://testserver", follow_redirects=False
     ) as client:
-        return await client.get("/auth/callback?code=garbage&state=whatever")
+        return await client.get("/auth/callback?code=garbage&state=login.whatever")
 
 
 def test_repeated_rejected_callbacks_trip_the_limiter():
@@ -137,8 +180,44 @@ def test_blocked_caller_never_reaches_authorize_access_token():
     assert oauth_client.calls == MAX_FAILURES
 
 
+def test_callback_without_protected_flow_state_is_rejected_before_token_exchange():
+    oauth_client = _SucceedingOAuthClient({"email": "admin@example.com", "sub": "1"})
+    app = _app(oauth_client)
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
+            return await client.get("/auth/callback?code=garbage")
+
+    response = asyncio.run(run())
+    assert response.status_code == 401
+    assert oauth_client.calls == 0
+
+
+def test_cross_session_link_callback_is_rejected_before_token_exchange():
+    oauth_client = _SucceedingOAuthClient({"email": "admin@example.com", "sub": "1"})
+    app = _app(oauth_client)
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
+            return await client.get(
+                "/auth/callback?code=valid&state=link.from-another-session"
+            )
+
+    response = asyncio.run(run())
+    assert response.status_code == 401
+    assert oauth_client.calls == 0
+
+
 def test_rejected_allowed_email_also_counts_as_a_failure():
-    oauth_client = _SucceedingOAuthClient({"email": "not-the-admin@example.com"})
+    oauth_client = _SucceedingOAuthClient(
+        {"email": "not-the-admin@example.com", "sub": "not-admin"}
+    )
     app = _app(oauth_client, allowed_email="admin@example.com")
 
     async def run():
@@ -169,6 +248,20 @@ def test_successful_callback_records_no_failure():
     assert results == [303] * (MAX_FAILURES + 2)
 
 
+@pytest.mark.parametrize("subject", [None, "", 0, False, [], {}])
+def test_callback_without_valid_string_subject_fails_and_is_limited(subject):
+    oauth_client = _SucceedingOAuthClient(
+        {"email": "admin@example.com", "sub": subject}
+    )
+    app = _app(oauth_client, allowed_email="admin@example.com")
+
+    async def run():
+        return [(await _get_callback(app)).status_code for _ in range(MAX_FAILURES + 1)]
+
+    results = asyncio.run(run())
+    assert results == [401] * MAX_FAILURES + [429]
+
+
 def test_non_oauth_error_failure_is_not_charged_to_the_callers_ledger():
     oauth_client = _OutageOAuthClient()
     app = _app(oauth_client)
@@ -180,7 +273,13 @@ def test_non_oauth_error_failure_is_not_charged_to_the_callers_ledger():
             async with httpx.AsyncClient(
                 transport=transport, base_url="http://testserver"
             ) as client:
-                results.append((await client.get("/auth/callback?code=x&state=y")).status_code)
+                results.append(
+                    (
+                        await client.get(
+                            "/auth/callback?code=x&state=login.whatever"
+                        )
+                    ).status_code
+                )
         return results
 
     results = asyncio.run(run())
@@ -201,7 +300,9 @@ def test_successful_callback_clears_pre_login_session_and_remints_csrf():
             transport=transport, base_url="http://testserver", follow_redirects=False
         ) as client:
             await client.post("/test/plant-session")
-            callback_response = await client.get("/auth/callback?code=garbage&state=whatever")
+            callback_response = await client.get(
+                "/auth/callback?code=garbage&state=login.whatever"
+            )
             assert callback_response.status_code == 303
 
             session = (await client.get("/test/session")).json()
@@ -209,7 +310,8 @@ def test_successful_callback_clears_pre_login_session_and_remints_csrf():
             # token minted for the now-authenticated session is a fresh one,
             # not the pre-login value a fixation attack would have planted.
             assert "evil" not in session
-            assert session["user"]["email"] == "admin@example.com"
+            assert session["legacy_oidc"]["email"] == "admin@example.com"
+            assert session["legacy_oidc"]["subject"] == "1"
             assert session["csrf"] != "preplanted-csrf"
 
     asyncio.run(run())

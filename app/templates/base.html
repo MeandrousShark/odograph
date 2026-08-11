@@ -32,6 +32,7 @@
     </nav>
     <div class="header-account">
       <span class="who">{{ user.name or user.email or user.sub }}</span>
+      {% if user.is_admin and user.id %}<a href="/settings/account">Account Security</a>{% endif %}
       <a href="/settings">Settings</a>
       <form class="logout-form" hx-post="/logout" hx-swap="none"><button type="submit" class="link-button">Log out</button></form>
     </div>

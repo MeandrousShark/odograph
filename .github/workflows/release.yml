@@ -34,7 +34,7 @@ jobs:
           set -euo pipefail
           revision="$(git rev-parse HEAD)"
           image="ghcr.io/${REPOSITORY,,}"
-          python scripts/release_notes.py --tag "$VERSION"
+          python scripts/check_release_contract.py --tag "$VERSION" --image "$image"
           echo "image=$image" >> "$GITHUB_OUTPUT"
           echo "revision=$revision" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"

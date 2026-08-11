@@ -27,6 +27,54 @@ occasion an additive migration might happen to tolerate it. Treat "the
 migration succeeded" as a one-way door. The supported way back is restoring
 the pre-upgrade backup, described in [Rollback](#rollback) below.
 
+## Account migration
+
+The account foundation uses two additive migrations. Migration 020 moves an
+existing local administrator into account ID 1 without changing the normalized
+email or password hash. Migration 021 adds linked OIDC identity records. No
+trip, point, report, or settings row becomes user-owned in this release.
+
+An existing local administrator is migrated to account ID 1 with the same
+normalized email and password hash. The old password continues to work. An
+obsolete `ADMIN_TOKEN` entry may remain in an existing `.env`; the application
+ignores it, and `/setup` no longer exists. The value is not printed by
+diagnostics and cannot enable signup or password reset.
+
+`INITIAL_ADMIN_SIGNUP` defaults to disabled when absent. Upgrading an existing
+OIDC-only installation therefore does not open public registration. While no
+account exists, signup stays disabled, and OIDC remains configured, sign in
+with the existing provider and continue at `/account/establish`. That one-time
+transition creates the local administrator credentials and links the current
+provider identity in one transaction. Afterward, local and OIDC login reach the
+same account. The durable link uses the provider's exact issuer and subject;
+matching email addresses do not create or select links.
+
+Because both account migrations are forward-only, an upgrade that commits
+them cannot be rolled back by starting the previous image against that same
+database. Restoring the verified pre-upgrade archive into a fresh volume is
+the supported rollback path. That restore also removes any account or linked
+identity created after the backup, along with every other post-backup write.
+
+`ALLOWED_EMAIL`, when configured, gates only this narrow legacy transition. It
+does not authorize a linked OIDC login. Without it, any identity accepted by
+the configured provider can reach the transition, preserving the installation's
+previous provider-trust boundary. If that boundary is too broad, or the
+provider is unavailable, create the missing account from inside the
+application container instead:
+
+```sh
+docker compose exec app python -m app.manage_account create-admin
+# or: podman-compose exec app python -m app.manage_account create-admin
+```
+
+Use `reset-password` instead when an account already exists. Both commands read
+passwords interactively or from protected standard input and accept no password
+argument. After `create-admin`, sign in locally and use Account Security to link
+the provider deliberately when it is available. Linking requires the current
+local password and a fresh provider authorization. Odograph stores the linked
+issuer and subject plus safe display metadata, but does not retain OIDC access,
+refresh, or ID tokens after the callback.
+
 ## Upgrade procedure
 
 1. **Confirm your current exact release and read every release note between

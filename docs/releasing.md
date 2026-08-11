@@ -95,11 +95,14 @@ For the first public release, use the explicit statement "Prior-release
 artifact upgrade gate: not applicable. No prior public release exists." Do
 not imply that the gate ran.
 
-Validate that the release-note extractor selects the intended section, then
-review and commit the Compose pin and changelog together:
+Validate that the Compose image, changelog section, documented exact-tag
+install path, and runtime-reported version contract all agree. Then confirm
+the release-note extractor selects the intended section and review and commit
+the Compose pin and changelog together:
 
 ```sh
 RELEASE_TMP=$(mktemp -d)
+python3 scripts/check_release_contract.py --tag "$VERSION" --image "$IMAGE"
 python3 scripts/release_notes.py --tag "$VERSION" \
   --notes-output "$RELEASE_TMP/release-notes.md" \
   --pip-audit-output "$RELEASE_TMP/pip-audit.ignore" \

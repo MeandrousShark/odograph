@@ -1,6 +1,4 @@
-"""Password hashing and setup-token hashing for the single local
-administrator (app/auth.py's /login/local and /setup routes).
-"""
+"""Password hashing for local account credentials."""
 from __future__ import annotations
 
 import base64
@@ -70,11 +68,3 @@ def verify_password(password: str, stored: str) -> bool:
         # out of hashlib.scrypt -- either way, "doesn't verify", not a 500.
         return False
     return hmac.compare_digest(candidate, expected)
-
-
-def sha256_hex(value: str) -> str:
-    """Used to store/compare the setup token's auto-consume fingerprint --
-    plain SHA-256 is deliberate here (see migrations/017_local_admin.sql),
-    not scrypt.
-    """
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()

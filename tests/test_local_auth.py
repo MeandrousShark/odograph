@@ -1,11 +1,11 @@
-"""Unit tests for the local-admin password/token hashing helpers."""
+"""Unit tests for local-account password hashing."""
 from __future__ import annotations
 
 import base64
 import hashlib
 
 from app import local_auth
-from app.local_auth import hash_password, sha256_hex, verify_password
+from app.local_auth import hash_password, verify_password
 
 
 def test_hash_password_round_trips_through_verify():
@@ -54,9 +54,3 @@ def test_verify_password_rejects_malformed_stored_hash_without_raising():
     assert not verify_password("anything", "not-a-valid-hash")
     assert not verify_password("anything", "scrypt$notanint$8$1$c2FsdA==$ZGlnZXN0")
     assert not verify_password("anything", "bcrypt$10$abc$def")
-
-
-def test_sha256_hex_is_deterministic_and_distinguishes_input():
-    assert sha256_hex("a-token") == sha256_hex("a-token")
-    assert sha256_hex("a-token") != sha256_hex("a-different-token")
-    assert sha256_hex("a-token") == hashlib.sha256(b"a-token").hexdigest()

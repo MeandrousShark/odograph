@@ -466,7 +466,7 @@ details.add-manual legend { font-size: .75rem; opacity: .7; padding: 0 .3rem; }
 a { color: inherit; }
 .empty { opacity: .6; margin: 2rem 0; }
 .muted { opacity: .6; }
-/* /login and /setup: same label/input stacking as .trip-edit-grid label,
+/* Authentication forms use the same label/input stacking as .trip-edit-grid label,
    but a single narrow column -- these forms are never side-by-side with
    other content, unlike the in-page edit grids they borrow the shape from. */
 .auth-form {
@@ -474,6 +474,19 @@ a { color: inherit; }
   max-width: 22rem; margin-top: var(--space-3);
 }
 .auth-form label { display: flex; flex-direction: column; gap: var(--space-1); font-size: .85rem; }
+.account-security-section { margin-top: 1.5rem; }
+.account-security-identity {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: var(--space-2);
+  max-width: 28rem; margin: var(--space-3) 0 0;
+}
+.account-security-identity div {
+  min-width: 0; padding: var(--space-2) var(--space-3); background: var(--surface0);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.account-security-identity dt { color: var(--fg-muted); font-size: .8rem; }
+.account-security-identity dd { margin: var(--space-1) 0 0; overflow-wrap: anywhere; }
+.auth-form .auth-checkbox { flex-direction: row; align-items: flex-start; }
+.auth-form .auth-checkbox input { margin-top: .2rem; }
 .auth-divider { text-align: center; color: var(--fg-muted); font-size: .8rem; margin: var(--space-3) 0; }
 .ytd-deduction { font-size: .95rem; margin: .25rem 0 1rem; }
 .ytd-deduction.muted { font-size: .85rem; }

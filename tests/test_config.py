@@ -1,5 +1,4 @@
-"""Config.from_env's auth-path validation matrix: dev / local-only /
-OIDC-only / both / partial-OIDC-is-an-error, plus ADMIN_TOKEN set/unset.
+"""Config.from_env's auth-path validation matrix and signup fail-closed default.
 OIDC becoming optional must not touch the pre-existing required-vars check.
 """
 from __future__ import annotations
@@ -21,7 +20,9 @@ from app.main import make_templates
 
 REQUIRED_VARS = ("DATABASE_URL", "INGEST_PASSWORD", "SESSION_SECRET")
 OIDC_VARS = ("OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET")
-ALL_OPTIONAL_AUTH_VARS = OIDC_VARS + ("ADMIN_TOKEN", "DEV_NO_AUTH")
+ALL_OPTIONAL_AUTH_VARS = OIDC_VARS + (
+    "ADMIN_TOKEN", "INITIAL_ADMIN_SIGNUP", "DEV_NO_AUTH",
+)
 RUNTIME_IDENTITY_VARS = ("APP_VERSION", "APP_GIT_REVISION")
 WORKER_ENV_VARS = (
     "OSRM_URL", "RAW_MESSAGE_RETENTION_DAYS", "NTFY_URL", "NTFY_TOPIC",
@@ -50,48 +51,50 @@ def test_missing_required_vars_still_raises(monkeypatch):
         Config.from_env()
 
 
-def test_dev_no_auth_needs_no_oidc_or_admin_token(clean_env):
+def test_dev_no_auth_needs_no_oidc(clean_env):
     clean_env.setenv("DEV_NO_AUTH", "1")
     cfg = Config.from_env()
     assert cfg.dev_no_auth is True
     assert cfg.oidc_configured is False
-    assert cfg.admin_token == ""
+    assert cfg.initial_admin_signup is False
 
 
 def test_local_only_mode_needs_no_oidc(clean_env):
-    clean_env.setenv("ADMIN_TOKEN", "s3cr3t")
     cfg = Config.from_env()
     assert cfg.dev_no_auth is False
     assert cfg.oidc_configured is False
-    assert cfg.admin_token == "s3cr3t"
+    assert cfg.initial_admin_signup is False
 
 
-def test_oidc_only_mode_needs_no_admin_token(clean_env):
+def test_oidc_only_mode_defaults_signup_closed(clean_env):
     clean_env.setenv("OIDC_ISSUER", "https://idp.example.com")
     clean_env.setenv("OIDC_CLIENT_ID", "client-id")
     clean_env.setenv("OIDC_CLIENT_SECRET", "client-secret")
     cfg = Config.from_env()
     assert cfg.oidc_configured is True
-    assert cfg.admin_token == ""
+    assert cfg.initial_admin_signup is False
 
 
-def test_both_oidc_and_local_mode_coexist(clean_env):
+def test_oidc_and_initial_signup_config_can_coexist(clean_env):
     clean_env.setenv("OIDC_ISSUER", "https://idp.example.com")
     clean_env.setenv("OIDC_CLIENT_ID", "client-id")
     clean_env.setenv("OIDC_CLIENT_SECRET", "client-secret")
-    clean_env.setenv("ADMIN_TOKEN", "s3cr3t")
+    clean_env.setenv("INITIAL_ADMIN_SIGNUP", "1")
     cfg = Config.from_env()
     assert cfg.oidc_configured is True
-    assert cfg.admin_token == "s3cr3t"
+    assert cfg.initial_admin_signup is True
 
 
-def test_neither_oidc_nor_admin_token_does_not_raise(clean_env):
-    # Local-login mode is the fallback whenever OIDC is absent -- the login
-    # page handles the no-admin-yet state, so this is not a startup error
-    # (unlike the old hard OIDC requirement).
+def test_missing_initial_signup_is_fail_closed(clean_env):
     cfg = Config.from_env()
     assert cfg.oidc_configured is False
-    assert cfg.admin_token == ""
+    assert cfg.initial_admin_signup is False
+
+
+def test_obsolete_admin_token_is_ignored(clean_env):
+    clean_env.setenv("ADMIN_TOKEN", "obsolete-value")
+    cfg = Config.from_env()
+    assert cfg.initial_admin_signup is False
 
 
 @pytest.mark.parametrize("set_var", OIDC_VARS)

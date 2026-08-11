@@ -10,7 +10,7 @@ and proxy to that loopback address. Port 8077 is not intended to be exposed to
 the internet directly.
 
 Production browser sessions use Secure cookies. Complete TLS setup and use the
-public `https://` URL before visiting `/setup` or `/login`; plain
+public `https://` URL before visiting `/signup` or `/login`; plain
 `http://127.0.0.1:8077` is suitable only for health checks and as the proxy
 upstream. Use a certificate trusted by both the browser and the OwnTracks
 phone. Caddy can obtain one automatically for a public domain; nginx commonly

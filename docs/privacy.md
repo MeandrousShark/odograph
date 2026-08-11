@@ -21,6 +21,15 @@ of a hosted service, and this project has no hosted service.
 
 ## What can leave your instance, and only if you configure it
 
+- **An OIDC identity provider** (optional sign-in). Starting a login or link
+  sends the browser to the configured provider and identifies Odograph's OIDC
+  client. The callback exchanges the returned authorization code and receives
+  the subject and any email or display-name claims the provider supplies.
+  Odograph stores the configured issuer and exact subject as the durable link,
+  plus email and display name as non-authoritative metadata. It does not
+  retain access, refresh, or ID tokens after the callback. Logging out of
+  Odograph ends only the application session; sign out at the provider
+  separately to end that session too.
 - **A geocoder** (optional reverse geocoding and address autocomplete),
   selected by `GEOCODE_PROVIDER`. Whichever provider you pick receives the
   same underlying data: trip-endpoint coordinates (for reverse geocoding)
@@ -112,15 +121,10 @@ this claim with tests, not just the statement above:
   constraint violation whose own error detail would otherwise echo back
   the exact row values involved (Postgres's duplicate-key error, for
   example, names the conflicting coordinate).
-- **One deliberate exception:** a rejected OIDC sign-in attempt (an email
-  that doesn't match `ALLOWED_EMAIL`) logs that email address as a
-  warning. This is a knowing tradeoff, not an oversight. Diagnosing a
-  misconfigured `ALLOWED_EMAIL` (a typo, a stale value, the wrong account
-  signing in) without seeing which email was rejected is guesswork, and an
-  email address is nowhere near as sensitive as a coordinate, an address,
-  or a credential. Everything else on this page (API keys, session
-  material, ingest credentials, `ADMIN_TOKEN`, the session secret, and
-  every coordinate/address path above) never appears in a log line.
+- **Rejected OIDC callbacks log only a fixed reason or exception type.** The
+  application does not log provider subjects, tokens, or a rejected email.
+  `ALLOWED_EMAIL` applies only to the one-time OIDC-only upgrade transition,
+  and a rejection there uses the same generic warning.
 
 ## Summary
 
@@ -130,4 +134,5 @@ while you're looking at a map: OpenStreetMap's tile server by default, or
 whatever `MAP_TILE_URL` names instead. Everything else (detection,
 storage, reporting, road-snapping) stays entirely within infrastructure
 you control, and a self-hosted Nominatim keeps geocoding within that same
-boundary too.
+boundary too. Configured OIDC sends authentication data to its provider, not
+location history.

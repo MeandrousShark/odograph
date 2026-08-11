@@ -31,7 +31,8 @@ def test_release_is_tag_only_repo_scoped_and_serialized_per_tag():
     assert validate["env"]["REPOSITORY"] == "${{ github.repository }}"
     assert 'image="ghcr.io/${REPOSITORY,,}"' in validate["run"]
     assert "git rev-parse HEAD" in validate["run"]
-    assert "scripts/release_notes.py" in validate["run"]
+    assert "scripts/check_release_contract.py" in validate["run"]
+    assert '--tag "$VERSION" --image "$image"' in validate["run"]
     assert "gh release view" in steps_by_name(prepare)[
         "Refuse to replace an existing GitHub release"
     ]["run"]

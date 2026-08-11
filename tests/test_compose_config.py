@@ -13,7 +13,7 @@ CANONICAL_COMPOSE = ROOT / "compose.yaml"
 BUILD_OVERRIDE = ROOT / "compose.build.override.yml"
 ENV_EXAMPLE = ROOT / ".env.example"
 GENERATE_ENV = ROOT / "scripts" / "generate_env.sh"
-RELEASE_IMAGE = "ghcr.io/meandrousshark/odograph:v0.7.5"
+RELEASE_IMAGE = "ghcr.io/meandrousshark/odograph:v0.8.0"
 
 REQUIRED_VARIABLE_GUARD = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*):\?")
 
@@ -96,17 +96,14 @@ def test_app_service_runs_read_only_with_a_tmp_tmpfs():
     assert app["tmpfs"] == ["/tmp"]
 
 
-def test_env_example_ships_osrm_dataset_commented_out():
-    # An uncommented default here would silently point a new operator at
-    # the maintainer's own region. The `osrm` service checks the variable
-    # itself when it starts, so leaving it commented out costs the
-    # baseline stack nothing.
+def test_env_example_does_not_enable_an_osrm_dataset():
+    # An uncommented default would silently point a new operator at a region.
+    # The concise baseline omits optional settings and the complete reference
+    # names the variable for operators who deliberately enable the profile.
     lines = ENV_EXAMPLE.read_text().splitlines()
-    dataset_lines = [line for line in lines if "OSRM_DATASET" in line]
 
-    assert dataset_lines, "expected an OSRM_DATASET line in .env.example"
-    assert all(line.startswith("#") for line in dataset_lines)
-    assert not any(line.strip() == "OSRM_DATASET=washington-latest.osrm" for line in lines)
+    assert not any(line.startswith("OSRM_DATASET=") for line in lines)
+    assert "`OSRM_DATASET`" in (ROOT / "docs" / "configuration.md").read_text()
 
 
 def test_no_required_variable_guard_depends_on_a_variable_a_clean_install_lacks(tmp_path):

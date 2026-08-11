@@ -91,7 +91,7 @@ def _config(**overrides) -> SimpleNamespace:
         ntfy_token="", ntfy_username="", ntfy_password="",
         email_enabled=False, smtp_username="", smtp_password="",
         smtp_host="", smtp_port=587, smtp_security="starttls", smtp_tls_insecure=False,
-        oidc_configured=False, admin_token="", app_url="", dev_no_auth=False,
+        oidc_configured=False, initial_admin_signup=False, app_url="", dev_no_auth=False,
         raw_message_retention_days=365.0, odometer_reminder_requested=False,
     )
     defaults.update(overrides)
@@ -213,7 +213,7 @@ def test_config_presence_reports_only_booleans():
         geocode_provider=GeoapifyProvider(api_key="topsecretkey", omit_country="United States of America"),
         ntfy_url="http://ntfy.internal", ntfy_topic="mileage", ntfy_token="ntfytoken",
         smtp_username="user", smtp_password="hunter2", email_enabled=True,
-        admin_token="admintoken", app_url="https://mileage.example.com",
+        initial_admin_signup=True, app_url="https://mileage.example.com",
     )
     presence = config_presence(cfg)
 
@@ -224,14 +224,13 @@ def test_config_presence_reports_only_booleans():
     assert presence["ntfy_auth_configured"] is True
     assert presence["smtp_configured"] is True
     assert presence["smtp_auth_configured"] is True
-    assert presence["admin_token_configured"] is True
+    assert presence["initial_admin_signup"] is True
     assert presence["app_url_configured"] is True
     # Never the values themselves.
     rendered = repr(presence)
     assert "topsecretkey" not in rendered
     assert "ntfytoken" not in rendered
     assert "hunter2" not in rendered
-    assert "admintoken" not in rendered
 
 
 def test_config_presence_tolerates_a_partial_config_double():

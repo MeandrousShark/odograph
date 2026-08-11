@@ -8,7 +8,7 @@
 <div class="form-error-summary" role="alert">{{ error }}</div>
 {% endif %}
 
-{% if local_admin_exists %}
+{% if account_exists %}
 <form method="post" action="/login/local" class="auth-form">
   <input type="hidden" name="csrf_token" value="{{ csrf }}">
   <label>Email
@@ -21,23 +21,19 @@
 </form>
 {% endif %}
 
-{% if local_admin_exists and oidc_available %}
-<p class="auth-divider">or</p>
-{% endif %}
-
-{% if oidc_available %}
+{% if oidc_login_available or legacy_oidc_available %}
+{% if account_exists %}<p class="auth-divider">or</p>{% endif %}
 <a class="control control-secondary" href="/login/oidc">Sign in with OIDC</a>
 {% endif %}
 
-{% if not local_admin_exists and not oidc_available %}
+{% if signup_available %}
 <p class="muted">
-  No administrator has been set up yet.
-  {% if setup_available %}
-  <a href="/setup">Complete setup</a> to create one.
-  {% else %}
-  See the README's setup instructions to configure sign-in for this instance.
-  {% endif %}
+  New installation? <a href="/signup">Create the administrator account</a>.
 </p>
+{% endif %}
+
+{% if not account_exists and not signup_available and not legacy_oidc_available %}
+<p class="muted">No administrator account is available. Use the operator recovery command.</p>
 {% endif %}
 
 {% endblock %}

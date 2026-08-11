@@ -3,6 +3,9 @@
 {% block content %}
 
 <h2>Appearance</h2>
+{% if user.is_admin and user.id %}
+<p><a href="/settings/account">Manage your login and password in Account Security</a>.</p>
+{% endif %}
 <p class="muted">Follows your device's light/dark setting unless overridden here.
   Applies immediately and is remembered only in this browser.</p>
 

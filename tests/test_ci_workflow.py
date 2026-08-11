@@ -126,6 +126,7 @@ def test_public_snapshot_includes_ci_and_release_files(tmp_path):
     }
     assert snapshot_docs == {
         "docs/backups.md",
+        "docs/configuration.md",
         "docs/osrm.md",
         "docs/owntracks.md",
         "docs/privacy.md",

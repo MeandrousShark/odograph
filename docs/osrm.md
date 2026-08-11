@@ -81,9 +81,9 @@ OSRM_DATASET=florida-latest.osrm
 OSRM_URL=http://osrm:5000
 ```
 
-`OSRM_DATASET` ships commented out in `.env.example` on purpose: an
-uncommented default would silently point a fresh install at someone else's
-region. If you start the `osrm` profile before provisioning, the service
+`OSRM_DATASET` is omitted from the baseline `.env.example` on purpose: a
+default would silently point a fresh install at someone else's region. If you
+start the `osrm` profile before provisioning, the service
 itself catches the empty value and exits with an explanation, rather than
 failing obscurely against an empty `/data`. The service is set to restart, so
 the container will exit and restart repeatedly until you either provision a
@@ -95,8 +95,9 @@ docker compose --profile osrm up -d osrm      # or: podman-compose --profile osr
 ```
 
 `OSRM_MIN_CONFIDENCE`, `OSRM_MAX_COORDS`, `SNAP_DEBOUNCE_S`, and
-`SNAP_SWEEP_S` (see `.env.example`) tune snapping behavior once it's running;
-none of them need changing to get started.
+`SNAP_SWEEP_S` tune snapping behavior once it's running; none of them need
+changing to get started. See the
+[configuration reference](configuration.md#road-snapping) for their defaults.
 
 ## Disk and RAM sizing
 

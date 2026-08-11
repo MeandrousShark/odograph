@@ -38,7 +38,7 @@ class _FakeCursor:
         return self
 
     async def fetchone(self):
-        return None  # no local admin row -- production's exact configuration
+        return None  # no account row in the OIDC-only upgrade configuration
 
 
 class _FakeConn:
@@ -64,11 +64,14 @@ def _bare_app() -> FastAPI:
     app.add_middleware(
         SessionMiddleware, secret_key="test-secret", same_site="lax", https_only=False
     )
-    # OIDC configured, no local admin: production's exact configuration, and
-    # the one in which GET /login used to auto-redirect to the provider
-    # instead of rendering a page (the logout bug).
+    # This OIDC-only upgrade configuration has no account row. It is the state
+    # in which GET /login used to auto-redirect to the provider instead of
+    # rendering a page (the logout bug).
     app.state.config = SimpleNamespace(
-        dev_no_auth=False, admin_token="", allowed_email="", oidc_configured=True
+        dev_no_auth=False,
+        initial_admin_signup=False,
+        allowed_email="",
+        oidc_configured=True,
     )
     app.state.oauth = _FakeOAuth()
     app.state.pool = _FakePool()

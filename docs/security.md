@@ -33,6 +33,11 @@ and database; nothing here defends against a hostile operator.
   by which a browser or phone reaches the application. See
   [Reverse proxy and TLS](reverse-proxy.md) for the supported proxy
   configurations.
+- **Optional OIDC identity provider.** When configured, the provider is trusted
+  to authenticate its users and maintain stable issuer and subject values.
+  Odograph stores that exact pair as the linked identity. Provider email and
+  display name are non-authoritative metadata and cannot create or select a
+  link.
 - **Phone (OwnTracks).** The device posting location fixes is trusted with
   its own ingest credentials and nothing else. It has no access to the web
   UI, and a compromised phone can only inject or spoof its own location
@@ -66,25 +71,36 @@ Every network-reachable route, and what actually guards it:
   password") whether the failure was no local administrator, a wrong email,
   or a wrong password. A successful login clears and rebuilds the session
   (fixation defense) and issues a fresh CSRF token.
-- **`/setup`**: reachable only while `ADMIN_TOKEN` is set in the
-  environment; the route 404s otherwise. It shares the same per-IP limiter as
-  local login. The token is checked with a constant-time comparison and is
-  single-use: once it successfully creates or resets the local administrator,
-  a hash of it is stored and a repeat submission of the same token is
-  rejected as already-used, distinct from (and not counted against) the
-  failure limiter.
-- **The OIDC callback (`/auth/callback`)**: only reachable when OIDC is
-  configured. Authlib's own `state` check rejects a replayed or forged
-  callback before any token exchange happens. Beyond that, the callback
-  shares the same per-IP limiter as local login and setup: a caller that gets
-  past the `state` check but is rejected by the identity provider, or whose
-  email doesn't match a configured `ALLOWED_EMAIL`, counts as a failure on
-  that ledger. The limiter is checked *before* the token exchange, not after,
-  because the exchange itself is a real outbound HTTP request to your
-  identity provider. An unmetered caller could otherwise loop garbage
-  authorization codes at this endpoint and get your instance's egress address
-  throttled by your own provider, entirely without a valid session ever
-  existing.
+- **`/signup`**: reachable only when `INITIAL_ADMIN_SIGNUP=1`, no account
+  exists, and development auth bypass is off. The first successful transaction
+  creates the sole administrator. A database singleton constraint prevents a
+  concurrent request or application bug from creating a second account. The
+  durable account row closes both signup routes permanently.
+- **`/settings/account`**: requires an enabled administrator account session.
+  Password changes require the current password, matching new passwords, and
+  a session-bound CSRF token. A successful change increments the account's
+  authentication version, invalidating older sessions while issuing a fresh
+  valid session to the browser that completed the change. Linking OIDC requires
+  the current local password and a fresh provider authorization. Unlinking
+  requires the current password and explicit confirmation, removes the stored
+  identity, increments the authentication version, and clears the current
+  session.
+- **`/account/establish`**: available only to the narrow legacy OIDC session
+  used by an upgraded OIDC-only installation with no account and public signup
+  disabled. It creates local administrator credentials and links the current
+  provider identity in one transaction. `ALLOWED_EMAIL`, when set, gates only
+  entry into this one-time transition. The operator command is the safer
+  alternative if the provider's trust boundary is too broad or unavailable.
+- **The OIDC callback (`/auth/callback`)**: handles distinct login and linking
+  flows protected by state and nonce checks. A linked login resolves the exact
+  provider issuer and subject to the same account used by local login. Email is
+  display metadata, not an account selector, and `ALLOWED_EMAIL` does not apply
+  to linked login. Linking also requires a current account session and the
+  password reauthentication that started the flow. The callback does not
+  persist access, refresh, or ID tokens. It shares the failed-auth limiter with
+  other authentication checks, and the limiter is checked before the outbound
+  token exchange so garbage authorization codes cannot freely consume provider
+  requests.
 - **`/healthz`**: deliberately unauthenticated, and deliberately minimal: it
   runs `SELECT 1` against the database and returns `{"ok": true}` or an
   error. It discloses no version string, no git revision, no schema or
@@ -100,15 +116,15 @@ Everything else in the application (the trip list, trip detail, review
 queue, settings, expenses, and every htmx partial and POST behind them)
 requires an authenticated session, plus a matching `X-CSRF-Token` header on
 every state-changing htmx request or a matching hidden field on the plain
-login/setup forms that can't set custom headers.
+login, signup, and Account Security forms that can't set custom headers.
 
 ## Rate limiting and proxy trust
 
 Rate limiting is per-IP, in-memory, and counts failures only. A phone
 flushing a backlog of correct-credential requests, or a person typing their
 password right the first time, is never throttled. There are two limiters:
-one dedicated to `/ingest`, and one shared by `/login/local`, `/setup`, and
-the OIDC callback, since all three are the same shape of risk: an
+one dedicated to `/ingest`, and one shared by local credential checks,
+signup validation, and the OIDC callback, since they are the same shape of risk: an
 unauthenticated caller feeding the application plausible-looking credentials.
 
 Both limiters key on `client_ip()`, which reads only the address Uvicorn's
@@ -199,9 +215,9 @@ configuration files.
 
 5. **Generate every secret with real entropy, and know which ones you can
    rotate later.** `scripts/generate_env.sh` does this for you at install
-   time. `SESSION_SECRET` and `ADMIN_TOKEN` are both safely regenerable at
-   any time. See [Password recovery and session revocation](../README.md#password-recovery-and-session-revocation)
-   for exactly what changing each one does and doesn't invalidate.
+   time. `SESSION_SECRET` is safely regenerable at any time. See
+   [Password recovery and session revocation](../README.md#password-recovery-and-session-revocation)
+   for the account-level recovery commands and session behavior.
    `INGEST_PASSWORD` is also safely regenerable, but every OwnTracks device
    needs its stored password updated to match before it can post again.
    `POSTGRES_PASSWORD` is fixed for the life of a given database volume.
@@ -216,13 +232,12 @@ configuration files.
    and screenshots, and rotate it (updating every device's OwnTracks
    configuration to match) if you ever suspect it leaked.
 
-7. **Run the `ADMIN_TOKEN` lifecycle to completion: set, bootstrap, clear.**
-   `/setup` 404s whenever `ADMIN_TOKEN` is unset, so the bootstrap page is
-   reachable at all only while it's populated. After you've created (or
-   reset) the local administrator through `/setup`, set `ADMIN_TOKEN=` in
-   `.env` and recreate the app container so it loads the change. Leaving a
-   populated token in place after setup is complete leaves an unnecessary
-   standing credential capable of resetting your administrator password.
+7. **Keep account creation and recovery narrow.** Fresh generated
+   configuration sets `INITIAL_ADMIN_SIGNUP=1`; the first account row closes
+   signup even if that value remains unchanged. Existing configurations that
+   omit it stay fail-closed. Recover a missing account or lost password only
+   with `python -m app.manage_account create-admin` or `reset-password` inside
+   the application container. The command accepts no password argument.
 
 8. **Encrypt backups, and control who can read them.** `scripts/backup_database.sh`
    captures your full location history, credentials hashes, and every other
@@ -238,6 +253,8 @@ configuration files.
    the geocoder, ntfy, and SMTP are all opt-in, and the application runs
    fully without any of them. Each one you enable is both an outbound data
    flow (see [privacy.md](privacy.md) for exactly what each sends) and a
+   configuration change (see the
+   [configuration reference](configuration.md#external-services)), plus a
    dependency your diagnostics have to account for. If you don't need
    road-snapping, reverse geocoding, push reminders, or email digests, leave
    the corresponding `.env` variables unset. The geocoder itself is a choice,
@@ -259,18 +276,14 @@ configuration files.
       immediately invalidates every existing signed session cookie,
       including your own, so everyone has to sign back in. It does not touch
       any stored data.
-    - **`ADMIN_TOKEN`**: generate a new value, put it in `.env`, and
-      recreate the app to reissue a fresh one-time `/setup` page. A leaked
-      but already-cleared token (step 7 above) is not itself exploitable,
-      since `/setup` 404s with no token set.
-    - **A local administrator password**: set a fresh `ADMIN_TOKEN`,
-      recreate the app, use `/setup`'s reset flow to set a new password,
-      then clear `ADMIN_TOKEN` again and recreate the app once more. This
-      alone does not invalidate any session issued before the reset; also
-      rotate `SESSION_SECRET` if you need every existing session revoked
-      too.
+    - **A local administrator password**: change it in Account Security when
+      signed in, or run `python -m app.manage_account reset-password` inside
+      the app container for operator recovery. Either path increments the
+      account authentication version and invalidates older sessions.
     - **OIDC client secret**: rotate it with your identity provider and
       update `OIDC_CLIENT_SECRET` in `.env`, then recreate the app.
+      A linked identity still belongs to the same account after client-secret
+      rotation because it is keyed by the provider's issuer and subject.
     - **Optional-service credentials** (`GEOCODE_API_KEY`, ntfy token or
       username/password, SMTP username/password). Rotate with the
       respective provider and update `.env`. None of these grant access to

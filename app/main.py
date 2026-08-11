@@ -366,9 +366,9 @@ def create_app(config: Config | None = None) -> FastAPI:
     app.state.ingest_limiter = FailedAuthLimiter(
         cfg.ingest_auth_max_failures, cfg.ingest_auth_window_s
     )
-    # Shared by /login/local, /setup, and /auth/callback (app/auth.py) --
-    # one per-IP ledger for all three, since each is the same "unauthenticated
-    # caller feeding the app plausible-looking credentials" surface. The
+    # Shared by local credential checks and /auth/callback (app/auth.py), since
+    # each is the same "unauthenticated caller feeding the app plausible-looking
+    # credentials" surface. The
     # callback's failure is a rejected/garbage OIDC code rather than a wrong
     # password, but the risk it caps is worse than a wasted login attempt:
     # every check counts as a real outbound token-exchange request to the

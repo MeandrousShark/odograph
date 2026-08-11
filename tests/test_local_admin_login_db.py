@@ -1,8 +1,4 @@
-"""DB-backed tests for POST /login/local: success against a stored hash,
-generic failure (wrong email or wrong password look identical), session
-fixation defense (session/CSRF rotate on success), per-IP limiter
-throttling, and that the limiter is genuinely shared with /setup.
-"""
+"""DB-backed tests for account-aware local login."""
 from __future__ import annotations
 
 import asyncio
@@ -15,7 +11,7 @@ import pytest
 from app.auth import make_router
 from app.db import make_pool, run_migrations
 from app.ingest import FailedAuthLimiter
-from app.local_auth import hash_password, sha256_hex
+from app.local_auth import hash_password
 from app.main import make_templates
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -39,17 +35,19 @@ async def _reset_schema(pool) -> None:
     await run_migrations(pool)
 
 
-async def _seed_admin(pool, *, email=ADMIN_EMAIL, password=ADMIN_PASSWORD, token="seed-token"):
+async def _seed_admin(pool, *, email=ADMIN_EMAIL, password=ADMIN_PASSWORD, enabled=True):
     async with pool.connection() as conn:
         await conn.execute(
-            "INSERT INTO local_admin (id, email, password_hash, consumed_token_hash) "
+            "INSERT INTO accounts (id, email, password_hash, is_enabled) "
             "VALUES (1, %s, %s, %s)",
-            (email, hash_password(password), sha256_hex(token)),
+            (email, hash_password(password), enabled),
         )
 
 
 def _request(pool, *, ip="203.0.113.9", limiter=None, session=None):
-    cfg = SimpleNamespace(admin_token="", dev_no_auth=False, allowed_email="")
+    cfg = SimpleNamespace(
+        initial_admin_signup=False, dev_no_auth=False, allowed_email=""
+    )
     return SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, config=cfg,
@@ -80,9 +78,8 @@ async def _success_and_fixation_scenario():
         assert response.status_code == 303
         assert response.headers["location"] == "/"
 
-        assert request.session["user"] == {
-            "sub": "local:1", "name": "admin", "email": ADMIN_EMAIL,
-        }
+        assert request.session["account_id"] == 1
+        assert request.session["auth_version"] == 1
         # Fixation defense: the old pre-login session content is gone
         # (not just overwritten user/csrf keys), and the CSRF token issued
         # for the now-authenticated session differs from the pre-login one.
@@ -172,47 +169,6 @@ def test_login_local_limiter_throttles_repeated_failures_from_one_ip():
     asyncio.run(_limiter_scenario())
 
 
-async def _shared_limiter_with_setup_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
-    try:
-        await _reset_schema(pool)
-        await _seed_admin(pool, token="seed-token")
-        limiter = FailedAuthLimiter(2, 900.0)
-
-        # Two failed /setup attempts from the same IP...
-        setup_cfg = SimpleNamespace(admin_token="the-real-token", dev_no_auth=False, allowed_email="")
-        setup_request_factory = lambda: SimpleNamespace(
-            app=SimpleNamespace(state=SimpleNamespace(
-                pool=pool, config=setup_cfg,
-                templates=make_templates(SimpleNamespace(display_tz=TZ, app_version="test")),
-                oauth=None, login_limiter=limiter,
-            )),
-            session={"csrf": "test-csrf"},
-            client=SimpleNamespace(host="203.0.113.9"),
-        )
-        setup_post = _endpoint("/setup", "POST")
-        for _ in range(2):
-            response = await setup_post(
-                setup_request_factory(), token="wrong", email="x@example.com",
-                password="password one", password_confirm="password one",
-                csrf_token="test-csrf",
-            )
-            assert response.status_code == 401
-
-        # ...blocks /login/local from that same IP too, proving one shared
-        # per-IP ledger rather than two independent ones.
-        login_request = _request(pool, ip="203.0.113.9", limiter=limiter)
-        login_response = await _login_local(login_request)
-        assert login_response.status_code == 429
-    finally:
-        await pool.close()
-
-
-def test_setup_and_login_local_share_the_same_per_ip_limiter():
-    asyncio.run(_shared_limiter_with_setup_scenario())
-
-
 async def _non_ascii_email_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
@@ -235,3 +191,21 @@ async def _non_ascii_email_scenario():
 
 def test_login_local_rejects_non_ascii_email_with_401_and_charges_the_limiter():
     asyncio.run(_non_ascii_email_scenario())
+
+
+async def _disabled_account_scenario():
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        await _reset_schema(pool)
+        await _seed_admin(pool, enabled=False)
+        request = _request(pool)
+        response = await _login_local(request)
+        assert response.status_code == 401
+        assert "account_id" not in request.session
+    finally:
+        await pool.close()
+
+
+def test_disabled_account_cannot_log_in():
+    asyncio.run(_disabled_account_scenario())

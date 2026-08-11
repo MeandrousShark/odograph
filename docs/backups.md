@@ -14,14 +14,14 @@ your `compose.yaml`.
 
 `scripts/backup_database.sh` produces a PostgreSQL custom-format `pg_dump`
 archive of the complete `mileage` database: schema, PostGIS objects, trips,
-GPS points and raw ingest messages, local-admin credential hashes, places and
-tagging rules, vehicles, expenses, odometer readings, overrides, caches, and
-worker delivery ledgers. There's no table-level allowlist, so a future schema
-change can't silently ship an unprotected table.
+GPS points and raw ingest messages, account credential hashes, linked identity
+metadata, places and tagging rules, vehicles, expenses, odometer readings,
+overrides, caches, and worker delivery ledgers. There's no table-level
+allowlist, so a future schema change can't silently ship an unprotected table.
 
 Three things are deliberately **not** in the archive:
 
-- **`.env`.** It holds your database, ingest, session, setup, OIDC, and
+- **`.env`.** It holds your database, ingest, session, OIDC, and
   optional-service secrets and configuration, and none of it lives in
   PostgreSQL. The backup script never reads or prints it. See
   [Protecting `.env`](#protecting-env) below. Losing it is a real recovery
@@ -150,8 +150,10 @@ What losing a given value actually costs, if you don't have a copy:
 - **`SESSION_SECRET`** is safely regenerable. Put a new high-entropy value
   in `.env` and recreate the app. This signs every existing browser session
   out at once; it doesn't touch stored data.
-- **`ADMIN_TOKEN`** is safely regenerable. Put a new high-entropy value in
-  `.env` and recreate the app to reissue the one-time `/setup` page.
+- **Local administrator credentials** live in the database, not `.env`.
+  Restore them with the database archive. If the password is lost, run
+  `python -m app.manage_account reset-password` inside the app container;
+  the reset invalidates previously issued sessions.
 - **`INGEST_PASSWORD`** is safely regenerable, but every OwnTracks device
   needs its password field updated to match before it can post again. See
   [Connecting OwnTracks](owntracks.md).

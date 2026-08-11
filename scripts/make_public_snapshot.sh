@@ -111,7 +111,7 @@ TOP_LEVEL_FILES=(
     pyproject.toml
 )
 DOCS_FILES=(
-    docs/backups.md docs/osrm.md docs/owntracks.md docs/privacy.md
+    docs/backups.md docs/configuration.md docs/osrm.md docs/owntracks.md docs/privacy.md
     docs/releasing.md docs/reverse-proxy.md docs/security.md docs/upgrading.md
 )
 
@@ -135,7 +135,7 @@ git archive HEAD "${ARCHIVE_PATHS[@]}" | tar -x -C "$OUTDIR"
 violations=0
 
 if [ -d "$OUTDIR/docs" ]; then
-    expected_docs=$'docs/backups.md\ndocs/osrm.md\ndocs/owntracks.md\ndocs/privacy.md\ndocs/releasing.md\ndocs/reverse-proxy.md\ndocs/security.md\ndocs/upgrading.md'
+    expected_docs=$'docs/backups.md\ndocs/configuration.md\ndocs/osrm.md\ndocs/owntracks.md\ndocs/privacy.md\ndocs/releasing.md\ndocs/reverse-proxy.md\ndocs/security.md\ndocs/upgrading.md'
     actual_docs="$(find "$OUTDIR/docs" -type f | sed "s#^$OUTDIR/##" | sort)"
     if [ "$actual_docs" != "$expected_docs" ]; then
         echo "error: snapshot docs do not match the public allowlist." >&2

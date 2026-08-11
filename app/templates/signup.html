@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Create administrator: Odograph{% endblock %}
+{% block content %}
+
+<h2>Create administrator account</h2>
+<p class="muted">This creates the sole administrator for this Odograph instance.</p>
+
+{% if error %}
+<div class="form-error-summary" role="alert">{{ error }}</div>
+{% endif %}
+
+<form method="post" action="/signup" class="auth-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <label>Email
+    <input type="email" name="email" required autocomplete="username" autofocus>
+  </label>
+  <label>Password
+    <input type="password" name="password" required autocomplete="new-password" minlength="8">
+  </label>
+  <label>Confirm password
+    <input type="password" name="password_confirm" required autocomplete="new-password" minlength="8">
+  </label>
+  <button type="submit" class="control control-primary">Create administrator</button>
+</form>
+
+<p class="muted"><a href="/login">Back to sign in</a></p>
+
+{% endblock %}

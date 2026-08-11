@@ -54,7 +54,7 @@ def _bare_app(pool, retention_worker=None) -> FastAPI:
         ntfy_username="", ntfy_password="", email_enabled=False,
         smtp_username="", smtp_password="", smtp_host="", smtp_port=587,
         smtp_security="starttls", smtp_tls_insecure=False,
-        oidc_configured=False, admin_token="", app_url="",
+        oidc_configured=False, initial_admin_signup=False, app_url="",
     )
     app.state.templates = make_templates(app.state.config)
     if retention_worker is not None:

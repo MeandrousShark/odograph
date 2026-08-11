@@ -27,6 +27,156 @@ reproduced here.
 - Complete before release: list every application, database, configuration,
   and operational break, or state explicitly that there are none.
 
+## [0.8.0] - 2026-08-11
+
+Installation and sign-in release. A new instance is now set up the way most
+self-hosted applications are: obtain the release files, generate `.env`, run
+Compose once, and create the administrator account in the browser. There is no
+bootstrap token to copy out of a log and no second edit of `.env`. Sign-in also
+becomes a single account that can hold both a password and a linked identity
+provider, replacing the two unrelated ways into the same instance.
+
+Odograph is still a single-user application. Exactly one account exists, it is
+always the administrator, and all trips and settings remain instance-wide. The
+database enforces that limit. This release adds the account groundwork that a
+future multi-user version can build on, without adding a second user.
+
+This release contains two database migrations and takes the schema from 19 to
+21. Read the "Breaking changes" and "Supported upgrade path" sections below
+before upgrading, and take a verified backup first.
+
+### Added
+
+- **Create the first administrator in the browser.** A brand-new instance
+  offers an account-creation form on first visit, where you choose an email
+  address and password. That first account becomes the sole administrator, and
+  both signup routes close permanently once it exists. Two people submitting
+  the form at the same moment still produce exactly one account.
+
+- **A new Account Security page, linked from Settings.** It shows your login
+  email, lets you change your password, shows whether an identity provider is
+  configured and linked, and offers the link and unlink actions along with
+  short recovery guidance.
+
+- **Optional linked single sign-on.** A signed-in administrator can
+  deliberately link the configured OIDC provider to their account by re-entering
+  their password and completing a provider authorization. After that, either the
+  password or the provider signs you into the same account. The link is anchored
+  to the provider's stable issuer and subject, so a changed email address at the
+  provider does not break sign-in. A matching email address on its own never
+  creates or selects a link. Unlinking asks for your current password and leaves
+  password login working.
+
+- **An operator recovery command.** If you are locked out or the provider is
+  unavailable, you can create the missing first account or reset the existing
+  password from inside the application container:
+
+  ```sh
+  docker compose exec app python -m app.manage_account create-admin
+  docker compose exec app python -m app.manage_account reset-password
+  ```
+
+  The same commands work through `podman-compose exec app`. Passwords are read
+  interactively or from protected standard input, never from a command-line
+  argument, and no password, hash, or database URL is printed.
+
+- **A grouped environment-variable reference at `docs/configuration.md`.**
+  Every supported variable is documented there by area: authentication,
+  detector behavior, interface, retention, external services, and worker
+  scheduling.
+
+- **A release consistency check.** Release preparation and the release workflow
+  now verify that the changelog section, the Compose image tag, the documented
+  install instructions, and the version the running application reports all
+  agree before anything is published.
+
+### Changed
+
+- **`.env.example` is now the runnable baseline rather than a full catalog.**
+  It contains the three generated secrets, the initial-signup setting, the
+  display timezone, and the safe loopback proxy default. Optional integrations
+  stay unset, and the exhaustive list moved to `docs/configuration.md`. The
+  generator still refuses to overwrite an existing `.env`, applies restrictive
+  permissions, and never prints a generated secret.
+
+- **The README separates the install path from everything optional.** The
+  critical path is a short ordered sequence pinned to an exact release tag,
+  followed by a post-install checklist covering the reverse proxy, Account
+  Security, OwnTracks, backups, optional services, and security hardening.
+
+- **Sessions now identify an account rather than a standalone login.** Both
+  password and provider sign-in produce the same kind of session and the same
+  access.
+
+### Removed
+
+- **`ADMIN_TOKEN` and the `/setup` bootstrap page.** Neither is part of
+  installation, sign-in, or recovery any more. An existing `.env` that still
+  contains `ADMIN_TOKEN` starts normally; the value is ignored, is never
+  printed, and cannot enable any authentication path.
+
+### Security
+
+- **Sensitive changes sign out other sessions.** Changing your password,
+  resetting it with the operator command, and unlinking the provider all
+  invalidate previously issued sessions for the account. The browser that
+  changed the password keeps a valid replacement session.
+
+- **Public registration cannot open by accident on upgrade.** The
+  `INITIAL_ADMIN_SIGNUP` setting is treated as disabled whenever it is absent,
+  so upgrading an existing installation never exposes an account-creation form.
+  It is also ignored entirely once an account exists, so there is no cleanup
+  step after signup.
+
+- **The database, not only a route check, enforces the single-account limit.**
+  A second account cannot be inserted while this constraint exists.
+
+- **Account creation, password changes, recovery, linking, and unlinking are
+  CSRF-protected** and use the existing failed-login rate limiter where
+  credentials are checked. Failures are generic and do not reveal whether an
+  unrelated identity exists.
+
+- **Provider tokens are not retained.** Odograph stores the linked issuer,
+  subject, and safe display metadata, and discards access, refresh, and ID
+  tokens after the callback. No password material, token, or raw provider claim
+  appears in the interface, logs, or errors.
+
+### Supported upgrade path
+
+- `v0.7.6` may upgrade directly to `v0.8.0`. Earlier releases should upgrade to
+  `v0.7.6` first.
+
+### Breaking changes
+
+- **Two forward-only database migrations run, taking the schema from 19 to 21.**
+  Migration 020 moves an existing local administrator into account ID 1 without
+  changing its normalized email or password hash, so the old password keeps
+  working. Migration 021 adds the linked-identity table. No trip, point, report,
+  or settings row becomes user-owned.
+
+- **Once those migrations commit, starting the previous image against the same
+  database is not a supported rollback.** The supported way back is restoring
+  the verified pre-upgrade backup into a fresh volume, which also discards any
+  account or linked identity created after that backup. Take and verify a
+  backup before upgrading.
+
+- **`/setup` no longer exists and `ADMIN_TOKEN` no longer does anything.** Any
+  bookmark, script, or automation that relies on either will fail.
+
+- **An installation that previously used the identity provider with no local
+  account must complete a one-time transition.** Public signup stays closed on
+  upgrade. Sign in with the existing provider and continue at
+  `/account/establish`, which sets a local password and links the current
+  provider identity together in one step. Where `ALLOWED_EMAIL` is configured it
+  continues to gate that one transition; where it is not, any identity the
+  provider accepts can reach it, which preserves the installation's existing
+  trust boundary. Use the operator command instead if that boundary is too broad
+  or the provider is down.
+
+- **`ALLOWED_EMAIL` is no longer an authorization substitute for a linked
+  identity.** It is retained only for the legacy transition above and is
+  documented as deprecated.
+
 ## [0.7.6] - 2026-08-10
 
 Maintenance release: punctuation consistency in the interface and exported

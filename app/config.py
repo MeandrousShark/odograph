@@ -34,7 +34,7 @@ class Config:
     oidc_client_id: str
     oidc_client_secret: str
     allowed_email: str
-    admin_token: str
+    initial_admin_signup: bool
     login_auth_max_failures: int
     login_auth_window_s: float
     display_tz: ZoneInfo
@@ -155,8 +155,7 @@ class Config:
         oidc_client_id = os.environ.get("OIDC_CLIENT_ID", "")
         oidc_client_secret = os.environ.get("OIDC_CLIENT_SECRET", "")
         oidc_fields = (oidc_issuer, oidc_client_id, oidc_client_secret)
-        # OIDC is now optional -- a bare instance falls back to local-login
-        # mode (admin_token below gates its /setup bootstrap). But *some*
+        # OIDC is optional. A bare instance uses local accounts. But *some*
         # OIDC vars set and others missing is neither a working provider nor
         # a clean absence; that's almost certainly an operator typo, so it
         # still fails loudly at startup instead of silently landing on the
@@ -167,17 +166,16 @@ class Config:
                 "together, or all left unset to use local-login mode instead"
             )
 
-        admin_token = os.environ.get("ADMIN_TOKEN", "")
+        initial_admin_signup = os.environ.get("INITIAL_ADMIN_SIGNUP", "0") == "1"
         if dev_no_auth:
             log.info("UI auth: DEV_NO_AUTH=1 -- authentication is disabled")
         else:
             paths = []
             if all(oidc_fields):
                 paths.append("OIDC")
-            paths.append(
-                "local-login (ADMIN_TOKEN set)" if admin_token
-                else "local-login (ADMIN_TOKEN unset -- /setup unreachable until configured)"
-            )
+            paths.append("local-login")
+            if initial_admin_signup:
+                paths.append("initial administrator signup")
             log.info("UI auth paths active: %s", ", ".join(paths))
 
         forwarded_allow_ips = os.environ.get("FORWARDED_ALLOW_IPS", "")
@@ -215,7 +213,7 @@ class Config:
             oidc_client_id=oidc_client_id,
             oidc_client_secret=oidc_client_secret,
             allowed_email=os.environ.get("ALLOWED_EMAIL", "").strip().lower(),
-            admin_token=admin_token,
+            initial_admin_signup=initial_admin_signup,
             login_auth_max_failures=int(os.environ.get("LOGIN_AUTH_MAX_FAILURES", 10)),
             login_auth_window_s=_f("LOGIN_AUTH_WINDOW_S", 900.0),
             display_tz=ZoneInfo(os.environ.get("DISPLAY_TZ", "UTC")),

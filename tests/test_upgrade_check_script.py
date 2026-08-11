@@ -106,6 +106,14 @@ case "${1-}" in
         cat compose.yaml
         ;;
     up)
+        case " $original " in
+            *" app "|*" app")
+                case "$PWD" in
+                    */cand/*) printf '%s\n' candidate > "$FAKE_ACTIVE_APP" ;;
+                    *) printf '%s\n' base > "$FAKE_ACTIVE_APP" ;;
+                esac
+                ;;
+        esac
         exit "${FAKE_UP_EXIT:-42}"
         ;;
     down|stop)
@@ -113,6 +121,45 @@ case "${1-}" in
     exec)
         case "$original" in
             *pg_isready*) exit 0 ;;
+            *"python -m app.manage_account reset-password"*)
+                IFS= read -r password
+                IFS= read -r confirmation
+                [ "$password" = "$confirmation" ] || exit 94
+                printf '%s' "$password" > "$FAKE_ROTATED_PASSWORD"
+                printf 'auth|password-reset|candidate\n' >> "$FAKE_LOG"
+                exit 0
+                ;;
+            *"INSERT INTO oidc_identities"*)
+                : > "$FAKE_LINK_MARKER"
+                printf 'auth|oidc-link|candidate\n' >> "$FAKE_LOG"
+                exit 0
+                ;;
+            *"to_regclass('accounts') IS NOT NULL"*)
+                case "$PWD" in */cand/*) printf '%s\n' t;; *) printf '%s\n' f;; esac
+                exit 0
+                ;;
+            *"to_regclass('accounts') IS NULL"*)
+                if [ "${FAKE_AUTH_FAULT:-}" = rollback-accounts-present ]; then
+                    printf '%s\n' f
+                else
+                    case "$PWD" in */cand/*) printf '%s\n' f;; *) printf '%s\n' t;; esac
+                fi
+                exit 0
+                ;;
+            *"to_regclass('oidc_identities') IS NULL"*)
+                case "$PWD" in */cand/*) printf '%s\n' f;; *) printf '%s\n' t;; esac
+                exit 0
+                ;;
+            *"count(*) FROM accounts WHERE email"*) printf '%s\n' 1; exit 0 ;;
+            *"count(*) FROM oidc_identities oi JOIN accounts"*)
+                if [ -f "$FAKE_LINK_MARKER" ]; then printf '%s\n' 1; else printf '%s\n' 0; fi
+                exit 0
+                ;;
+            *"count(*) FROM oidc_identities"*)
+                if [ -f "$FAKE_LINK_MARKER" ]; then printf '%s\n' 1; else printf '%s\n' 0; fi
+                exit 0
+                ;;
+            *"count(*) FROM local_admin WHERE id = 1"*) printf '%s\n' 1; exit 0 ;;
             *"sh -c"*) printf '%s\n' 1; exit 0 ;;
             *"count(*) FROM trips"*) printf '%s\n' 1; exit 0 ;;
             *"count(*) FROM points"*)
@@ -164,6 +211,7 @@ def _run(
     *,
     frontend: str = "podman",
     fail_up: bool = True,
+    auth_fault: str = "",
 ) -> tuple[subprocess.CompletedProcess, Path, Path, Path]:
     bin_dir = tmp_path / "bin"
     scratch_root = tmp_path / "scratch"
@@ -177,19 +225,43 @@ def _run(
         "#!/usr/bin/env bash\nset -u\n"
         "args=\"$*\"\n"
         "url=\"${!#}\"\n"
+        "printf 'http|%s\\n' \"$url\" >> \"$FAKE_LOG\"\n"
         "outfile=\"\"\n"
+        "password=\"\"\n"
         "previous=\"\"\n"
         "for arg in \"$@\"; do\n"
         "  if [ \"$previous\" = -o ]; then outfile=\"$arg\"; fi\n"
+        "  case \"$arg\" in password=*) password=\"${arg#password=}\";; esac\n"
         "  previous=\"$arg\"\n"
         "done\n"
         "if [ -n \"$outfile\" ] && [ \"$outfile\" != /dev/null ]; then\n"
         "  printf '%s\\n' '<input name=\"csrf_token\" value=\"fake-csrf\">' > \"$outfile\"\n"
+        "  if [ \"$url\" = 'http://127.0.0.1:8077/login' ]; then\n"
+        "    active=$(cat \"$FAKE_ACTIVE_APP\" 2>/dev/null || true)\n"
+        "    if [ \"$active\" = base ] || { [ -f \"$FAKE_LINK_MARKER\" ] "
+        "&& [ \"${FAKE_AUTH_FAULT:-}\" != linked-oidc-hidden ]; } "
+        "|| [ \"${FAKE_AUTH_FAULT:-}\" = candidate-unlinked-oidc ]; then\n"
+        "      printf '%s\\n' '<a href=\"/login/oidc\">OIDC</a>' >> \"$outfile\"\n"
+        "    fi\n"
+        "  fi\n"
         "fi\n"
         "status=200\n"
         "case \"$url\" in\n"
-        "  */login/local) status=303;;\n"
-        "  */setup) case \"$args\" in *--data-urlencode*) status=303;; esac;;\n"
+        "  */login/local)\n"
+        "    active=$(cat \"$FAKE_ACTIVE_APP\")\n"
+        "    original=$(cat \"$FAKE_ORIGINAL_PASSWORD\")\n"
+        "    rotated=$(cat \"$FAKE_ROTATED_PASSWORD\" 2>/dev/null || true)\n"
+        "    valid=$original\n"
+        "    if [ \"$active\" = candidate ] && [ -n \"$rotated\" ]; then valid=$rotated; fi\n"
+        "    if [ \"$password\" = \"$valid\" ]; then status=303; else status=401; fi\n"
+        "    if [ \"${FAKE_AUTH_FAULT:-}\" = accept-old-after-rotation ] "
+        "&& [ \"$active\" = candidate ] && [ \"$password\" = \"$original\" ]; then status=303; fi\n"
+        "    if [ \"${FAKE_AUTH_FAULT:-}\" = accept-rotated-after-rollback ] "
+        "&& [ \"$active\" = base ] && [ -n \"$rotated\" ] && [ \"$password\" = \"$rotated\" ]; then status=303; fi\n"
+        "    ;;\n"
+        "  */setup)\n"
+        "    case \"$args\" in *--data-urlencode*) status=303; printf '%s' \"$password\" > \"$FAKE_ORIGINAL_PASSWORD\";; esac\n"
+        "    ;;\n"
         "  */ingest) : > \"$FAKE_INGEST_MARKER\";;\n"
         "esac\n"
         "case \"$args\" in *'-w %'*|*\"-w %\"*) printf '%s' \"$status\";; esac",
@@ -209,8 +281,22 @@ def _run(
         "  trap - EXIT\n"
         "  exit \"$status\"\n"
         "fi\n"
+        "if [ \"${1-}\" = -c ]; then\n"
+        "  case \"${2-}\" in\n"
+        "    *secrets.token_hex*) printf '%s\\n' \"$FAKE_OIDC_SECRET\"; exit 0;;\n"
+        "    *secrets.token_urlsafe*)\n"
+        "      if [ -f \"$FAKE_ORIGINAL_PASSWORD\" ]; then\n"
+        "        printf '%s\\n' \"$FAKE_NEW_PASSWORD\"\n"
+        "      else\n"
+        "        printf '%s\\n' \"$FAKE_OLD_PASSWORD\"\n"
+        "      fi\n"
+        "      exit 0\n"
+        "      ;;\n"
+        "  esac\n"
+        "fi\n"
         f"exec {sys.executable!r} \"$@\"",
     )
+    oidc_secret = "b" * 64
     env = {
         **os.environ,
         "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '/usr/bin:/bin')}",
@@ -218,6 +304,14 @@ def _run(
         "FAKE_LOG": str(log_path),
         "FAKE_OVERRIDE_CAPTURE": str(override_capture),
         "FAKE_INGEST_MARKER": str(tmp_path / "ingested"),
+        "FAKE_ACTIVE_APP": str(tmp_path / "active-app"),
+        "FAKE_ORIGINAL_PASSWORD": str(tmp_path / "original-password"),
+        "FAKE_ROTATED_PASSWORD": str(tmp_path / "rotated-password"),
+        "FAKE_LINK_MARKER": str(tmp_path / "linked-identity"),
+        "FAKE_OLD_PASSWORD": "original-password-contract",
+        "FAKE_NEW_PASSWORD": "rotated-password-contract",
+        "FAKE_OIDC_SECRET": oidc_secret,
+        "FAKE_AUTH_FAULT": auth_fault,
         "FAKE_UP_EXIT": "42" if fail_up else "0",
         "TMPDIR": str(scratch_root),
     }
@@ -348,6 +442,24 @@ def test_candidate_image_uses_app_only_override_without_build_and_tears_down(
     assert candidate_up[0].endswith(" up -d --no-build app")
     assert "--build" not in candidate_up[0]
     assert any(line.endswith(" down") for line in lines)
+    assert "auth|oidc-link|candidate" in lines
+    assert "auth|password-reset|candidate" in lines
+    assert any(
+        "python -m app.manage_account reset-password" in line for line in lines
+    )
+    assert any("INSERT INTO oidc_identities" in line for line in lines)
+    assert not any(line == "http|http://127.0.0.1:8077/login/oidc" for line in lines)
+    assert "original local password works" in result.stdout
+    assert "candidate schema and offered for sign-in" in result.stdout
+    assert "the new password works and the original fails" in result.stdout
+    assert "rotated password and candidate-only auth state absent" in result.stdout
+    combined_output = result.stdout + result.stderr + log_path.read_text()
+    for secret in (
+        "original-password-contract",
+        "rotated-password-contract",
+        "b" * 64,
+    ):
+        assert secret not in combined_output
     assert list(scratch_root.glob("upgrade_check.*")) == []
 
 
@@ -445,7 +557,7 @@ def test_data_manifest_comparison_ignores_schema_version_drift(tmp_path):
     scratch = tmp_path / "scratch"
     scratch.mkdir()
 
-    common_data = "== local_admin ==\nadmin@example.test\n== vehicles ==\ncar\n"
+    common_data = "== administrator ==\nadmin@example.test\n== vehicles ==\ncar\n"
     manifest_a = tmp_path / "manifest-a.txt"
     manifest_b = tmp_path / "manifest-b.txt"
     manifest_a.write_text("== schema_version ==\n18\n" + common_data)
@@ -520,4 +632,51 @@ def test_source_candidate_refuses_db_service_drift_before_up(tmp_path):
     assert "release-specific operations migration plan" in result.stderr
     assert not any(" up " in f" {line} " for line in log_path.read_text().splitlines())
     assert any(line.endswith(" down") for line in log_path.read_text().splitlines())
+    assert list(scratch_root.glob("upgrade_check.*")) == []
+
+
+@pytest.mark.parametrize(
+    ("auth_fault", "message"),
+    [
+        (
+            "candidate-unlinked-oidc",
+            "configured but unlinked OIDC was incorrectly offered",
+        ),
+        (
+            "accept-old-after-rotation",
+            "original local password still signed in after rotation",
+        ),
+        (
+            "linked-oidc-hidden",
+            "stored OIDC identity was not offered as a candidate sign-in option",
+        ),
+        (
+            "accept-rotated-after-rollback",
+            "candidate-rotated password incorrectly worked after rollback",
+        ),
+        (
+            "rollback-accounts-present",
+            "candidate-only accounts relation survived rollback",
+        ),
+    ],
+)
+def test_mixed_auth_drill_fails_closed_on_transition_drift(
+    tmp_path, auth_fault, message
+):
+    repo, base_ref, candidate_ref = _install_repo(tmp_path)
+
+    result, log_path, _, scratch_root = _run(
+        repo,
+        ["--base", base_ref, "--candidate", candidate_ref],
+        tmp_path,
+        fail_up=False,
+        auth_fault=auth_fault,
+    )
+
+    assert result.returncode != 0
+    assert message in result.stderr
+    combined_output = result.stdout + result.stderr + log_path.read_text()
+    assert "original-password-contract" not in combined_output
+    assert "rotated-password-contract" not in combined_output
+    assert "b" * 64 not in combined_output
     assert list(scratch_root.glob("upgrade_check.*")) == []

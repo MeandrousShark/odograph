@@ -1,6 +1,6 @@
 """Proves a spoofed X-Forwarded-For cannot reset, evade, or poison the
 per-IP ledger either FailedAuthLimiter keys on -- including the ledger
-/auth/callback now shares with /login/local and /setup.
+/auth/callback shares with the other authentication checks.
 
 Wraps the real /ingest router and the real login/auth router in
 uvicorn.middleware.proxy_headers.ProxyHeadersMiddleware -- the same
@@ -134,7 +134,7 @@ def test_ingest_trusted_proxy_still_gets_forwarded_ip_honored():
     assert other_visitor.status_code == 401
 
 
-# --- /login/local: FailedAuthLimiter shared with /setup, behind session+CSRF ---
+# --- /login/local: FailedAuthLimiter behind session and CSRF ---
 
 
 class _FakeCursor:
@@ -154,6 +154,9 @@ class _FakeConn:
 
     def cursor(self, row_factory=None):
         return _FakeCursor(self._row)
+
+    async def execute(self, *args, **kwargs):
+        return _FakeCursor((self._row is not None,))
 
 
 class _FakeConnCtx:
@@ -195,12 +198,22 @@ def _login_app(*, trusted_hosts):
         SessionMiddleware, secret_key="test-secret", same_site="lax", https_only=False
     )
     app.state.config = SimpleNamespace(
-        dev_no_auth=False, admin_token="", allowed_email="", oidc_configured=False,
+        dev_no_auth=False,
+        initial_admin_signup=False,
+        allowed_email="",
+        oidc_configured=False,
     )
     # Wrong email on every submission short-circuits login_local's `and`
     # chain before verify_password, so failures are cheap and deterministic
     # without needing a real scrypt hash here.
-    app.state.pool = _FakePool({"id": 1, "email": "admin@example.com", "password_hash": "x"})
+    app.state.pool = _FakePool({
+        "id": 1,
+        "email": "admin@example.com",
+        "password_hash": "x",
+        "is_admin": True,
+        "is_enabled": True,
+        "auth_version": 1,
+    })
     app.state.oauth = None
     templates = _CapturingTemplates()
     app.state.templates = templates
@@ -263,7 +276,7 @@ def test_login_spoofed_xff_cannot_poison_a_victims_ledger():
     assert response.status_code == 401
 
 
-# --- /auth/callback: FailedAuthLimiter shared with /login/local and /setup ---
+# --- /auth/callback: FailedAuthLimiter shared with local credential checks ---
 
 
 class _RejectingOAuthClient:
@@ -281,8 +294,14 @@ def _callback_app(*, trusted_hosts):
     app.add_middleware(
         SessionMiddleware, secret_key="test-secret", same_site="lax", https_only=False
     )
-    app.state.config = SimpleNamespace(dev_no_auth=False, allowed_email="")
+    app.state.config = SimpleNamespace(
+        dev_no_auth=False,
+        initial_admin_signup=False,
+        allowed_email="",
+        oidc_issuer="https://idp.example.com",
+    )
     app.state.oauth = SimpleNamespace(pocketid=_RejectingOAuthClient())
+    app.state.pool = _FakePool(None)
     app.state.login_limiter = FailedAuthLimiter(max_failures=MAX_FAILURES, window_s=900)
     app.include_router(make_auth_router())
     return ProxyHeadersMiddleware(app, trusted_hosts=trusted_hosts)

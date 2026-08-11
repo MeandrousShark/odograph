@@ -24,6 +24,10 @@ HEALTH_PORT=8077
 BASE_URL="http://127.0.0.1:${HEALTH_PORT}"
 ADMIN_EMAIL="drill-admin@example.test"
 POSTRESTORE_DEVICE="postrestore-check"
+OIDC_ISSUER="https://idp.example.test"
+OIDC_CLIENT_ID="upgrade-drill-client"
+OIDC_SUBJECT="upgrade-drill-subject"
+OIDC_EMAIL="drill-oidc@example.test"
 
 usage() {
     cat >&2 <<'EOF'
@@ -250,7 +254,7 @@ remove_stamp_images() {
         case "$img" in
             "localhost/${PROJECT}"*|"${PROJECT}"[-_]*) ;;
             *)
-                echo "error: refusing to remove image '$img' -- does not begin with 'localhost/$PROJECT' or '$PROJECT-'/'$PROJECT_'" >&2
+                echo "error: refusing to remove image '$img' -- does not begin with 'localhost/$PROJECT' or '$PROJECT-'/'${PROJECT}_'" >&2
                 return 1
                 ;;
         esac
@@ -356,6 +360,33 @@ env_value() {
     grep -m1 "^$2=" "$1" | cut -d= -f2-
 }
 
+set_env_value() {
+    local file="$1" key="$2" value="$3" updated
+    updated="$(mktemp "$SCRATCH/env.XXXXXX")"
+    awk -v key="$key" 'index($0, key "=") != 1 { print }' "$file" > "$updated"
+    printf '%s=%s\n' "$key" "$value" >> "$updated"
+    chmod 600 "$updated"
+    mv "$updated" "$file"
+}
+
+auth_env_matches() {
+    local key base_value candidate_value
+    for key in OIDC_ISSUER OIDC_CLIENT_ID OIDC_CLIENT_SECRET; do
+        base_value="$(env_value "$BASE_DIR/.env" "$key")" || return 1
+        candidate_value="$(env_value "$CAND_DIR/.env" "$key")" || return 1
+        [ -n "$base_value" ] || return 1
+        [ "$base_value" = "$candidate_value" ] || return 1
+    done
+}
+
+oidc_env_loaded() {
+    # These names must expand inside the app container, not in this script.
+    # shellcheck disable=SC2016
+    compose_dir "$1" exec -T app sh -c \
+        '[ -n "$OIDC_ISSUER" ] && [ -n "$OIDC_CLIENT_ID" ] && [ -n "$OIDC_CLIENT_SECRET" ]' \
+        >/dev/null
+}
+
 find_free_port() {
     python3 - <<'PYEOF'
 import socket
@@ -385,6 +416,16 @@ count_points() {
         "SELECT count(*) FROM points WHERE device = '$2'"
 }
 
+administrator_email() {
+    local dir="$1" has_accounts
+    has_accounts="$(db_query "$dir" "SELECT to_regclass('accounts') IS NOT NULL")"
+    if [ "$has_accounts" = "t" ]; then
+        db_query "$dir" "SELECT email FROM accounts ORDER BY id"
+    else
+        db_query "$dir" "SELECT email FROM local_admin ORDER BY id"
+    fi
+}
+
 # schema_version is its own manifest section so a migration's expected
 # difference across an upgrade is trivial to isolate from the rest of the
 # diff (see strip_schema_version_section / assert_data_manifests_equal
@@ -396,9 +437,8 @@ capture_manifest() {
         echo "== schema_version =="
         schema_version "$dir"
 
-        echo "== local_admin =="
-        db_query "$dir" \
-            "SELECT email FROM local_admin ORDER BY id"
+        echo "== administrator =="
+        administrator_email "$dir"
 
         echo "== trips_by_source_category =="
         db_query "$dir" \
@@ -527,6 +567,19 @@ login_local_admin() {
     [ "$status" = "303" ]
 }
 
+login_page_offers_oidc() {
+    local html
+    html="$(mktemp "$SCRATCH/http/login-oidc.XXXXXX")"
+    curl -sS -m 8 -o "$html" "${BASE_URL}/login"
+    grep -q 'href="/login/oidc"' "$html"
+}
+
+rotate_candidate_password() {
+    printf '%s\n%s\n' "$ROTATED_PASSWORD" "$ROTATED_PASSWORD" \
+        | compose_cand exec -T app python -m app.manage_account reset-password \
+            >/dev/null
+}
+
 ingest_one_point() {
     local ingest_password="$1" device="$2" status
     # Same illustrative Golden Gate Park coordinate scripts/send_test_track.sh
@@ -626,7 +679,13 @@ step_materialize() {
 
 step1_base_up() {
     (cd "$BASE_DIR" && ./scripts/generate_env.sh) >/dev/null
+    OIDC_CLIENT_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+    set_env_value "$BASE_DIR/.env" OIDC_ISSUER "$OIDC_ISSUER"
+    set_env_value "$BASE_DIR/.env" OIDC_CLIENT_ID "$OIDC_CLIENT_ID"
+    set_env_value "$BASE_DIR/.env" OIDC_CLIENT_SECRET "$OIDC_CLIENT_SECRET"
     cp "$BASE_DIR/.env" "$CAND_DIR/.env"
+    auth_env_matches \
+        || step_fail "step 1: complete synthetic OIDC configuration was not preserved into the candidate environment"
 
     # scripts/dev_seed.py (step 2) refuses any --database-url whose host
     # isn't loopback, and the canonical compose.yaml never publishes db's
@@ -650,7 +709,9 @@ step1_base_up() {
 
     compose_base up -d --build db app
     wait_for_healthz 240 || step_fail "step 1: base install did not become healthy at ${BASE_URL}/healthz"
-    step_pass "step 1: base ($BASE_REF) up and healthy at ${BASE_URL}"
+    oidc_env_loaded "$BASE_DIR" \
+        || step_fail "step 1: base app did not receive the complete synthetic OIDC configuration"
+    step_pass "step 1: base ($BASE_REF) up and healthy with complete synthetic OIDC configuration at ${BASE_URL}"
 }
 
 step2_seed() {
@@ -662,7 +723,9 @@ step2_seed() {
 
     setup_local_admin "$admin_token" "$ADMIN_EMAIL" "$ADMIN_PASSWORD" \
         || step_fail "step 2: /setup did not create the local administrator"
-    step_pass "step 2a: local admin created via the token-gated /setup flow"
+    login_page_offers_oidc \
+        || step_fail "step 2: legacy base login did not offer OIDC with complete configuration"
+    step_pass "step 2a: local admin created via the token-gated /setup flow and legacy OIDC login is offered"
 
     # app is stopped for the duration of seeding: its own background
     # detector scheduler could otherwise grab the same per-run advisory
@@ -743,7 +806,7 @@ step6_post_restore_check() {
 }
 
 step7_upgrade() {
-    local v mig
+    local v mig account_count identity_count
     compose_base stop app
     if [ -n "$CANDIDATE_IMAGE" ]; then
         compose_cand up -d --no-build app
@@ -758,11 +821,48 @@ step7_upgrade() {
 
     capture_manifest "$CAND_DIR" "$SCRATCH/manifest-after-upgrade.txt"
     assert_data_manifests_equal "$SCRATCH/manifest-after-ingest.txt" "$SCRATCH/manifest-after-upgrade.txt" \
-        "step 7: candidate healthy, schema_version=$v matches migration count, data unchanged"
+        "step 7a: candidate healthy, schema_version=$v matches migration count, data unchanged"
+
+    oidc_env_loaded "$CAND_DIR" \
+        || step_fail "step 7: candidate app did not receive the preserved OIDC configuration"
+    account_count="$(db_query "$CAND_DIR" \
+        "SELECT count(*) FROM accounts WHERE email = '${ADMIN_EMAIL}' AND password_hash IS NOT NULL")"
+    [ "$account_count" = "1" ] \
+        || step_fail "step 7: migrated local administrator account was not present exactly once"
+    identity_count="$(db_query "$CAND_DIR" "SELECT count(*) FROM oidc_identities")"
+    [ "$identity_count" = "0" ] \
+        || step_fail "step 7: migrated local administrator unexpectedly started with a linked OIDC identity"
+    if login_page_offers_oidc; then
+        step_fail "step 7: configured but unlinked OIDC was incorrectly offered as a sign-in option"
+    fi
+    login_local_admin "$ADMIN_EMAIL" "$ADMIN_PASSWORD" \
+        || step_fail "step 7: migrated original local password did not sign in"
+    step_pass "step 7b: original local password works; preserved OIDC configuration remains unavailable until explicitly linked"
+
+    db_query "$CAND_DIR" \
+        "INSERT INTO oidc_identities (account_id, issuer, subject, provider_email, provider_display_name) SELECT id, '${OIDC_ISSUER}', '${OIDC_SUBJECT}', '${OIDC_EMAIL}', 'Upgrade drill identity' FROM accounts WHERE email = '${ADMIN_EMAIL}'" \
+        >/dev/null
+    identity_count="$(db_query "$CAND_DIR" \
+        "SELECT count(*) FROM oidc_identities oi JOIN accounts a ON a.id = oi.account_id WHERE a.email = '${ADMIN_EMAIL}' AND oi.issuer = '${OIDC_ISSUER}' AND oi.subject = '${OIDC_SUBJECT}'")"
+    [ "$identity_count" = "1" ] \
+        || step_fail "step 7: explicit candidate-schema OIDC identity link was not stored exactly once"
+    login_page_offers_oidc \
+        || step_fail "step 7: stored OIDC identity was not offered as a candidate sign-in option"
+    step_pass "step 7c: representative OIDC identity linked through the candidate schema and offered for sign-in; no external provider contacted"
+
+    ROTATED_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_urlsafe(18))')"
+    rotate_candidate_password \
+        || step_fail "step 7: supported account recovery command did not rotate the local password"
+    login_local_admin "$ADMIN_EMAIL" "$ROTATED_PASSWORD" \
+        || step_fail "step 7: rotated local password did not sign in"
+    if login_local_admin "$ADMIN_EMAIL" "$ADMIN_PASSWORD"; then
+        step_fail "step 7: original local password still signed in after rotation"
+    fi
+    step_pass "step 7d: supported account recovery command rotated the password; the new password works and the original fails"
 }
 
 step8_rollback() {
-    local v mig
+    local v mig local_admin_count
     compose_base down
     remove_stamp_volumes
     compose_base up -d db
@@ -784,7 +884,24 @@ step8_rollback() {
     # point, so a correct rollback must show that write as lost, exactly as
     # the documented rollback contract promises.
     assert_manifests_equal "$SCRATCH/manifest-before.txt" "$SCRATCH/manifest-after-rollback.txt" \
-        "step 8: rollback restored the prior release + pre-upgrade data; the post-backup ingest write was lost as documented"
+        "step 8a: rollback restored the prior release + pre-upgrade data; the post-backup ingest write was lost as documented"
+
+    login_local_admin "$ADMIN_EMAIL" "$ADMIN_PASSWORD" \
+        || step_fail "step 8: original local password did not work after rollback"
+    if login_local_admin "$ADMIN_EMAIL" "$ROTATED_PASSWORD"; then
+        step_fail "step 8: candidate-rotated password incorrectly worked after rollback"
+    fi
+    login_page_offers_oidc \
+        || step_fail "step 8: rolled-back legacy login did not offer OIDC from the preserved configuration"
+    [ "$(db_query "$BASE_DIR" "SELECT to_regclass('accounts') IS NULL")" = "t" ] \
+        || step_fail "step 8: candidate-only accounts relation survived rollback"
+    [ "$(db_query "$BASE_DIR" "SELECT to_regclass('oidc_identities') IS NULL")" = "t" ] \
+        || step_fail "step 8: candidate-only OIDC identity state survived rollback"
+    local_admin_count="$(db_query "$BASE_DIR" \
+        "SELECT count(*) FROM local_admin WHERE id = 1 AND email = '${ADMIN_EMAIL}' AND password_hash IS NOT NULL")"
+    [ "$local_admin_count" = "1" ] \
+        || step_fail "step 8: legacy local_admin state was not restored exactly once"
+    step_pass "step 8b: original password and legacy OIDC login restored; rotated password and candidate-only auth state absent"
 }
 
 # --- run the drill -------------------------------------------------------

@@ -187,7 +187,6 @@ def config_presence(cfg: Config) -> dict[str, bool]:
     ntfy_password = getattr(cfg, "ntfy_password", "")
     smtp_username = getattr(cfg, "smtp_username", "")
     smtp_password = getattr(cfg, "smtp_password", "")
-    admin_token = getattr(cfg, "admin_token", "")
     app_url = getattr(cfg, "app_url", "")
     return {
         "osrm_configured": bool(osrm_url),
@@ -197,7 +196,7 @@ def config_presence(cfg: Config) -> dict[str, bool]:
         "smtp_configured": bool(getattr(cfg, "email_enabled", False)),
         "smtp_auth_configured": bool(smtp_username and smtp_password),
         "oidc_configured": bool(getattr(cfg, "oidc_configured", False)),
-        "admin_token_configured": bool(admin_token),
+        "initial_admin_signup": bool(getattr(cfg, "initial_admin_signup", False)),
         "app_url_configured": bool(app_url),
         "dev_no_auth": bool(getattr(cfg, "dev_no_auth", False)),
     }

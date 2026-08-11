@@ -195,7 +195,7 @@ def test_authenticated_settings_context_uses_config_and_live_schema(monkeypatch)
                     osrm_url="", ntfy_url="", ntfy_topic="", ntfy_token="",
                     ntfy_username="", ntfy_password="", email_enabled=False,
                     smtp_username="", smtp_password="", oidc_configured=False,
-                    admin_token="", app_url="", dev_no_auth=False,
+                    initial_admin_signup=False, app_url="", dev_no_auth=False,
                 ),
             )
         ),

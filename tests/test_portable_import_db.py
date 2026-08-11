@@ -133,7 +133,7 @@ def _minimal_bundle_text(
     Python version's json.dumps happens to do with a float('nan') today.
     """
     return (
-        '{"format":"odograph-portable","format_version":1,"schema_version":19,'
+        '{"format":"odograph-portable","format_version":1,"schema_version":21,'
         '"exported_at":"2026-08-05T00:00:00+00:00",'
         f'"vehicles":{vehicles},"places":{places},"tag_rules":{tag_rules},'
         f'"mileage_rates":{mileage_rates},"trips":{trips},"expenses":{expenses},'
@@ -327,7 +327,7 @@ def test_detector_run_after_import_does_not_delete_imported_trips():
     """
     async def run(pool):
         bundle = {
-            "format": "odograph-portable", "format_version": 1, "schema_version": 19,
+            "format": "odograph-portable", "format_version": 1, "schema_version": 21,
             "exported_at": "2026-08-05T00:00:00+00:00",
             "vehicles": [{
                 "$id": 1, "name": "Car", "make": None, "model": None, "plate": None,
@@ -413,7 +413,7 @@ def test_detector_run_after_import_does_not_delete_imported_trips():
 
 def _two_imported_detected_trips_bundle() -> dict:
     return {
-        "format": "odograph-portable", "format_version": 1, "schema_version": 19,
+        "format": "odograph-portable", "format_version": 1, "schema_version": 21,
         "exported_at": "2026-08-05T00:00:00+00:00",
         "vehicles": [{
             "$id": 1, "name": "Car", "make": None, "model": None, "plate": None,
@@ -538,7 +538,7 @@ def test_import_into_non_clean_target_is_refused_and_leaves_target_unchanged():
         transport = httpx.ASGITransport(app=_bare_app(pool))
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             csrf = await _csrf(client)
-            response = await _import(client, csrf, _minimal_bundle(19))
+            response = await _import(client, csrf, _minimal_bundle(21))
 
         assert response.status_code == 409
         body = response.json()
@@ -570,7 +570,7 @@ def test_import_into_target_with_leftover_points_is_refused():
         transport = httpx.ASGITransport(app=_bare_app(pool))
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             csrf = await _csrf(client)
-            response = await _import(client, csrf, _minimal_bundle(19))
+            response = await _import(client, csrf, _minimal_bundle(21))
 
         assert response.status_code == 409
         body = response.json()
@@ -587,7 +587,7 @@ def test_import_into_target_with_leftover_points_is_refused():
 ])
 def test_wrong_format_or_version_rejected(mutate, expected_field):
     async def run(pool):
-        bundle = _minimal_bundle(19)
+        bundle = _minimal_bundle(21)
         mutate(bundle)
 
         transport = httpx.ASGITransport(app=_bare_app(pool))
@@ -629,7 +629,7 @@ def test_mismatched_schema_version_rejected():
 
 def test_duplicate_mileage_rate_year_rejected():
     async def run(pool):
-        bundle = _minimal_bundle(19)
+        bundle = _minimal_bundle(21)
         bundle["mileage_rates"] = [
             {"year": 2026, "rate_per_mi": 0.7, "rate_h2_per_mi": None, "h2_start_month": None},
             {"year": 2026, "rate_per_mi": 0.75, "rate_h2_per_mi": None, "h2_start_month": None},
@@ -653,7 +653,7 @@ def test_duplicate_mileage_rate_year_rejected():
 
 def test_duplicate_odometer_reading_vehicle_and_time_rejected():
     async def run(pool):
-        bundle = _minimal_bundle(19)
+        bundle = _minimal_bundle(21)
         bundle["vehicles"] = [{
             "$id": 1, "name": "Car", "make": None, "model": None, "plate": None,
             "is_default": True, "active": True,
@@ -682,7 +682,7 @@ def test_duplicate_odometer_reading_vehicle_and_time_rejected():
 
 def test_duplicate_place_name_rejected():
     async def run(pool):
-        bundle = _minimal_bundle(19)
+        bundle = _minimal_bundle(21)
         bundle["places"] = [
             {"$id": 1, "name": "Home", "kind": "home", "lat": 47.6, "lon": -122.3, "radius_m": 150},
             {"$id": 2, "name": "Home", "kind": "other", "lat": 47.7, "lon": -122.4, "radius_m": 150},
@@ -706,7 +706,7 @@ def test_duplicate_place_name_rejected():
 
 def test_dangling_dollar_id_reference_rejected():
     async def run(pool):
-        bundle = _minimal_bundle(19)
+        bundle = _minimal_bundle(21)
         bundle["trips"] = [{
             "$id": 1, "device": "phone1", "source": "manual",
             "started_at": "2026-01-01T00:00:00+00:00", "ended_at": "2026-01-01T00:30:00+00:00",
@@ -835,7 +835,7 @@ def test_import_requires_csrf_token(bad_token):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             await _csrf(client)  # primes the session's real token
             response = await _import(
-                client, "unused", _minimal_bundle(19), override_csrf=bad_token
+                client, "unused", _minimal_bundle(21), override_csrf=bad_token
             )
         assert response.status_code == 403
 
@@ -851,7 +851,7 @@ def test_import_requires_authentication():
         async with httpx.AsyncClient(
             transport=transport, base_url="http://testserver", follow_redirects=False,
         ) as client:
-            files = {"file": ("bundle.json", json.dumps(_minimal_bundle(19)).encode(), "application/json")}
+            files = {"file": ("bundle.json", json.dumps(_minimal_bundle(21)).encode(), "application/json")}
             response = await client.post(
                 "/settings/import/data", data={"csrf_token": "x"}, files=files,
             )

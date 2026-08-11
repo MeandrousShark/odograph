@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Establish administrator account: Odograph{% endblock %}
+{% block content %}
+
+<h2>Establish administrator account</h2>
+
+<p>Create local login credentials for this existing installation. The current
+sign-in provider identity will be linked to the same administrator account.</p>
+
+{% if error %}
+<div class="form-error-summary" role="alert">{{ error }}</div>
+{% endif %}
+
+<form method="post" action="/account/establish" class="auth-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <label>Local login email
+    <input type="email" name="email" value="{{ email }}" required autocomplete="username" autofocus>
+  </label>
+  <label>New password
+    <input type="password" name="password" required autocomplete="new-password" minlength="8">
+  </label>
+  <label>Confirm new password
+    <input type="password" name="password_confirm" required autocomplete="new-password" minlength="8">
+  </label>
+  <button type="submit" class="control control-primary">Establish administrator account</button>
+</form>
+
+<p class="muted">If the provider is unavailable, an operator with container
+access can use <code>python -m app.manage_account create-admin</code> instead.</p>
+
+{% endblock %}

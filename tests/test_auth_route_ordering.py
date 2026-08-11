@@ -1,9 +1,3 @@
-"""Route-registration tests for the new /login/local, /login/oidc, and
-/setup routes: they must resolve to their own handlers (not get swallowed
-by another route or dependency), and /setup must genuinely 404 -- not just
-render an error page -- when ADMIN_TOKEN is unset. Real `Route.matches()`
-resolution, no DB needed, same pattern as tests/test_ui_route_ordering.py.
-"""
 from __future__ import annotations
 
 import asyncio
@@ -27,26 +21,40 @@ def _first_matching_route(method: str, path: str):
     return None
 
 
-def test_login_local_and_oidc_and_setup_resolve_to_their_own_handlers():
-    assert _first_matching_route("GET", "/login").path == "/login"
-    assert _first_matching_route("POST", "/login/local").path == "/login/local"
-    assert _first_matching_route("GET", "/login/oidc").path == "/login/oidc"
-    assert _first_matching_route("GET", "/setup").path == "/setup"
-    assert _first_matching_route("POST", "/setup").path == "/setup"
+def test_account_auth_routes_resolve_and_setup_is_removed():
+    expected = {
+        ("GET", "/login"),
+        ("POST", "/login/local"),
+        ("GET", "/signup"),
+        ("POST", "/signup"),
+        ("GET", "/login/oidc"),
+        ("GET", "/auth/callback"),
+        ("GET", "/account/establish"),
+        ("POST", "/account/establish"),
+        ("GET", "/settings/account"),
+        ("POST", "/settings/account/password"),
+        ("POST", "/settings/account/oidc/link"),
+        ("POST", "/settings/account/oidc/unlink"),
+        ("POST", "/logout"),
+    }
+    for method, path in expected:
+        assert _first_matching_route(method, path).path == path
+    assert _first_matching_route("GET", "/setup") is None
+    assert _first_matching_route("POST", "/setup") is None
 
 
-def test_existing_routes_still_resolve_after_new_routes_are_added():
-    assert _first_matching_route("GET", "/auth/callback").path == "/auth/callback"
-    assert _first_matching_route("POST", "/logout").path == "/logout"
-
-
-def test_login_local_and_setup_have_no_require_csrf_dependency():
-    # These forms are plain (no-JS) POSTs and can't set the X-CSRF-Token
-    # header require_csrf checks -- their CSRF defense is the hidden
-    # csrf_token form field, checked by hand inside the handler instead.
+def test_plain_auth_forms_use_hidden_form_csrf_checks():
     routes = {
-        route.path: route for route in make_router().routes
-        if route.path in {"/login/local", "/setup"}
+        route.path: route
+        for route in make_router().routes
+        if route.path in {
+            "/login/local",
+            "/signup",
+            "/account/establish",
+            "/settings/account/password",
+            "/settings/account/oidc/link",
+            "/settings/account/oidc/unlink",
+        }
     }
     for route in routes.values():
         names = {dep.call.__name__ for dep in route.dependant.dependencies}
@@ -54,49 +62,59 @@ def test_login_local_and_setup_have_no_require_csrf_dependency():
 
 
 class _FakeCursor:
-    def __init__(self, row):
+    def __init__(self, row, identity):
         self._row = row
+        self._identity = identity
+        self._query = ""
 
     async def execute(self, *args, **kwargs):
+        self._query = args[0] if args else ""
         return self
 
     async def fetchone(self):
+        if "FROM oidc_identities" in self._query:
+            return self._identity
         return self._row
 
 
 class _FakeConn:
-    def __init__(self, row):
+    def __init__(self, row, identity):
         self._row = row
+        self._identity = identity
 
     def cursor(self, row_factory=None):
-        return _FakeCursor(self._row)
+        return _FakeCursor(self._row, self._identity)
 
     async def execute(self, *args, **kwargs):
-        return None
+        cursor = _FakeCursor((self._row is not None,), self._identity)
+        return await cursor.execute(*args, **kwargs)
 
 
 class _FakeConnCtx:
-    def __init__(self, row):
+    def __init__(self, row, identity):
         self._row = row
+        self._identity = identity
 
     async def __aenter__(self):
-        return _FakeConn(self._row)
+        return _FakeConn(self._row, self._identity)
 
     async def __aexit__(self, *exc_info):
         return False
 
 
 class _FakePool:
-    def __init__(self, row=None):
+    def __init__(self, row=None, identity=None):
         self._row = row
+        self._identity = identity
 
     def connection(self):
-        return _FakeConnCtx(self._row)
+        return _FakeConnCtx(self._row, self._identity)
 
 
 class _FakeOAuthClient:
-    async def authorize_redirect(self, request, redirect_uri):
+    async def authorize_redirect(self, request, redirect_uri, **kwargs):
         from starlette.responses import RedirectResponse
+
         return RedirectResponse("https://idp.example.com/authorize", status_code=303)
 
 
@@ -104,17 +122,20 @@ class _FakeOAuth:
     pocketid = _FakeOAuthClient()
 
 
-def _bare_app(*, admin_token: str, oidc_configured: bool, local_admin_row=None):
+def _bare_app(*, signup: bool, oidc: bool, account=None, linked=False):
     app = FastAPI()
     app.add_middleware(
         SessionMiddleware, secret_key="test-secret", same_site="lax", https_only=False
     )
     app.state.config = SimpleNamespace(
-        dev_no_auth=False, admin_token=admin_token, allowed_email="",
-        oidc_configured=oidc_configured,
+        dev_no_auth=False,
+        initial_admin_signup=signup,
+        allowed_email="",
+        oidc_configured=oidc,
+        oidc_issuer="https://idp.example.com",
     )
-    app.state.pool = _FakePool(local_admin_row)
-    app.state.oauth = _FakeOAuth() if oidc_configured else None
+    app.state.pool = _FakePool(account, {"id": 1} if linked else None)
+    app.state.oauth = _FakeOAuth() if oidc else None
     app.state.templates = SimpleNamespace(
         TemplateResponse=lambda request, name, context, status_code=200: (
             PlainTextResponse(f"rendered:{name}", status_code=status_code)
@@ -132,40 +153,48 @@ async def _get(app: FastAPI, path: str) -> httpx.Response:
         return await client.get(path)
 
 
-def test_setup_404s_when_admin_token_is_unset():
-    app = _bare_app(admin_token="", oidc_configured=False)
-    response = asyncio.run(_get(app, "/setup"))
-    assert response.status_code == 404
+def test_fresh_install_exposes_signup_but_not_legacy_oidc():
+    app = _bare_app(signup=True, oidc=True)
+    assert asyncio.run(_get(app, "/signup")).status_code == 200
+    assert asyncio.run(_get(app, "/login/oidc")).status_code == 404
+    assert asyncio.run(_get(app, "/auth/callback")).status_code == 404
 
 
-def test_setup_is_reachable_when_admin_token_is_set():
-    app = _bare_app(admin_token="setup-token", oidc_configured=False)
-    response = asyncio.run(_get(app, "/setup"))
-    assert response.status_code == 200
+def test_upgrade_default_closes_signup_and_preserves_legacy_oidc():
+    app = _bare_app(signup=False, oidc=True)
+    assert asyncio.run(_get(app, "/signup")).status_code == 404
+    assert asyncio.run(_get(app, "/login/oidc")).status_code == 303
 
 
-def test_login_renders_page_when_configured_and_no_local_admin_exists():
-    # GET /login never auto-redirects to the provider, even in this
-    # configuration (OIDC configured, no local admin row yet): auto-redirect
-    # here is what let the IdP's own SSO session silently re-authenticate a
-    # user right after they logged out.
-    app = _bare_app(admin_token="", oidc_configured=True, local_admin_row=None)
-    response = asyncio.run(_get(app, "/login"))
-    assert response.status_code == 200
-    assert response.text == "rendered:login.html"
+def test_existing_unlinked_account_closes_signup_and_oidc_login():
+    account = {
+        "id": 1,
+        "email": "admin@example.com",
+        "password_hash": "hash",
+        "is_admin": True,
+        "is_enabled": True,
+        "auth_version": 1,
+    }
+    app = _bare_app(signup=True, oidc=True, account=account)
+    assert asyncio.run(_get(app, "/signup")).status_code == 404
+    assert asyncio.run(_get(app, "/login/oidc")).status_code == 404
+    assert asyncio.run(_get(app, "/login")).status_code == 200
 
 
-def test_login_renders_page_when_local_admin_exists_even_with_oidc_configured():
-    app = _bare_app(
-        admin_token="", oidc_configured=True,
-        local_admin_row={"id": 1, "email": "admin@example.com"},
-    )
-    response = asyncio.run(_get(app, "/login"))
-    assert response.status_code == 200
-    assert response.text == "rendered:login.html"
+def test_existing_linked_account_enables_oidc_login():
+    account = {
+        "id": 1,
+        "email": "admin@example.com",
+        "password_hash": "hash",
+        "is_admin": True,
+        "is_enabled": True,
+        "auth_version": 1,
+    }
+    app = _bare_app(signup=False, oidc=True, account=account, linked=True)
+    assert asyncio.run(_get(app, "/login/oidc")).status_code == 303
 
 
-def test_auth_callback_404s_in_local_only_mode():
-    app = _bare_app(admin_token="setup-token", oidc_configured=False)
-    response = asyncio.run(_get(app, "/auth/callback"))
-    assert response.status_code == 404
+def test_admin_token_cannot_restore_setup_route():
+    app = _bare_app(signup=False, oidc=False)
+    app.state.config.admin_token = "obsolete"
+    assert asyncio.run(_get(app, "/setup")).status_code == 404
