@@ -341,6 +341,54 @@ For the first public release, record "Prior-release artifact upgrade gate: not
 applicable. No prior public release exists." A clean-install verification on
 both architectures is still required.
 
+## Move the floating minor tag
+
+Alongside every immutable `vX.Y.Z` tag, the registry carries a floating `vX.Y`
+tag that points at the newest patch within that minor version. Operators who
+would otherwise reach for `latest` pin `vX.Y` instead: they pick up patch fixes
+without silently crossing a minor boundary, which is where migrations and, before
+1.0, breaking changes are allowed to land. There is deliberately no `latest` tag
+and no floating major tag.
+
+**This step is mandatory for every patch release.** A floating tag that stops
+moving is worse than no floating tag, because operators believe it is current
+while it quietly pins them to an old patch. A release is not complete until
+`vX.Y` resolves to the release you just published.
+
+Move it only after the published artifacts verify and the upgrade drill passes.
+The floating tag must never point at an unverified, yanked, or partially
+published release.
+
+Retag by digest so the tag is an alias for the exact index that was already
+signed. Do not rebuild or re-push the manifest: a rebuilt index gets a new
+digest, and the existing cosign signature would no longer cover the floating
+tag.
+
+```sh
+crane tag "$IMAGE:$VERSION" "${VERSION%.*}"
+```
+
+This needs a token with `write:packages`; the workflow's own token is not
+available here. `gh auth refresh -h github.com -s write:packages` followed by
+`gh auth token | crane auth login ghcr.io -u <user> --password-stdin` is
+sufficient. Then confirm the floating tag is the same artifact and still
+verifies:
+
+```sh
+crane digest "$IMAGE:$VERSION"
+crane digest "$IMAGE:${VERSION%.*}"
+cosign verify \
+  --certificate-identity-regexp "^https://github.com/MeandrousShark/odograph/.github/workflows/.*@refs/tags/$VERSION$" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  "$IMAGE:${VERSION%.*}"
+```
+
+Both digests must be identical and the signature must verify through the
+floating tag. The signing certificate identity still names the immutable
+version, which is correct: it records which release the artifact came from.
+
+A prerelease never moves a floating tag.
+
 ## Complete the release
 
 Review the GitHub release as a new operator would. Confirm its upgrade path and

@@ -1,209 +1,289 @@
 # Odograph
 
-Odograph is a self-hosted mileage tracker fed by [OwnTracks](https://owntracks.org/)
-in HTTP mode. Ingests location fixes, detects trips via stay-point clustering, tags them
-as business/personal (or manually when detection misses a drive), and provides a
-full trip ledger with filtering, bulk editing, detailed maps, mileage/deduction
-reports, expense tracking, and odometer reconciliation. Optional add-ons include
-self-hosted OSRM road-snapping, reverse geocoding (Geoapify or a self-hosted
-Nominatim), and ntfy/email reminders for trips that still need tagging. See
-[docs/privacy.md](docs/privacy.md) for exactly which of these send data
-outside your instance, and under what configuration, and
-[docs/security.md](docs/security.md) for the trust model, entry-point
-security, and an operator hardening checklist.
+Odograph is a self-hosted mileage tracker that uses
+[OwnTracks](https://owntracks.org/) to record your drives automatically.
 
-**This is a US tax tool.** Odograph computes mileage deductions from IRS
-standard mileage rates. Outside the US, that figure is not merely
-unlocalized. It's wrong. If you're not a US filer, the deduction reports
-this project produces are not useful to you.
+It can:
+
+- Detect trips from your phone's location history
+- Mark trips as business or personal
+- Let you add or edit trips by hand
+- Show trip routes on a map
+- Track vehicle expenses
+- Calculate estimated IRS mileage deductions
+- Compare tracked mileage against your vehicle's odometer
+- Remind you about trips that still need to be categorized
+
+Your data stays on your own server unless you turn on an external service such
+as hosted geocoding. The [privacy guide](docs/privacy.md) explains exactly what
+each option sends outside your instance. The
+[security guide](docs/security.md) covers the trust model and a hardening
+checklist.
+
+> **US users only:** Odograph's deduction reports use IRS standard mileage
+> rates. Trip tracking still works anywhere, but the tax figures are only
+> meaningful for US filers.
 
 ## Install
 
-### Requirements
+### What you need
 
-- A Linux host with Git and either Docker Engine with the Compose v2 plugin
-  (`docker compose`) or Podman with podman-compose 1.3.0 or newer
-  (`podman-compose`). Legacy `docker-compose` v1 is not supported.
-- OpenSSL or Python 3 on the host to generate secrets.
-- A domain name whose DNS points to the host, plus a TLS-terminating reverse
-  proxy. Browser sessions use Secure cookies, so the production UI must be
-  reached over HTTPS; `http://127.0.0.1:8077` is only a local health and proxy
-  upstream address.
-- At least 2 GB RAM and 5 GB free disk for the baseline app, database, and
-  initial data. SSD-class storage is recommended. Low-memory boards such as a
-  1 GB Raspberry Pi 3 are untested and unsupported. Long retention increases
-  database use.
-- Optional OSRM road data requires substantially more memory and disk depending
-  on the region. Process the extract on a larger machine, then copy the
-  resulting dataset to the host that will run it.
-- The `app` container runs as fixed non-root UID/GID `10001:10001` with an
-  empty capability set. It writes nothing to disk, so this only matters if you
-  bind-mount a host directory into it yourself: make sure that path is
-  readable (and writable, if applicable) by UID/GID 10001.
+- A Linux server or VM
+- Git
+- Either Docker Engine with the Compose v2 plugin (`docker compose`) or Podman
+  with podman-compose 1.3.0 or newer. The old `docker-compose` v1 will not work.
+- OpenSSL or Python 3 on the host, used to generate your secrets
+- A domain name pointing at the host
+- A reverse proxy that terminates HTTPS
+- About 2 GB of RAM and 5 GB of free disk to start
 
-Linux is what this project is tested on and what it supports. Nothing in the
-design is Linux-specific beyond that: these are ordinary Linux container
-images, so Docker Desktop or `podman machine` on macOS or Windows will very
-likely work. It is simply not tested, so it is not claimed. If you try it and
-something breaks, open an issue. I have both platforms available and am glad
-to help track a problem down; I just don't test them ahead of time. Note that
-the phone posts location fixes continuously, so whatever the operating system,
-a machine that sleeps makes a poor host.
+Linux is what Odograph is tested and supported on. Docker Desktop or
+`podman machine` on macOS or Windows will probably work, but they are not
+tested, so they are not claimed. If you try one and hit a problem, open an
+issue and I will help track it down.
 
-### Clean-host quickstart: critical path
+Your phone posts location updates all day, so Odograph works best on a machine
+that stays awake rather than one that sleeps.
 
-Choose the version shown on the GitHub Releases page. Clone the repository and
-check out that exact tag, replacing `vX.Y.Z` below with the chosen release:
+## Quick start
+
+Pick the version you want from the GitHub Releases page, then clone the
+repository and check out that exact release tag:
 
 ```sh
 git clone https://github.com/MeandrousShark/odograph.git
 cd odograph
 git checkout vX.Y.Z
+```
+
+Generate your configuration:
+
+```sh
 scripts/generate_env.sh
 ```
 
-Edit `.env` and set `DISPLAY_TZ` to your
-[IANA timezone name](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones).
-The generated file is already a working local-login configuration: all three
-required secrets are populated, optional integrations are disabled, and
-first-account signup is enabled. See the
-[configuration reference](docs/configuration.md) only when you want to change
-the baseline or enable an integration. Leave
-`FORWARDED_ALLOW_IPS=*` unchanged only while the compose port remains bound to
-host loopback as shipped.
+Open `.env` and set your timezone:
 
-Start the baseline stack with exactly one of these commands. Compose pulls the
-immutable image tag pinned by the checked-out release automatically:
+```env
+DISPLAY_TZ=America/Los_Angeles
+```
+
+Use your own [IANA timezone name](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones).
+
+That generated file is already a working local-login setup. All three required
+secrets are filled in and every optional integration is switched off. You only
+need the [configuration reference](docs/configuration.md) when you want to
+change something.
+
+### Start Odograph
+
+With Docker:
 
 ```sh
-# Docker Compose v2
 docker compose up -d
+```
 
-# Or Podman Compose
+Or with Podman:
+
+```sh
 podman-compose up -d
 ```
 
-Then verify both services and the local health endpoint with the matching
-frontend:
+Compose downloads the immutable image tag pinned by the checked-out release, so
+you always get exactly the version you checked out.
+
+#### Tracking patch releases instead
+
+The registry also publishes a floating tag for each minor version, such as
+`v0.8`, which always points at the newest patch within it. To follow that
+instead of a fixed patch, create `compose.override.yml` next to `compose.yaml`:
+
+```yaml
+services:
+  app:
+    image: ghcr.io/meandrousshark/odograph:v0.8
+```
+
+Both Compose frontends pick that file up automatically. A `pull` then brings in
+`v0.8.1` when it ships, while moving to a new minor version stays a deliberate
+choice. Read the release notes before pulling either way.
+
+There is no `latest` tag on purpose. Minor releases are where database
+migrations land, and Odograph's migrations are one-way: once one runs, going
+back means restoring a backup rather than switching the image. Crossing a minor
+version unattended is a good way to discover that the hard way.
+
+Check that both services came up:
 
 ```sh
 docker compose ps
 # or: podman-compose ps
+```
+
+And that the app answers on the host:
+
+```sh
 curl -fsS http://127.0.0.1:8077/healthz
 ```
 
-Next, configure your domain and TLS reverse proxy to send traffic to
-`127.0.0.1:8077`, following [the reverse-proxy guide](docs/reverse-proxy.md).
-Confirm `https://mileage.example.com/healthz` works before browser setup.
-Do not use the plain-HTTP loopback URL for `/signup` or `/login`: production
-session cookies are intentionally Secure and will not work there.
+That address is for local health checks and your reverse proxy only. It is not
+how you use Odograph day to day.
 
-Open `https://mileage.example.com/signup` and create the single administrator.
-The stored account closes signup permanently, so no environment cleanup or app
-recreation is needed. Sign in with the email and password you chose, then open
-Account Security at `/settings/account`.
+## Set up HTTPS
 
-Compose stores the account and application data in the named `dbdata` volume.
-Ordinary restarts, recreates, and `down`/`up` cycles without `-v` preserve it,
-and signup stays closed. Do not use `down -v` unless you intend to delete the
+Point your reverse proxy at `127.0.0.1:8077` and give it your domain, for
+example `https://mileage.example.com`. The
+[reverse proxy guide](docs/reverse-proxy.md) has worked examples.
+
+Odograph requires HTTPS for browser sign-in, because its session cookies are
+marked Secure. Confirm this works before going further:
+
+```text
+https://mileage.example.com/healthz
+```
+
+## Create your account
+
+Open `https://mileage.example.com/signup` and create your administrator
+account, then sign in.
+
+Only the first account can be created this way. Once it exists, public signup
+closes on its own. There is no setup token to copy and no container to
+recreate afterward.
+
+You can manage your password and optional sign-in providers later under
+**Settings, then Account Security**.
+
+## Connect OwnTracks
+
+Follow the [OwnTracks guide](docs/owntracks.md) to connect your phone. It walks
+through sending a test track, confirming Odograph received it, and deleting the
+test data afterward.
+
+Once that works, Odograph starts detecting trips on its own.
+
+## Backups
+
+Before you rely on Odograph, make a backup and prove it restores:
+
+```sh
+scripts/backup_database.sh --output backups/first-install.dump
+scripts/restore_database.sh --verify-only backups/first-install.dump
+```
+
+Then pick somewhere encrypted and off this host to keep them, on a schedule.
+[Backups and disaster recovery](docs/backups.md) covers both.
+
+Your data lives in the Compose `dbdata` volume. Restarts, container recreates,
+and ordinary `down` then `up` cycles all keep it. What destroys it is:
+
+```sh
+docker compose down -v
+```
+
+or the Podman equivalent. Only run that when you actually mean to erase the
 database.
 
-### Post-install checklist
+## Security
 
-These steps are important operations, but none is a prerequisite for starting
-a brand-new empty instance:
+Before relying on your installation, work through the
+[security hardening checklist](docs/security.md#hardening-checklist).
 
-1. Confirm the public HTTPS health endpoint and review
-   [reverse-proxy trust](docs/reverse-proxy.md#trusting-forwarded-headers).
-2. In Account Security, optionally configure and link an
-   [OIDC provider](docs/configuration.md#authentication-and-ingest).
-3. Follow [Connecting OwnTracks](docs/owntracks.md), send the removable
-   synthetic track, verify it in the UI, and clean it up.
-4. Take and verify a one-off database backup:
+If you change the default networking, also review
+[reverse proxy trust](docs/reverse-proxy.md#trusting-forwarded-headers).
 
-   ```sh
-   scripts/backup_database.sh --output backups/first-install.dump
-   scripts/restore_database.sh --verify-only backups/first-install.dump
-   ```
+The app container runs as a fixed non-root user, UID and GID `10001`, and
+writes nothing to disk. That only matters if you mount a host directory into
+it yourself, in which case that path has to be readable, and writable if it is
+written to, by `10001`.
 
-   Then choose encrypted, off-host storage and a schedule in
-   [Backups and disaster recovery](docs/backups.md).
-5. Enable only the optional services you want: [OSRM](docs/osrm.md), reverse
-   geocoding, ntfy, or email. Their settings are in the
-   [configuration reference](docs/configuration.md#external-services), and
-   their data-sharing behavior is in the [privacy guide](docs/privacy.md).
-6. Complete the [security hardening checklist](docs/security.md#hardening-checklist).
+## Optional features
 
-For later releases, follow [Upgrading](docs/upgrading.md). Every upgrade starts
-with a fresh verified backup and continues from an exact release tag.
+Odograph needs none of these. Every setting is in the
+[configuration reference](docs/configuration.md#external-services), and if a
+feature sends anything off your server the [privacy guide](docs/privacy.md)
+spells out what.
 
-### Password recovery and session revocation
+- **OIDC sign-in** through a compatible identity provider
+- **Reverse geocoding** to turn coordinates into readable addresses
+- **ntfy or email reminders** for trips still waiting to be categorized
+- **OSRM** for self-hosted road snapping and better route maps
 
-To change the password while signed in, open Account Security. If you lose
-access, run the appropriate command for your Compose frontend and enter the new
-password interactively:
+### OIDC
+
+OIDC is a second way to sign in to the administrator account you already have,
+not a separate account.
+
+Register `https://mileage.example.com/auth/callback` with your provider, set
+the three OIDC variables, then link it from **Settings, then Account Security**
+while signed in with your password. Linking asks for that password and a fresh
+authorization from the provider.
+
+Afterward either method signs you into the same account. The link follows the
+provider's issuer and subject, so it survives your email address changing
+there. See the
+[authentication settings](docs/configuration.md#authentication-and-ingest) for
+details, and [Upgrading](docs/upgrading.md) if you are moving an older
+OIDC-only installation.
+
+### Reverse geocoding
+
+Odograph supports Geoapify as a hosted provider and Nominatim as a self-hosted
+one. Read the
+[configuration reference](docs/configuration.md#external-services) and the
+[privacy guide](docs/privacy.md) before turning either on.
+
+### OSRM
+
+OSRM is optional and entirely self-hosted. It needs road data prepared for your
+region ahead of time, and it can want considerably more memory and disk than
+Odograph itself. See the [OSRM guide](docs/osrm.md).
+
+## Password recovery
+
+While signed in, change your password under **Settings, then Account
+Security**.
+
+If you are locked out, reset it from the server and type the new password when
+prompted:
 
 ```sh
 docker compose exec app python -m app.manage_account reset-password
 # or: podman-compose exec app python -m app.manage_account reset-password
 ```
 
-Use `create-admin` instead of `reset-password` only when no account exists and
-public first-account signup is disabled. Both password changes and operator
-resets revoke previously issued application sessions. The browser completing a
-signed-in password change receives a fresh valid session.
+Use `create-admin` instead when no account exists yet and public signup is
+closed.
 
-Logging out ends the application's own session and returns you to the login
-page, but it does not end the identity provider's session. With OIDC,
-signing back in afterward may not prompt for credentials at all, because the
-provider still considers you signed in. To fully sign out, also sign out of
-the identity provider directly. Odograph does not retain OIDC access, refresh,
-or ID tokens after the callback.
+Both a password change and an operator reset sign out your other Odograph
+sessions. The browser that made the change stays signed in.
 
-### Optional integrations
+If you use OIDC, signing out of Odograph does not sign you out of your identity
+provider, so signing back in may not prompt you at all. Sign out of the
+provider separately to end that session. Odograph does not keep provider tokens
+after sign-in.
 
-The baseline stack needs none of these. The
-[configuration reference](docs/configuration.md#external-services) lists every
-setting and default:
+## Updating
 
-- OIDC is an optional login method for the same administrator account. Register
-  `https://mileage.example.com/auth/callback` with the provider, configure all
-  three OIDC variables, then open Account Security while signed in locally.
-  Linking requires the current local password and a fresh provider authorization.
-  Later OIDC logins resolve the provider's exact issuer and subject, not its
-  email claim, and reach the same account as local login. `ALLOWED_EMAIL` does
-  not control linked login. It applies only to the one-time transition for an
-  existing OIDC-only installation described in [Upgrading](docs/upgrading.md).
-- Reverse geocoding and address search are enabled by setting
-  `GEOCODE_PROVIDER` to `geoapify` (hosted; also needs `GEOCODE_API_KEY`) or
-  `nominatim` (self-hosted only; also needs `GEOCODE_NOMINATIM_URL`, which
-  ships with no default). Left unset with `GEOCODE_API_KEY` set, it resolves
-  to `geoapify` for compatibility with configs from before this setting
-  existed. An existing `.env` needs no change. See
-  [the privacy guide](docs/privacy.md) for exactly what each provider
-  receives before enabling either.
-- ntfy reminders and SMTP email are likewise enabled only when their
-  corresponding `.env` variables are set. See
-  [the privacy guide](docs/privacy.md) before enabling external services.
-- Self-hosted OSRM road snapping is an optional compose profile. It requires a
-  separately prepared regional dataset before starting `--profile osrm`. The
-  app ships no default region. See [docs/osrm.md](docs/osrm.md) for choosing
-  an extract, provisioning it, and sizing a host for it.
+When a new release comes out, follow the [upgrading guide](docs/upgrading.md).
+Take a fresh backup and verify it first, then move from one exact release tag
+to the next. Watch the GitHub Releases page to hear about new versions.
 
 ## Contributing
 
-Interested in running the test suite or working on the code itself? See
-[CONTRIBUTING.md](CONTRIBUTING.md) for development setup, running tests, and
-local development instructions.
+Want to run the test suite or work on the code? See
+[CONTRIBUTING.md](CONTRIBUTING.md) for development setup and local
+instructions.
 
 ## Support
 
-This project is self-hosted software, not a hosted service. Only the latest
-release is supported, by one maintainer on a best-effort basis. There is no
-service-level agreement, guaranteed response time, or promise of help operating
-custom infrastructure. See [SECURITY.md](SECURITY.md) for security-reporting
-and supported-version details and [CONTRIBUTING.md](CONTRIBUTING.md) for the
-project scope.
+Odograph is self-hosted open-source software, not a hosted service. Only the
+latest release is supported, by one maintainer, on a best-effort basis. There
+is no service-level agreement or guaranteed response time.
+
+Open a GitHub issue for bugs and feature requests. See
+[SECURITY.md](SECURITY.md) for security reporting and supported versions, and
+[CONTRIBUTING.md](CONTRIBUTING.md) for project scope.
 
 ## AI assistance
 
@@ -217,9 +297,9 @@ that built it. The verification commands are in
 
 ## License
 
-AGPL-3.0. In short: you're free to use, modify, and self-host this project, but
-if you run a modified version as a network service that other people use, you
-must offer that version's source to those users. See [LICENSE](LICENSE) for the
-full text.
+AGPL-3.0. In short: you are free to use, modify, and self-host this project,
+but if you run a modified version as a network service that other people use,
+you must offer that version's source to those users. See [LICENSE](LICENSE) for
+the full text.
 
 Copyright (C) 2026 Michael Hannon.

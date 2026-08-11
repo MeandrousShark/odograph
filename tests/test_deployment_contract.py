@@ -56,12 +56,14 @@ def test_env_example_is_only_the_runnable_baseline():
 
 
 def test_quickstart_separates_critical_path_from_post_install_operations():
+    # Boundaries are section headings rather than a single "quickstart" heading
+    # so the prose can be rewritten without weakening the split this guards:
+    # getting an instance running and signed into must not be interleaved with
+    # optional services, backups, or recovery.
     readme = (ROOT / "README.md").read_text()
-    critical = readme.split("### Clean-host quickstart: critical path", 1)[1].split(
-        "### Post-install checklist", 1
-    )[0]
-    post_install = readme.split("### Post-install checklist", 1)[1].split(
-        "### Password recovery", 1
+    critical = readme.split("## Quick start", 1)[1].split("## Connect OwnTracks", 1)[0]
+    post_install = readme.split("## Connect OwnTracks", 1)[1].split(
+        "## Password recovery", 1
     )[0]
 
     assert "git checkout vX.Y.Z" in critical
