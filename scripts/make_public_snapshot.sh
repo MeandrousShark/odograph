@@ -105,7 +105,7 @@ TOP_LEVEL_FILES=(
     README.md LICENSE SECURITY.md CONTRIBUTING.md THIRD_PARTY_NOTICES.md CHANGELOG.md
     compose.yaml compose.build.override.yml Dockerfile .dockerignore
     .env.example .gitignore
-    requirements.txt requirements-dev.txt requirements.lock
+    requirements.txt requirements-dev.txt requirements-dev.lock requirements.lock
     # pyproject.toml only sets pytest's pythonpath; without it, `import
     # app` fails from inside the snapshot and its test suite can't run.
     pyproject.toml

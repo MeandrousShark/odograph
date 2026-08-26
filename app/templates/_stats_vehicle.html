@@ -1,0 +1,36 @@
+<section class="stats-section">
+  <h2>Per-vehicle breakdown</h2>
+  {% if vehicle_breakdown.vehicles %}
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr>
+        <th>Vehicle</th>
+        <th>Business</th>
+        <th>Personal</th>
+        <th>Total</th>
+        <th>Expenses</th>
+        <th>Deduction</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for v in vehicle_breakdown.vehicles %}
+      <tr>
+        <td>{{ v.vehicle_name }}</td>
+        <td class="num">{{ v.business_m | mi }}</td>
+        <td class="num">{{ v.personal_m | mi }}</td>
+        <td class="num">{{ v.total_m | mi }}</td>
+        <td class="num">{{ v.expense_total | usd }}</td>
+        <td class="num">{{ v.deduction | usd }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">No vehicle data available.</p>
+  {% endif %}
+  {% if vehicle_breakdown.coverage_note %}
+  <p class="muted stats-coverage">{{ vehicle_breakdown.coverage_note }}</p>
+  {% endif %}
+</section>

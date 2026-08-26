@@ -1,0 +1,8 @@
+<section class="stats-section">
+  <h2>Business vs. personal share</h2>
+  <div class="chart-scroll">{{ trend.chart_svg | safe }}</div>
+  <p class="stats-legend"><span class="business">Business</span><span class="personal">Personal</span></p>
+  {% if trend.coverage_note %}
+  <p class="muted stats-coverage">{{ trend.coverage_note }}</p>
+  {% endif %}
+</section>

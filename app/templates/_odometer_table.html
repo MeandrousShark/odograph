@@ -4,14 +4,14 @@
 {% if entry.readings %}
 <div class="settings-table-scroll settings-table-scroll-odometer-readings">
 <table class="settings-table">
-  <thead><tr><th>Recorded</th><th>Odometer (mi)</th><th>Note</th><th></th></tr></thead>
+  <thead><tr><th>Recorded</th><th>Odometer (mi)</th><th>Note</th><th class="settings-table-actions"></th></tr></thead>
   <tbody>
     {% for r in entry.readings %}
     <tr id="odometer-{{ r.id }}">
       <td>{{ r.recorded_at | local_dt }}</td>
       <td class="num">{{ r.odometer_m | mi }}</td>
       <td>{{ r.note or '' }}</td>
-      <td>
+      <td class="settings-table-actions">
         <button type="button" class="danger" title="Delete reading"
                 hx-post="/settings/odometer/{{ r.id }}/delete"
                 hx-target="#odometer-table" hx-swap="outerHTML"
@@ -66,7 +66,7 @@
     <label>Time <input type="time" name="time" value="{{ now.strftime('%H:%M') }}" required></label>
     <label>Odometer (mi) <input type="number" step="0.1" min="0.1" name="value" required style="width:7rem"></label>
     <label>Note <input type="text" name="note" style="width:10rem"></label>
-    <button type="submit">Add</button>
+    <button type="submit" class="control control-secondary">Add</button>
   </form>
 </details>
 </div>

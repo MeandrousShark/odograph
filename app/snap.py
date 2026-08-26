@@ -14,6 +14,7 @@ import httpx
 from psycopg_pool import AsyncConnectionPool
 
 from app.detector.runner import load_trip_points
+from app.validation import parse_finite_number
 from app.worker import PokeSweepWorker
 
 log = logging.getLogger(__name__)
@@ -130,6 +131,78 @@ async def route_distance_m(
     if body.get("code") != "Ok" or not routes:
         return None
     return routes[0].get("distance")
+
+
+@dataclass(frozen=True)
+class RoutedLine:
+    distance_m: float
+    geojson: dict          # GeoJSON LineString geometry
+
+
+async def route_line(
+    http_client: httpx.AsyncClient, osrm_url: str,
+    from_lat: float, from_lon: float, to_lat: float, to_lon: float,
+) -> Optional[RoutedLine]:
+    """One-shot OSRM `/route` call for routed manual trip entry -- same
+    caller-facing shape as `route_distance_m` above (dedicated short
+    timeout, raises on transport failure or non-2xx status so the caller
+    degrades on its own terms), but also asking for the route geometry so
+    the manual trip can store a real road-following line instead of a
+    straight line between the two endpoints.
+
+    Returns None for anything short of a clean, well-formed route rather
+    than raising, since a malformed OSRM body (bad distance, missing or
+    malformed geometry) is a "can't route this" outcome for the caller,
+    not a transport failure -- the same distinction `route_distance_m`
+    draws between its `raise_for_status()` and its own `None` return.
+    """
+    url = (
+        f"{osrm_url.rstrip('/')}/route/v1/driving/"
+        f"{from_lon:.6f},{from_lat:.6f};{to_lon:.6f},{to_lat:.6f}"
+        "?overview=full&geometries=geojson&alternatives=false&steps=false"
+    )
+    resp = await http_client.get(url, timeout=httpx.Timeout(4.0, connect=2.0))
+    resp.raise_for_status()
+    body = resp.json()
+    routes = body.get("routes") or []
+    if body.get("code") != "Ok" or not routes:
+        return None
+
+    route = routes[0]
+    distance = parse_finite_number(route.get("distance"), minimum=0)
+    # A distance of exactly zero only happens when the two endpoints
+    # coincide (the same place picked twice, or two coincident map clicks),
+    # which is not a real route to store. parse_manual_trip_input already
+    # requires a strictly positive distance for the hand-entered path, so
+    # letting a routed zero through here would store a trip the manual-entry
+    # contract would otherwise refuse.
+    if not distance:
+        return None
+
+    geometry = route.get("geometry")
+    if not isinstance(geometry, dict) or geometry.get("type") != "LineString":
+        return None
+    coordinates = geometry.get("coordinates")
+    if not isinstance(coordinates, list) or len(coordinates) < 2:
+        return None
+
+    # Rebuilt from validated floats rather than passing the parsed response
+    # through: this is what guarantees nothing unvalidated and no extra
+    # keys from the OSRM response can reach the database later.
+    parsed_coords: list[list[float]] = []
+    for entry in coordinates:
+        if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+            return None
+        lon = parse_finite_number(entry[0], minimum=-180, maximum=180)
+        lat = parse_finite_number(entry[1], minimum=-90, maximum=90)
+        if lon is None or lat is None:
+            return None
+        parsed_coords.append([lon, lat])
+
+    return RoutedLine(
+        distance_m=distance,
+        geojson={"type": "LineString", "coordinates": parsed_coords},
+    )
 
 
 def parse_match_response(response_json: dict, min_confidence: float, input_count: int) -> SnapResult:

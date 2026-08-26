@@ -387,3 +387,70 @@ async def _rewrite_during_point_load_scenario():
 
 def test_snapworker_discards_stale_result_when_rewrite_lands_during_point_load():
     asyncio.run(_rewrite_during_point_load_scenario())
+
+
+async def _manual_trip_immunity_scenario():
+    """A manual trip's `snap_status` starts and stays NULL (migrations/
+    004_snapping.sql only backfills 'pending' onto source='detected' rows),
+    so run_once's `WHERE snap_status = 'pending'` selection already excludes
+    it -- but a routed manual trip (this package) is the first manual trip
+    to ever carry a real `path`, so this pins down that having road-like
+    geometry still doesn't make it eligible for snapping.
+    """
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        await _reset_schema(pool)
+        async with pool.connection() as conn:
+            detected_id = await _insert_trip(conn, T0, T0 + timedelta(seconds=15), point_count=2)
+            await _insert_point(conn, T0, detected_id)
+            await _insert_point(conn, T0 + timedelta(seconds=15), detected_id)
+
+            manual_row = await conn.execute(
+                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
+                "path, start_geom, end_geom, snap_status) VALUES ("
+                "'manual', 'manual', %s, %s, 1200, "
+                "ST_SetSRID(ST_GeomFromText('LINESTRING(-122.33 47.60, -122.20 47.70)'), 4326), "
+                "ST_SetSRID(ST_MakePoint(-122.33, 47.60), 4326)::geography, "
+                "ST_SetSRID(ST_MakePoint(-122.20, 47.70), 4326)::geography, NULL) RETURNING id",
+                (T0, T0 + timedelta(minutes=20)),
+            )
+            manual_id = (await manual_row.fetchone())[0]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={
+                "code": "Ok",
+                "matchings": [{
+                    "confidence": 0.95,
+                    "distance": 1234.5,
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": [[-122.33, 47.60], [-122.32, 47.61]],
+                    },
+                }],
+                "tracepoints": [{}, {}],
+            })
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            worker = SnapWorker(pool, client, "http://osrm", 0.5, 250, 15.0, 300.0)
+            await worker.run_once()
+
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT snap_status::text FROM trips WHERE id = %s", (detected_id,)
+            )
+            detected_status = (await cur.fetchone())[0]
+            cur = await conn.execute(
+                "SELECT snap_status::text, path IS NOT NULL FROM trips WHERE id = %s",
+                (manual_id,),
+            )
+            manual_status, manual_has_path = await cur.fetchone()
+        assert detected_status == "ok", "the real pending trip must still get snapped normally"
+        assert manual_status is None, "a manual trip's snap_status must never be drained to a terminal value"
+        assert manual_has_path is True, "its own stored path must be left untouched"
+    finally:
+        await pool.close()
+
+
+def test_snapworker_never_drains_manual_trips_including_routed_ones():
+    asyncio.run(_manual_trip_immunity_scenario())

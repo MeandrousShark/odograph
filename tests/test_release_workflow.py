@@ -52,6 +52,13 @@ def test_release_test_gate_runs_full_postgis_suite_and_pip_audit():
     assert "pg_isready" in postgres["options"]
 
     steps = steps_by_name(test)
+    setup_python = next(
+        step for step in test["steps"] if step.get("uses") == "actions/setup-python@v6"
+    )
+    assert setup_python["with"]["cache-dependency-path"] == "requirements-dev.lock"
+    assert steps["Install test dependencies"]["run"] == (
+        "python -m pip install -r requirements-dev.lock"
+    )
     install = steps["Install Gitleaks"]
     assert install["env"] == {
         "GITLEAKS_VERSION": "8.30.1",

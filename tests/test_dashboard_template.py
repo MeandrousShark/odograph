@@ -152,8 +152,8 @@ def test_attention_strip_present_with_review_and_missing_trip_links():
 
 def test_view_all_trips_and_add_manual_trip_links():
     body = _render(_dashboard())
-    assert 'href="/trips">View all trips</a>' in body
-    assert 'href="/trips?manual_open=true#manual-trip">Add manual trip</a>' in body
+    assert 'class="control control-secondary" href="/trips">View all trips</a>' in body
+    assert 'class="control control-secondary" href="/trips?manual_open=true#manual-trip">Add manual trip</a>' in body
 
 
 def test_deduction_unavailable_shows_settings_link_not_a_number():
@@ -177,7 +177,7 @@ def test_detected_and_manual_cards_render_through_shared_partial():
     assert 'id="trip-1"' in body
     assert 'id="trip-2"' in body
     assert 'class="status-badge manual-badge">Manual</span>' in body
-    assert body.count('class="trip-card"') == 2
+    assert body.count('class="card trip-card"') == 2
 
 
 def test_day_group_heading_includes_today_and_yesterday_prefixes():

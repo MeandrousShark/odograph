@@ -2,6 +2,7 @@
 {% block title %}Establish administrator account: Odograph{% endblock %}
 {% block content %}
 
+<div class="card auth-card">
 <h2>Establish administrator account</h2>
 
 <p>Create local login credentials for this existing installation. The current
@@ -27,5 +28,6 @@ sign-in provider identity will be linked to the same administrator account.</p>
 
 <p class="muted">If the provider is unavailable, an operator with container
 access can use <code>python -m app.manage_account create-admin</code> instead.</p>
+</div>
 
 {% endblock %}

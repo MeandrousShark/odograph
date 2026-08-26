@@ -1,5 +1,7 @@
 {% from "_purpose_field.html" import purpose_field %}
 {% from "_trip_delete_dialog.html" import trip_delete_dialog %}
+{% from "_vehicle_select.html" import vehicle_select %}
+{% from "_notes_field.html" import notes_field %}
 <div id="review-card">
 {% if state == 'card' %}
   <p class="review-remaining muted">{{ remaining }} remaining</p>
@@ -29,17 +31,16 @@
        {% if path_snapped_geojson %}data-path-snapped="{{ path_snapped_geojson }}"{% endif %}></div>
   {% endif %}
 
-  <!-- Business/Personal/Skip live inside one <form> purely so htmx's
-       default "include the closest enclosing form" behavior carries the
-       current from/to/vehicle filters along automatically -- no per-button
-       hx-vals duplicating them, and no drift between the three actions'
-       filter params. Vehicle/notes below stay outside this form: they post
-       to unrelated endpoints that don't take filter params, and (being
-       hx-swap="none") must not inherit this form's hx-target/hx-swap. -->
+  <!-- All editable fields and actions live in one form so the advancing
+       request saves the visible values atomically. The individual field
+       saves remain available when a user tabs away before classifying. -->
+  <!-- The form carries the current filters and editable field values in the
+       same advancing request, avoiding a race with independent field saves. -->
   <form id="review-form" hx-target="#review-card" hx-swap="outerHTML">
     <input type="hidden" name="from" value="{{ filter_from }}">
     <input type="hidden" name="to" value="{{ filter_to }}">
     <input type="hidden" name="vehicle" value="{{ filter_vehicle }}">
+    <input type="hidden" name="q" value="{{ filter_q }}">
     <p>
       Purpose
       {{ purpose_field(
@@ -47,49 +48,42 @@
         hx_post='/trips/' ~ trip.id ~ '/purpose', hx_swap='none'
       ) }}
     </p>
+    <p>
+      Vehicle
+      {{ vehicle_select(trip, vehicles, default_if_unassigned=true) }}
+    </p>
+    <p>
+      Notes
+      {{ notes_field(trip) }}
+    </p>
     <p class="tags">
       <button type="button" id="review-business" hx-post="/review/{{ trip.id }}/tag"
               hx-vals='{"category": "business"}'>Business (b)</button>
       <button type="button" id="review-personal" hx-post="/review/{{ trip.id }}/tag"
               hx-vals='{"category": "personal"}'>Personal (p)</button>
       <button type="button" id="review-skip" hx-post="/review/{{ trip.id }}/skip">Skip (s)</button>
+      <button type="button" id="review-undo" disabled>Undo (z)</button>
     </p>
   </form>
-
-  <p>
-    Vehicle
-    <select hx-post="/trips/{{ trip.id }}/vehicle" hx-trigger="change"
-            hx-swap="none" name="vehicle_id">
-      <option value="">--</option>
-      {% for v in vehicles %}
-      <option value="{{ v.id }}" {{ 'selected' if trip.vehicle_id == v.id }}>{{ v.name }}</option>
-      {% endfor %}
-      {% if trip.vehicle_id and trip.vehicle_id not in (vehicles | map(attribute='id') | list) %}
-      <option value="{{ trip.vehicle_id }}" selected>{{ trip.vehicle_name }} (inactive)</option>
-      {% endif %}
-    </select>
-  </p>
-  <p>
-    Notes
-    <input class="notes" name="notes" value="{{ trip.notes or '' }}" placeholder="notes…"
-           hx-post="/trips/{{ trip.id }}/notes" hx-trigger="change" hx-swap="none">
-  </p>
 
   <div class="review-card-actions">
     <a href="/trips/{{ trip.id }}">View trip detail →</a>
     {{ trip_delete_dialog(
       trip, 'trip-delete-review-' ~ trip.id, '/review/' ~ trip.id ~ '/delete',
       hx_target='#review-card', hx_swap='outerHTML',
-      filter_from=filter_from, filter_to=filter_to, filter_vehicle=filter_vehicle
+      filter_from=filter_from, filter_to=filter_to, filter_vehicle=filter_vehicle,
+      filter_q=filter_q
     ) }}
   </div>
 
 {% elif state == 'done' %}
   <p class="empty">No more unclassified trips in this pass.</p>
+  <p><button type="button" id="review-undo" disabled>Undo (z)</button></p>
   <p><a href="{{ review_url }}">Start over</a> · <a href="/trips">Back to trip list</a></p>
 
 {% else %}
   <p class="empty">Nothing to review.</p>
   <p><a href="/trips">Back to trip list</a></p>
 {% endif %}
+{% if undo_notice %}<p class="status-message" role="status">{{ undo_notice }}</p>{% endif %}
 </div>

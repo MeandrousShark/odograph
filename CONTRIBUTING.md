@@ -12,18 +12,28 @@ cadence or SLA for issues or pull requests.
 
 ## Development setup
 
-Use the project-local virtual environment, not system Python packages:
+If Python 3.13 is installed natively, use an external virtual environment, not
+system Python packages or the project-local `.venv`:
 
 ```sh
-python3 -m venv .venv
-.venv/bin/pip install -r requirements-dev.txt
-.venv/bin/pytest
+python3.13 -m venv /tmp/mileage-tracker-venv
+/tmp/mileage-tracker-venv/bin/pip install -r requirements-dev.lock
+/tmp/mileage-tracker-venv/bin/pytest
 ```
 
 Most tests are pure functions (trip detector, report builders) and need no
-database. If `pytest` cannot import `httpx` or `psycopg_pool`, the `.venv`
-is stale or incomplete. Reinstall `requirements-dev.txt` before treating
-that as a test failure. Note the naming split: the PyPI package is
+database. `requirements-dev.lock` copies the Python 3.13 runtime lock used by
+CI and the container, then pins pytest and its dependencies. On Tokyo, use the
+following verified Python 3.13 container path as the canonical setup:
+
+```sh
+podman run --rm -v "$PWD:/work:Z" -w /work docker.io/library/python:3.13-slim \
+  sh -c "apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/* && pip install -r requirements-dev.lock && pytest"
+```
+
+If `pytest` cannot import `httpx` or `psycopg_pool`, the external environment
+is stale or incomplete. Reinstall `requirements-dev.lock` before treating that
+as a test failure. Note the naming split: the PyPI package is
 `psycopg-pool`, but the Python import is `psycopg_pool`.
 
 DB-backed tests (ingest, detector integration, routes) need a disposable
@@ -36,7 +46,17 @@ podman run -d --name mt_testdb \
   -e POSTGRES_PASSWORD=testpw -p 55432:5432 \
   docker.io/postgis/postgis:16-3.4
 TEST_DATABASE_URL=postgresql://mileage:testpw@127.0.0.1:55432/mileage \
-  .venv/bin/pytest
+  /tmp/mileage-tracker-venv/bin/pytest
+```
+
+For Tokyo's canonical container setup, use the host network and pass the same
+test database URL explicitly:
+
+```sh
+podman run --rm --network host \
+  -e TEST_DATABASE_URL=postgresql://mileage:testpw@127.0.0.1:55432/mileage \
+  -v "$PWD:/work:Z" -w /work docker.io/library/python:3.13-slim \
+  sh -c "apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/* && pip install -r requirements-dev.lock && pytest"
 ```
 
 Without `TEST_DATABASE_URL` set, DB-dependent tests skip rather than fail.
@@ -52,7 +72,7 @@ podman run -d --name mileage-db -p 5432:5432 \
 
 DATABASE_URL=postgresql://mileage:dev@localhost:5432/mileage \
 INGEST_PASSWORD=dev SESSION_SECRET=dev DEV_NO_AUTH=1 \
-uvicorn app.main:create_app --factory --reload
+/tmp/mileage-tracker-venv/bin/uvicorn app.main:create_app --factory --reload
 ```
 
 For a containerized source build, add the contributor override explicitly:

@@ -15,11 +15,11 @@
 </nav>
 
 <div class="dashboard-metrics">
-  <div class="metric-card">
+  <div class="card metric-card">
     <span class="metric-label">Trips</span>
     <strong class="metric-value">{{ dashboard.trip_count }}</strong>
   </div>
-  <div class="metric-card">
+  <div class="card metric-card">
     <span class="metric-label">Distance</span>
     <strong class="metric-value">{{ dashboard.distance.total_m | mi }} mi</strong>
     <small class="metric-detail">
@@ -28,13 +28,13 @@
       {{ dashboard.distance.unclassified_m | mi }} mi unclassified
     </small>
   </div>
-  <div class="metric-card">
+  <div class="card metric-card">
     <span class="metric-label">Expenses recorded</span>
     <strong class="metric-value">{{ dashboard.expense_total | usd }}</strong>
     <small class="metric-detail">Spending this week, not a deduction;
       <a href="/expenses">view expenses</a>.</small>
   </div>
-  <div class="metric-card">
+  <div class="card metric-card">
     <span class="metric-label">Estimated deduction</span>
     {% if dashboard.deduction.available %}
     <strong class="metric-value">{{ dashboard.deduction.amount | usd }}</strong>
@@ -59,7 +59,7 @@
 
 <div class="dashboard-links">
   <a class="control control-secondary" href="/trips">View all trips</a>
-  <a href="/trips?manual_open=true#manual-trip">Add manual trip</a>
+  <a class="control control-secondary" href="/trips?manual_open=true#manual-trip">Add manual trip</a>
 </div>
 
 {% if not dashboard.day_groups %}

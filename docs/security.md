@@ -296,6 +296,17 @@ configuration files.
       [Protecting `.env`](backups.md#protecting-env) for the mechanics of
       changing it against a live volume versus a fresh one.
 
+11. **Do not tighten `Referrer-Policy` at your proxy.** The application
+    sends `Referrer-Policy: strict-origin-when-cross-origin`, which gives
+    the map tile host your instance's origin and nothing more: no path, no
+    query string, and nothing at all on an HTTPS to HTTP downgrade. A proxy
+    that overrides this with `no-referrer` or `same-origin` sends no
+    `Referer` at all on cross-origin requests, and OpenStreetMap's tile
+    servers answer a refererless request with a 403 error tile instead of
+    the map. If your hardening snippet sets this header, drop it and let the
+    application's value through. Pointing `MAP_TILE_URL` at a tile host of
+    your own is the way to stop sending the origin anywhere.
+
 ## What to do about a compromise
 
 If you believe the application, its host, or its database has been

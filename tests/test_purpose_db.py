@@ -59,14 +59,32 @@ async def _scenario():
             )
             trip_id = (await cur.fetchone())[0]
 
-        await PURPOSE(_request(pool), trip_id, "  Client planning  ", {"sub": "test"})
+        await PURPOSE(
+            _request(pool), trip_id, purpose="  Client planning  ", user={"sub": "test"},
+        )
         async with pool.connection() as conn:
             cur = await conn.execute("SELECT purpose, notes FROM trips WHERE id=%s", (trip_id,))
             assert await cur.fetchone() == ("Client planning", None)
 
         await MANUAL(
-            _request(pool), "2026-02-01", "10:00", "10:30", 5.0, "business",
-            "  Deliver documents  ", "weather note", "", {"sub": "test"},
+            _request(pool),
+            date="2026-02-01",
+            start_time="10:00",
+            end_time="10:30",
+            distance=5.0,
+            category="business",
+            purpose="  Deliver documents  ",
+            notes="weather note",
+            vehicle_id="",
+            route_mode="none",
+            start_place="",
+            end_place="",
+            start_lat="",
+            start_lon="",
+            end_lat="",
+            end_lon="",
+            routed_distance="",
+            user={"sub": "test"},
         )
         async with pool.connection() as conn:
             cur = await conn.execute(
@@ -117,7 +135,9 @@ async def _purpose_edit_claims_human_ownership_scenario():
             )
             trip_id = (await cur.fetchone())[0]
 
-        await PURPOSE(_request(pool), trip_id, "  Client visit  ", {"sub": "test"})
+        await PURPOSE(
+            _request(pool), trip_id, purpose="  Client visit  ", user={"sub": "test"},
+        )
         async with pool.connection() as conn:
             cur = await conn.execute(
                 "SELECT purpose, category::text, tag_source::text FROM trips WHERE id=%s",

@@ -23,6 +23,10 @@
     if (document.querySelector('dialog[open]')) return;
     var tag = (e.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'z' || e.key === 'Z')) {
+      triggerReviewUndo();
+      return;
+    }
     var selector = null;
     if (e.key === 'b' || e.key === 'B') selector = '#review-business';
     else if (e.key === 'p' || e.key === 'P') selector = '#review-personal';
@@ -31,6 +35,85 @@
     var button = document.querySelector(selector);
     if (button) button.click();
   });
+
+  // One step, client-remembered, lost on reload -- not the override/audit
+  // machinery that backs merge/split/delete undo in Settings. That's for
+  // structural changes to trips; this is taking back a keystroke. Held here
+  // rather than on the card for the same reason the handler above is bound
+  // to `document`: an outerHTML swap of #review-card destroys anything
+  // bound to the card, including the very action that caused the swap.
+  var lastReviewAction = null;
+  var pendingReviewAction = null;
+  var undoRequestInFlight = null;
+
+  function updateReviewUndoButton() {
+    var button = document.getElementById('review-undo');
+    if (button) button.disabled = !lastReviewAction || !!undoRequestInFlight;
+  }
+
+  document.addEventListener('click', function (e) {
+    if (e.target && e.target.id === 'review-undo') triggerReviewUndo();
+  });
+
+  // Tag and skip aren't symmetric -- a tag leaves the unclassified set and
+  // needs its category cleared server-side to undo, a skip doesn't -- so
+  // `kind` is captured here and sent to /review/{id}/undo, which decides
+  // what to reverse. Business/Personal/Skip are the only buttons this
+  // matches; every other htmx request on this page (vehicle, notes,
+  // purpose, delete, undo itself) is ignored.
+  document.addEventListener('htmx:beforeRequest', function (e) {
+    var elt = e.detail.elt;
+    var kind = elt && elt.id === 'review-skip' ? 'skip'
+      : (elt && (elt.id === 'review-business' || elt.id === 'review-personal')) ? 'tag'
+      : null;
+    if (!kind || pendingReviewAction) return;
+    var match = /^\/review\/(\d+)\//.exec(elt.getAttribute('hx-post') || '');
+    if (!match) return;
+    // This must happen before htmx swaps the source button away. Its nearest
+    // form holds the exact filter values included in this request.
+    var form = elt.closest('form');
+    pendingReviewAction = {
+      kind: kind,
+      tripId: match[1],
+      from: form ? form.elements.from.value : '',
+      to: form ? form.elements.to.value : '',
+      vehicle: form ? form.elements.vehicle.value : '',
+      q: form ? form.elements.q.value : '',
+    };
+  });
+
+  document.addEventListener('htmx:afterRequest', function (e) {
+    var elt = e.detail.elt;
+    var path = (e.detail.pathInfo && e.detail.pathInfo.requestPath) ||
+      (elt && elt.getAttribute && elt.getAttribute('hx-post')) || '';
+    if (undoRequestInFlight && path === '/review/' + undoRequestInFlight.tripId + '/undo') {
+      if (e.detail.successful) lastReviewAction = null;
+      undoRequestInFlight = null;
+      updateReviewUndoButton();
+      return;
+    }
+    if (!pendingReviewAction) return;
+    var match = /^\/review\/(\d+)\/(?:tag|skip)$/.exec(path);
+    if (!match || String(pendingReviewAction.tripId) !== match[1]) return;
+    if (e.detail.successful) lastReviewAction = pendingReviewAction;
+    pendingReviewAction = null;
+    updateReviewUndoButton();
+  });
+
+  function triggerReviewUndo() {
+    if (!lastReviewAction || undoRequestInFlight) return;
+    var action = lastReviewAction;
+    undoRequestInFlight = action;
+    updateReviewUndoButton();
+    htmx.ajax('POST', '/review/' + action.tripId + '/undo', {
+      target: '#review-card',
+      swap: 'outerHTML',
+      values: {
+        kind: action.kind, from: action.from, to: action.to, vehicle: action.vehicle,
+        q: action.q,
+      },
+    });
+  }
 
   // Held here, not local to initReviewMap, so a later call can tear down the
   // previous instance: an outerHTML swap of #review-card discards the old
@@ -167,6 +250,7 @@
 
   initReviewMap();
   document.body.addEventListener('htmx:afterSettle', initReviewMap);
+  document.body.addEventListener('htmx:afterSettle', updateReviewUndoButton);
 </script>
 
 {% endblock %}

@@ -2,7 +2,7 @@
 <div class="settings-table-scroll settings-table-scroll-vehicles">
 <table class="settings-table">
   <thead>
-    <tr><th>Name</th><th>Make</th><th>Model</th><th>Plate</th><th>Default</th><th></th></tr>
+    <tr><th>Name</th><th>Make</th><th>Model</th><th>Plate</th><th>Default</th><th class="settings-table-actions"></th></tr>
   </thead>
   <tbody>
     {% for v in vehicles %}
@@ -15,13 +15,13 @@
         {% if v.is_default %}
           <span class="vehicle-default-indicator">Default</span>
         {% elif v.active %}
-          <button type="button" hx-post="/settings/vehicles/{{ v.id }}/default"
+          <button type="button" class="control control-secondary" hx-post="/settings/vehicles/{{ v.id }}/default"
                   hx-target="#vehicles-table" hx-swap="outerHTML">Set default</button>
         {% endif %}
       </td>
-      <td>
+      <td class="settings-table-actions">
         {% if v.active %}
-        <button type="button" hx-post="/settings/vehicles/{{ v.id }}/update" hx-include="closest tr"
+        <button type="button" class="control control-secondary" hx-post="/settings/vehicles/{{ v.id }}/update" hx-include="closest tr"
                 hx-target="#vehicles-table" hx-swap="outerHTML">Save</button>
         <button type="button" class="danger" title="Deactivate vehicle"
                 hx-post="/settings/vehicles/{{ v.id }}/deactivate"
@@ -45,7 +45,7 @@
     <label>Model <input type="text" name="model" style="width:6rem"></label>
     <label>Plate <input type="text" name="plate" style="width:5rem"></label>
     <label><input type="checkbox" name="is_default" value="1"> Make default</label>
-    <button type="submit">Add</button>
+    <button type="submit" class="control control-secondary">Add</button>
   </form>
 </details>
 </div>

@@ -134,7 +134,7 @@ async def _review_tag_race_scenario():
         task = await _run_blocked_and_release(
             pool, trip_id,
             lambda: REVIEW_TAG(
-                request, trip_id, "business", "", "", "", "", {"sub": "test"},
+                request, trip_id, "business", "", "", "", "", {"sub": "test"}, q="",
             ),
         )
         with pytest.raises(HTTPException) as exc:
@@ -193,7 +193,7 @@ async def _happy_path_scenario():
         assert f'<article id="trip-{tag_trip_id}"' in tag_response.body.decode()
 
         review_response = await REVIEW_TAG(
-            request, review_trip_id, "personal", "", "", "", "", {"sub": "test"},
+            request, review_trip_id, "personal", "", "", "", "", {"sub": "test"}, q="",
         )
         assert review_response.status_code == 200
 

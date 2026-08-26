@@ -18,6 +18,7 @@ SHIPPING_TOP_LEVEL_FILES = {
     "compose.build.override.yml",
     "compose.yaml",
     "pyproject.toml",
+    "requirements-dev.lock",
     "requirements-dev.txt",
     "requirements.lock",
     "requirements.txt",

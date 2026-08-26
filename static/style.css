@@ -12,6 +12,11 @@
   --latte-mauve: #8839ef;
   --latte-red: #d20f39;
   --latte-peach: #fe640b;
+  --latte-blue: #1e66f5;
+  --latte-teal: #179299;
+  --latte-yellow: #df8e1d;
+  --latte-pink: #ea76cb;
+  --latte-maroon: #e64553;
 
   /* Catppuccin Macchiato (dark) palette tokens */
   --macchiato-base: #24273a;
@@ -24,6 +29,11 @@
   --macchiato-mauve: #c6a0f6;
   --macchiato-red: #ed8796;
   --macchiato-peach: #f5a97f;
+  --macchiato-blue: #8aadf4;
+  --macchiato-teal: #8bd5ca;
+  --macchiato-yellow: #eed49f;
+  --macchiato-pink: #f5bde6;
+  --macchiato-maroon: #ee99a0;
 }
 
 /* Active flavor mapping. Three layers, lowest to highest priority:
@@ -39,6 +49,9 @@
   --text: var(--latte-text); --subtext0: var(--latte-subtext0);
   --green: var(--latte-green); --mauve: var(--latte-mauve);
   --red: var(--latte-red); --peach: var(--latte-peach);
+  --blue: var(--latte-blue); --teal: var(--latte-teal);
+  --yellow: var(--latte-yellow); --pink: var(--latte-pink);
+  --maroon: var(--latte-maroon);
   --border: var(--latte-surface0);
 }
 @media (prefers-color-scheme: dark) {
@@ -48,6 +61,9 @@
     --text: var(--macchiato-text); --subtext0: var(--macchiato-subtext0);
     --green: var(--macchiato-green); --mauve: var(--macchiato-mauve);
     --red: var(--macchiato-red); --peach: var(--macchiato-peach);
+    --blue: var(--macchiato-blue); --teal: var(--macchiato-teal);
+    --yellow: var(--macchiato-yellow); --pink: var(--macchiato-pink);
+    --maroon: var(--macchiato-maroon);
     --border: var(--macchiato-surface0);
   }
 }
@@ -58,6 +74,9 @@
   --text: var(--latte-text); --subtext0: var(--latte-subtext0);
   --green: var(--latte-green); --mauve: var(--latte-mauve);
   --red: var(--latte-red); --peach: var(--latte-peach);
+  --blue: var(--latte-blue); --teal: var(--latte-teal);
+  --yellow: var(--latte-yellow); --pink: var(--latte-pink);
+  --maroon: var(--latte-maroon);
   --border: var(--latte-surface0);
 }
 :root[data-theme="dark"] {
@@ -67,6 +86,9 @@
   --text: var(--macchiato-text); --subtext0: var(--macchiato-subtext0);
   --green: var(--macchiato-green); --mauve: var(--macchiato-mauve);
   --red: var(--macchiato-red); --peach: var(--macchiato-peach);
+  --blue: var(--macchiato-blue); --teal: var(--macchiato-teal);
+  --yellow: var(--macchiato-yellow); --pink: var(--macchiato-pink);
+  --maroon: var(--macchiato-maroon);
   --border: var(--macchiato-surface0);
 }
 
@@ -84,6 +106,11 @@
   --cat-personal: var(--mauve);
   --danger: var(--red);
   --warn: var(--peach);
+  --year-1: var(--blue);
+  --year-2: var(--teal);
+  --year-3: var(--yellow);
+  --year-4: var(--pink);
+  --year-5: var(--maroon);
   --route: var(--green);
   --focus-ring: var(--mauve);
   --shadow: 0 0.35rem 1.25rem rgb(30 32 48 / 14%);
@@ -110,7 +137,7 @@ body {
   max-width: 1100px; margin: 0 auto; padding: var(--space-4) var(--space-6);
   background: var(--bg); color: var(--fg);
 }
-button, input, select { min-height: var(--control-height); }
+button, input, select, summary { min-height: var(--control-height); }
 button, input, select, textarea {
   color: var(--control-fg); background-color: var(--control-bg);
   border: 1px solid var(--control-border); border-radius: var(--radius-sm); font: inherit;
@@ -131,6 +158,12 @@ footer p { margin: 0; font-size: .8rem; }
 .link-button { background: none; border: none; min-height: var(--control-height); padding: 0 var(--space-2); margin: 0; font: inherit;
                color: inherit; text-decoration: underline; cursor: pointer; box-shadow: none; }
 a, button, input, select, textarea, summary { overflow-wrap: anywhere; }
+/* min-height above gives a native <summary> the shared control target, but
+   align-content defaults to start on a block box, so the label would sit at
+   the top of that taller box with the slack below it. Centering is what the
+   control-styled summaries elsewhere in this file already pair with their
+   own min-height; this brings the unstyled ones in line. */
+summary { cursor: pointer; align-content: center; }
 a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
 textarea:focus-visible, summary:focus-visible {
   outline: 3px solid var(--focus-ring); outline-offset: 2px;
@@ -173,8 +206,13 @@ td.num { font-variant-numeric: tabular-nums; }
                padding: .15rem .5rem; cursor: pointer; font-size: .8rem; }
 .tags button.active-business { background: var(--cat-business); color: var(--base); border-color: var(--cat-business); }
 .tags button.active-personal { background: var(--cat-personal); color: var(--base); border-color: var(--cat-personal); }
+/* Horizontal padding widened from .25rem: the only free-text input in the
+   app with its own explicit (and previously too-tight) padding rule, per
+   the 2026-08-08 maintainer report. Every other text input relies on the
+   browser's native default padding instead, which is a different,
+   unrelated situation this correction doesn't touch. */
 input.notes { width: 100%; min-width: 8rem; border: 1px solid transparent;
-              background: var(--control-bg); color: var(--control-fg); padding: .15rem .25rem; border-radius: 4px; }
+              background: var(--control-bg); color: var(--control-fg); padding: .15rem .5rem; border-radius: 4px; }
 input.notes:hover, input.notes:focus { border-color: var(--border-strong); }
 .purpose-field { position: relative; display: inline-block; max-width: 100%; vertical-align: middle; }
 .purpose-field input { box-sizing: border-box; padding-right: 2rem; }
@@ -196,7 +234,12 @@ input.notes:hover, input.notes:focus { border-color: var(--border-strong); }
 .manual-badge { font-size: .7rem; border: 1px solid var(--border-strong); border-radius: 4px;
                 padding: 0 .3rem; opacity: .7; }
 .trip-card-list { display: grid; gap: var(--space-3); min-width: 0; }
-.trip-card {
+/* Shared surface for every card-shaped block in the app. .trip-card and
+   .metric-card previously declared this same padding/border/radius/
+   background/shadow set twice, under two different class names; both now
+   carry this class alongside their own (card trip-card, card metric-card)
+   and add only what's actually theirs on top of it. */
+.card {
   min-width: 0; padding: var(--space-4); border: 1px solid var(--border);
   border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow);
 }
@@ -229,7 +272,11 @@ input.notes:hover, input.notes:focus { border-color: var(--border-strong); }
 .category-unclassified, .status-warning { border-color: var(--warn); }
 .trip-card-controls { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: flex-end; margin-top: var(--space-2); }
 .trip-card-control { display: flex; flex-direction: column; gap: .15rem; min-width: 0; flex: 1 1 10rem; }
-.trip-card-control .field-label { font-size: .75rem; color: var(--fg-muted); }
+/* .filter-bar .field-label (below) is a third, deliberately different
+   .field-label rule: it omits color, so filter/export/triage/quarterly
+   labels stay full-color while these two stay muted. Not merged into this
+   selector list, since doing so would silently mute them too. */
+.trip-card-control .field-label, .trip-detail-field .field-label { font-size: .75rem; color: var(--fg-muted); }
 /* `> select` (not the bare descendant selector) so this can never reach the
    purpose field's *inner* .purpose-recent <select> -- that one is a small
    absolutely-positioned chevron overlay (see .purpose-recent above) that a
@@ -315,6 +362,9 @@ input.notes:hover, input.notes:focus { border-color: var(--border-strong); }
   min-width: 0; width: 100%; margin-top: var(--space-3);
 }
 .filter-bar .field { display: flex; flex-direction: column; gap: .15rem; }
+/* Deliberately no color here, unlike .trip-card-control/.trip-detail-field's
+   .field-label (near .trip-card-controls above): filter/export/triage/
+   quarterly labels stay full-color, not muted. */
 .filter-bar .field-label { font-size: .75rem; }
 .filter-bar .pills { display: flex; gap: .35rem; min-height: var(--control-height); flex-wrap: wrap; }
 .filter-bar .pills a { display: flex; align-items: center; border: 1px solid var(--control-border);
@@ -324,9 +374,22 @@ input.notes:hover, input.notes:focus { border-color: var(--border-strong); }
 .filter-bar .date-range { display: flex; gap: .5rem; align-items: end; }
 .filter-bar .date-range label { display: flex; flex-direction: column; font-size: .75rem; gap: .15rem; }
 .filter-bar .date-range input[type="date"] { box-sizing: border-box; }
-.filter-date-row, .filter-apply-row, .filter-link-groups {
+.filter-search-row, .filter-date-row, .filter-apply-row, .filter-link-groups {
   display: flex; gap: var(--space-2); align-items: end;
 }
+/* The filter form keeps its groups on one line and asks the bar for the
+   width to do it, rather than wrapping internally: an internally wrapped form
+   costs the bar a whole extra row. Only the search field flexes, so the date,
+   vehicle, and submit groups can never be shrunk into the one-letter-per-line
+   submit button this layout produced when search was added as a fourth
+   competitor for a fixed width. When the bar cannot grant the form its basis,
+   the bar wraps instead, which keeps the controls intact.
+   Must stay after `.filter-bar .date-range` (equal specificity, later wins). */
+.filter-bar .trip-filter-form { flex: 1 1 34rem; flex-wrap: nowrap; }
+.filter-date-row, .filter-apply-row { flex: 0 0 auto; }
+.filter-search-row { flex: 1 1 10rem; min-width: 0; }
+.filter-search-row label { display: flex; flex-direction: column; font-size: .75rem; gap: .15rem; width: 100%; }
+.filter-search-row input[type="search"] { box-sizing: border-box; width: 100%; min-width: 0; }
 .filter-clear { white-space: nowrap; }
 .gap { cursor: help; }
 .missing-trip-badge { color: var(--danger); }
@@ -342,6 +405,24 @@ details.add-manual label { display: flex; flex-direction: column; font-size: .75
 details.add-manual fieldset { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
                               border: 1px solid var(--border); border-radius: 6px; padding: .5rem; }
 details.add-manual legend { font-size: .75rem; opacity: .7; padding: 0 .3rem; }
+.route-saved-notice {
+  margin: var(--space-3) 0; padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--warn); color: var(--fg-muted);
+}
+.route-picker {
+  display: flex; flex-direction: column; gap: var(--space-2);
+  width: 100%; padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+/* Higher specificity than the generic `details.add-manual label` rule, which
+   would otherwise stack each mode radio and its text on separate lines. */
+details.add-manual .route-mode-option { flex-direction: row; align-items: center; gap: .3rem; }
+.route-mode-panel { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: end; width: 100%; }
+.route-mode-panel select { min-width: 0; max-width: 100%; }
+.route-map-hint { margin: 0; font-size: .8rem; color: var(--fg-muted); flex: 1 1 100%; }
+.route-picker-map { width: 100%; height: 260px; border-radius: var(--radius-sm); border: 1px solid var(--border); }
+.route-picker-status { margin: 0; min-height: 1rem; font-size: .8rem; color: var(--fg-muted); }
+.route-distance-hint { font-size: .75rem; opacity: .7; }
 .theme-picker { display: flex; gap: 1rem; align-items: center; width: fit-content;
                 border: 1px solid var(--border); border-radius: 6px; padding: .5rem .75rem; margin: 0; }
 .theme-picker legend { font-size: .75rem; opacity: .7; padding: 0 .3rem; }
@@ -358,17 +439,21 @@ details.add-manual legend { font-size: .75rem; opacity: .7; padding: 0 .3rem; }
   color: var(--base); background: var(--danger); border: 1px solid var(--danger);
   border-radius: var(--radius-sm); cursor: pointer;
 }
-.trip-delete-dialog {
+/* Shared by every native <dialog> in the app (the delete-confirmation
+   dialog and the four trips.html selection-batch dialogs): the box, its
+   backdrop, the actions row, and that row's button padding were previously
+   declared twice, once per dialog family, with byte-identical rules. */
+.app-dialog {
   box-sizing: border-box; width: min(28rem, calc(100vw - 2rem)); max-width: 100%;
   color: var(--fg); background: var(--surface-elevated); border: 1px solid var(--border-strong);
   border-radius: 8px; padding: 0;
 }
-.trip-delete-dialog::backdrop { background: rgb(0 0 0 / 55%); }
+.app-dialog::backdrop { background: rgb(0 0 0 / 55%); }
+.app-dialog-actions { display: flex; justify-content: flex-end; gap: .5rem; }
+.app-dialog-actions button { padding: .4rem .75rem; cursor: pointer; }
 .trip-delete-dialog-content { padding: 1rem; }
 .trip-delete-dialog-content h2 { margin: 0 0 .75rem; }
 .trip-delete-dialog-content p { margin: 0 0 1rem; line-height: 1.4; }
-.trip-delete-dialog-actions { display: flex; justify-content: flex-end; gap: .5rem; }
-.trip-delete-dialog-actions button { padding: .4rem .75rem; cursor: pointer; }
 .trip-delete-confirm {
   color: var(--base); background: var(--danger); border: 1px solid var(--danger);
   border-radius: 4px; font-weight: 600;
@@ -411,12 +496,6 @@ details.add-manual legend { font-size: .75rem; opacity: .7; padding: 0 .3rem; }
 }
 .selection-toolbar { display: flex; justify-content: flex-end; margin: var(--space-3) 0; }
 .selection-minimum { max-width: 15rem; color: var(--fg-muted); font-size: .8rem; }
-.selection-dialog {
-  box-sizing: border-box; width: min(28rem, calc(100vw - 2rem)); max-width: 100%;
-  color: var(--fg); background: var(--surface-elevated); border: 1px solid var(--border-strong);
-  border-radius: 8px; padding: 0;
-}
-.selection-dialog::backdrop { background: rgb(0 0 0 / 55%); }
 .selection-dialog-content { padding: 1rem; display: flex; flex-direction: column; gap: var(--space-3); }
 .selection-dialog-content h2 { margin: 0; }
 .selection-dialog-explain { margin: 0; line-height: 1.4; color: var(--fg-muted); font-size: .9rem; }
@@ -429,8 +508,6 @@ details.add-manual legend { font-size: .75rem; opacity: .7; padding: 0 .3rem; }
 .selection-dialog-radio > input[type="radio"] { margin-top: .3rem; }
 .selection-dialog-radio > span { padding-top: .1rem; }
 .selection-dialog-error { margin: 0; }
-.selection-dialog-actions { display: flex; justify-content: flex-end; gap: .5rem; }
-.selection-dialog-actions button { padding: .4rem .75rem; cursor: pointer; }
 .settings-table { width: 100%; }
 .settings-table-scroll { max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
 .settings-table-scroll-device-fixes .settings-table { min-width: 34rem; }
@@ -441,12 +518,23 @@ details.add-manual legend { font-size: .75rem; opacity: .7; padding: 0 .3rem; }
 .settings-table-scroll-places .settings-table { min-width: 50rem; }
 .settings-table-scroll-rules .settings-table { min-width: 36rem; }
 .settings-table-scroll-overrides .settings-table { min-width: 48rem; }
+.settings-table-scroll-workers .settings-table { min-width: 65rem; }
 /* The overrides table is an undo log with no row limit, so an active user's
    history can otherwise grow past the viewport. A rem cap can't account for
    viewport height, so this caps it relative to the viewport instead, keeping
    the expanded section on screen with the table scrolling internally. */
 .settings-table-scroll-overrides { max-height: 60vh; overflow-y: auto; }
 .settings-table button, .vehicle-default-indicator { white-space: nowrap; }
+/* The trailing action cell in a settings table holds a variable number of
+   controls (a lone Save, Save+Deactivate, a lone Delete, ...), so the
+   rightmost one lands at a different x position row to row under the
+   default left alignment. Right-aligning the cell keeps the rightmost
+   control's position consistent regardless of how many controls the row
+   carries. Scoped to this explicit class, not `td:last-child`: several
+   settings tables (device fixes, odometer intervals, the Diagnostics
+   Workers table) end in a data column, not an action column, and a
+   structural last-child selector would reach those too. */
+.settings-table-actions { text-align: right; }
 .diagnostics-list {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
   gap: var(--space-3); margin: 0;
@@ -466,6 +554,14 @@ details.add-manual legend { font-size: .75rem; opacity: .7; padding: 0 .3rem; }
 a { color: inherit; }
 .empty { opacity: .6; margin: 2rem 0; }
 .muted { opacity: .6; }
+/* The four authentication pages (login, signup, establish-account, and the
+   authenticated Account Security page) share one centered card, built from
+   the .card surface above with only width and centering added on top, per
+   Package B1's acceptance criterion 3. Account Security carries more
+   sections than the other three, so it gets the wider variant rather than
+   forcing every page to one width. */
+.auth-card { max-width: 26rem; margin: var(--space-6) auto 0; }
+.auth-card-wide { max-width: 34rem; }
 /* Authentication forms use the same label/input stacking as .trip-edit-grid label,
    but a single narrow column -- these forms are never side-by-side with
    other content, unlike the in-page edit grids they borrow the shape from. */
@@ -487,7 +583,14 @@ a { color: inherit; }
 .account-security-identity dd { margin: var(--space-1) 0 0; overflow-wrap: anywhere; }
 .auth-form .auth-checkbox { flex-direction: row; align-items: flex-start; }
 .auth-form .auth-checkbox input { margin-top: .2rem; }
-.auth-divider { text-align: center; color: var(--fg-muted); font-size: .8rem; margin: var(--space-3) 0; }
+/* Matches .auth-form's own max-width and left alignment (no auto margins),
+   so "or" spans the same run as the sign-in button above and the OIDC
+   control below instead of centering in the wider card while they stay
+   left-aligned. */
+.auth-divider {
+  max-width: 22rem; text-align: center; color: var(--fg-muted);
+  font-size: .8rem; margin: var(--space-3) 0;
+}
 .ytd-deduction { font-size: .95rem; margin: .25rem 0 1rem; }
 .ytd-deduction.muted { font-size: .85rem; }
 /* Trip detail's Purpose/Notes/Vehicle block. Purpose and Notes each get
@@ -499,7 +602,6 @@ a { color: inherit; }
    stacked at narrow widths via the same flex-wrap the row already needs. */
 .trip-detail-fields { display: flex; flex-direction: column; gap: var(--space-3); margin: 1rem 0; }
 .trip-detail-field { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
-.trip-detail-field .field-label { font-size: .75rem; color: var(--fg-muted); }
 .trip-detail-row { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: flex-end; }
 .trip-detail-row .trip-detail-field { flex: 1 1 12rem; }
 .trip-detail-row .advanced-tools { margin: 0; flex: 1 1 auto; }
@@ -575,14 +677,33 @@ a { color: inherit; }
 .stats-chart { display: block; width: 100%; min-width: 45rem; height: auto; overflow: visible; }
 .stats-chart text { fill: var(--fg-muted); font-size: 11px; }
 .stats-axis { stroke: var(--border-strong); stroke-width: 1; }
+.stats-gridline { stroke: var(--border); stroke-width: 1; }
 .stats-legend { display: flex; gap: .8rem; font-size: .8rem; color: var(--fg-muted); }
 .stats-legend span::before { content: ""; display: inline-block; width: .65rem; height: .65rem; border-radius: 2px; margin-right: .25rem; }
 .stats-legend .business::before { background: var(--cat-business); }
 .stats-legend .personal::before { background: var(--cat-personal); }
 .stats-legend .unclassified::before { background: var(--warn); }
+.stats-legend .year-1::before { background: var(--year-1); }
+.stats-legend .year-2::before { background: var(--year-2); }
+.stats-legend .year-3::before { background: var(--year-3); }
+.stats-legend .year-4::before { background: var(--year-4); }
+.stats-legend .year-5::before { background: var(--year-5); }
+/* Drill-down links wrap individual chart bars. Opacity is the only hover
+   affordance since a color shift would require yet another semantic token
+   for what is a purely interactive (non-data) hint. */
+.stats-chart a { cursor: pointer; }
+.stats-chart a:hover rect { opacity: .8; }
 .stats-rankings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.5rem; }
 .stats-rankings h2 { margin-top: 0; }
 .stats-coverage { font-size: .8rem; }
+/* Same scroll-inside-a-wrapper convention as .settings-table-scroll, but
+   under the general .table-scroll name since this is the only non-settings
+   table on the page. The per-vehicle table's six columns are a name plus
+   five short mi/usd figures, none needing much room on their own, so
+   min-width just covers each header word (Business/Personal/Expenses/
+   Deduction) staying on one line rather than a wider settings-style table. */
+.table-scroll { max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
+.table-scroll table { min-width: 40rem; }
 
 /* Weekly dashboard metric cards. Reuses the trip-card surface/shadow/radius
    tokens rather than stats-summary's plainer background so the metric cards
@@ -608,11 +729,7 @@ a { color: inherit; }
   display: grid; grid-template-columns: repeat(4, minmax(9rem, 1fr)); gap: var(--space-3);
   margin-bottom: var(--space-4);
 }
-.metric-card {
-  min-width: 0; padding: var(--space-4); border: 1px solid var(--border);
-  border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow);
-  display: flex; flex-direction: column; gap: var(--space-1);
-}
+.metric-card { display: flex; flex-direction: column; gap: var(--space-1); }
 .metric-label { font-size: .8rem; color: var(--fg-muted); }
 .metric-value { font-size: 1.3rem; font-variant-numeric: tabular-nums; }
 .metric-unavailable { font-size: 1rem; color: var(--fg-muted); }
@@ -649,6 +766,7 @@ a { color: inherit; }
   details.add-manual label { width: 100%; }
   .trip-filter-bar { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
   .trip-filter-bar .trip-filter-form { display: grid; width: 100%; gap: var(--space-2); }
+  .trip-filter-bar .filter-search-row input { width: 100%; min-width: 0; }
   .trip-filter-bar .filter-date-row {
     display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-1);
   }
@@ -696,6 +814,9 @@ a { color: inherit; }
   .header-account { flex-wrap: wrap; }
   .trip-card { padding: var(--space-3); }
   .trip-card-heading { flex-direction: column; gap: var(--space-1); }
+  .auth-card { padding: var(--space-3); }
+  .route-picker-map { height: 220px; }
+  .tags button { padding-inline: .2rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {

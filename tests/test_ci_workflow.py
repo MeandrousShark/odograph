@@ -59,6 +59,13 @@ def test_ci_runs_full_suite_on_push_and_pull_requests_with_postgis():
     assert "pg_isready -h 127.0.0.1 -U mileage -d mileage" in postgres["options"]
 
     steps = {step.get("name"): step for step in job["steps"]}
+    setup_python = next(
+        step for step in job["steps"] if step.get("uses") == "actions/setup-python@v6"
+    )
+    assert setup_python["with"]["cache-dependency-path"] == "requirements-dev.lock"
+    assert steps["Install test dependencies"]["run"] == (
+        "python -m pip install -r requirements-dev.lock"
+    )
     assert steps["Run full test suite"]["run"] == "python -m pytest"
     assert "tests/" not in steps["Run full test suite"]["run"]
 
@@ -114,6 +121,9 @@ def test_public_snapshot_includes_ci_and_release_files(tmp_path):
     )
     assert (snapshot / "CHANGELOG.md").read_bytes() == (
         committed_bytes("CHANGELOG.md")
+    )
+    assert (snapshot / "requirements-dev.lock").read_bytes() == (
+        committed_bytes("requirements-dev.lock")
     )
     assert (snapshot / "docs" / "releasing.md").read_bytes() == (
         committed_bytes("docs/releasing.md")

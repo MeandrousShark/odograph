@@ -43,6 +43,7 @@ REVIEW_PAGE = _endpoint("/review")
 REVIEW_CARD = _endpoint("/review/card")
 REVIEW_TAG = _endpoint("/review/{trip_id}/tag")
 REVIEW_SKIP = _endpoint("/review/{trip_id}/skip")
+REVIEW_UNDO = _endpoint("/review/{trip_id}/undo")
 REVIEW_DELETE = _endpoint("/review/{trip_id}/delete")
 
 
@@ -74,18 +75,26 @@ async def _reset_schema(pool) -> None:
 
 async def _insert_trip(
     conn, started_at: datetime, category: str = "unclassified", vehicle_id: int | None = None,
-    source: str = "manual",
+    source: str = "manual", notes: str | None = None,
 ) -> int:
     cur = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, distance_m, category, vehicle_id) "
-        "VALUES ('phone', %s, %s, %s, 1000, %s, %s) RETURNING id",
-        (source, started_at, started_at + timedelta(minutes=15), category, vehicle_id),
+        "INSERT INTO trips (device, source, started_at, ended_at, distance_m, category, "
+        "vehicle_id, notes) VALUES ('phone', %s, %s, %s, 1000, %s, %s, %s) RETURNING id",
+        (source, started_at, started_at + timedelta(minutes=15), category, vehicle_id, notes),
     )
     return (await cur.fetchone())[0]
 
 
 async def _insert_vehicle(conn, name: str) -> int:
     cur = await conn.execute("INSERT INTO vehicles (name) VALUES (%s) RETURNING id", (name,))
+    return (await cur.fetchone())[0]
+
+
+async def _insert_default_vehicle(conn, name: str) -> int:
+    await conn.execute("UPDATE vehicles SET is_default = false WHERE is_default")
+    cur = await conn.execute(
+        "INSERT INTO vehicles (name, is_default) VALUES (%s, true) RETURNING id", (name,)
+    )
     return (await cur.fetchone())[0]
 
 
@@ -100,7 +109,7 @@ async def _ordering_and_classified_exclusion_scenario():
             await _insert_trip(conn, BASE + timedelta(hours=2))
 
         request = _request(pool)
-        response = await REVIEW_PAGE(request, {"sub": "test"}, "", "", "")
+        response = await REVIEW_PAGE(request, {"sub": "test"}, "", "", "", "")
         assert response.context["state"] == "card"
         assert response.context["trip"]["id"] == oldest_id
         assert response.context["remaining"] == 2
@@ -123,7 +132,7 @@ async def _date_filter_scenario():
             await _insert_trip(conn, BASE + timedelta(days=62))
 
         request = _request(pool)
-        response = await REVIEW_PAGE(request, {"sub": "test"}, "2026-02-01", "2026-02-28", "")
+        response = await REVIEW_PAGE(request, {"sub": "test"}, "2026-02-01", "2026-02-28", "", "")
         assert response.context["trip"]["id"] == in_range_id
         assert response.context["remaining"] == 1
     finally:
@@ -147,7 +156,7 @@ async def _vehicle_filter_scenario():
             truck_trip_id = await _insert_trip(conn, BASE + timedelta(hours=1), vehicle_id=truck_id)
 
         request = _request(pool)
-        response = await REVIEW_PAGE(request, {"sub": "test"}, "", "", str(truck_id))
+        response = await REVIEW_PAGE(request, {"sub": "test"}, "", "", str(truck_id), "")
         assert response.context["trip"]["id"] == truck_trip_id
         assert response.context["remaining"] == 1
     finally:
@@ -170,7 +179,7 @@ async def _unassigned_vehicle_filter_scenario():
             unassigned_trip_id = await _insert_trip(conn, BASE + timedelta(hours=1))
 
         request = _request(pool)
-        response = await REVIEW_PAGE(request, {"sub": "test"}, "", "", "none")
+        response = await REVIEW_PAGE(request, {"sub": "test"}, "", "", "none", "")
         assert response.context["trip"]["id"] == unassigned_trip_id
         assert response.context["remaining"] == 1
     finally:
@@ -192,7 +201,8 @@ async def _tag_and_advance_scenario():
 
         request = _request(pool)
         response = await REVIEW_TAG(
-            request, first_id, "business", "  Client meeting  ", "", "", "", {"sub": "test"}
+            request, first_id, "business", "  Client meeting  ", "", "", "", {"sub": "test"},
+            q="",
         )
         assert response.context["state"] == "card"
         assert response.context["trip"]["id"] == second_id
@@ -208,7 +218,7 @@ async def _tag_and_advance_scenario():
         # "empty" (a fresh /review load would still find nothing today, but
         # that's a coincidence of this scenario, not what "done" means).
         response = await REVIEW_TAG(
-            request, second_id, "personal", "", "", "", "", {"sub": "test"}
+            request, second_id, "personal", "", "", "", "", {"sub": "test"}, q="",
         )
         assert response.context["state"] == "done"
         assert response.context["remaining"] == 0
@@ -231,7 +241,7 @@ async def _invalid_category_scenario():
         request = _request(pool)
         with pytest.raises(HTTPException) as exc_info:
             await REVIEW_TAG(
-                request, trip_id, "unclassified", "", "", "", "", {"sub": "test"}
+                request, trip_id, "unclassified", "", "", "", "", {"sub": "test"}, q="",
             )
         assert exc_info.value.status_code == 400
 
@@ -255,7 +265,7 @@ async def _skip_saves_purpose_scenario():
             first_id = await _insert_trip(conn, BASE)
             second_id = await _insert_trip(conn, BASE + timedelta(hours=1))
         response = await REVIEW_SKIP(
-            _request(pool), first_id, "  Deliver records  ", "", "", "", {"sub": "test"}
+            _request(pool), first_id, "  Deliver records  ", "", "", "", {"sub": "test"}, q="",
         )
         assert response.context["trip"]["id"] == second_id
         async with pool.connection() as conn:
@@ -271,6 +281,166 @@ def test_review_skip_saves_current_purpose_before_advancing():
     asyncio.run(_skip_saves_purpose_scenario())
 
 
+async def _action_saves_all_review_fields_scenario():
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        await _reset_schema(pool)
+        async with pool.connection() as conn:
+            vehicle_id = await _insert_default_vehicle(conn, "Default")
+            first_id = await _insert_trip(conn, BASE)
+            await _insert_trip(conn, BASE + timedelta(hours=1))
+        request = _request(pool)
+        await REVIEW_SKIP(
+            request, first_id, "Site visit", "", "", "", {"sub": "test"},
+            notes="Gate code", vehicle_id=str(vehicle_id), q="",
+        )
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT purpose, notes, vehicle_id FROM trips WHERE id = %s", (first_id,)
+            )
+            assert await cur.fetchone() == ("Site visit", "Gate code", vehicle_id)
+    finally:
+        await pool.close()
+
+
+def test_review_skip_atomically_saves_purpose_notes_and_vehicle():
+    asyncio.run(_action_saves_all_review_fields_scenario())
+
+
+async def _undo_tag_scenario():
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        await _reset_schema(pool)
+        async with pool.connection() as conn:
+            vehicle_id = await _insert_vehicle(conn, "Truck")
+            first_id = await _insert_trip(conn, BASE, vehicle_id=vehicle_id)
+            second_id = await _insert_trip(
+                conn, BASE + timedelta(hours=1), vehicle_id=vehicle_id
+            )
+
+        request = _request(pool)
+        from_str, to_str, vehicle_str = "2026-01-01", "2026-01-31", str(vehicle_id)
+        response = await REVIEW_TAG(
+            request, first_id, "business", "Client meeting",
+            from_str, to_str, vehicle_str, {"sub": "test"}, vehicle_id=vehicle_str, q="",
+        )
+        assert response.context["trip"]["id"] == second_id
+
+        # Undo reverses the tag through the same clearing path the list
+        # view's tag route uses: category back to 'unclassified',
+        # tag_source stays 'human' (never NULL) so the auto-tagger can't
+        # re-tag a trip a human just touched, and the human-entered purpose
+        # is untouched. Filters round-trip exactly like the other three
+        # /review/{id}/* actions.
+        response = await REVIEW_UNDO(
+            request, first_id, "tag", from_str, to_str, vehicle_str, {"sub": "test"}, q="",
+        )
+        assert response.context["state"] == "card"
+        assert response.context["trip"]["id"] == first_id
+        assert response.context["filter_from"] == from_str
+        assert response.context["filter_to"] == to_str
+        assert response.context["filter_vehicle"] == vehicle_str
+
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT category::text, purpose, tag_source::text FROM trips WHERE id = %s",
+                (first_id,),
+            )
+            assert await cur.fetchone() == ("unclassified", "Client meeting", "human")
+    finally:
+        await pool.close()
+
+
+def test_review_undo_reverses_a_tag_and_represents_the_trip():
+    asyncio.run(_undo_tag_scenario())
+
+
+async def _undo_skip_scenario():
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        await _reset_schema(pool)
+        async with pool.connection() as conn:
+            first_id = await _insert_trip(conn, BASE)
+            second_id = await _insert_trip(conn, BASE + timedelta(hours=1))
+
+        request = _request(pool)
+        response = await REVIEW_SKIP(
+            request, first_id, "Deliver records", "", "", "", {"sub": "test"}, q="",
+        )
+        assert response.context["trip"]["id"] == second_id
+
+        # A skip writes only purpose; undoing it reverses no write, only
+        # re-presents the trip -- the saved purpose is left exactly as the
+        # user typed it, and tag_source is untouched (still NULL: this trip
+        # was never human-tagged).
+        response = await REVIEW_UNDO(
+            request, first_id, "skip", "", "", "", {"sub": "test"}, q="",
+        )
+        assert response.context["state"] == "card"
+        assert response.context["trip"]["id"] == first_id
+
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT category::text, purpose, tag_source::text FROM trips WHERE id = %s",
+                (first_id,),
+            )
+            assert await cur.fetchone() == ("unclassified", "Deliver records", None)
+    finally:
+        await pool.close()
+
+
+def test_review_undo_reverses_a_skip_by_re_presenting_with_no_write():
+    asyncio.run(_undo_skip_scenario())
+
+
+async def _undo_rejects_unknown_kind_scenario():
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        await _reset_schema(pool)
+        async with pool.connection() as conn:
+            trip_id = await _insert_trip(conn, BASE)
+
+        request = _request(pool)
+        with pytest.raises(HTTPException) as exc_info:
+            await REVIEW_UNDO(request, trip_id, "delete", "", "", "", {"sub": "test"}, "")
+        assert exc_info.value.status_code == 400
+
+        async with pool.connection() as conn:
+            cur = await conn.execute("SELECT category::text FROM trips WHERE id = %s", (trip_id,))
+            assert (await cur.fetchone())[0] == "unclassified"
+    finally:
+        await pool.close()
+
+
+def test_review_undo_rejects_kind_outside_tag_or_skip():
+    asyncio.run(_undo_rejects_unknown_kind_scenario())
+
+
+async def _undo_vanished_trip_scenario():
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        await _reset_schema(pool)
+        async with pool.connection() as conn:
+            trip_id = await _insert_trip(conn, BASE)
+            await conn.execute("DELETE FROM trips WHERE id = %s", (trip_id,))
+
+        request = _request(pool)
+        with pytest.raises(HTTPException) as exc_info:
+            await REVIEW_UNDO(request, trip_id, "skip", "", "", "", {"sub": "test"}, "")
+        assert exc_info.value.status_code == 404
+    finally:
+        await pool.close()
+
+
+def test_review_undo_404s_when_the_trip_no_longer_exists():
+    asyncio.run(_undo_vanished_trip_scenario())
+
+
 async def _skip_cursor_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
@@ -284,17 +454,17 @@ async def _skip_cursor_scenario():
             third_id = await _insert_trip(conn, BASE + timedelta(hours=1))
 
         request = _request(pool)
-        response = await REVIEW_CARD(request, {"sub": "test"}, tied_lower_id, "", "", "")
+        response = await REVIEW_CARD(request, {"sub": "test"}, tied_lower_id, "", "", "", "")
         assert response.context["trip"]["id"] == tied_higher_id
         assert response.context["remaining"] == 2
 
         # Skip again past the tie, landing on the strictly-later trip.
-        response = await REVIEW_CARD(request, {"sub": "test"}, tied_higher_id, "", "", "")
+        response = await REVIEW_CARD(request, {"sub": "test"}, tied_higher_id, "", "", "", "")
         assert response.context["trip"]["id"] == third_id
         assert response.context["remaining"] == 1
 
         # Exhausting the cursor is "done", not "empty".
-        response = await REVIEW_CARD(request, {"sub": "test"}, third_id, "", "", "")
+        response = await REVIEW_CARD(request, {"sub": "test"}, third_id, "", "", "", "")
         assert response.context["state"] == "done"
         assert response.context["remaining"] == 0
 
@@ -303,7 +473,7 @@ async def _skip_cursor_scenario():
         # than 404ing.
         async with pool.connection() as conn:
             await conn.execute("DELETE FROM trips WHERE id = %s", (tied_lower_id,))
-        response = await REVIEW_CARD(request, {"sub": "test"}, tied_lower_id, "", "", "")
+        response = await REVIEW_CARD(request, {"sub": "test"}, tied_lower_id, "", "", "", "")
         assert response.context["state"] == "card"
         assert response.context["trip"]["id"] == tied_higher_id
         assert response.context["remaining"] == 2
@@ -324,7 +494,7 @@ async def _empty_state_scenario():
             await _insert_trip(conn, BASE, category="business")
 
         request = _request(pool)
-        response = await REVIEW_PAGE(request, {"sub": "test"}, "", "", "")
+        response = await REVIEW_PAGE(request, {"sub": "test"}, "", "", "", "")
         assert response.context["state"] == "empty"
         assert response.context["trip"] is None
         assert response.context["remaining"] == 0
@@ -362,7 +532,7 @@ async def _delete_and_advance_scenario():
         from_str, to_str, vehicle_str = "2026-01-01", "2026-01-31", str(included_vehicle)
 
         response = await REVIEW_DELETE(
-            request, manual_id, from_str, to_str, vehicle_str, {"sub": "test"}
+            request, manual_id, from_str, to_str, vehicle_str, {"sub": "test"}, q="",
         )
         assert response.context["state"] == "card"
         assert response.context["trip"]["id"] == detected_id
@@ -377,7 +547,7 @@ async def _delete_and_advance_scenario():
             assert await cur.fetchone() is None
 
         response = await REVIEW_DELETE(
-            request, detected_id, from_str, to_str, vehicle_str, {"sub": "test"}
+            request, detected_id, from_str, to_str, vehicle_str, {"sub": "test"}, q="",
         )
         assert response.context["state"] == "card"
         assert response.context["trip"]["id"] == last_id
@@ -392,7 +562,7 @@ async def _delete_and_advance_scenario():
             assert await cur.fetchone() == (BASE, BASE + timedelta(minutes=15))
 
         response = await REVIEW_DELETE(
-            request, last_id, from_str, to_str, vehicle_str, {"sub": "test"}
+            request, last_id, from_str, to_str, vehicle_str, {"sub": "test"}, q="",
         )
         assert response.context["state"] == "done"
         assert response.context["trip"] is None
@@ -406,3 +576,70 @@ async def _delete_and_advance_scenario():
 
 def test_review_delete_manual_and_detected_advances_with_cursor_and_filters_to_done():
     asyncio.run(_delete_and_advance_scenario())
+
+
+async def _review_search_filter_scenario():
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        await _reset_schema(pool)
+        async with pool.connection() as conn:
+            matching_id = await _insert_trip(conn, BASE, notes="Zephyr pickup")
+            await _insert_trip(conn, BASE + timedelta(hours=1), notes="Ordinary errand")
+
+        request = _request(pool)
+        response = await REVIEW_PAGE(request, {"sub": "test"}, "", "", "", "zephyr")
+        assert response.context["state"] == "card"
+        assert response.context["trip"]["id"] == matching_id
+        assert response.context["remaining"] == 1
+    finally:
+        await pool.close()
+
+
+def test_review_page_respects_search_term():
+    asyncio.run(_review_search_filter_scenario())
+
+
+async def _undo_within_search_filtered_pass_scenario():
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        await _reset_schema(pool)
+        async with pool.connection() as conn:
+            first_id = await _insert_trip(conn, BASE, notes="Zephyr pickup")
+            second_id = await _insert_trip(conn, BASE + timedelta(hours=1), notes="Zephyr dropoff")
+            # Doesn't match the search term, so a search-filtered pass must
+            # skip it entirely -- proving undo lands back on the exact trip,
+            # not merely "the next unclassified trip" (which this would be,
+            # unfiltered).
+            await _insert_trip(conn, BASE + timedelta(minutes=30), notes="Unrelated")
+
+        request = _request(pool)
+        # Carries the trip's own notes back on the tag request (as a real
+        # form submission would) so the write doesn't clobber the text the
+        # search term needs to still match after undo clears the category.
+        response = await REVIEW_TAG(
+            request, first_id, "business", "", "", "", "", {"sub": "test"},
+            notes="Zephyr pickup", q="zephyr",
+        )
+        assert response.context["trip"]["id"] == second_id
+        assert response.context["remaining"] == 1
+
+        response = await REVIEW_UNDO(
+            request, first_id, "tag", "", "", "", {"sub": "test"}, q="zephyr",
+        )
+        assert response.context["state"] == "card"
+        assert response.context["trip"]["id"] == first_id
+        assert response.context["remaining"] == 2
+
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT category::text FROM trips WHERE id = %s", (first_id,)
+            )
+            assert (await cur.fetchone())[0] == "unclassified"
+    finally:
+        await pool.close()
+
+
+def test_review_undo_lands_on_exact_trip_within_a_search_filtered_pass():
+    asyncio.run(_undo_within_search_filtered_pass_scenario())

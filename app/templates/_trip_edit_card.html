@@ -1,5 +1,6 @@
 {% from "_purpose_field.html" import purpose_field %}
-<article id="trip-{{ trip.id }}" class="trip-card trip-edit-card">
+{% from "_field_error.html" import field_error %}
+<article id="trip-{{ trip.id }}" class="card trip-card trip-edit-card">
   <form hx-post="/trips/{{ trip.id }}/edit" hx-target="#trip-{{ trip.id }}" hx-swap="outerHTML">
     <div class="trip-edit-heading">
       <h3>Edit {{ 'manual' if trip.source == 'manual' else 'detected' }} trip</h3>
@@ -15,22 +16,22 @@
       <label>Date
         <input type="date" name="date" value="{{ values.date }}" required
                {% if errors.date %}aria-invalid="true" aria-describedby="edit-date-{{ trip.id }}-error"{% endif %}>
-        {% if errors.date %}<span class="field-error" id="edit-date-{{ trip.id }}-error">{{ errors.date }}</span>{% endif %}
+        {{ field_error(errors, 'date', 'edit-date', trip.id) }}
       </label>
       <label>Start time
         <input type="time" name="start_time" value="{{ values.start_time }}" required
                {% if errors.start_time %}aria-invalid="true" aria-describedby="edit-start-{{ trip.id }}-error"{% endif %}>
-        {% if errors.start_time %}<span class="field-error" id="edit-start-{{ trip.id }}-error">{{ errors.start_time }}</span>{% endif %}
+        {{ field_error(errors, 'start_time', 'edit-start', trip.id) }}
       </label>
       <label>End time
         <input type="time" name="end_time" value="{{ values.end_time }}" required
                {% if errors.end_time %}aria-invalid="true" aria-describedby="edit-end-{{ trip.id }}-error"{% endif %}>
-        {% if errors.end_time %}<span class="field-error" id="edit-end-{{ trip.id }}-error">{{ errors.end_time }}</span>{% endif %}
+        {{ field_error(errors, 'end_time', 'edit-end', trip.id) }}
       </label>
       <label>Distance (mi)
         <input type="number" name="distance" value="{{ values.distance }}" step="0.1" min="0.1" required
                {% if errors.distance %}aria-invalid="true" aria-describedby="edit-distance-{{ trip.id }}-error"{% endif %}>
-        {% if errors.distance %}<span class="field-error" id="edit-distance-{{ trip.id }}-error">{{ errors.distance }}</span>{% endif %}
+        {{ field_error(errors, 'distance', 'edit-distance', trip.id) }}
       </label>
     </div>
     {% endif %}
@@ -42,7 +43,7 @@
           <option value="{{ category }}" {{ 'selected' if values.category == category }}>{{ category | capitalize }}</option>
           {% endfor %}
         </select>
-        {% if errors.category %}<span class="field-error" id="edit-category-{{ trip.id }}-error">{{ errors.category }}</span>{% endif %}
+        {{ field_error(errors, 'category', 'edit-category', trip.id) }}
       </label>
       <label>Vehicle
         <select name="vehicle_id" {% if errors.vehicle_id %}aria-invalid="true" aria-describedby="edit-vehicle-{{ trip.id }}-error"{% endif %}>
@@ -54,7 +55,7 @@
           <option value="{{ trip.vehicle_id }}" {{ 'selected' if values.vehicle_id == trip.vehicle_id | string }}>{{ trip.vehicle_name }} (inactive)</option>
           {% endif %}
         </select>
-        {% if errors.vehicle_id %}<span class="field-error" id="edit-vehicle-{{ trip.id }}-error">{{ errors.vehicle_id }}</span>{% endif %}
+        {{ field_error(errors, 'vehicle_id', 'edit-vehicle', trip.id) }}
       </label>
       <label>Purpose
         {{ purpose_field(
@@ -63,7 +64,7 @@
           aria_invalid=errors.purpose,
           describedby=('edit-purpose-' ~ trip.id ~ '-error') if errors.purpose else ''
         ) }}
-        {% if errors.purpose %}<span class="field-error" id="edit-purpose-{{ trip.id }}-error">{{ errors.purpose }}</span>{% endif %}
+        {{ field_error(errors, 'purpose', 'edit-purpose', trip.id) }}
       </label>
       <label class="trip-edit-notes">Notes
         <textarea name="notes" rows="3">{{ values.notes }}</textarea>

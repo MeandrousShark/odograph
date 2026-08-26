@@ -120,9 +120,14 @@ class SecurityHeadersMiddleware:
                         "form-action 'self'"
                     )
                     headers["X-Content-Type-Options"] = "nosniff"
-                    # Tile requests would otherwise hand the tile host the URL
-                    # of the page being viewed via its Referer header.
-                    headers["Referrer-Policy"] = "same-origin"
+                    # Origin only on cross-origin requests, so the tile host
+                    # learns this deployment's origin but never the URL of the
+                    # page being viewed. Deliberately not "same-origin": that
+                    # strips the Referer header outright on cross-origin
+                    # requests, and OpenStreetMap's tile servers answer a
+                    # refererless request with a 403 error tile rather than
+                    # the map, which is how it shipped broken once already.
+                    headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
                     headers["Cross-Origin-Opener-Policy"] = "same-origin"
                     headers["Permissions-Policy"] = (
                         "geolocation=(), camera=(), microphone=(), payment=()"

@@ -2,7 +2,7 @@
 <div class="settings-table-scroll settings-table-scroll-rates">
 <table class="settings-table">
   <thead>
-    <tr><th>Year</th><th>Rate ($/mi)</th><th>Mid-year change</th><th></th></tr>
+    <tr><th>Year</th><th>Rate ($/mi)</th><th>Mid-year change</th><th class="settings-table-actions"></th></tr>
   </thead>
   <tbody>
     {% for rate in rates %}
@@ -25,8 +25,8 @@
                style="width:6rem"
                value="{{ '%.4f' | format(rate.rate_h2_per_mi) if rate.rate_h2_per_mi is not none else '' }}">
       </td>
-      <td>
-        <button type="button" hx-post="/settings/rates" hx-include="closest tr"
+      <td class="settings-table-actions">
+        <button type="button" class="control control-secondary" hx-post="/settings/rates" hx-include="closest tr"
                 hx-target="#rates-table" hx-swap="outerHTML">Save</button>
         {% if rate.env_override %}
         <span class="manual-badge" title="MILEAGE_RATE_{{ rate.year }} env var overrides this until the app restarts">env override</span>
@@ -51,7 +51,7 @@
       {% for m in range(1, 13) %}<option value="{{ m }}" {{ 'selected' if m == 7 }}>{{ month_abbr[m] }} 1</option>{% endfor %}
     </select>
     <label>2nd-half rate ($/mi) <input type="number" name="rate_h2_per_mi" step="0.0001" min="0.0001" style="width:6rem"></label>
-    <button type="submit">Save</button>
+    <button type="submit" class="control control-secondary">Save</button>
   </form>
 </details>
 </div>

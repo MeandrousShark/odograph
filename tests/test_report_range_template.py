@@ -171,18 +171,21 @@ def test_report_html_empty_state_has_no_summary_or_tables():
     assert "<table>" not in body
 
 
-def test_by_vehicle_heading_sits_directly_before_its_table():
-    # "By vehicle" is the only report heading immediately followed by a bare
-    # <table>, which is what made its first column look misaligned against
-    # the heading above it -- the global first-column padding fix depends on
-    # this adjacency, not on any report-specific styling.
+def test_report_tables_use_local_horizontal_scroll_wrappers():
+    # Both report tables overflowed the page at 320px rather than scrolling
+    # inside their own box. The wrapper is the app's existing convention for
+    # that, and it does not disturb the first-column padding fix below, which
+    # keys off the cells rather than off the table's parent.
     report = build_annual_report([_trip(1), _trip(2)], RATES, TZ, 2026)
     body = _render(
         "report.html", report=report, odometer_coverage=[], expenses=[],
         expense_report=SimpleNamespace(comparisons=[]), user=USER, csrf="token",
         next_year_disabled=False,
     )
-    assert "<h2>By vehicle</h2>\n<table>" in body
+    assert body.count('<div class="table-wrapper">') == 2
+    assert "<h2>By vehicle</h2>\n<div class=\"table-wrapper\">" in body
+    assert body.count("</table>\n</div>") == 2
 
     css = (Path(__file__).parents[1] / "static/style.css").read_text()
+    assert ".table-wrapper { overflow-x: auto; }" in css
     assert "th:first-child, td:first-child { padding-left: 0; }" in css

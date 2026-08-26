@@ -75,7 +75,11 @@ def test_trip_card_long_content_wraps_without_forcing_page_width():
     stylesheet = (ROOT / "static/style.css").read_text()
 
     assert ".trip-route {" in stylesheet
-    assert ".trip-card {" in stylesheet
+    # .trip-card's own padding/border/radius/background/shadow moved into
+    # the shared .card base class (see test_dashboard_template.py's
+    # test_detected_and_manual_cards_render_through_shared_partial for the
+    # markup side of this); .trip-card itself no longer declares them.
+    assert ".card {" in stylesheet
     assert "min-width: 0" in stylesheet
     assert "overflow-wrap: anywhere" in stylesheet
 

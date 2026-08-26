@@ -1,9 +1,14 @@
-# Self-hosted OSRM road-snapping
+# Self-hosted OSRM road-snapping and routing
 
-OSRM turns a GPS trace with drift and gaps into a route that actually follows
-roads, which sharpens the mileage this app computes for a trip. It's entirely
-optional: with `OSRM_URL` empty or unset, snapping is off and the app is
-otherwise fully usable. Trips still detect, list, tag, report, and export.
+OSRM serves two purposes in this app. First, it turns GPS traces with drift and
+gaps into routes that actually follow roads, which sharpens the mileage computed
+for detected trips. Second, it routes manual trips point-to-point: when a user
+creates a manual trip using a route mode (named places or map-picked points),
+OSRM computes the road distance and geometry between those endpoints. It's
+entirely optional: with `OSRM_URL` empty or unset, both snapping and manual
+trip routing are off, and the app is otherwise fully usable. Detected trips
+still assemble from GPS traces, and manual trips still save with a hand-entered
+distance. Reverse geocoding, list, tag, report, and export all continue to work.
 See [docs/privacy.md](privacy.md) for exactly what OSRM does and doesn't see,
 and [docs/security.md](security.md) for the operator hardening checklist that
 covers it alongside the other optional services.

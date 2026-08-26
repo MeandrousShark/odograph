@@ -27,6 +27,118 @@ reproduced here.
 - Complete before release: list every application, database, configuration,
   and operational break, or state explicitly that there are none.
 
+## [0.9.0] - 2026-08-25
+
+Interface, analytics, and manual-routing release. The trip archive is now
+searchable, the Stats page supports longer-horizon analysis and drill-downs,
+the review flow is faster from the keyboard, and a manual trip can carry a
+router-computed path and distance. Authentication pages and narrow-screen
+layouts also receive a consistency and accessibility pass.
+
+There is no database migration in this release; the schema remains at 21.
+OSRM remains optional, and every existing workflow continues to work without
+it.
+
+### Added
+
+- **Routed manual trips.** When OSRM is configured, a manual trip can now be
+  routed between two named places or two points selected on a map. The form
+  previews the route, fills in the routed distance, and lets you override that
+  distance before saving. The saved trip carries its route and endpoints, and
+  its detail page shows the route on the existing map.
+
+  Routing is an enhancement rather than a requirement. A trip with no route
+  selection saves exactly as before. If routing is unavailable, a trip with a
+  hand-entered distance still saves without geometry and explains what
+  happened; a blank distance returns to the form for correction.
+
+- **Text search across the trip archive.** `/trips` can search notes, business
+  purpose, start and end place names, and cached start and end addresses,
+  case-insensitively and by substring. Search combines with category, date,
+  and vehicle filters and follows the trip set through archive pagination,
+  export, and the review flow.
+
+- **Long-horizon Stats views.** The Stats page gains year navigation,
+  arbitrary date-range and vehicle filters, a five-year monthly comparison,
+  a quarterly business-versus-personal share chart, and a per-vehicle table of
+  mileage, expenses, and mileage deduction. Monthly, weekly, and year-over-year
+  chart bars link to the corresponding filtered trip archive.
+
+- **One-step review undo.** The review page now has a clickable `Undo (z)`
+  action that restores the immediately preceding classification or skip,
+  including after the final card. A status message confirms the restored trip
+  and count. Undo is intentionally kept in browser memory for the current
+  review pass rather than creating durable history.
+
+### Changed
+
+- **Review is more keyboard-friendly and preserves visible edits.** `b`, `p`,
+  `s`, and unmodified `z` perform Business, Personal, Skip, and Undo while
+  normal browser Ctrl/Cmd+Z behavior and focus and dialog guards remain intact.
+  Purpose, Vehicle, and Notes now save atomically with either a classification
+  or a skip, and an unassigned trip visually selects the active default vehicle
+  until the next action saves it.
+
+- **Stats charts are easier to read and explore.** All four bar charts now
+  have numeric Y-axis labels, gridlines, and per-bar hover tooltips. Mileage
+  axes use rounded mile values, the category-share chart uses percentages,
+  and wide multi-quarter charts allocate enough space to keep their labels
+  distinct.
+
+- **Authentication and shared controls use a more consistent layout.** Sign
+  in, initial signup, legacy account establishment, and Account Security now
+  use centered card surfaces with consistent spacing. Repeated dialog, field,
+  vehicle-selection, notes, and card patterns now share common components.
+  Editable notes fields have more horizontal padding, Settings action columns
+  align consistently, and the dashboard's manual-trip action matches its
+  neighboring archive action.
+
+- **The public documentation is easier to follow.** The README was rewritten
+  in plain language, the OwnTracks guide now covers practical battery and
+  region settings on iOS and Android, and the OSRM, privacy, security, and
+  configuration guides describe routed manual trips. The install guide also
+  documents floating minor image tags such as `v0.9` for operators who want
+  patch updates without crossing a minor release.
+
+- **Contributor test installs are reproducible.** CI and contributor guidance
+  now use an exact Python 3.13 test-dependency lock, and a task-isolated helper
+  starts disposable PostGIS databases safely for concurrent test runs.
+
+### Fixed
+
+- **OpenStreetMap tiles load again under the application's security headers.**
+  The previous `same-origin` referrer policy suppressed the header that the
+  public tile service requires, producing a 403 error tile on maps. The policy
+  is now `strict-origin-when-cross-origin`, which sends only the deployment
+  origin to a cross-origin tile host, never the viewed path or query string.
+
+- **Narrow layouts keep content and controls usable.** Review actions now fit
+  at 320px, report tables, the per-vehicle Stats table, and the Diagnostics
+  Workers table scroll within their own sections, and native disclosure
+  controls meet the existing 44px minimum height with centered labels. The
+  trip search and filter bar also wraps without squeezing labels or creating
+  horizontal page overflow.
+
+### Security
+
+- **Manual-route preview and saving do not trust the browser.** The preview is
+  authenticated, same-origin, and CSRF-protected. Final submission resolves
+  the selected endpoints and calls OSRM again on the server instead of
+  accepting client-supplied geometry. Coordinates, distances, and GeoJSON are
+  validated, and routing failures do not expose the OSRM address,
+  configuration, coordinates, or internal exceptions.
+
+### Supported upgrade path
+
+- `v0.8.0` may upgrade directly to `v0.9.0`. Earlier releases should upgrade
+  to `v0.8.0` first.
+
+### Breaking changes
+
+- None. There is no migration; the schema stays at 21. There are no required
+  configuration changes, no new runtime dependencies, and no detector-version
+  change. OSRM remains optional.
+
 ## [0.8.0] - 2026-08-11
 
 Installation and sign-in release. A new instance is now set up the way most

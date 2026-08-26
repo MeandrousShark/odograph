@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_add_place_form.html" import add_place_form %}
 {% block title %}Settings: Odograph{% endblock %}
 {% block content %}
 
@@ -81,7 +82,7 @@
 
 <div class="settings-table-scroll settings-table-scroll-places">
 <table id="places-table" class="settings-table">
-  <thead><tr><th>Name</th><th>Kind</th><th>Location</th><th>Radius (m)</th><th></th></tr></thead>
+  <thead><tr><th>Name</th><th>Kind</th><th>Location</th><th>Radius (m)</th><th class="settings-table-actions"></th></tr></thead>
   <tbody>
     {% for place in places %}
     <tr id="place-{{ place.id }}">
@@ -98,8 +99,8 @@
         <input type="number" step="0.000001" name="lon" value="{{ place.lon }}" style="width:7rem">
       </td>
       <td class="num"><input type="number" name="radius_m" value="{{ place.radius_m | round(0) }}" min="1" style="width:4.5rem"></td>
-      <td>
-        <button type="button" hx-post="/places/{{ place.id }}/update" hx-include="closest tr">Save</button>
+      <td class="settings-table-actions">
+        <button type="button" class="control control-secondary" hx-post="/places/{{ place.id }}/update" hx-include="closest tr">Save</button>
         <button type="button" class="danger" title="Delete place"
                 hx-post="/places/{{ place.id }}/delete"
                 hx-confirm="Delete place '{{ place.name }}'? Trips referencing it will show coordinates instead.">Delete</button>
@@ -112,27 +113,7 @@
 
 <details class="add-manual">
   <summary>Add place</summary>
-  <form hx-post="/places">
-    <label>Name <input type="text" name="name" required></label>
-    <label>Kind
-      <select name="kind">
-        <option value="home">Home</option>
-        <option value="work">Work</option>
-        <option value="other" selected>Other</option>
-      </select>
-    </label>
-    {% if geocode_enabled %}
-    <label>Address search <input type="text" name="q" autocomplete="off"
-        placeholder="Start typing an address…" style="width:16rem"
-        hx-get="/places/search" hx-trigger="keyup changed delay:400ms"
-        hx-target="#address-results"></label>
-    <div id="address-results"></div>
-    {% endif %}
-    <label>Lat <input type="number" step="0.000001" name="lat" required style="width:8rem"></label>
-    <label>Lon <input type="number" step="0.000001" name="lon" required style="width:8rem"></label>
-    <label>Radius (m) <input type="number" name="radius_m" value="150" min="1" style="width:5rem"></label>
-    <button type="submit">Add</button>
-  </form>
+  {{ add_place_form(geocode_enabled=geocode_enabled, submit_label='Add') }}
 </details>
 <script nonce="{{ csp_nonce }}">
 // Delegated on document (not the button) so a CSP-compatible listener still
@@ -158,14 +139,14 @@ document.addEventListener('click', function (event) {
 
 <div class="settings-table-scroll settings-table-scroll-rules">
 <table id="rules-table" class="settings-table">
-  <thead><tr><th>Side A</th><th>Side B</th><th>Category</th><th></th></tr></thead>
+  <thead><tr><th>Side A</th><th>Side B</th><th>Category</th><th class="settings-table-actions"></th></tr></thead>
   <tbody>
     {% for rule in rules %}
     <tr>
       <td>{{ rule.a_desc }}</td>
       <td>{{ rule.b_desc }}</td>
       <td>{{ rule.category | capitalize }}</td>
-      <td>
+      <td class="settings-table-actions">
         <button type="button" class="danger" title="Delete rule"
                 hx-post="/rules/{{ rule.id }}/delete"
                 hx-confirm="Delete this rule?">Delete</button>
@@ -210,7 +191,7 @@ document.addEventListener('click', function (event) {
     <label>Category
       <select name="category"><option value="business">Business</option><option value="personal">Personal</option></select>
     </label>
-    <button type="submit">Add rule</button>
+    <button type="submit" class="control control-secondary">Add rule</button>
   </form>
 </details>
 
@@ -222,7 +203,7 @@ document.addEventListener('click', function (event) {
   {% if boundary_overrides %}
   <div class="settings-table-scroll settings-table-scroll-overrides">
   <table id="boundary-overrides-table" class="settings-table">
-    <thead><tr><th>Device</th><th>Kind</th><th>Detail</th><th>Created</th><th></th></tr></thead>
+    <thead><tr><th>Device</th><th>Kind</th><th>Detail</th><th>Created</th><th class="settings-table-actions"></th></tr></thead>
     <tbody>
       {% for o in boundary_overrides %}
       <tr id="boundary-override-{{ o.id }}">
@@ -236,7 +217,7 @@ document.addEventListener('click', function (event) {
           {% endif %}
         </td>
         <td>{{ o.created_at | local_dt }}</td>
-        <td>
+        <td class="settings-table-actions">
           <button type="button" class="danger" title="{{ 'Restore deleted trip' if o.kind == 'discard' else 'Undo this override' }}"
                   hx-post="/settings/boundary_overrides/{{ o.id }}/delete"
                   hx-confirm="{% if o.kind == 'discard' %}Restore this deleted trip? Its stored location data will be reprocessed.{% else %}Undo this merge/split? The affected trips will be re-detected.{% endif %}">
@@ -285,7 +266,7 @@ document.addEventListener('click', function (event) {
   <input type="hidden" name="csrf_token" value="{{ csrf }}">
   <label>Bundle file <input type="file" name="file" accept="application/json,.json" required></label>
   <label><input type="checkbox" name="dry_run" value="1"> Dry run (validate only, don't write)</label>
-  <button type="submit">Import</button>
+  <button type="submit" class="control control-secondary">Import</button>
 </form>
 
 <details class="section-disclosure" id="diagnostics">
@@ -322,6 +303,7 @@ document.addEventListener('click', function (event) {
   <h3>Workers</h3>
   <p class="muted">State lives in this process's memory only and resets on every restart;
     timestamps below are since process start, not since the worker was first enabled.</p>
+  <div class="settings-table-scroll settings-table-scroll-workers">
   <table class="settings-table">
     <thead>
       <tr><th>Worker</th><th>Enabled</th><th>Last run</th><th>Last success</th><th>Last skip</th><th>Last failure</th><th>Next run</th></tr>
@@ -346,6 +328,7 @@ document.addEventListener('click', function (event) {
       {% endfor %}
     </tbody>
   </table>
+  </div>
 
   <h3>Configuration presence</h3>
   <p class="muted">Whether a setting is present, never its value.</p>
@@ -359,7 +342,7 @@ document.addEventListener('click', function (event) {
   <p class="muted">OSRM, the geocoder, ntfy, and SMTP are only probed when you click below;
     never automatically, so an outage here never becomes background traffic against a
     third-party service.</p>
-  <button type="button" hx-post="/settings/diagnostics/check"
+  <button type="button" class="control control-secondary" hx-post="/settings/diagnostics/check"
           hx-target="#diagnostics-connectivity" hx-swap="innerHTML">Check now</button>
   <div id="diagnostics-connectivity">
     {% include "_diagnostics_connectivity.html" %}

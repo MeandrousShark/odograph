@@ -14,10 +14,15 @@ of a hosted service, and this project has no hosted service.
 - **Every GPS point, trip, stay, place, and report lives in your own
   Postgres/PostGIS database.** Nothing about this data is sent anywhere
   by default.
-- **Road-snapping and routing run against your own OSRM container, if you
-  choose to run one.** OSRM is optional and entirely self-hosted: your
-  coordinates are sent to a container you control, on infrastructure you
-  control, and never leave it via this path.
+- **Road-snapping and manual trip routing run against your own OSRM
+  container, if you choose to run one.** OSRM is optional and entirely
+  self-hosted. When it is configured, two categories of coordinates go to a
+  container you control, on infrastructure you control, and never leave it via
+  this path: GPS traces from detected trips, for road snapping to correct
+  drift and compute accurate mileage; and named place coordinates or
+  map-picked points from routed manual trip entry. The manual-entry
+  coordinates are sent while the form is being filled in, so they reach OSRM
+  even for a trip the user never saves.
 
 ## What can leave your instance, and only if you configure it
 

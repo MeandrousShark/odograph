@@ -89,7 +89,7 @@ def test_html_response_carries_the_exact_header_set(monkeypatch):
     response = asyncio.run(_get(app))
 
     assert response.headers["X-Content-Type-Options"] == "nosniff"
-    assert response.headers["Referrer-Policy"] == "same-origin"
+    assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
     assert response.headers["Cross-Origin-Opener-Policy"] == "same-origin"
     assert response.headers["Permissions-Policy"] == (
         "geolocation=(), camera=(), microphone=(), payment=()"
@@ -141,6 +141,18 @@ def test_hsts_present_only_on_https_when_max_age_set(monkeypatch):
 
     http_response = asyncio.run(_get(app, scheme="http"))
     assert "Strict-Transport-Security" not in http_response.headers
+
+
+# A referrer policy that suppresses the header entirely on cross-origin
+# requests breaks the map: OpenStreetMap's tile servers reject a refererless
+# request with a 403 error tile. These are the only two values that do that.
+REFERER_SUPPRESSING_POLICIES = {"no-referrer", "same-origin"}
+
+
+def test_referrer_policy_still_sends_an_origin_to_the_tile_host(monkeypatch):
+    app = _build_app(monkeypatch)
+    response = asyncio.run(_get(app))
+    assert response.headers["Referrer-Policy"] not in REFERER_SUPPRESSING_POLICIES
 
 
 def test_img_src_follows_a_custom_map_tile_url(monkeypatch):

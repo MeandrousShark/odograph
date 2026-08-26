@@ -102,11 +102,20 @@ def test_detected_trip_has_geometry_gated_route_link_without_thumbnail():
     assert "View route" not in without_geometry
 
 
-def test_manual_trip_has_no_thumbnail_or_route_link():
-    body = _render(_trip(source="manual"))
+def test_manual_trip_has_no_thumbnail_or_route_link_without_geometry():
+    body = _render(_trip(source="manual", has_route_geometry=False))
 
     assert "thumb.svg" not in body
     assert "View route" not in body
+
+
+def test_manual_trip_with_route_geometry_shows_view_route_link():
+    # A routed manual trip has a working detail-page map (verified directly
+    # against trip.html elsewhere), so the archive card must offer a way to
+    # reach it, the same as a detected trip does.
+    body = _render(_trip(source="manual", has_route_geometry=True))
+
+    assert '<a class="control control-secondary trip-card-route-action" href="/trips/42">View route</a>' in body
 
 
 def test_trip_actions_share_desktop_row_and_keep_mobile_details_full_width():
@@ -326,7 +335,9 @@ def test_imported_detected_trip_detail_has_no_advanced_tools():
 
 
 def test_manual_trip_detail_has_no_map_or_advanced_tools():
-    body = _render_detail(_trip(source="manual"), has_prev_trip=False, has_next_trip=False)
+    body = _render_detail(
+        _trip(source="manual", has_route_geometry=False), has_prev_trip=False, has_next_trip=False,
+    )
 
     assert 'id="map"' not in body
     assert 'class="advanced-tools"' not in body
@@ -334,6 +345,17 @@ def test_manual_trip_detail_has_no_map_or_advanced_tools():
     assert 'id="name-start"' not in body
     assert 'name="notes"' in body
     assert 'class="trip-detail-delete"' in body
+
+
+def test_routed_manual_trip_detail_shows_map_but_no_advanced_tools():
+    body = _render_detail(
+        _trip(source="manual", has_route_geometry=True), has_prev_trip=False, has_next_trip=False,
+    )
+
+    assert '<div id="map">' in body
+    assert 'class="advanced-tools"' not in body
+    assert 'id="split-toggle"' not in body
+    assert 'id="name-start"' not in body
 
 
 def test_advanced_tools_summary_is_text_only_with_no_decorative_glyph():

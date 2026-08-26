@@ -1,9 +1,57 @@
 {% extends "base.html" %}
 {% block title %}Stats · Odograph{% endblock %}
 {% block content %}
+
+<p>
+  <a href="/stats?year={{ filter_year - 1 }}{% if filter_vehicle %}&vehicle={{ filter_vehicle }}{% endif %}">← {{ filter_year - 1 }}</a>
+  <strong style="margin: 0 .5rem">{{ filter_year }}</strong>
+  {% if next_year_disabled %}
+  <span class="report-year-next" aria-disabled="true">{{ filter_year + 1 }} →</span>
+  {% else %}
+  <a href="/stats?year={{ filter_year + 1 }}{% if filter_vehicle %}&vehicle={{ filter_vehicle }}{% endif %}">{{ filter_year + 1 }} →</a>
+  {% endif %}
+</p>
+
+{% set filters_active = filter_from or filter_to or filter_vehicle %}
+<div class="trip-page-disclosures">
+<details class="trip-page-disclosure trip-tools" {{ 'open' if filters_active }}>
+  <summary>Filters</summary>
+  <div class="filter-bar trip-filter-bar">
+    <form class="date-range trip-filter-form" method="get" action="/stats">
+      <input type="hidden" name="year" value="{{ filter_year }}">
+      <div class="filter-date-row">
+        <label>From <input type="date" name="from" value="{{ filter_from }}"></label>
+        <label>To <input type="date" name="to" value="{{ filter_to }}"></label>
+      </div>
+      <div class="filter-apply-row">
+        <label>Vehicle
+          <select name="vehicle">
+            <option value="">All</option>
+            <option value="none" {{ 'selected' if filter_vehicle == 'none' }}>Unassigned</option>
+            {% for v in vehicles %}
+            <option value="{{ v.id }}" {{ 'selected' if filter_vehicle == v.id | string }}>{{ v.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button type="submit">Filter</button>
+        {% if filters_active %}<a class="control control-secondary filter-clear" href="/stats?year={{ filter_year }}">Clear</a>{% endif %}
+      </div>
+    </form>
+  </div>
+</details>
+</div>
+
+{% if filter_from or filter_to %}
+<h2>{{ period_start.strftime('%b') }} - {{ period_end.strftime('%b %Y') }} driving overview</h2>
+{% else %}
 <h2>{{ stats.year }} driving overview</h2>
+{% endif %}
 {% if not stats.trip_count %}
+{% if filters_active %}
+<p class="empty">No trips match the current filters.</p>
+{% else %}
 <p class="empty">No trips recorded this year yet.</p>
+{% endif %}
 {% else %}
 <div class="stats-summary">
   <div><span>Total miles</span><strong>{{ stats.total_m | mi }}</strong><small>{{ stats.trip_count }} trips</small></div>
@@ -21,6 +69,14 @@
   <div class="chart-scroll">{{ stats.monthly_chart | safe }}</div>
   <p class="stats-legend"><span class="business">Business</span><span class="personal">Personal</span><span class="unclassified">Unclassified</span></p>
 </section>
+
+{% if multiyear and multiyear.chart_svg and multiyear.years | length > 1 %}
+{% include "_stats_multiyear.html" %}
+{% endif %}
+
+{% if trend and trend.plottable_quarters > 1 %}
+{% include "_stats_trends.html" %}
+{% endif %}
 
 <div class="stats-rankings">
   <section>
@@ -40,6 +96,11 @@
     {% else %}<p class="muted">Name places in Settings to see this ranking.</p>{% endif %}
   </section>
 </div>
+
+{% if vehicle_breakdown and vehicle_breakdown.assigned_vehicle_count %}
+{% include "_stats_vehicle.html" %}
+{% endif %}
+
 {% if stats.unnamed_trip_count %}<p class="muted stats-coverage">{{ stats.unnamed_trip_count }} trip(s) with an unnamed endpoint are excluded from named-route rankings.</p>{% endif %}
 {% endif %}
 {% endblock %}

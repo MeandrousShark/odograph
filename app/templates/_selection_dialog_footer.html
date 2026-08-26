@@ -1,0 +1,12 @@
+{# confirm_label is rendered with | safe so the merge dialog can pass a
+   label containing markup (a nested <span data-selection-count>). Every
+   caller passes a template literal; confirm_label must stay
+   template-controlled markup and must never carry user input, since | safe
+   skips autoescaping entirely. #}
+{% macro selection_dialog_footer(confirm_id, confirm_label, confirm_disabled=true) -%}
+<p class="selection-dialog-error" role="alert" hidden></p>
+<div class="app-dialog-actions selection-dialog-actions">
+  <button type="button" data-selection-dialog-cancel autofocus>Cancel</button>
+  <button type="button" id="{{ confirm_id }}"{% if confirm_disabled %} disabled{% endif %}>{{ confirm_label | safe }}</button>
+</div>
+{%- endmacro %}

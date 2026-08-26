@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_field_pills.html" import field_pills %}
 {% block title %}{{ report.year }} Report: Odograph{% endblock %}
 {% block content %}
 
@@ -15,15 +16,15 @@
 </p>
 
 <div class="filter-bar">
-  <div class="field">
-    <span class="field-label">Quarterly / custom range</span>
-    <span class="pills">
-      {% for q in range(1, 5) %}
-      {% set qstart, qend = quarter_bounds(report.year, q) %}
-      <a href="/report/range?from={{ qstart.isoformat() }}&to={{ qend.isoformat() }}">Q{{ q }}</a>
-      {% endfor %}
-    </span>
-  </div>
+  {% set quarter_pills = [] %}
+  {% for q in range(1, 5) %}
+  {% set qstart, qend = quarter_bounds(report.year, q) %}
+  {% set _ = quarter_pills.append({
+    'href': ('/report/range?from=' ~ qstart.isoformat() ~ '&to=' ~ qend.isoformat()) | safe,
+    'text': 'Q' ~ q,
+  }) %}
+  {% endfor %}
+  {{ field_pills('Quarterly / custom range', quarter_pills) }}
   <form class="date-range" method="get" action="/report/range">
     <label>From <input type="date" name="from" required></label>
     <label>To <input type="date" name="to" required></label>

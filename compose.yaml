@@ -18,7 +18,7 @@ services:
     # This canonical file always pulls an immutable release tag and never
     # builds. Contributors who want a source build add
     # compose.build.override.yml.
-    image: ghcr.io/meandrousshark/odograph:v0.8.0
+    image: ghcr.io/meandrousshark/odograph:v0.9.0
     depends_on:
       db:
         condition: service_healthy

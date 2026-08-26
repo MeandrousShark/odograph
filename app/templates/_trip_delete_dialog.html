@@ -2,7 +2,7 @@
   trip, dialog_id, action_url,
   trigger_label='Delete trip', trigger_title='Delete trip',
   hx_target=none, hx_swap=none,
-  filter_from=none, filter_to=none, filter_vehicle=none,
+  filter_from=none, filter_to=none, filter_vehicle=none, filter_q=none,
   fragment=false
 ) %}
 <button type="button" class="control control-destructive trip-delete-trigger"
@@ -11,7 +11,7 @@
         aria-controls="{{ dialog_id }}" data-trip-delete-open="{{ dialog_id }}">
   {{ trigger_label }}
 </button>
-<dialog id="{{ dialog_id }}" class="trip-delete-dialog"
+<dialog id="{{ dialog_id }}" class="app-dialog trip-delete-dialog"
         aria-labelledby="{{ dialog_id }}-title"
         aria-describedby="{{ dialog_id }}-description">
   <form class="trip-delete-dialog-content">
@@ -28,9 +28,10 @@
       <input type="hidden" name="from" value="{{ filter_from }}">
       <input type="hidden" name="to" value="{{ filter_to }}">
       <input type="hidden" name="vehicle" value="{{ filter_vehicle }}">
+      <input type="hidden" name="q" value="{{ filter_q }}">
     {% endif %}
     {% if fragment %}<input type="hidden" name="fragment" value="true">{% endif %}
-    <div class="trip-delete-dialog-actions">
+    <div class="app-dialog-actions trip-delete-dialog-actions">
       <button type="button" data-trip-delete-cancel autofocus>Cancel</button>
       <button type="button" class="control control-destructive trip-delete-confirm"
               hx-post="{{ action_url }}"

@@ -73,7 +73,7 @@ async def _call_index(request, **prefill):
         request, {"sub": "test"}, "", "", "", "",
         prefill.get("manual_date", ""), prefill.get("manual_start", ""),
         prefill.get("manual_notes", ""), prefill.get("bridge_trip", ""),
-        prefill.get("manual_open", ""),
+        prefill.get("manual_open", ""), q="",
     )
 
 

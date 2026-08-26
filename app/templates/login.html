@@ -2,6 +2,7 @@
 {% block title %}Sign in: Odograph{% endblock %}
 {% block content %}
 
+<div class="card auth-card">
 <h2>Sign in</h2>
 
 {% if error %}
@@ -35,5 +36,6 @@
 {% if not account_exists and not signup_available and not legacy_oidc_available %}
 <p class="muted">No administrator account is available. Use the operator recovery command.</p>
 {% endif %}
+</div>
 
 {% endblock %}

@@ -1,11 +1,12 @@
 {% from "_trip_delete_dialog.html" import trip_delete_dialog %}
 {% from "_purpose_field.html" import purpose_field %}
+{% from "_vehicle_select.html" import vehicle_select %}
 {% set full_start = describe_endpoint(trip.start_place_name, trip.start_lat, trip.start_lon, trip.get('start_address')) %}
 {% set full_end = describe_endpoint(trip.end_place_name, trip.end_lat, trip.end_lon, trip.get('end_address')) %}
 {% set compact_start = describe_compact_endpoint(trip.start_place_name, trip.start_lat, trip.start_lon, trip.get('start_address')) %}
 {% set compact_end = describe_compact_endpoint(trip.end_place_name, trip.end_lat, trip.end_lon, trip.get('end_address')) %}
 {% set missing = missing_trip_badge(trip) %}
-<article id="trip-{{ trip.id }}" class="trip-card">
+<article id="trip-{{ trip.id }}" class="card trip-card">
   <div class="trip-card-heading">
     <div class="trip-card-heading-main">
       <label class="trip-card-selector" hidden>
@@ -35,16 +36,7 @@
   <div class="trip-card-controls">
     <div class="trip-card-control">
       <span class="field-label">Vehicle</span>
-      <select hx-post="/trips/{{ trip.id }}/vehicle" hx-trigger="change"
-              hx-target="#trip-{{ trip.id }}" hx-swap="outerHTML" name="vehicle_id">
-        <option value="">Not assigned</option>
-        {% for vehicle in vehicles %}
-        <option value="{{ vehicle.id }}" {{ 'selected' if trip.vehicle_id == vehicle.id }}>{{ vehicle.name }}</option>
-        {% endfor %}
-        {% if trip.vehicle_id and trip.vehicle_id not in (vehicles | map(attribute='id') | list) %}
-        <option value="{{ trip.vehicle_id }}" selected>{{ trip.vehicle_name }} (inactive)</option>
-        {% endif %}
-      </select>
+      {{ vehicle_select(trip, vehicles, empty_label='Not assigned', hx_target='#trip-' ~ trip.id, hx_swap='outerHTML') }}
     </div>
     <div class="trip-card-control">
       <span class="field-label">Purpose</span>
@@ -95,7 +87,9 @@
         </div>
       </div>
     </details>
-    {% if trip.source == 'detected' and trip.get('has_route_geometry') %}
+    {# The detail page renders a route map for any trip with geometry, manual
+       or detected, so this link must not be limited to detected trips. #}
+    {% if trip.get('has_route_geometry') %}
     <a class="control control-secondary trip-card-route-action" href="/trips/{{ trip.id }}">View route</a>
     {% endif %}
     <button type="button" class="control control-secondary trip-card-edit-action"

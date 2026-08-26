@@ -14,9 +14,9 @@ def _templates():
     return make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
 
 
-def _render_detail(source: str) -> str:
+def _render_detail(source: str, **trip_overrides) -> str:
     return _templates().env.get_template("trip.html").render(
-        trip=_trip(source=source), recent_purposes=[], vehicles=[], categories=[],
+        trip=_trip(source=source, **trip_overrides), recent_purposes=[], vehicles=[], categories=[],
         has_prev_trip=False, has_next_trip=False, path_geojson=None,
         path_snapped_geojson=None, stay_centroids="[]", min_trip_distance_m=100,
         user={"name": "Tester"}, csrf_token="test",
@@ -47,6 +47,25 @@ def _assert_accessible_delete_component(
     assert f'hx-post="{action_url}"' in component
     assert "Delete trip" in component
     assert expected_copy in component
+
+
+def test_native_summary_controls_share_the_control_minimum_height():
+    # Settings' disclosures are bare <summary> elements with no control class,
+    # so they depend entirely on the global rule for their touch target. The
+    # centering is part of that contract rather than cosmetic: min-height alone
+    # leaves the label at the top of the taller box, because align-content
+    # starts rather than centers on a block box.
+    body = _templates().env.get_template("settings.html").render(
+        boundary_overrides=[], rates=[], vehicles=[], odometer=[], places=[],
+        rules=[], geocode_enabled=False, user={"name": "Tester"}, csrf_token="test",
+    )
+    assert "<summary>Add place</summary>" in body
+    assert "<summary>Add rule</summary>" in body
+
+    stylesheet = (Path(__file__).parents[1] / "static/style.css").read_text()
+
+    assert "button, input, select, summary { min-height: var(--control-height); }" in stylesheet
+    assert "summary { cursor: pointer; align-content: center; }" in stylesheet
 
 
 def test_trip_cards_offer_in_place_delete_for_detected_and_manual_trips():
@@ -90,7 +109,7 @@ def test_trip_detail_has_named_delete_action_with_source_appropriate_confirmatio
 
 
 def test_manual_trip_detail_has_no_map_script_and_no_none_literals():
-    body = _render_detail("manual")
+    body = _render_detail("manual", has_route_geometry=False)
 
     assert 'id="map"' not in body
     assert "L.map(" not in body
@@ -273,9 +292,32 @@ def test_settings_tables_are_full_width_padded_and_scroll_inside_section_wrapper
     assert ".settings-table th:last-child" not in css
     assert "th, td { text-align: left; padding: .35rem .5rem;" in css
     for section in ("rates", "vehicles", "odometer-readings", "odometer-intervals",
-                    "places", "rules", "overrides"):
+                    "places", "rules", "overrides", "workers"):
         assert f".settings-table-scroll-{section} .settings-table {{ min-width:" in css
     assert ".settings-table button, .vehicle-default-indicator { white-space: nowrap; }" in css
+
+
+def test_diagnostics_workers_table_scrolls_inside_its_own_wrapper():
+    body = _templates().env.get_template("settings.html").render(
+        boundary_overrides=[], rates=[], vehicles=[], odometer=[], places=[],
+        rules=[], geocode_enabled=False, user={"name": "Tester"}, csrf_token="test",
+        diagnostics={"app_version": "test", "git_revision": "test",
+                     "schema_version": "1", "detector_version": 1},
+        diagnostics_report={
+            "database": {"ok": True, "error_type": None, "stats": {}},
+            "migrations": {"status": "up_to_date", "applied": [1], "expected": [1]},
+            "workers": [{
+                "name": "detector", "enabled": True, "state_available": True,
+                "last_run_at": None, "last_success_at": None, "last_skip_at": None,
+                "last_failure_at": None, "last_failure_type": None, "next_run_at": None,
+            }],
+            "config_presence": {},
+        },
+    )
+
+    # Same wrapper convention as every other settings table (rates, vehicles,
+    # places, ...), which the Workers table previously lacked.
+    assert '<div class="settings-table-scroll settings-table-scroll-workers">\n  <table class="settings-table">' in body
 
 
 def test_vehicle_default_uses_neutral_control_scale_indicator():

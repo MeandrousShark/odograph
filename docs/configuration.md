@@ -100,11 +100,11 @@ All services in this section are disabled when their enabling values are
 unset. Read [Privacy and external services](privacy.md) before sending location
 or account-related data to a hosted provider.
 
-### Road snapping
+### Road snapping and manual trip routing
 
 | Variable | Default | Purpose |
 |---|---:|---|
-| `OSRM_URL` | unset | OSRM base URL. In the optional Compose profile use `http://osrm:5000`. |
+| `OSRM_URL` | unset | OSRM base URL. Enables both GPS-trace road snapping and routed manual trip entry. In the optional Compose profile use `http://osrm:5000`. |
 | `OSRM_DATASET` | unset | Basename of the prepared dataset served by the Compose `osrm` profile. It is checked only when that profile starts. |
 | `OSRM_MIN_CONFIDENCE` | `0.5` | Minimum OSRM match confidence accepted for a snapped route. |
 | `OSRM_MAX_COORDS` | `250` | Maximum coordinates sent in one OSRM match request. |

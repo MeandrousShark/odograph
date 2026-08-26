@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -8,15 +9,21 @@ from app.main import make_templates
 
 TZ = ZoneInfo("America/Los_Angeles")
 ROOT = Path(__file__).parents[1]
+PLACES = [
+    {"id": 1, "name": "Home", "kind": "home", "lat": 47.6, "lon": -122.3, "radius_m": 100},
+    {"id": 2, "name": "Office", "kind": "work", "lat": 47.7, "lon": -122.4, "radius_m": 100},
+]
 
 
-def _render_index(vehicles=None, **filters):
+def _render_index(vehicles=None, places=None, notice="", csp_nonce="", **filters):
     templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     return templates.env.get_template("trips.html").render(
         months=[], vehicles=vehicles or [], recent_purposes=[], user={"sub": "test"},
-        csrf="token", filter_category=filters.get("category", ""),
+        csrf="token", places=places or [], notice=notice, csp_nonce=csp_nonce,
+        filter_category=filters.get("category", ""),
         filter_from=filters.get("from_", ""), filter_to=filters.get("to", ""),
-        filter_vehicle=filters.get("vehicle", ""), filter_url=lambda *a, **k: "/",
+        filter_vehicle=filters.get("vehicle", ""), filter_q=filters.get("q", ""),
+        filter_url=lambda *a, **k: "/",
         export_url=lambda *a, **k: "/", review_url="/review", ytd_year=2026,
         ytd_deduction=None,
     )
@@ -26,6 +33,7 @@ def _render(vehicles):
     templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     body = templates.env.get_template("trips.html").render(
         months=[], vehicles=vehicles, user={"sub": "test"}, csrf="token",
+        places=[], notice="",
         filter_category="", filter_from="", filter_to="", filter_vehicle="",
         filter_url=lambda *a, **k: "/", export_url=lambda *a, **k: "/",
         ytd_year=2026, ytd_deduction=None,
@@ -295,7 +303,7 @@ def test_manual_trip_form_opens_from_manual_open_flag_without_prefill():
     templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     body = templates.env.get_template("trips.html").render(
         months=[], vehicles=[], recent_purposes=[], user={"sub": "test"},
-        csrf="token", filter_category="", filter_from="", filter_to="",
+        csrf="token", places=[], notice="", filter_category="", filter_from="", filter_to="",
         filter_vehicle="", filter_url=lambda *a, **k: "/",
         export_url=lambda *a, **k: "/", review_url="/review", ytd_year=2026,
         ytd_deduction=None, manual_open=True,
@@ -310,7 +318,7 @@ def test_manual_trip_form_opens_and_prefills_from_missing_trip_badge_link():
     templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     body = templates.env.get_template("trips.html").render(
         months=[], vehicles=[], recent_purposes=[], user={"sub": "test"},
-        csrf="token", filter_category="", filter_from="", filter_to="",
+        csrf="token", places=[], notice="", filter_category="", filter_from="", filter_to="",
         filter_vehicle="", filter_url=lambda *a, **k: "/",
         export_url=lambda *a, **k: "/", review_url="/review", ytd_year=2026,
         ytd_deduction=None, manual_open=True,
@@ -333,7 +341,7 @@ def test_manual_trip_form_shows_osrm_hint_when_present():
     templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     body = templates.env.get_template("trips.html").render(
         months=[], vehicles=[], recent_purposes=[], user={"sub": "test"},
-        csrf="token", filter_category="", filter_from="", filter_to="",
+        csrf="token", places=[], notice="", filter_category="", filter_from="", filter_to="",
         filter_vehicle="", filter_url=lambda *a, **k: "/",
         export_url=lambda *a, **k: "/", review_url="/review", ytd_year=2026,
         ytd_deduction=None, manual_open=True,
@@ -358,10 +366,16 @@ def test_trip_pager_is_block_markup_with_stable_next_url():
     assert 'hx-target="closest .trip-pager"' in body
 
 
-def test_trip_list_has_no_thumbnail_attribution():
+def test_trip_page_carries_tile_attribution_exactly_once_for_the_route_picker_map():
+    # This used to assert the string was absent entirely, back when the trip
+    # list had no map anywhere on the page. The route picker's shared map now
+    # legitimately needs the tile attribution once, for its own tile layer,
+    # so the assertion is exact-count rather than absence: it still fails if
+    # the string were ever duplicated (e.g. a second map instance) or lost
+    # outright (e.g. the tile layer losing its attribution option).
     rendered = _render_index()
 
-    assert "openstreetmap.org/copyright" not in rendered
+    assert rendered.count("openstreetmap.org/copyright") == 1
 
 
 def test_trip_filters_use_native_disclosure_and_open_for_every_active_filter():
@@ -379,11 +393,40 @@ def test_trip_filters_use_native_disclosure_and_open_for_every_active_filter():
 
     for filters in (
         {"category": "business"}, {"from_": "2026-07-01"},
-        {"to": "2026-07-31"}, {"vehicle": "2"},
+        {"to": "2026-07-31"}, {"vehicle": "2"}, {"q": "zephyr"},
     ):
         active = _render_index(**filters)
         assert '<details class="trip-page-disclosure trip-tools" open>' in active
         assert '<a class="control control-secondary filter-clear" href="/trips">Clear</a>' in active
+
+
+def test_trip_filter_form_has_a_search_box_that_carries_the_term():
+    collapsed = _render_index()
+    assert 'class="filter-search-row"' in collapsed
+    assert 'type="search" name="q" value=""' in collapsed
+
+    active = _render_index(q="zephyr")
+    assert 'type="search" name="q" value="zephyr"' in active
+
+
+def test_only_the_search_field_flexes_in_the_filter_form():
+    """Adding search as a fourth competitor for a fixed form width shrank the
+    submit button until its label broke one letter per line. Pinning the date
+    and submit groups makes them unshrinkable, so the bar wraps instead, and
+    letting the form itself grow keeps it to a single line so it does not cost
+    the bar an extra row.
+    """
+    css = (ROOT / "static/style.css").read_text()
+    assert ".filter-bar .trip-filter-form { flex: 1 1 34rem; flex-wrap: nowrap; }" in css
+    assert ".filter-date-row, .filter-apply-row { flex: 0 0 auto; }" in css
+    assert ".filter-search-row { flex: 1 1 10rem; min-width: 0; }" in css
+
+    # Equal specificity with `.filter-bar .date-range { display: flex; }`, so
+    # source order is what makes the form rule win; and the narrow-viewport
+    # block must still come later to restore the stacked grid.
+    form_rule = css.index(".filter-bar .trip-filter-form { flex:")
+    assert css.index(".filter-bar .date-range { display: flex;") < form_rule
+    assert form_rule < css.index("@media (max-width: 760px)")
 
 
 def test_trip_page_disclosures_share_scoped_summary_row_and_full_width_content():
@@ -414,6 +457,7 @@ def test_trip_filter_disclosure_preserves_urls_and_compacts_narrow_layout():
     templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     body = templates.env.get_template("trips.html").render(
         months=[], vehicles=[], recent_purposes=[], user={"sub": "test"}, csrf="token",
+        places=[], notice="",
         filter_category="business", filter_from="2026-07-01", filter_to="2026-07-31",
         filter_vehicle="", filter_url=lambda category: f"/category/{category or 'all'}",
         export_url=lambda kind: f"/export/{kind}", review_url="/review?from=2026-07-01",
@@ -492,3 +536,216 @@ def test_card_layout_has_tokens_focus_targets_and_reduced_motion_support():
     assert ".trip-card-details > summary" in stylesheet
     assert ".trip-card.is-selected" in stylesheet
     assert ".selected-label { display: none" in stylesheet
+
+
+def test_route_mode_radios_render_with_none_checked_by_default():
+    body = _render_index(places=PLACES)
+    picker = body.split('class="route-picker"')[1].split("</fieldset>", 1)[0]
+
+    assert '<input type="radio" name="route_mode" value="none" checked>' in picker
+    assert '<input type="radio" name="route_mode" value="places">' in picker
+    assert '<input type="radio" name="route_mode" value="map">' in picker
+    # Only the "none" option carries `checked`.
+    assert picker.count("checked") == 1
+
+
+def test_place_selects_are_populated_from_the_places_context():
+    body = _render_index(places=PLACES)
+    picker = body.split('class="route-picker"')[1].split("<label>Distance", 1)[0]
+
+    start_select = picker.split('name="start_place"')[1].split("</select>")[0]
+    end_select = picker.split('name="end_place"')[1].split("</select>")[0]
+    for select in (start_select, end_select):
+        assert '<option value="1">Home</option>' in select
+        assert '<option value="2">Office</option>' in select
+
+
+def test_route_picker_has_hidden_coordinate_fields_map_reset_and_status_region():
+    body = _render_index(places=PLACES)
+    picker = body.split('class="route-picker"')[1].split("<label>Distance", 1)[0]
+
+    assert '<input type="hidden" name="start_lat">' in picker
+    assert '<input type="hidden" name="start_lon">' in picker
+    assert '<input type="hidden" name="end_lat">' in picker
+    assert '<input type="hidden" name="end_lon">' in picker
+    assert '<input type="hidden" name="routed_distance">' in picker
+    assert '<div id="route-picker-map" class="route-picker-map" hidden></div>' in picker
+    assert 'data-route-map-reset' in picker
+    assert '>Reset points</button>' in picker
+    assert 'class="route-picker-status" role="status">' in picker
+
+
+def test_distance_input_is_cleared_in_lockstep_with_routed_distance_hint():
+    """The server (app/ui.py, add_manual_trip) treats a submitted `distance`
+    that differs from the hidden `routed_distance` hint as a deliberate
+    override and stores it verbatim. If a route selection is invalidated
+    (mode change, map reset, or a preview that fails) without also clearing
+    a preview-owned `distance`, the leftover value becomes indistinguishable
+    from something the user actually typed. This asserts the helper exists,
+    only clears a value it recognizes as its own, and is actually wired into
+    every site that blanks `routed_distance` -- not just that the string
+    "clearDistanceIfPreviewOwned" appears somewhere in the page.
+    """
+    body = _render_index(places=PLACES)
+
+    assert "function clearDistanceIfPreviewOwned()" in body
+    helper = body.split("function clearDistanceIfPreviewOwned() {")[1].split("\n  }\n", 1)[0]
+    # The comparison has to read both fields, and must not unconditionally
+    # blank `distance` -- only when it still matches the routed hint.
+    assert "routeField('distance')" in helper
+    assert "routeField('routed_distance')" in helper
+    assert "current === hint" in helper
+    assert "distance.value = '';" in helper
+
+    def block(start_marker: str, end_marker: str = "\n  }") -> str:
+        return body.split(start_marker, 1)[1].split(end_marker, 1)[0]
+
+    # clearRouteEndpoints() runs on every route-mode change; the helper must
+    # run before routed_distance is blanked, since the comparison needs the
+    # pre-clear hint value.
+    endpoints_block = block("function clearRouteEndpoints() {")
+    assert "clearDistanceIfPreviewOwned();" in endpoints_block
+    assert endpoints_block.index("clearDistanceIfPreviewOwned();") < endpoints_block.index(
+        "setRouteFieldValue('routed_distance', '');"
+    )
+
+    # The "Reset points" button's click handler.
+    reset_block = block(
+        "if (!event.target.closest('[data-route-map-reset]')) return;", "\n  });"
+    )
+    assert "clearDistanceIfPreviewOwned();" in reset_block
+    assert reset_block.index("clearDistanceIfPreviewOwned();") < reset_block.index(
+        "setRouteFieldValue('routed_distance', '');"
+    )
+
+    # maybePreviewRoute's three failure branches: transport error, a non-OK
+    # HTTP response, and a well-formed but `ok: false` JSON body.
+    transport_error_block = block("} catch (err) {", "\n      return;\n    }")
+    http_error_block = block("if (!resp.ok) {", "\n      return;\n    }")
+    ok_false_block = block("if (!data.ok) {", "\n      return;\n    }")
+    for failure_block in (transport_error_block, http_error_block, ok_false_block):
+        assert "clearDistanceIfPreviewOwned();" in failure_block
+        assert failure_block.index("clearDistanceIfPreviewOwned();") < failure_block.index(
+            "setRouteFieldValue('routed_distance', '');"
+        )
+
+    # Exactly the definition plus its five call sites -- no orphaned
+    # invalidation path was left unwired, and nothing calls it redundantly.
+    assert body.count("clearDistanceIfPreviewOwned()") == 6
+
+
+def test_failed_route_preview_clears_the_stale_drawn_route():
+    """A failed preview (transport error, non-OK response, or a well-formed
+    `ok: false` body) leaves behind a route line that belonged to a
+    selection the server just rejected, so it must not stay on the map.
+    Named-places markers came from that same rejected response and go with
+    the line; map-picked markers are the user's own click points and must
+    survive, since removing them would silently discard input the user
+    would otherwise have to redo.
+    """
+    body = _render_index(places=PLACES)
+
+    assert "function clearStaleRouteLine() {" in body
+    helper = body.split("function clearStaleRouteLine() {", 1)[1].split("\n  }\n", 1)[0]
+    assert "if (routeLine) { routeMap.removeLayer(routeLine); routeLine = null; }" in helper
+    # The line always goes; markers only go with it, and only in
+    # named-places mode.
+    line_removal = helper.index("routeLine = null")
+    mode_gate = helper.index("currentRouteMode() === 'places'")
+    assert line_removal < mode_gate
+    marker_removal = helper[mode_gate:]
+    assert "routeStartMarker = null" in marker_removal
+    assert "routeEndMarker = null" in marker_removal
+
+    fn_body = body.split("async function maybePreviewRoute() {", 1)[1].split(
+        "\n    drawRoutePreview(data);\n  }", 1
+    )[0]
+    # Called from exactly the three failure branches, never from the
+    # success path that ends in drawRoutePreview(data).
+    assert fn_body.count("clearStaleRouteLine();") == 3
+
+    guard = "if (seq !== routePreviewSeq) return;"
+    for segment in fn_body.split(guard)[1:]:
+        # Each guard belongs to one failure branch. A superseded response
+        # returns immediately on the guard's own `return`, before this
+        # branch (and its call to clearStaleRouteLine) is ever reached, so
+        # finding the call inside the branch that follows its guard is
+        # exactly the "runs only after the sequence check" property.
+        next_guard = segment.find("if (seq")
+        branch = segment if next_guard == -1 else segment[:next_guard]
+        assert "clearStaleRouteLine();" in branch
+
+
+def test_route_unavailable_notice_renders_only_when_flagged():
+    with_notice = _render_index(notice="route_unavailable")
+    assert 'role="status"' in with_notice.split('class="route-saved-notice"')[1][:200]
+    assert "automatic routing was unavailable" in with_notice
+    assert "OSRM" not in with_notice
+    assert with_notice.index('class="route-saved-notice"') < with_notice.index(
+        'class="trip-page-disclosures"'
+    )
+
+    without_notice = _render_index(notice="")
+    assert "route-saved-notice" not in without_notice
+    assert "automatic routing was unavailable" not in without_notice
+
+
+def test_leaflet_assets_are_linked_in_head():
+    body = _render_index()
+
+    assert '<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">' in body
+    assert '<script src="/static/vendor/leaflet/leaflet.js"></script>' in body
+
+
+def test_every_script_element_carries_the_nonce_or_is_a_same_origin_asset():
+    # Same discipline test_security_headers.py checks live-end-to-end: an
+    # inline <script> without this page's nonce would be blocked by CSP, so
+    # no fragment (or careless addition) may introduce a second bare one. A
+    # `src="..."` script is exempt because CSP's `'self'` already covers a
+    # same-origin vendored asset regardless of nonce.
+    body = _render_index(csp_nonce="test-nonce-xyz")
+
+    tags = re.findall(r"<script\b[^>]*>", body)
+    assert tags, "expected at least one <script> tag"
+    for tag in tags:
+        assert "src=" in tag or 'nonce="test-nonce-xyz"' in tag, tag
+
+    # Exactly the known set of inline script blocks: base.html's three plus
+    # trips.html's one page-level block -- not a stray fragment-local script.
+    assert body.count('<script nonce="test-nonce-xyz">') == 4
+
+
+def test_route_picker_map_click_normalizes_longitude_before_use():
+    """The route picker map opens on a world view, which Leaflet renders as
+    several horizontally repeated copies of the world. A click on a repeated
+    copy reports a raw, unnormalized longitude (for example 241.171875)
+    outside [-180, 180], which the server's coordinate validation correctly
+    rejects. This asserts the click handler normalizes the coordinate with
+    Leaflet's own `wrap()` before it is ever formatted, stored in the hidden
+    inputs, or used to place a marker -- not merely that "wrap" appears
+    somewhere in the page.
+    """
+    body = _render_index(places=PLACES)
+
+    assert "function onRoutePickerMapClick(event) {" in body
+    handler = body.split("function onRoutePickerMapClick(event) {", 1)[1].split(
+        "\n  }\n", 1
+    )[0]
+
+    assert "event.latlng.wrap()" in handler
+    wrap_index = handler.index("event.latlng.wrap()")
+
+    # Nothing may read the raw event.latlng after the wrapped value is
+    # produced; every subsequent use (formatting, markers, hidden fields)
+    # must go through the normalized latlng.
+    assert "event.latlng" not in handler[wrap_index + len("event.latlng.wrap()"):]
+
+    # The formatted lat/lon fed to the hidden inputs, and the LatLng handed
+    # to L.marker for on-map placement, both have to come from the same
+    # normalized value, or the marker would sit somewhere other than what
+    # the stored coordinates say.
+    assert handler.count("latlng.lat.toFixed(6)") == 1
+    assert handler.count("latlng.lng.toFixed(6)") == 1
+    assert handler.count("L.marker(latlng,") == 2
+    assert wrap_index < handler.index("latlng.lat.toFixed(6)")
+    assert wrap_index < handler.index("L.marker(latlng,")

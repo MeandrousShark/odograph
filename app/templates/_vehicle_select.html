@@ -1,0 +1,13 @@
+{% macro vehicle_select(trip, vehicles, empty_label='--', hx_post='/trips/' ~ trip.id ~ '/vehicle', hx_target='', hx_swap='none', default_if_unassigned=false) -%}
+<select {% if hx_post %}hx-post="{{ hx_post }}" hx-trigger="change"{% endif %}
+        {% if hx_target %}hx-target="{{ hx_target }}"{% endif %}
+        hx-swap="{{ hx_swap }}" name="vehicle_id">
+  <option value="">{{ empty_label }}</option>
+  {% for v in vehicles %}
+  <option value="{{ v.id }}" {{ 'selected' if trip.vehicle_id == v.id or (default_if_unassigned and trip.vehicle_id is none and v.is_default) }}>{{ v.name }}</option>
+  {% endfor %}
+  {% if trip.vehicle_id and trip.vehicle_id not in (vehicles | map(attribute='id') | list) %}
+  <option value="{{ trip.vehicle_id }}" selected>{{ trip.vehicle_name }} (inactive)</option>
+  {% endif %}
+</select>
+{%- endmacro %}

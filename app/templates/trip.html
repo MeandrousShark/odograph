@@ -1,6 +1,9 @@
 {% extends "base.html" %}
 {% from "_purpose_field.html" import purpose_field %}
 {% from "_trip_delete_dialog.html" import trip_delete_dialog %}
+{% from "_add_place_form.html" import add_place_form %}
+{% from "_vehicle_select.html" import vehicle_select %}
+{% from "_notes_field.html" import notes_field %}
 {% block title %}Trip {{ trip.started_at | local_dt }}: Odograph{% endblock %}
 {% block head %}
   <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
@@ -33,7 +36,10 @@
   {{ trip.category }}{% if trip.purpose %} · purpose: “{{ trip.purpose }}”{% endif %}{% if trip.notes %} · “{{ trip.notes }}”{% endif %}
 </p>
 
-{% if trip.source == 'detected' %}
+{% set show_map = trip.source == 'detected' or trip.has_route_geometry %}
+{% set has_route_endpoints = trip.start_lat is not none and trip.start_lon is not none
+   and trip.end_lat is not none and trip.end_lon is not none %}
+{% if show_map and has_route_endpoints %}
 <div id="map"></div>
 {% endif %}
 
@@ -47,8 +53,7 @@
   </div>
   <div class="trip-detail-field">
     <span class="field-label">Notes</span>
-    <input class="notes" name="notes" value="{{ trip.notes or '' }}" placeholder="notes…"
-           hx-post="/trips/{{ trip.id }}/notes" hx-trigger="change" hx-swap="none">
+    {{ notes_field(trip) }}
   </div>
   <!-- Vehicle and Advanced trip tools share one row (each field/disclosure
        above gets its own instead) because they were the two controls users
@@ -65,16 +70,7 @@
            which this detail page does not need to insert. The <select>
            already reflects the chosen vehicle via native browser behavior, so
            there's nothing this page needs to re-render from the response body. -->
-      <select hx-post="/trips/{{ trip.id }}/vehicle" hx-trigger="change"
-              hx-swap="none" name="vehicle_id">
-        <option value="">--</option>
-        {% for v in vehicles %}
-        <option value="{{ v.id }}" {{ 'selected' if trip.vehicle_id == v.id }}>{{ v.name }}</option>
-        {% endfor %}
-        {% if trip.vehicle_id and trip.vehicle_id not in (vehicles | map(attribute='id') | list) %}
-        <option value="{{ trip.vehicle_id }}" selected>{{ trip.vehicle_name }} (inactive)</option>
-        {% endif %}
-      </select>
+      {{ vehicle_select(trip, vehicles) }}
     </div>
 
     {% if trip.source == 'detected' and not trip.imported %}
@@ -150,22 +146,7 @@
     {% else %}
       <details class="add-manual" id="name-start">
         <summary>Name start location</summary>
-        <form hx-post="/places">
-          <label>Name <input type="text" name="name" required></label>
-          <label>Kind
-            <select name="kind">
-              <option value="home">Home</option>
-              <option value="work">Work</option>
-              <option value="other" selected>Other</option>
-            </select>
-          </label>
-          <label>Lat <input type="number" step="0.000001" name="lat" id="start-lat"
-                             value="{{ trip.start_lat }}" style="width:8rem"></label>
-          <label>Lon <input type="number" step="0.000001" name="lon" id="start-lon"
-                             value="{{ trip.start_lon }}" style="width:8rem"></label>
-          <label>Radius (m) <input type="number" name="radius_m" value="150" min="1" style="width:5rem"></label>
-          <button type="submit">Save</button>
-        </form>
+        {{ add_place_form(lat_id='start-lat', lon_id='start-lon', lat_value=trip.start_lat, lon_value=trip.start_lon, lat_lon_required=false) }}
       </details>
     {% endif %}
     {% if trip.end_place_name %}
@@ -173,22 +154,7 @@
     {% else %}
       <details class="add-manual" id="name-end">
         <summary>Name end location</summary>
-        <form hx-post="/places">
-          <label>Name <input type="text" name="name" required></label>
-          <label>Kind
-            <select name="kind">
-              <option value="home">Home</option>
-              <option value="work">Work</option>
-              <option value="other" selected>Other</option>
-            </select>
-          </label>
-          <label>Lat <input type="number" step="0.000001" name="lat" id="end-lat"
-                             value="{{ trip.end_lat }}" style="width:8rem"></label>
-          <label>Lon <input type="number" step="0.000001" name="lon" id="end-lon"
-                             value="{{ trip.end_lon }}" style="width:8rem"></label>
-          <label>Radius (m) <input type="number" name="radius_m" value="150" min="1" style="width:5rem"></label>
-          <button type="submit">Save</button>
-        </form>
+        {{ add_place_form(lat_id='end-lat', lon_id='end-lon', lat_value=trip.end_lat, lon_value=trip.end_lon, lat_lon_required=false) }}
       </details>
     {% endif %}
   </div>
@@ -203,12 +169,11 @@
   ) }}
 </div>
 
-{% if trip.source == 'detected' %}
+{% if show_map and has_route_endpoints %}
 <script nonce="{{ csp_nonce }}">
   const path = {{ path_geojson | safe if path_geojson else 'null' }};
   const pathSnapped = {{ path_snapped_geojson | safe if path_snapped_geojson else 'null' }};
   const stays = {{ stay_centroids | safe }};
-  const minTripDistanceM = {{ min_trip_distance_m }};
   const start = [{{ trip.start_lat }}, {{ trip.start_lon }}];
   const end = [{{ trip.end_lat }}, {{ trip.end_lon }}];
 
@@ -263,6 +228,15 @@
     L.circle([c.coordinates[1], c.coordinates[0]],
              { radius: 150, color: stayColor, fillOpacity: 0.1 }).addTo(map);
   }
+
+  {% if trip.source == 'detected' %}
+  // Everything below is detected-trip-only tooling (split, the map-click
+  // place-naming fill, the trip-points fetch): a manual trip, routed or not,
+  // has no backing GPS points to split or re-derive a place from, so none of
+  // it applies. Kept inside this one nonced script element, alongside the
+  // shared map init above, rather than a second <script> block, so both
+  // stay covered by the same CSP nonce.
+  const minTripDistanceM = {{ min_trip_distance_m }};
 
   // Split mode: a third, exclusive click-mode alongside the place-naming
   // one below. While armed, clicking the map picks the nearest *real* GPS
@@ -355,6 +329,7 @@
       lonEl.value = e.latlng.lng.toFixed(6);
     }
   });
+  {% endif %}
 
   // Mobile browsers frequently finish laying out the map container *after*
   // this inline script runs. Re-fit once the container reports real

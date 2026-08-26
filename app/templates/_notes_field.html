@@ -1,0 +1,4 @@
+{% macro notes_field(trip) -%}
+<input class="notes" name="notes" value="{{ trip.notes or '' }}" placeholder="notes…"
+       hx-post="/trips/{{ trip.id }}/notes" hx-trigger="change" hx-swap="none">
+{%- endmacro %}

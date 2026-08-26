@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import calendar
 import json
 import logging
 import math
@@ -56,8 +57,11 @@ from app.report import (
     range_filename_slug,
     sum_month_deductions,
 )
-from app.snap import route_distance_m
+from app.snap import route_distance_m, route_line
 from app.stats import build_dashboard
+from app.stats_multiyear import build_multiyear_chart
+from app.stats_trends import build_share_trend
+from app.stats_vehicle import build_vehicle_breakdown
 from app.trip_queries import DISPLAY_DISTANCE_SQL
 from app.validation import parse_finite_number
 from app.vehicles import (
@@ -74,6 +78,22 @@ log = logging.getLogger(__name__)
 
 # Place names/addresses are correlated subselects (not JOINs) so every query
 # built on TRIP_COLUMNS picks them up without touching its FROM clause.
+# Factored into module-level constants (rather than left inline) so
+# `_trip_filter_sql`'s search predicate can reuse the exact same subselects
+# instead of duplicating them in the WHERE clause.
+_START_PLACE_NAME_SQL = "(SELECT name FROM places WHERE id = trips.start_place_id)"
+_END_PLACE_NAME_SQL = "(SELECT name FROM places WHERE id = trips.end_place_id)"
+_START_ADDRESS_SQL = (
+    "(SELECT address FROM geocode_cache\n"
+    f"     WHERE lat = ROUND(ST_Y(trips.start_geom::geometry)::numeric, {GEOCODE_PRECISION})\n"
+    f"       AND lon = ROUND(ST_X(trips.start_geom::geometry)::numeric, {GEOCODE_PRECISION}))"
+)
+_END_ADDRESS_SQL = (
+    "(SELECT address FROM geocode_cache\n"
+    f"     WHERE lat = ROUND(ST_Y(trips.end_geom::geometry)::numeric, {GEOCODE_PRECISION})\n"
+    f"       AND lon = ROUND(ST_X(trips.end_geom::geometry)::numeric, {GEOCODE_PRECISION}))"
+)
+
 # display_distance_m is the canonical "distance to show": snapped when
 # available, raw as fallback (raw distance_m stays selected as the pre-snap
 # baseline).
@@ -84,19 +104,15 @@ TRIP_COLUMNS = f"""
     point_count, has_gap, imported, category::text AS category, purpose, notes,
     ST_Y(start_geom::geometry) AS start_lat, ST_X(start_geom::geometry) AS start_lon,
     ST_Y(end_geom::geometry) AS end_lat, ST_X(end_geom::geometry) AS end_lon,
-    (SELECT name FROM places WHERE id = trips.start_place_id) AS start_place_name,
-    (SELECT name FROM places WHERE id = trips.end_place_id) AS end_place_name,
+    {_START_PLACE_NAME_SQL} AS start_place_name,
+    {_END_PLACE_NAME_SQL} AS end_place_name,
     vehicle_id,
     -- Subselect (not JOIN) so a deactivated vehicle still shows its name on
     -- trips that point at it, despite being absent from the default picker.
     (SELECT name FROM vehicles WHERE id = trips.vehicle_id) AS vehicle_name,
     (path IS NOT NULL OR path_snapped IS NOT NULL) AS has_route_geometry,
-    (SELECT address FROM geocode_cache
-     WHERE lat = ROUND(ST_Y(trips.start_geom::geometry)::numeric, {GEOCODE_PRECISION})
-       AND lon = ROUND(ST_X(trips.start_geom::geometry)::numeric, {GEOCODE_PRECISION})) AS start_address,
-    (SELECT address FROM geocode_cache
-     WHERE lat = ROUND(ST_Y(trips.end_geom::geometry)::numeric, {GEOCODE_PRECISION})
-       AND lon = ROUND(ST_X(trips.end_geom::geometry)::numeric, {GEOCODE_PRECISION})) AS end_address,
+    {_START_ADDRESS_SQL} AS start_address,
+    {_END_ADDRESS_SQL} AS end_address,
     -- Missing-trip detection: four near-identical subselects for the
     -- predecessor trip, because one SELECT item can't reference another's
     -- alias (and a LATERAL join would mean touching every FROM clause that
@@ -143,6 +159,10 @@ TRIP_COLUMNS = f"""
 
 CATEGORIES = ("business", "personal", "unclassified")
 RULE_CATEGORIES = ("business", "personal")
+# The only value /trips?notice=... is ever allowed to mean something:
+# whitelisted (never reflected as-is) so an arbitrary query string can't
+# echo attacker-controlled text onto the page.
+MANUAL_ROUTE_UNAVAILABLE_NOTICE = "route_unavailable"
 EXPORT_MEDIA_TYPES = {
     "csv": "text/csv",
     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -197,6 +217,30 @@ def parse_date_range(
     if to_dt is not None:
         to_dt += timedelta(days=1)
     return from_dt, to_dt
+
+
+def _multiyear_window(
+    years_present: list[int], selected_year: int, now: datetime
+) -> tuple[list[int], int, int]:
+    """Derive the year-over-year window and cutoff for the stats page's
+    cross-year charts from the selected year, not from today.
+
+    A selected year in the past is fully elapsed, so its cutoff is the end
+    of December and no month is clamped. `>=` rather than `==` against
+    `now.year` is deliberate: a hand-crafted future `?year=2030` should
+    degrade to the current-year, same-elapsed-period cutoff rather than
+    claim a year that hasn't happened yet is complete.
+
+    The window is the five most recent years present that are no later
+    than the selected year, so `?year=2024` ends at 2024 and never shows
+    2025 or 2026 even though they exist in the data.
+    """
+    if selected_year >= now.year:
+        cutoff_month, cutoff_day = now.month, now.day
+    else:
+        cutoff_month, cutoff_day = 12, 31
+    eligible_years = [y for y in years_present if y <= selected_year]
+    return eligible_years[-5:], cutoff_month, cutoff_day
 
 
 def _parse_range_query_dates(from_str: str, to_str: str) -> tuple[date, date]:
@@ -269,7 +313,9 @@ def parse_manual_trip_input(
     end_time: str,
     distance: str,
     tz: ZoneInfo,
-) -> tuple[datetime, datetime, float]:
+    *,
+    distance_optional: bool = False,
+) -> tuple[datetime, datetime, float | None]:
     """Interpret manual trip fields once for create and edit.
 
     The browser submits wall-clock values without an offset. Attaching the
@@ -278,6 +324,12 @@ def parse_manual_trip_input(
     End times at or before the start represent an overnight trip, matching the
     original manual-entry contract. Distance is parsed from text so NaN and
     infinity cannot bypass a simple positive-number comparison.
+
+    `distance_optional` defaults False so trip-edit's existing required-
+    distance contract (and its tests) are untouched; a routed manual trip
+    passes True to let a blank distance mean "use the routed distance"
+    instead of a validation error, returning None for it rather than 0 or
+    NaN so the caller can't mistake "not supplied" for a real value.
     """
     errors: dict[str, str] = {}
     try:
@@ -309,32 +361,138 @@ def parse_manual_trip_input(
                 "daylight saving). Enter a later time."
             )
     ended_at = naive_end.replace(tzinfo=tz) if naive_end is not None else None
-    try:
-        distance_miles = float(distance)
-    except (TypeError, ValueError):
-        distance_miles = math.nan
-    if not math.isfinite(distance_miles) or distance_miles <= 0:
-        errors["distance"] = "Distance must be a positive finite number."
+    distance_miles: float | None
+    # A direct call that bypasses form coercion (rather than going through
+    # FastAPI) can still hand this a float instead of the submitted string;
+    # only a string can be blank, so anything else falls through to the
+    # numeric parse below as it always has.
+    if distance_optional and isinstance(distance, str) and not distance.strip():
+        distance_miles = None
+    else:
+        try:
+            distance_miles = float(distance)
+        except (TypeError, ValueError):
+            distance_miles = math.nan
+        if not math.isfinite(distance_miles) or distance_miles <= 0:
+            errors["distance"] = "Distance must be a positive finite number."
     if errors:
         raise ManualTripValidationError(errors)
     assert started_at is not None and ended_at is not None
     if ended_at <= started_at:
         ended_at += timedelta(days=1)
-    distance_m = distance_miles * METERS_PER_MILE
-    if not math.isfinite(distance_m):
-        raise ManualTripValidationError(
-            {"distance": "Distance must be a positive finite number."}
-        )
+    if distance_miles is None:
+        distance_m = None
+    else:
+        distance_m = distance_miles * METERS_PER_MILE
+        if not math.isfinite(distance_m):
+            raise ManualTripValidationError(
+                {"distance": "Distance must be a positive finite number."}
+            )
     return started_at, ended_at, distance_m
+
+
+@dataclass(frozen=True)
+class _ManualRouteEndpoints:
+    """Validated routing endpoints for a manual trip, resolved from
+    whichever `route_mode` the form submitted. `start_place_id`/
+    `end_place_id` are only set for `route_mode == "places"` -- a
+    map-picked endpoint has no place to attribute the trip to.
+    """
+    from_lat: float
+    from_lon: float
+    to_lat: float
+    to_lon: float
+    start_place_id: int | None
+    end_place_id: int | None
+
+
+def _parse_manual_route_coord(value: str, *, minimum: float, maximum: float) -> float:
+    try:
+        raw = float(value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid route coordinate")
+    parsed = parse_finite_number(raw, minimum=minimum, maximum=maximum)
+    if parsed is None:
+        raise HTTPException(status_code=400, detail="Invalid route coordinate")
+    return parsed
+
+
+async def _resolve_manual_route_endpoints(
+    conn, route_mode: str, start_place: str, end_place: str,
+    start_lat: str, start_lon: str, end_lat: str, end_lon: str,
+) -> _ManualRouteEndpoints | None:
+    """Turn a manual-trip route selection into validated endpoint
+    coordinates. Returns None for `route_mode == "none"` (no routing at
+    all, the caller's cue to skip OSRM entirely). Raises HTTPException(400)
+    for anything unparseable, unselected, or out of range -- unlike a
+    detected trip's coordinates, these come straight from user-controlled
+    form fields with no GPS-pipeline validation behind them, and the
+    message never echoes the submitted value back (an unknown place id or
+    a bad coordinate string is not safe to reflect into a response body).
+
+    Never touches OSRM itself: the caller must release this connection
+    before routing, so a slow or hung outbound OSRM call never holds a
+    pooled database connection.
+    """
+    if route_mode == "none":
+        return None
+    if route_mode == "places":
+        try:
+            start_id = int(start_place)
+            end_id = int(end_place)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Select a start and end place")
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT id, ST_Y(geom::geometry) AS lat, ST_X(geom::geometry) AS lon "
+            "FROM places WHERE id = ANY(%s)",
+            ([start_id, end_id],),
+        )
+        rows = {row["id"]: row for row in await cur.fetchall()}
+        if start_id not in rows or end_id not in rows:
+            raise HTTPException(status_code=400, detail="Unknown place selected")
+        return _ManualRouteEndpoints(
+            from_lat=rows[start_id]["lat"], from_lon=rows[start_id]["lon"],
+            to_lat=rows[end_id]["lat"], to_lon=rows[end_id]["lon"],
+            start_place_id=start_id, end_place_id=end_id,
+        )
+    if route_mode == "map":
+        return _ManualRouteEndpoints(
+            from_lat=_parse_manual_route_coord(start_lat, minimum=-90, maximum=90),
+            from_lon=_parse_manual_route_coord(start_lon, minimum=-180, maximum=180),
+            to_lat=_parse_manual_route_coord(end_lat, minimum=-90, maximum=90),
+            to_lon=_parse_manual_route_coord(end_lon, minimum=-180, maximum=180),
+            start_place_id=None, end_place_id=None,
+        )
+    raise HTTPException(status_code=400, detail="Unknown route mode")
+
+
+def _escape_ilike_term(term: str) -> str:
+    """Escape `%`, `_`, and backslash so a raw search term matches those
+    characters literally instead of acting as ILIKE wildcards/escape
+    introducer. Backslash must be escaped first, or escaping % and _ would
+    double-escape the backslashes this step just inserted.
+    """
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _trip_filter_sql(
     category: str, from_dt: datetime | None, to_dt: datetime | None,
     vehicle_id: int | None | Literal["none"] = None,
+    q: str = "",
 ) -> tuple[str, list]:
     """Build a `WHERE` clause + params list for filtering trips by category,
-    vehicle, and/or `started_at` range. Shared by the trip list, `/export`,
-    the month pager, and `/review` so none of them can drift apart.
+    vehicle, date range, and/or a free-text search term. Shared by the trip
+    list, `/export`, the month pager, and `/review` so none of them can
+    drift apart.
+
+    The search term matches notes, purpose, either place name, or either
+    cached address, case-insensitively and on substrings -- the same four
+    subselects `TRIP_COLUMNS` selects, reused here rather than duplicated so
+    the predicate can never see different text than what the archive
+    displays. An empty or whitespace-only term is no search at all, so the
+    generated SQL (and every URL built from it) is unchanged from before
+    this filter existed.
     """
     clauses = []
     params: list = []
@@ -352,15 +510,32 @@ def _trip_filter_sql(
     if to_dt is not None:
         clauses.append("started_at < %s")
         params.append(to_dt)
+    term = q.strip()
+    if term:
+        pattern = f"%{_escape_ilike_term(term)}%"
+        clauses.append(
+            "(notes ILIKE %s ESCAPE '\\' OR purpose ILIKE %s ESCAPE '\\' OR "
+            f"{_START_PLACE_NAME_SQL} ILIKE %s ESCAPE '\\' OR "
+            f"{_END_PLACE_NAME_SQL} ILIKE %s ESCAPE '\\' OR "
+            f"{_START_ADDRESS_SQL} ILIKE %s ESCAPE '\\' OR "
+            f"{_END_ADDRESS_SQL} ILIKE %s ESCAPE '\\')"
+        )
+        params.extend([pattern] * 6)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     return where, params
 
 
-def _url_with_filters(path: str, from_str: str, to_str: str, vehicle_str: str, **leading) -> str:
+def _url_with_filters(
+    path: str, from_str: str, to_str: str, vehicle_str: str, q_str: str = "", **leading
+) -> str:
     """One query-string builder for every link that carries the current
     filter set, so the views can't drift on param names or ordering.
     `leading` params (category, format, offset) come first; empty values are
-    dropped (but a genuine 0, e.g. `offset`, is kept).
+    dropped (but a genuine 0, e.g. `offset`, is kept). A whitespace-only
+    `q_str` is dropped the same way, matching `_trip_filter_sql` treating it
+    as no search: a page with no active search term builds byte-identical
+    URLs to before this filter existed. The term is stored stripped, so a
+    padded term cannot make an otherwise identical link differ.
     """
     params = {k: v for k, v in leading.items() if v != "" and v is not None}
     if from_str:
@@ -369,6 +544,9 @@ def _url_with_filters(path: str, from_str: str, to_str: str, vehicle_str: str, *
         params["to"] = to_str
     if vehicle_str:
         params["vehicle"] = vehicle_str
+    term = q_str.strip()
+    if term:
+        params["q"] = term
     return f"{path}?{urlencode(params)}" if params else path
 
 
@@ -390,9 +568,10 @@ def _month_page_url(
     from_str: str,
     to_str: str,
     vehicle: str,
+    q: str = "",
 ) -> str:
     return _url_with_filters(
-        f"/trips/month/{year}/{month}", from_str, to_str, vehicle,
+        f"/trips/month/{year}/{month}", from_str, to_str, vehicle, q,
         offset=offset, category=category,
     )
 
@@ -408,10 +587,11 @@ async def _fetch_month_page(
     from_dt: datetime | None,
     to_dt: datetime | None,
     vehicle_id: int | None | Literal["none"],
+    q: str = "",
 ) -> tuple[list[dict], bool]:
     """Fetch one stable local-month page plus a one-row `has_more` sentinel."""
     month_start, month_end = _month_bounds(year, month, tz)
-    where, params = _trip_filter_sql(category, from_dt, to_dt, vehicle_id)
+    where, params = _trip_filter_sql(category, from_dt, to_dt, vehicle_id, q=q)
     where += " AND" if where else "WHERE"
     where += " started_at >= %s AND started_at < %s"
     params.extend((month_start, month_end))
@@ -883,11 +1063,11 @@ async def _apply_human_tag(
         raise HTTPException(status_code=404, detail="No such trip")
 
 
-def _review_url(from_str: str, to_str: str, vehicle_str: str) -> str:
+def _review_url(from_str: str, to_str: str, vehicle_str: str, q_str: str = "") -> str:
     """`/review` link carrying the current filters. No category param:
     `/review` always pins category to unclassified.
     """
-    return _url_with_filters("/review", from_str, to_str, vehicle_str)
+    return _url_with_filters("/review", from_str, to_str, vehicle_str, q_str)
 
 
 async def _trip_position(conn, trip_id: int) -> tuple[datetime, int] | None:
@@ -939,7 +1119,8 @@ async def _delete_trip_in(conn, trip_id: int) -> tuple[datetime, int]:
 
 
 async def _fetch_review_card(
-    conn, where: str, params: list, cursor: tuple[datetime, int] | None
+    conn, where: str, params: list, cursor: tuple[datetime, int] | None,
+    *, inclusive: bool = False,
 ) -> dict:
     """One review card (or the lack of one): the oldest unclassified trip
     matching the filters, strictly after `cursor` (None = fresh `/review`
@@ -948,10 +1129,18 @@ async def _fetch_review_card(
     empty filtered set ("empty": nothing ever matched) from an exhausted
     pass ("done": the cursor ran out but a fresh load would find trips),
     review.html renders the two differently.
+
+    `inclusive=True` switches the cursor comparison to "at or after", so the
+    trip named by `cursor` itself can be the one returned. Every advancing
+    caller (skip, tag-and-advance, delete) leaves this False, matching the
+    "strictly after" contract above; only undo passes `inclusive=True`, with
+    the undone trip's own position as cursor, to bring that exact trip back
+    to the card instead of the trip after it.
     """
     extra_where, extra_params = "", []
     if cursor is not None:
-        extra_where = " AND (started_at, id) > (%s, %s)"
+        op = ">=" if inclusive else ">"
+        extra_where = f" AND (started_at, id) {op} (%s, %s)"
         extra_params = list(cursor)
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
@@ -986,16 +1175,18 @@ async def _fetch_review_card(
     }
 
 
-def _review_filter_sql(request: Request, from_: str, to: str, vehicle: str) -> tuple[str, list]:
+def _review_filter_sql(
+    request: Request, from_: str, to: str, vehicle: str, q: str = ""
+) -> tuple[str, list]:
     """The unclassified-pinned filter every `/review` route shares."""
     tz = request.app.state.config.display_tz
     from_dt, to_dt = parse_date_range(from_, to, tz)
-    return _trip_filter_sql("unclassified", from_dt, to_dt, _parse_vehicle_id(vehicle))
+    return _trip_filter_sql("unclassified", from_dt, to_dt, _parse_vehicle_id(vehicle), q=q)
 
 
 async def _render_review_card(
     request: Request, conn, template: str, card: dict,
-    from_: str, to: str, vehicle: str, **extra,
+    from_: str, to: str, vehicle: str, q: str = "", **extra,
 ):
     """Render a review card with the shared context (vehicles, purpose
     suggestions, current filters) every `/review` route passes identically.
@@ -1007,7 +1198,9 @@ async def _render_review_card(
         {
             **card, "vehicles": vehicles, "recent_purposes": recent_purposes,
             "filter_from": from_, "filter_to": to, "filter_vehicle": vehicle,
-            "review_url": _review_url(from_, to, vehicle),
+            "filter_q": q,
+            "review_url": _review_url(from_, to, vehicle, q),
+            "undo_notice": "",
             **extra,
         },
     )
@@ -1047,70 +1240,110 @@ def make_router() -> APIRouter:
     router = APIRouter()
 
     @router.get("/stats")
-    async def stats(request: Request, user: dict = Depends(require_user)):
-        """Current-year operational view, deliberately separate from the
-        filing-oriented annual report: category work and repeated routes are
-        most useful while the year is still in progress, while the report
-        preserves its tax-specific caveats and rate-period accounting.
+    async def stats(
+        request: Request,
+        user: dict = Depends(require_user),
+        year: int | None = Query(None, ge=1, le=9998),
+        from_: str = Query("", alias="from"),
+        to: str = Query(""),
+        vehicle: str = Query(""),
+    ):
+        """Operational view, deliberately separate from the filing-oriented
+        annual report: category work and repeated routes are most useful for
+        a chosen year or range, while the report preserves its tax-specific
+        caveats and rate-period accounting.
         """
         pool = request.app.state.pool
         tz = request.app.state.config.display_tz
         now = datetime.now(tz)
-        year_start = datetime(now.year, 1, 1, tzinfo=tz)
-        next_year_start = datetime(now.year + 1, 1, 1, tzinfo=tz)
-        week_start = (now - timedelta(days=now.weekday())).replace(
-            hour=0, minute=0, second=0, microsecond=0,
-        ) - timedelta(weeks=11)
-        weekly_start = max(year_start, week_start)
+        selected_year = year or now.year
+        year_start = datetime(selected_year, 1, 1, tzinfo=tz)
+        next_year_start = datetime(selected_year + 1, 1, 1, tzinfo=tz)
+
+        from_dt, to_dt = parse_date_range(from_, to, tz)
+        if from_dt is not None and from_dt > year_start:
+            year_start = from_dt
+        if to_dt is not None and to_dt < next_year_start:
+            next_year_start = to_dt
+
+        vehicle_id = _parse_vehicle_id(vehicle)
+        vehicle_clause = ""
+        vehicle_params: list = []
+        if vehicle_id == VEHICLE_FILTER_UNASSIGNED:
+            vehicle_clause = " AND vehicle_id IS NULL"
+        elif vehicle_id is not None:
+            vehicle_clause = " AND vehicle_id = %s"
+            vehicle_params = [vehicle_id]
+
+        period_start_date = from_dt.date() if from_dt is not None else date(selected_year, 1, 1)
+        if to_dt is not None:
+            period_end_date = (to_dt - timedelta(days=1)).date()
+        elif selected_year < now.year:
+            period_end_date = date(selected_year, 12, 31)
+        else:
+            period_end_date = now.date()
+        # A from/to filter can spill outside the selected year (e.g. to=2027-01-15
+        # with year=2026); clamp so monthly bucket ranges stay within that year.
+        period_start_date = max(period_start_date, date(selected_year, 1, 1))
+        period_end_date = min(period_end_date, date(selected_year, 12, 31))
+
         async with pool.connection() as conn:
             category_cur = await conn.execute(
                 f"SELECT category::text, count(*), COALESCE(SUM({DISPLAY_DISTANCE_SQL}), 0) "
-                "FROM trips WHERE started_at >= %s AND started_at < %s GROUP BY category",
-                (year_start, next_year_start),
+                f"FROM trips WHERE started_at >= %s AND started_at < %s{vehicle_clause} GROUP BY category",
+                (year_start, next_year_start, *vehicle_params),
             )
             weekly_cur = await conn.execute(
                 "SELECT date_trunc('week', started_at AT TIME ZONE %s)::date, category::text, count(*), "
                 f"COALESCE(SUM({DISPLAY_DISTANCE_SQL}), 0) "
-                "FROM trips WHERE started_at >= %s AND started_at < %s "
+                f"FROM trips WHERE started_at >= %s AND started_at < %s{vehicle_clause} "
                 "GROUP BY 1, 2 ORDER BY 1",
-                (tz.key, weekly_start, next_year_start),
+                (tz.key, year_start, next_year_start, *vehicle_params),
             )
             monthly_cur = await conn.execute(
                 "SELECT date_trunc('month', started_at AT TIME ZONE %s)::date, category::text, count(*), "
                 f"COALESCE(SUM({DISPLAY_DISTANCE_SQL}), 0) "
-                "FROM trips WHERE started_at >= %s AND started_at < %s "
+                f"FROM trips WHERE started_at >= %s AND started_at < %s{vehicle_clause} "
                 "GROUP BY 1, 2 ORDER BY 1",
-                (tz.key, year_start, next_year_start),
+                (tz.key, year_start, next_year_start, *vehicle_params),
             )
             routes_cur = await conn.execute(
                 "WITH named_routes AS ("
                 " SELECT LEAST(start_place_id, end_place_id) AS a_id, GREATEST(start_place_id, end_place_id) AS b_id, "
                 f" count(*) AS trip_count, COALESCE(SUM({DISPLAY_DISTANCE_SQL}), 0) AS total_m "
                 " FROM trips WHERE started_at >= %s AND started_at < %s "
-                " AND start_place_id IS NOT NULL AND end_place_id IS NOT NULL "
+                " AND start_place_id IS NOT NULL AND end_place_id IS NOT NULL"
+                f"{vehicle_clause} "
                 " GROUP BY 1, 2) "
                 "SELECT a.name, b.name, named_routes.trip_count, named_routes.total_m "
                 "FROM named_routes JOIN places a ON a.id = named_routes.a_id "
                 "JOIN places b ON b.id = named_routes.b_id "
                 "ORDER BY total_m DESC, trip_count DESC, a.name, b.name LIMIT 5",
-                (year_start, next_year_start),
+                (year_start, next_year_start, *vehicle_params),
             )
             places_cur = await conn.execute(
                 "WITH endpoints AS ("
-                " SELECT start_place_id AS place_id FROM trips WHERE started_at >= %s AND started_at < %s "
-                " UNION ALL SELECT end_place_id FROM trips WHERE started_at >= %s AND started_at < %s) "
+                f" SELECT start_place_id AS place_id FROM trips WHERE started_at >= %s AND started_at < %s{vehicle_clause} "
+                f" UNION ALL SELECT end_place_id FROM trips WHERE started_at >= %s AND started_at < %s{vehicle_clause}) "
                 "SELECT places.name, count(*) AS visit_count FROM endpoints "
                 "JOIN places ON places.id = endpoints.place_id GROUP BY places.id, places.name "
                 "ORDER BY visit_count DESC, places.name LIMIT 5",
-                (year_start, next_year_start, year_start, next_year_start),
+                (year_start, next_year_start, *vehicle_params, year_start, next_year_start, *vehicle_params),
             )
             unnamed_cur = await conn.execute(
-                "SELECT count(*) FROM trips WHERE started_at >= %s AND started_at < %s "
+                f"SELECT count(*) FROM trips WHERE started_at >= %s AND started_at < %s{vehicle_clause} "
                 "AND (start_place_id IS NULL OR end_place_id IS NULL)",
-                (year_start, next_year_start),
+                (year_start, next_year_start, *vehicle_params),
             )
+
+            def drill_url(start: date, end: date, category: str) -> str:
+                return _url_with_filters(
+                    "/trips", start.isoformat(), end.isoformat(), vehicle, category=category
+                )
+
             dashboard = build_dashboard(
-                now.year, now.date(), await category_cur.fetchall(), await weekly_cur.fetchall(),
+                selected_year, period_start_date, period_end_date,
+                await category_cur.fetchall(), await weekly_cur.fetchall(),
                 await monthly_cur.fetchall(),
                 [
                     {"start_name": row[0], "end_name": row[1], "trip_count": row[2], "total_m": float(row[3])}
@@ -1118,9 +1351,84 @@ def make_router() -> APIRouter:
                 ],
                 [{"name": row[0], "visit_count": row[1]} for row in await places_cur.fetchall()],
                 (await unnamed_cur.fetchone())[0],
+                drill_url,
             )
+
+            # The query itself stays unbounded on year so the five-year
+            # window can be chosen in Python (see _multiyear_window) instead
+            # of re-querying per candidate window. The from/to date filter
+            # still does not apply here: a year-over-year comparison is
+            # meaningless clamped to a sub-year range. It still respects the
+            # vehicle filter.
+            cross_year_cur = await conn.execute(
+                "SELECT EXTRACT(year FROM started_at AT TIME ZONE %s)::int, "
+                "EXTRACT(month FROM started_at AT TIME ZONE %s)::int, "
+                f"category::text, count(*), COALESCE(SUM({DISPLAY_DISTANCE_SQL}), 0) "
+                f"FROM trips WHERE TRUE{vehicle_clause} GROUP BY 1, 2, 3 ORDER BY 1, 2",
+                (tz.key, tz.key, *vehicle_params),
+            )
+            cross_year_rows = await cross_year_cur.fetchall()
+            years_present = sorted({row[0] for row in cross_year_rows})
+            multiyear_years, cutoff_month, cutoff_day = _multiyear_window(
+                years_present, selected_year, now
+            )
+
+            def multiyear_drill_url(bar_year: int, bar_month: int) -> str:
+                # The bar's own year, not `selected_year`: clicking the 2022
+                # bar in the January group must go to January 2022 even
+                # though the page is showing a different year.
+                last_day = calendar.monthrange(bar_year, bar_month)[1]
+                start = date(bar_year, bar_month, 1)
+                end = date(bar_year, bar_month, last_day)
+                return _url_with_filters("/trips", start.isoformat(), end.isoformat(), vehicle)
+
+            multiyear = build_multiyear_chart(
+                cross_year_rows, multiyear_years, cutoff_month, cutoff_day, multiyear_drill_url
+            )
+            trend = build_share_trend(cross_year_rows, multiyear_years, cutoff_month)
+
+            vehicle_mileage_cur = await conn.execute(
+                "SELECT t.vehicle_id, COALESCE(v.name, ''), "
+                "EXTRACT(month FROM t.started_at AT TIME ZONE %s)::int, "
+                f"t.category::text, count(*), COALESCE(SUM({DISPLAY_DISTANCE_SQL}), 0) "
+                "FROM trips t LEFT JOIN vehicles v ON v.id = t.vehicle_id "
+                f"WHERE t.started_at >= %s AND t.started_at < %s{vehicle_clause} "
+                "GROUP BY 1, 2, 3, 4",
+                (tz.key, year_start, next_year_start, *vehicle_params),
+            )
+            vehicle_expenses_cur = await conn.execute(
+                "SELECT expenses.vehicle_id, vehicles.name, COALESCE(SUM(expenses.amount), 0) "
+                "FROM expenses JOIN vehicles ON vehicles.id = expenses.vehicle_id "
+                f"WHERE expenses.incurred_on >= %s AND expenses.incurred_on <= %s{vehicle_clause} "
+                "GROUP BY 1, 2",
+                (period_start_date, period_end_date, *vehicle_params),
+            )
+            rates = await load_rates(conn)
+            vehicle_breakdown = build_vehicle_breakdown(
+                await vehicle_mileage_cur.fetchall(),
+                await vehicle_expenses_cur.fetchall(),
+                selected_year,
+                rates,
+            )
+
+            vehicles = await list_vehicles(conn)
         return request.app.state.templates.TemplateResponse(
-            request, "stats.html", {"user": user, "csrf": request.session.get("csrf", ""), "stats": dashboard},
+            request, "stats.html", {
+                "user": user,
+                "csrf": request.session.get("csrf", ""),
+                "stats": dashboard,
+                "multiyear": multiyear,
+                "trend": trend,
+                "vehicle_breakdown": vehicle_breakdown,
+                "filter_year": selected_year,
+                "filter_from": from_,
+                "filter_to": to,
+                "filter_vehicle": vehicle,
+                "vehicles": vehicles,
+                "next_year_disabled": selected_year >= now.year,
+                "period_start": period_start_date,
+                "period_end": period_end_date,
+            },
         )
 
     @router.get("/")
@@ -1198,12 +1506,14 @@ def make_router() -> APIRouter:
         manual_notes: str = Query(""),
         bridge_trip: str = Query(""),
         manual_open: str = Query(""),
+        notice: str = Query(""),
+        q: str = Query(""),
     ):
         pool = request.app.state.pool
         tz = request.app.state.config.display_tz
         from_dt, to_dt = parse_date_range(from_, to, tz)
         vehicle_id = _parse_vehicle_id(vehicle)
-        where, params = _trip_filter_sql(category, from_dt, to_dt, vehicle_id)
+        where, params = _trip_filter_sql(category, from_dt, to_dt, vehicle_id, q=q)
         page_size = request.app.state.config.trips_page_size
         ytd_year = datetime.now(tz).year
         year_start = datetime(ytd_year, 1, 1, tzinfo=tz)
@@ -1237,6 +1547,10 @@ def make_router() -> APIRouter:
             rates = await load_rates(conn)
             vehicles = await list_vehicles(conn)
             recent_purposes = await _fetch_recent_purposes(conn)
+            # For the manual-trip form's start/end place selectors. The
+            # template does not render these yet; fetching them here now
+            # means adding that markup later needs no route change alongside it.
+            places = await _fetch_places_rows(conn)
             # Grouped by local month so a mid-year rate change prices each
             # half at its own rate (see sum_month_deductions).
             ytd_cur = await conn.execute(
@@ -1272,7 +1586,7 @@ def make_router() -> APIRouter:
             )
             month["next_url"] = _month_page_url(
                 month["year"], month["month_num"], page_size,
-                category, from_, to, vehicle,
+                category, from_, to, vehicle, q,
             )
             months.append(month)
 
@@ -1289,17 +1603,29 @@ def make_router() -> APIRouter:
                 if bridge_trip else None,
             }
 
+        # Whitelisted, not reflected as-is: `notice` is an attacker-
+        # controlled query param, and the only thing it may ever mean is
+        # "the manual trip you just saved has no route" -- anything else
+        # collapses to no notice rather than echoing arbitrary query text
+        # onto the page.
+        notice_value = notice if notice == MANUAL_ROUTE_UNAVAILABLE_NOTICE else ""
+
         return request.app.state.templates.TemplateResponse(
             request, "trips.html",
             {
                 "months": months, "vehicles": vehicles, "recent_purposes": recent_purposes,
+                "places": places, "notice": notice_value,
                 "user": user, "csrf": request.session.get("csrf", ""),
                 "filter_category": category, "filter_from": from_, "filter_to": to,
-                "filter_vehicle": vehicle,
-                "filter_url": lambda category: _url_with_filters("/trips", from_, to, vehicle, category=category),
+                "filter_vehicle": vehicle, "filter_q": q,
+                "filter_url": lambda category: _url_with_filters(
+                    "/trips", from_, to, vehicle, q, category=category
+                ),
                 # export link must carry the current filter so an export matches what is on screen
-                "export_url": lambda fmt: _url_with_filters("/export", from_, to, vehicle, format=fmt, category=category),
-                "review_url": _review_url(from_, to, vehicle),
+                "export_url": lambda fmt: _url_with_filters(
+                    "/export", from_, to, vehicle, q, format=fmt, category=category
+                ),
+                "review_url": _review_url(from_, to, vehicle, q),
                 "ytd_year": ytd_year,
                 "ytd_deduction": sum_month_deductions(ytd_by_month, ytd_year, rates),
                 "manual_prefill": manual_prefill,
@@ -1318,12 +1644,13 @@ def make_router() -> APIRouter:
         from_: str = Query("", alias="from"),
         to: str = Query(""),
         vehicle: str = Query(""),
+        q: str = Query(""),
     ):
-        where, params = _review_filter_sql(request, from_, to, vehicle)
+        where, params = _review_filter_sql(request, from_, to, vehicle, q)
         async with request.app.state.pool.connection() as conn:
             card = await _fetch_review_card(conn, where, params, cursor=None)
             return await _render_review_card(
-                request, conn, "review.html", card, from_, to, vehicle,
+                request, conn, "review.html", card, from_, to, vehicle, q,
                 user=user, csrf=request.session.get("csrf", ""),
             )
 
@@ -1335,17 +1662,18 @@ def make_router() -> APIRouter:
         from_: str = Query("", alias="from"),
         to: str = Query(""),
         vehicle: str = Query(""),
+        q: str = Query(""),
     ):
         """Next-card partial, used by Skip. `after` is the currently displayed
         trip's id. Its own `(started_at, id)` becomes the cursor, so a
         skipped trip can't reappear within this pass.
         """
-        where, params = _review_filter_sql(request, from_, to, vehicle)
+        where, params = _review_filter_sql(request, from_, to, vehicle, q)
         async with request.app.state.pool.connection() as conn:
             cursor = await _trip_position(conn, after)
             card = await _fetch_review_card(conn, where, params, cursor)
             return await _render_review_card(
-                request, conn, "_review_card.html", card, from_, to, vehicle,
+                request, conn, "_review_card.html", card, from_, to, vehicle, q,
             )
 
     @router.post("/review/{trip_id}/skip", dependencies=[Depends(require_csrf)])
@@ -1357,24 +1685,36 @@ def make_router() -> APIRouter:
         to: str = Form(""),
         vehicle: str = Form(""),
         user: dict = Depends(require_user),
+        notes: str = Form(""),
+        vehicle_id: str = Form(""),
+        q: str = Form(""),
     ):
         """Save purpose and advance without classifying the current trip.
 
         Carrying purpose in this request makes Skip authoritative if a
         change-triggered independent save is still in flight.
         """
-        where, params = _review_filter_sql(request, from_, to, vehicle)
+        where, params = _review_filter_sql(request, from_, to, vehicle, q)
+        notes_value = notes if isinstance(notes, str) else ""
+        vehicle_value = vehicle_id if isinstance(vehicle_id, str) else ""
         async with request.app.state.pool.connection() as conn:
             position = await _trip_position(conn, trip_id)
             if position is None:
                 raise HTTPException(status_code=404, detail="No such trip")
-            await conn.execute(
-                "UPDATE trips SET purpose = %s, updated_at = now() WHERE id = %s",
-                (purpose.strip() or None, trip_id),
-            )
+            try:
+                cur = await conn.execute(
+                    "UPDATE trips SET purpose = %s, notes = %s, vehicle_id = %s, "
+                    "updated_at = now() WHERE id = %s",
+                    (purpose.strip() or None, notes_value.strip() or None,
+                     _parse_vehicle_form(vehicle_value), trip_id),
+                )
+            except errors.ForeignKeyViolation:
+                raise HTTPException(status_code=400, detail="No such vehicle")
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="No such trip")
             card = await _fetch_review_card(conn, where, params, cursor=position)
             return await _render_review_card(
-                request, conn, "_review_card.html", card, from_, to, vehicle,
+                request, conn, "_review_card.html", card, from_, to, vehicle, q,
             )
 
     @router.post("/review/{trip_id}/tag", dependencies=[Depends(require_csrf)])
@@ -1387,6 +1727,9 @@ def make_router() -> APIRouter:
         to: str = Form(""),
         vehicle: str = Form(""),
         user: dict = Depends(require_user),
+        notes: str = Form(""),
+        vehicle_id: str = Form(""),
+        q: str = Form(""),
     ):
         """Tag-and-advance in one round trip. Unlike
         the list-view `tag_trip`, a review card is by definition unclassified,
@@ -1397,17 +1740,75 @@ def make_router() -> APIRouter:
         """
         if category not in ("business", "personal"):
             raise HTTPException(status_code=400, detail="Unknown category")
-        where, params = _review_filter_sql(request, from_, to, vehicle)
+        where, params = _review_filter_sql(request, from_, to, vehicle, q)
+        notes_value = notes if isinstance(notes, str) else ""
+        vehicle_value = vehicle_id if isinstance(vehicle_id, str) else ""
         async with request.app.state.pool.connection() as conn:
             position = await _trip_position(conn, trip_id)
             if position is None:
                 raise HTTPException(status_code=404, detail="No such trip")
-            await _apply_human_tag(
-                conn, trip_id, category, purpose, update_purpose=True,
-            )
+            try:
+                cur = await conn.execute(
+                    "UPDATE trips SET category = %s, purpose = %s, notes = %s, "
+                    "vehicle_id = %s, tag_source = 'human', updated_at = now() "
+                    "WHERE id = %s",
+                    (category, purpose.strip() or None, notes_value.strip() or None,
+                     _parse_vehicle_form(vehicle_value), trip_id),
+                )
+            except errors.ForeignKeyViolation:
+                raise HTTPException(status_code=400, detail="No such vehicle")
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="No such trip")
             card = await _fetch_review_card(conn, where, params, cursor=position)
             return await _render_review_card(
-                request, conn, "_review_card.html", card, from_, to, vehicle,
+                request, conn, "_review_card.html", card, from_, to, vehicle, q,
+            )
+
+    @router.post("/review/{trip_id}/undo", dependencies=[Depends(require_csrf)])
+    async def review_undo_trip(
+        request: Request,
+        trip_id: int,
+        kind: str = Form(...),
+        from_: str = Form("", alias="from"),
+        to: str = Form(""),
+        vehicle: str = Form(""),
+        user: dict = Depends(require_user),
+        q: str = Form(""),
+    ):
+        """Reverse the one action review.html's page script remembers, and
+        re-present that trip. One step, client-remembered, lost on reload --
+        not the override/audit machinery that backs merge/split/delete undo
+        in Settings. That machinery is for structural changes to trips; this
+        is taking back a keystroke.
+
+        `kind` distinguishes what to reverse, because tag and skip aren't
+        symmetric. A tag (`review_tag_trip`) wrote `category` and left the
+        unclassified set, so undoing it clears `category` back to
+        'unclassified' through `_apply_human_tag`, the same clearing path
+        the list-view `tag_trip` already uses -- `tag_source` stays 'human'
+        on the clear, deliberately (see that function's docstring for why
+        that's load-bearing). A skip (`review_skip_trip`) wrote only
+        `purpose`; the trip never left the unclassified set, so undoing it
+        reverses no write and leaves the saved purpose alone.
+
+        Either way the trip is re-fetched with `inclusive=True` so it, not
+        whatever comes after it, lands back on the card.
+        """
+        if kind not in ("tag", "skip"):
+            raise HTTPException(status_code=400, detail="Unknown undo kind")
+        where, params = _review_filter_sql(request, from_, to, vehicle, q)
+        async with request.app.state.pool.connection() as conn:
+            position = await _trip_position(conn, trip_id)
+            if position is None:
+                raise HTTPException(status_code=404, detail="No such trip")
+            if kind == "tag":
+                await _apply_human_tag(conn, trip_id, "unclassified")
+            card = await _fetch_review_card(
+                conn, where, params, cursor=position, inclusive=True,
+            )
+            return await _render_review_card(
+                request, conn, "_review_card.html", card, from_, to, vehicle, q,
+                undo_notice="Previous action undone. Trip restored.",
             )
 
     @router.post("/review/{trip_id}/delete", dependencies=[Depends(require_csrf)])
@@ -1418,6 +1819,7 @@ def make_router() -> APIRouter:
         to: str = Form(""),
         vehicle: str = Form(""),
         user: dict = Depends(require_user),
+        q: str = Form(""),
     ):
         """Delete the displayed trip and advance beyond its prior position.
 
@@ -1425,12 +1827,12 @@ def make_router() -> APIRouter:
         removes the row, so the review pass continues exactly as tag and
         Skip do, including stable id tie-breaking.
         """
-        where, params = _review_filter_sql(request, from_, to, vehicle)
+        where, params = _review_filter_sql(request, from_, to, vehicle, q)
         async with request.app.state.pool.connection() as conn:
             position = await _delete_trip_in(conn, trip_id)
             card = await _fetch_review_card(conn, where, params, cursor=position)
             return await _render_review_card(
-                request, conn, "_review_card.html", card, from_, to, vehicle,
+                request, conn, "_review_card.html", card, from_, to, vehicle, q,
             )
 
     @router.get("/trips/month/{year}/{month}")
@@ -1444,6 +1846,7 @@ def make_router() -> APIRouter:
         to: str = Query(""),
         vehicle: str = Query(""),
         user: dict = Depends(require_user),
+        q: str = Query(""),
     ):
         pool = request.app.state.pool
         tz = request.app.state.config.display_tz
@@ -1452,7 +1855,7 @@ def make_router() -> APIRouter:
         async with pool.connection() as conn:
             trips, has_more = await _fetch_month_page(
                 conn, tz, year, month, page_size, offset, category,
-                from_dt, to_dt, _parse_vehicle_id(vehicle),
+                from_dt, to_dt, _parse_vehicle_id(vehicle), q,
             )
             vehicles = await list_vehicles(conn)
             recent_purposes = await _fetch_recent_purposes(conn)
@@ -1465,7 +1868,7 @@ def make_router() -> APIRouter:
                 "recent_purposes": recent_purposes,
                 "has_more": has_more,
                 "next_url": _month_page_url(
-                    year, month, offset + page_size, category, from_, to, vehicle
+                    year, month, offset + page_size, category, from_, to, vehicle, q
                 ),
             },
         )
@@ -1479,6 +1882,7 @@ def make_router() -> APIRouter:
         from_: str = Query("", alias="from"),
         to: str = Query(""),
         vehicle: str = Query(""),
+        q: str = Query(""),
     ):
         if format not in EXPORT_MEDIA_TYPES:
             raise HTTPException(status_code=400, detail="format must be csv or xlsx")
@@ -1488,7 +1892,7 @@ def make_router() -> APIRouter:
         vehicle_id = _parse_vehicle_id(vehicle)
         # Reuses the exact same filter SQL as index() so a filtered export
         # can never drift from what's currently on screen.
-        where, params = _trip_filter_sql(category, from_dt, to_dt, vehicle_id)
+        where, params = _trip_filter_sql(category, from_dt, to_dt, vehicle_id, q=q)
         async with pool.connection() as conn:
             cur = conn.cursor(row_factory=dict_row)
             await cur.execute(
@@ -1852,7 +2256,11 @@ def make_router() -> APIRouter:
         async with pool.connection() as conn:
             vehicles = await list_vehicles(conn)
             recent_purposes = await _fetch_recent_purposes(conn)
-            if trip["source"] == "detected":
+            # A routed manual trip has a real `path` too (see add_manual_trip),
+            # so it needs the same geometry fetch a detected trip gets; the
+            # stay-centroid and adjacent-trip queries below stay detected-only,
+            # since neither concept exists for a manual trip.
+            if trip["source"] == "detected" or trip["has_route_geometry"]:
                 cur = await conn.execute(
                     "SELECT ST_AsGeoJSON(path), ST_AsGeoJSON(path_snapped) "
                     "FROM trips WHERE id = %s", (trip_id,)
@@ -1860,6 +2268,7 @@ def make_router() -> APIRouter:
                 row = await cur.fetchone()
                 path_geojson = row[0] if row else None
                 path_snapped_geojson = row[1] if row else None
+            if trip["source"] == "detected":
                 cur = await conn.execute(
                     "SELECT ST_AsGeoJSON(centroid::geometry) FROM stays "
                     "WHERE device = %s AND (ended_at = %s OR started_at = %s)",
@@ -1966,6 +2375,67 @@ def make_router() -> APIRouter:
         ctx = await _fetch_trip_card_context(pool, trip_id)
         return request.app.state.templates.TemplateResponse(request, "_trip_card.html", ctx)
 
+    @router.post("/trips/manual/route-preview", dependencies=[Depends(require_csrf)])
+    async def manual_route_preview(
+        request: Request,
+        route_mode: str = Form("none"),
+        start_place: str = Form(""),
+        end_place: str = Form(""),
+        start_lat: str = Form(""),
+        start_lon: str = Form(""),
+        end_lat: str = Form(""),
+        end_lon: str = Form(""),
+        user: dict = Depends(require_user),
+    ):
+        """Preview-only: resolves and routes, but never writes anything.
+        add_manual_trip below re-resolves and re-routes from scratch on
+        submission rather than trusting anything from this response, so a
+        stale or tampered preview can, at worst, mislead the form's display,
+        never the saved trip.
+
+        Never leaks the OSRM base URL, an exception message, or the
+        submitted coordinates back to the browser on failure -- `ok: false`
+        with a plain "unavailable" reason is all a caller ever needs to
+        degrade the form to a manual distance entry.
+        """
+        pool = request.app.state.pool
+        async with pool.connection() as conn:
+            endpoints = await _resolve_manual_route_endpoints(
+                conn, route_mode, start_place, end_place,
+                start_lat, start_lon, end_lat, end_lon,
+            )
+        if endpoints is None:
+            raise HTTPException(status_code=400, detail="Select a route to preview")
+
+        cfg = request.app.state.config
+        http_client = request.app.state.osrm_http_client
+        if not cfg.osrm_url or http_client is None:
+            return JSONResponse({"ok": False, "reason": "unavailable"})
+        try:
+            routed = await route_line(
+                http_client, cfg.osrm_url,
+                endpoints.from_lat, endpoints.from_lon,
+                endpoints.to_lat, endpoints.to_lon,
+            )
+        except (httpx.HTTPError, ValueError) as e:
+            # Not str(e): route_line builds its request URL from these exact
+            # coordinates, and a raise_for_status() HTTPStatusError's message
+            # embeds the full URL it failed against -- same reasoning as
+            # _resolve_missing_trip_osrm_hint.
+            log.warning("manual route preview OSRM call failed: %s", type(e).__name__)
+            return JSONResponse({"ok": False, "reason": "unavailable"})
+        if routed is None:
+            return JSONResponse({"ok": False, "reason": "unavailable"})
+
+        return JSONResponse({
+            "ok": True,
+            "distance_m": routed.distance_m,
+            "distance_miles": format_miles(routed.distance_m),
+            "geometry": routed.geojson,
+            "start": [endpoints.from_lat, endpoints.from_lon],
+            "end": [endpoints.to_lat, endpoints.to_lon],
+        })
+
     @router.post("/trips/manual", dependencies=[Depends(require_csrf)])
     async def add_manual_trip(
         request: Request,
@@ -1977,12 +2447,22 @@ def make_router() -> APIRouter:
         purpose: str = Form(""),
         notes: str = Form(""),
         vehicle_id: str = Form(""),
+        route_mode: str = Form("none"),
+        start_place: str = Form(""),
+        end_place: str = Form(""),
+        start_lat: str = Form(""),
+        start_lon: str = Form(""),
+        end_lat: str = Form(""),
+        end_lon: str = Form(""),
+        routed_distance: str = Form(""),
         user: dict = Depends(require_user),
     ):
         tz = request.app.state.config.display_tz
+        routing_active = route_mode != "none"
         try:
             started_at, ended_at, distance_m = parse_manual_trip_input(
-                date, start_time, end_time, distance, tz
+                date, start_time, end_time, distance, tz,
+                distance_optional=routing_active,
             )
         except ManualTripValidationError as exc:
             if "distance" in exc.errors and len(exc.errors) == 1:
@@ -1993,19 +2473,104 @@ def make_router() -> APIRouter:
         parsed_vehicle_id = _parse_vehicle_form(vehicle_id)
 
         pool = request.app.state.pool
+        path_geojson = None
+        start_point = None
+        end_point = None
+        start_place_id = None
+        end_place_id = None
+        notice = None
+
+        if routing_active:
+            # Resolve first, release the connection, THEN call OSRM: a
+            # slow/hung outbound route request must never hold a pooled
+            # database connection while it waits.
+            async with pool.connection() as conn:
+                endpoints = await _resolve_manual_route_endpoints(
+                    conn, route_mode, start_place, end_place,
+                    start_lat, start_lon, end_lat, end_lon,
+                )
+            if endpoints is None:
+                raise HTTPException(status_code=400, detail="Invalid route selection")
+
+            cfg = request.app.state.config
+            http_client = request.app.state.osrm_http_client
+            routed = None
+            if cfg.osrm_url and http_client is not None:
+                try:
+                    routed = await route_line(
+                        http_client, cfg.osrm_url,
+                        endpoints.from_lat, endpoints.from_lon,
+                        endpoints.to_lat, endpoints.to_lon,
+                    )
+                except (httpx.HTTPError, ValueError) as e:
+                    # Not str(e): see manual_route_preview above for why.
+                    log.warning("manual trip routing failed: %s", type(e).__name__)
+                    routed = None
+
+            if routed is None:
+                if distance_m is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Automatic routing was unavailable. Enter the distance.",
+                    )
+                # Legacy manual trip: no geometry, submitted distance as-is.
+                notice = MANUAL_ROUTE_UNAVAILABLE_NOTICE
+            else:
+                # `routed_distance` is the exact value the preview put into
+                # the distance field. Equal to the submitted distance means
+                # the user never touched it (an echo, not an override), so
+                # the freshly re-routed distance wins rather than trusting a
+                # client-submitted number; different (or blank) means the
+                # user deliberately typed their own distance, which is kept
+                # as entered even though the route geometry is still stored.
+                is_echo = False
+                if distance_m is not None:
+                    routed_hint = routed_distance.strip()
+                    if routed_hint:
+                        try:
+                            is_echo = float(distance) == float(routed_hint)
+                        except ValueError:
+                            is_echo = False
+                if distance_m is None or is_echo:
+                    distance_m = routed.distance_m
+                path_geojson = routed.geojson
+                start_point = (endpoints.from_lon, endpoints.from_lat)
+                end_point = (endpoints.to_lon, endpoints.to_lat)
+                start_place_id = endpoints.start_place_id
+                end_place_id = endpoints.end_place_id
+
         async with pool.connection() as conn:
             try:
-                await conn.execute(
-                    "INSERT INTO trips (device, source, started_at, ended_at, distance_m,"
-                    " category, purpose, notes, vehicle_id)"
-                    " VALUES ('manual', 'manual', %s, %s, %s, %s, %s, %s, %s)",
-                    (started_at, ended_at, distance_m, category, purpose.strip() or None,
-                     notes.strip() or None,
-                     parsed_vehicle_id),
-                )
+                if path_geojson is not None:
+                    await conn.execute(
+                        "INSERT INTO trips (device, source, started_at, ended_at, distance_m,"
+                        " category, purpose, notes, vehicle_id, path, start_geom, end_geom,"
+                        " start_place_id, end_place_id, snap_status)"
+                        " VALUES ('manual', 'manual', %s, %s, %s, %s, %s, %s, %s,"
+                        " ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326),"
+                        " ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,"
+                        " ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,"
+                        " %s, %s, NULL)",
+                        (started_at, ended_at, distance_m, category, purpose.strip() or None,
+                         notes.strip() or None, parsed_vehicle_id,
+                         json.dumps(path_geojson),
+                         start_point[0], start_point[1],
+                         end_point[0], end_point[1],
+                         start_place_id, end_place_id),
+                    )
+                else:
+                    await conn.execute(
+                        "INSERT INTO trips (device, source, started_at, ended_at, distance_m,"
+                        " category, purpose, notes, vehicle_id)"
+                        " VALUES ('manual', 'manual', %s, %s, %s, %s, %s, %s, %s)",
+                        (started_at, ended_at, distance_m, category, purpose.strip() or None,
+                         notes.strip() or None,
+                         parsed_vehicle_id),
+                    )
             except errors.ForeignKeyViolation:
                 raise HTTPException(status_code=400, detail="No such vehicle")
-        return Response(status_code=204, headers={"HX-Redirect": "/trips"})
+        redirect = "/trips" if notice is None else f"/trips?notice={notice}"
+        return Response(status_code=204, headers={"HX-Redirect": redirect})
 
     @router.post("/trips/{trip_id}/delete", dependencies=[Depends(require_csrf)])
     async def delete_trip(

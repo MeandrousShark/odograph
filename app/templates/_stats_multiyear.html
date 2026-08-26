@@ -1,0 +1,12 @@
+<section class="stats-section">
+  <h2>Year-over-year monthly miles</h2>
+  <div class="chart-scroll">{{ multiyear.chart_svg | safe }}</div>
+  <p class="stats-legend">
+    {% for yr in multiyear.years %}
+    <span class="year-{{ loop.index }}">{{ yr }}</span>
+    {% endfor %}
+  </p>
+  {% if multiyear.coverage_note %}
+  <p class="muted stats-coverage">{{ multiyear.coverage_note }}</p>
+  {% endif %}
+</section>

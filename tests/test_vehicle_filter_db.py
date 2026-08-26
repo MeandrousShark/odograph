@@ -85,6 +85,7 @@ def test_trip_list_unassigned_filter_returns_only_null_vehicle_trips():
     async def check(pool, assigned_id, unassigned_id):
         response = await TRIPS_ARCHIVE(
             _request(pool), {"sub": "test"}, "", "", "", "none", "", "", "", "",
+            manual_open="", q="",
         )
         trip_ids = {
             trip["id"] for month in response.context["months"] for trip in month["trips"]
@@ -97,7 +98,7 @@ def test_trip_list_unassigned_filter_returns_only_null_vehicle_trips():
 def test_export_unassigned_filter_returns_only_null_vehicle_trips():
     async def check(pool, assigned_id, unassigned_id):
         response = await EXPORT_TRIPS(
-            _request(pool), {"sub": "test"}, "csv", "", "", "", "none",
+            _request(pool), {"sub": "test"}, "csv", "", "", "", "none", "",
         )
         rows = list(csv.reader(io.StringIO(response.body.decode("utf-8"))))
         notes_column = rows[0].index("Notes")
