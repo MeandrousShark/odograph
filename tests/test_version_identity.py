@@ -91,13 +91,21 @@ def test_docker_base_is_pinned_to_the_verified_multi_arch_index():
 
     assert (
         "FROM docker.io/library/python:3.13-slim@"
-        "sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91"
+        "sha256:7e3a6aca9d74f93cca21a91d86a8dad8c34749afd5b4a98ee481c9c47b9f5ed4"
     ) in source
     assert "Pinned to the OCI image index" in source
     assert "linux/amd64 and linux/arm64" in source
-    assert "podman manifest inspect docker.io/library/python@sha256:<resolved-digest>" in source
     assert "must run on amd64" not in source
-    assert "RepoDigests is architecture-specific" not in source
+
+    # The recorded way to re-resolve the pin must stay a raw-manifest read.
+    # `podman pull` plus RepoDigests returns the child manifest for whichever
+    # architecture the developer happens to be on, so following it produces a
+    # single-architecture base that builds fine locally and then fails the
+    # other architecture in CI. Pinning the recipe, not just the digest, is
+    # what keeps the next refresh from reintroducing that.
+    assert "skopeo inspect --raw docker://docker.io/library/python:3.13-slim" in source
+    assert "application/vnd.oci.image.index.v1+json" in source
+    assert "podman image inspect --format '{{index .RepoDigests 0}}'" not in source
 
 
 def test_settings_diagnostics_render_all_runtime_versions():

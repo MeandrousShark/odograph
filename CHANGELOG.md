@@ -27,7 +27,7 @@ reproduced here.
 - Complete before release: list every application, database, configuration,
   and operational break, or state explicitly that there are none.
 
-## [0.9.0] - 2026-08-25
+## [0.9.1] - 2026-08-26
 
 Interface, analytics, and manual-routing release. The trip archive is now
 searchable, the Stats page supports longer-horizon analysis and drill-downs,
@@ -38,6 +38,11 @@ layouts also receive a consistency and accessibility pass.
 There is no database migration in this release; the schema remains at 21.
 OSRM remains optional, and every existing workflow continues to work without
 it.
+
+`0.9.0` was tagged but never published: its release build was stopped by the
+blocking image scan, and a release is recut under a new version rather than
+retried under the same one. `0.9.1` is that recut and carries the same
+application changes plus the base-image refresh described under Security.
 
 ### Added
 
@@ -127,6 +132,19 @@ it.
   accepting client-supplied geometry. Coordinates, distances, and GeoJSON are
   validated, and routing failures do not expose the OSRM address,
   configuration, coordinates, or internal exceptions.
+
+- **Refreshed the container base image.** The base is repinned to a current
+  `python:3.13-slim` digest, which picks up the distribution's fixes for four
+  util-linux advisories, and the image additionally upgrades openssl to the
+  version that fixes `CVE-2026-14456`. A digest pin is reproducible but does
+  not receive rebuilt packages, so it is now re-resolved as part of preparing
+  a release.
+
+- **Removed pip from the published image.** Nothing at runtime resolves or
+  installs packages, so pip and its vendored dependencies are no longer
+  shipped. This removes the vendored `msgpack` and `setuptools` copies that
+  recent pip releases declare in their own SBOM. The image scans with no
+  fixable HIGH or CRITICAL findings and no scan acceptances.
 
 ### Supported upgrade path
 

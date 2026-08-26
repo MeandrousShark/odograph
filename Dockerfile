@@ -2,12 +2,31 @@
 # manifest, so the same immutable reference resolves correctly for both
 # linux/amd64 and linux/arm64. requirements.lock was verified against this
 # exact base on both target architectures.
-# Digest confirmed 2026-07-21 from Docker Hub for python:3.13-slim.
-# Re-resolve and verify both target platforms with:
-#   podman pull docker.io/library/python:3.13-slim
-#   podman image inspect --format '{{index .RepoDigests 0}}' docker.io/library/python:3.13-slim
-#   podman manifest inspect docker.io/library/python@sha256:<resolved-digest>
-FROM docker.io/library/python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91
+# Digest confirmed 2026-08-26 from Docker Hub for python:3.13-slim.
+# A digest pin is reproducible but frozen, so it stops receiving the base
+# distribution's rebuilt packages and eventually fails the release image scan
+# on findings that are fixed upstream. Re-resolve it as part of preparing a
+# release rather than waiting for the scan to block, and re-verify both target
+# platforms with:
+#   skopeo inspect --raw docker://docker.io/library/python:3.13-slim | sha256sum
+#   skopeo inspect --raw docker://docker.io/library/python@sha256:<resolved-digest>
+# Resolve it with skopeo rather than `podman pull` plus RepoDigests: that pair
+# reports the child manifest for the host's own architecture, so pinning what
+# it prints silently produces a single-architecture base. The correct value has
+# mediaType application/vnd.oci.image.index.v1+json and lists both linux/amd64
+# and linux/arm64.
+FROM docker.io/library/python:3.13-slim@sha256:7e3a6aca9d74f93cca21a91d86a8dad8c34749afd5b4a98ee481c9c47b9f5ed4
+
+# The pinned base still carries an openssl older than the one that fixes
+# CVE-2026-14456, which the release scan blocks on. Upgrading just those three
+# packages keeps the rest of the image exactly as the pinned digest built it,
+# rather than letting an unscoped upgrade move packages the lock was verified
+# against. Drop this layer once the base image itself ships the fix; leaving it
+# in place is harmless but hides that the pin has caught up.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends --only-upgrade \
+        openssl libssl3t64 openssl-provider-legacy \
+    && rm -rf /var/lib/apt/lists/*
 
 # VERSION/GIT_REVISION default to dev values so unlabeled local builds still
 # work; the release build supplies both explicitly. --platform linux/amd64 is
@@ -31,7 +50,18 @@ WORKDIR /srv/odograph
 # versions pinned against this base image; requirements.txt stays as the
 # human-edited source for the dev venv workflow and for regenerating the lock.
 COPY requirements.txt requirements.lock ./
-RUN pip install --no-cache-dir -r requirements.lock
+# pip is removed once the dependencies are installed. Nothing at runtime uses
+# it: the image starts uvicorn as an unprivileged user and never resolves or
+# installs a package. Removing it also removes pip's vendored copies of
+# msgpack and setuptools, which the base image's own pip declares in a
+# CycloneDX SBOM and which an image scanner therefore reports as fixable
+# findings against this image even though no code path can reach them. Deleting
+# the vendored code is the honest fix; suppressing the report is not. An
+# operator who needs a package inside a running container should rebuild the
+# image rather than mutate a running one.
+RUN pip install --no-cache-dir -r requirements.lock \
+    && python -m pip uninstall -y pip \
+    && rm -rf /usr/local/lib/python3.13/site-packages/pip
 
 COPY app/ app/
 COPY migrations/ migrations/
