@@ -27,6 +27,43 @@ reproduced here.
 - Complete before release: list every application, database, configuration,
   and operational break, or state explicitly that there are none.
 
+## [0.9.2] - 2026-08-26
+
+Release tooling maintenance. This release repairs the disposable upgrade and
+rollback drill for the account model introduced in `v0.8.0`, and adds a
+verified pre-deploy database backup path for installations managed directly by
+Podman or Docker rather than Compose.
+
+There is no application behavior change and no database migration. The schema
+remains at 21.
+
+### Added
+
+- **Direct-container database backups.** `scripts/backup_database.sh` now
+  accepts `--container NAME` and runs through an explicitly selected or
+  autodetected Podman or Docker runtime. The direct-container path retains the
+  same archive verification, checksum, manifest, overwrite protection, and
+  failure cleanup as the existing Compose path. This gives Quadlet deployments
+  a scripted, gated pre-deploy backup without requiring a Compose frontend.
+
+### Fixed
+
+- **Upgrade and rollback drills now support the current account model.** The
+  drill capability-detects the legacy `/setup` flow or the `v0.8.0` and later
+  `/signup` flow, validates the matching authentication schema after rollback,
+  and reports missing environment keys instead of aborting silently. The
+  legacy `v0.7.6` to `v0.8.0` path remains supported.
+
+### Supported upgrade path
+
+- `v0.9.1` may upgrade directly to `v0.9.2`. Earlier releases should upgrade
+  to `v0.9.1` first.
+
+### Breaking changes
+
+- None. There is no migration; the schema stays at 21. There are no
+  application, configuration, runtime-dependency, or detector-version changes.
+
 ## [0.9.1] - 2026-08-26
 
 Interface, analytics, and manual-routing release. The trip archive is now

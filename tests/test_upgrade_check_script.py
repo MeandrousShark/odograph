@@ -39,18 +39,29 @@ def _compose_yaml(db_image: str, app_marker: str) -> str:
 """
 
 
-def _install_repo(tmp_path: Path, *, candidate_db_image: str = "db:stable") -> tuple[Path, str, str]:
+def _install_repo(
+    tmp_path: Path,
+    *,
+    candidate_db_image: str = "db:stable",
+    modern_auth: bool = False,
+    no_bootstrap: bool = False,
+) -> tuple[Path, str, str]:
     repo = tmp_path / "repo"
     scripts_dir = repo / "scripts"
     migrations_dir = repo / "migrations"
     scripts_dir.mkdir(parents=True)
     migrations_dir.mkdir()
     _write_executable(scripts_dir / "upgrade_check.sh", UPGRADE_SCRIPT.read_text())
+    if no_bootstrap:
+        bootstrap_env = "'POSTGRES_PASSWORD=fake' 'INGEST_PASSWORD=fake'"
+    elif modern_auth:
+        bootstrap_env = "'POSTGRES_PASSWORD=fake' 'INGEST_PASSWORD=fake' 'INITIAL_ADMIN_SIGNUP=1'"
+    else:
+        bootstrap_env = "'POSTGRES_PASSWORD=fake' 'ADMIN_TOKEN=fake' 'INGEST_PASSWORD=fake'"
     _write_executable(
         scripts_dir / "generate_env.sh",
         "#!/usr/bin/env bash\n"
-        "printf '%s\\n' 'POSTGRES_PASSWORD=fake' 'ADMIN_TOKEN=fake' "
-        "'INGEST_PASSWORD=fake' > .env",
+        f"printf '%s\\n' {bootstrap_env} > .env",
     )
     _write_executable(scripts_dir / "send_test_track.sh", "#!/usr/bin/env bash\nexit 0")
     _write_executable(
@@ -135,7 +146,11 @@ case "${1-}" in
                 exit 0
                 ;;
             *"to_regclass('accounts') IS NOT NULL"*)
-                case "$PWD" in */cand/*) printf '%s\n' t;; *) printf '%s\n' f;; esac
+                if [ "${FAKE_MODERN_AUTH:-}" = 1 ]; then
+                    printf '%s\n' t
+                else
+                    case "$PWD" in */cand/*) printf '%s\n' t;; *) printf '%s\n' f;; esac
+                fi
                 exit 0
                 ;;
             *"to_regclass('accounts') IS NULL"*)
@@ -147,7 +162,27 @@ case "${1-}" in
                 exit 0
                 ;;
             *"to_regclass('oidc_identities') IS NULL"*)
-                case "$PWD" in */cand/*) printf '%s\n' f;; *) printf '%s\n' t;; esac
+                if [ "${FAKE_MODERN_AUTH:-}" = 1 ]; then
+                    printf '%s\n' f
+                else
+                    case "$PWD" in */cand/*) printf '%s\n' f;; *) printf '%s\n' t;; esac
+                fi
+                exit 0
+                ;;
+            *"to_regclass('oidc_identities') IS NOT NULL"*)
+                if [ "${FAKE_MODERN_AUTH:-}" = 1 ]; then
+                    printf '%s\n' t
+                else
+                    printf '%s\n' f
+                fi
+                exit 0
+                ;;
+            *"to_regclass('local_admin') IS NULL"*)
+                if [ "${FAKE_MODERN_AUTH:-}" = 1 ]; then
+                    printf '%s\n' t
+                else
+                    printf '%s\n' f
+                fi
                 exit 0
                 ;;
             *"count(*) FROM accounts WHERE email"*) printf '%s\n' 1; exit 0 ;;
@@ -212,6 +247,7 @@ def _run(
     frontend: str = "podman",
     fail_up: bool = True,
     auth_fault: str = "",
+    modern_auth: bool = False,
 ) -> tuple[subprocess.CompletedProcess, Path, Path, Path]:
     bin_dir = tmp_path / "bin"
     scratch_root = tmp_path / "scratch"
@@ -227,10 +263,12 @@ def _run(
         "url=\"${!#}\"\n"
         "printf 'http|%s\\n' \"$url\" >> \"$FAKE_LOG\"\n"
         "outfile=\"\"\n"
+        "headerfile=\"\"\n"
         "password=\"\"\n"
         "previous=\"\"\n"
         "for arg in \"$@\"; do\n"
         "  if [ \"$previous\" = -o ]; then outfile=\"$arg\"; fi\n"
+        "  if [ \"$previous\" = -D ]; then headerfile=\"$arg\"; fi\n"
         "  case \"$arg\" in password=*) password=\"${arg#password=}\";; esac\n"
         "  previous=\"$arg\"\n"
         "done\n"
@@ -238,7 +276,7 @@ def _run(
         "  printf '%s\\n' '<input name=\"csrf_token\" value=\"fake-csrf\">' > \"$outfile\"\n"
         "  if [ \"$url\" = 'http://127.0.0.1:8077/login' ]; then\n"
         "    active=$(cat \"$FAKE_ACTIVE_APP\" 2>/dev/null || true)\n"
-        "    if [ \"$active\" = base ] || { [ -f \"$FAKE_LINK_MARKER\" ] "
+        "    if { [ \"$active\" = base ] && [ \"${FAKE_MODERN_AUTH:-}\" != 1 ]; } || { [ \"$active\" = candidate ] && [ -f \"$FAKE_LINK_MARKER\" ] "
         "&& [ \"${FAKE_AUTH_FAULT:-}\" != linked-oidc-hidden ]; } "
         "|| [ \"${FAKE_AUTH_FAULT:-}\" = candidate-unlinked-oidc ]; then\n"
         "      printf '%s\\n' '<a href=\"/login/oidc\">OIDC</a>' >> \"$outfile\"\n"
@@ -247,6 +285,10 @@ def _run(
         "fi\n"
         "status=200\n"
         "case \"$url\" in\n"
+        "  */signup)\n"
+        "    case \"$args\" in *--data-urlencode*) status=303; printf '%s' \"$password\" > \"$FAKE_ORIGINAL_PASSWORD\";; esac\n"
+        "    if [ -n \"$headerfile\" ]; then printf '%s\\n' 'HTTP/1.1 303 See Other' 'Location: /' > \"$headerfile\"; fi\n"
+        "    ;;\n"
         "  */login/local)\n"
         "    active=$(cat \"$FAKE_ACTIVE_APP\")\n"
         "    original=$(cat \"$FAKE_ORIGINAL_PASSWORD\")\n"
@@ -312,6 +354,7 @@ def _run(
         "FAKE_NEW_PASSWORD": "rotated-password-contract",
         "FAKE_OIDC_SECRET": oidc_secret,
         "FAKE_AUTH_FAULT": auth_fault,
+        "FAKE_MODERN_AUTH": "1" if modern_auth else "",
         "FAKE_UP_EXIT": "42" if fail_up else "0",
         "TMPDIR": str(scratch_root),
     }
@@ -432,6 +475,8 @@ def test_candidate_image_uses_app_only_override_without_build_and_tears_down(
     assert "db:" not in override_capture.read_text()
 
     lines = log_path.read_text().splitlines()
+    assert "http|http://127.0.0.1:8077/setup" in lines
+    assert "http|http://127.0.0.1:8077/signup" not in lines
     config_lines = [line for line in lines if line.startswith("compose|") and line.endswith(" config")]
     assert len(config_lines) == 2
     assert "compose.candidate-image.override.yml" not in config_lines[0]
@@ -503,6 +548,49 @@ def test_source_candidate_allows_app_drift_and_uses_build_override(tmp_path):
     assert list(scratch_root.glob("upgrade_check.*")) == []
 
 
+def test_modern_auth_uses_signup_and_modern_rollback_contract(tmp_path):
+    repo, base_ref, candidate_ref = _install_repo(tmp_path, modern_auth=True)
+
+    result, log_path, _, scratch_root = _run(
+        repo,
+        ["--base", base_ref, "--candidate", candidate_ref],
+        tmp_path,
+        fail_up=False,
+        modern_auth=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "capability-gated /signup flow" in result.stdout
+    assert "modern accounts schema" in result.stdout
+    http_lines = log_path.read_text().splitlines()
+    assert "http|http://127.0.0.1:8077/signup" in http_lines
+    assert not any(line.endswith("/setup") for line in http_lines)
+    log_text = log_path.read_text()
+    assert "to_regclass('accounts') IS NOT NULL" in log_text
+    assert "to_regclass('oidc_identities') IS NOT NULL" in log_text
+    assert "to_regclass('local_admin') IS NULL" in log_text
+    assert "count(*) FROM local_admin" not in log_text
+    assert list(scratch_root.glob("upgrade_check.*")) == []
+
+
+def test_missing_bootstrap_capability_fails_before_http_bootstrap(tmp_path):
+    repo, base_ref, candidate_ref = _install_repo(tmp_path, no_bootstrap=True)
+
+    result, log_path, _, scratch_root = _run(
+        repo,
+        ["--base", base_ref, "--candidate", candidate_ref],
+        tmp_path,
+        fail_up=False,
+    )
+
+    assert result.returncode != 0
+    assert "no scriptable administrator bootstrap" in result.stderr
+    http_lines = log_path.read_text().splitlines()
+    assert not any(line.endswith("/setup") for line in http_lines)
+    assert not any(line.endswith("/signup") for line in http_lines)
+    assert list(scratch_root.glob("upgrade_check.*")) == []
+
+
 def _extract_function(source: str, name: str) -> str:
     marker = f"{name}() {{"
     start = source.index(marker)
@@ -517,6 +605,27 @@ def _extract_function(source: str, name: str) -> str:
             if depth == 0:
                 break
     return source[start : end + 1]
+
+
+def test_env_value_reports_missing_key_and_file(tmp_path):
+    source = UPGRADE_SCRIPT.read_text()
+    helper = tmp_path / "env-value.sh"
+    helper.write_text(
+        "#!/usr/bin/env bash\nset -o pipefail\n"
+        f"{_extract_function(source, 'env_value')}\n"
+        'env_value "$1" MISSING_KEY\n'
+    )
+    helper.chmod(0o755)
+    env_file = tmp_path / "base.env"
+    env_file.write_text("POSTGRES_PASSWORD=present\n")
+
+    result = subprocess.run(
+        [str(helper), str(env_file)], capture_output=True, text=True, timeout=10
+    )
+
+    assert result.returncode != 0
+    assert "MISSING_KEY" in result.stderr
+    assert str(env_file) in result.stderr
 
 
 def _manifest_comparison_harness(tmp_path: Path) -> Path:

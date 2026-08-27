@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 # Produces a portable custom-format pg_dump of the live "mileage" database
-# from a running compose install, plus a SHA-256 checksum sidecar and a
+# from a running Compose or direct container install, plus a SHA-256 checksum sidecar and a
 # non-secret manifest, without ever stopping the app or putting a password
 # on a command line (the database trusts the container-local socket
-# connection pg_dump/psql use here). Run from the directory containing
-# compose.yaml.
+# connection pg_dump/psql use here). Run from the installation checkout.
 #
 # Usage:
-#   scripts/backup_database.sh [--output PATH]
+#   scripts/backup_database.sh [--output PATH] [--container NAME]
 #
 # Default output: backups/mileage-<UTC timestamp>.dump, next to a
 # <archive>.sha256 checksum sidecar and a <archive>.manifest file. Refuses
@@ -15,15 +14,17 @@
 #
 # Env vars:
 #   COMPOSE_CMD   override compose command autodetection, e.g. "podman-compose"
+#   CONTAINER_RUNTIME  override direct container runtime autodetection, e.g. "podman"
 set -euo pipefail
 umask 077
 
 usage() {
-    echo "usage: $0 [--output PATH]" >&2
+    echo "usage: $0 [--output PATH] [--container NAME]" >&2
     exit "${1:-1}"
 }
 
 OUTPUT=""
+CONTAINER_NAME=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --output)
@@ -34,15 +35,18 @@ while [ "$#" -gt 0 ]; do
             OUTPUT="$2"
             shift 2
             ;;
+        --container)
+            if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+                echo "error: --container requires a non-empty value" >&2
+                usage
+            fi
+            CONTAINER_NAME="$2"
+            shift 2
+            ;;
         -h|--help) usage 0 ;;
         *) echo "error: unrecognized argument: $1" >&2; usage ;;
     esac
 done
-
-if [ ! -f compose.yaml ]; then
-    echo "error: compose.yaml not found in the current directory; run this script from the canonical installation checkout." >&2
-    exit 1
-fi
 
 detect_compose_cmd() {
     if [ -n "${COMPOSE_CMD:-}" ]; then
@@ -61,7 +65,32 @@ detect_compose_cmd() {
     exit 1
 }
 
-compose_cmd="$(detect_compose_cmd)"
+detect_container_runtime() {
+    if [ -n "${CONTAINER_RUNTIME:-}" ]; then
+        echo "$CONTAINER_RUNTIME"
+        return
+    fi
+    if command -v podman >/dev/null 2>&1; then
+        echo "podman"
+        return
+    fi
+    if command -v docker >/dev/null 2>&1; then
+        echo "docker"
+        return
+    fi
+    echo "error: neither 'podman' nor 'docker' found on PATH; set CONTAINER_RUNTIME to override." >&2
+    exit 1
+}
+
+if [ -n "$CONTAINER_NAME" ]; then
+    runtime_cmd="$(detect_container_runtime)"
+else
+    if [ ! -f compose.yaml ]; then
+        echo "error: compose.yaml not found in the current directory; run this script from the canonical installation checkout." >&2
+        exit 1
+    fi
+    compose_cmd="$(detect_compose_cmd)"
+fi
 
 if [ -z "$OUTPUT" ]; then
     stamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -118,8 +147,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Dumping database via: $compose_cmd exec -T db pg_dump ..."
-# -T disables TTY allocation; a TTY would mangle the binary dump stream.
+exec_db() {
+    if [ -n "$CONTAINER_NAME" ]; then
+        $runtime_cmd exec -i "$CONTAINER_NAME" "$@"
+    else
+        $compose_cmd exec -T db "$@"
+    fi
+}
+
+if [ -n "$CONTAINER_NAME" ]; then
+    echo "Dumping database via: $runtime_cmd exec -i $CONTAINER_NAME pg_dump ..."
+else
+    echo "Dumping database via: $compose_cmd exec -T db pg_dump ..."
+fi
+# Compose uses -T to disable TTY allocation. Direct runtimes use -i to keep
+# stdin attached without allocating a TTY. A TTY would mangle the binary dump
+# stream.
 #
 # The postgis/postgis image's init scripts install postgis_tiger_geocoder
 # and postgis_topology into every freshly initialized database, which
@@ -132,14 +175,14 @@ echo "Dumping database via: $compose_cmd exec -T db pg_dump ..."
 # scripts, which this app never does -- so excluding them is safe. This is
 # a denylist of known image-provisioned schemas, not an allowlist, so any
 # future application schema stays included by default.
-if ! $compose_cmd exec -T db pg_dump -U mileage -d mileage --format=custom \
+if ! exec_db pg_dump -U mileage -d mileage --format=custom \
     --exclude-schema=tiger --exclude-schema=tiger_data --exclude-schema=topology \
     > "$tmp_archive"; then
     echo "error: pg_dump failed; no backup was published." >&2
     exit 1
 fi
 
-if ! $compose_cmd exec -T db pg_restore --list < "$tmp_archive" > /dev/null; then
+if ! exec_db pg_restore --list < "$tmp_archive" > /dev/null; then
     echo "error: the dump failed pg_restore --list validation; no backup was published." >&2
     exit 1
 fi
@@ -160,12 +203,12 @@ printf '%s  %s\n' "$checksum_hex" "$archive_basename" > "$sidecar"
 
 # A pre-migration database is still a valid backup target, so a missing
 # schema_migrations table records 0 instead of aborting the backup.
-schema_version="$($compose_cmd exec -T db psql -U mileage -d mileage -Atc \
+schema_version="$(exec_db psql -U mileage -d mileage -Atc \
     "SELECT COALESCE(max(version), 0) FROM schema_migrations" 2>/dev/null)" || schema_version=""
 [ -n "$schema_version" ] || schema_version="0"
 
-postgres_version="$($compose_cmd exec -T db psql -U mileage -d mileage -Atc "SHOW server_version")"
-postgis_version="$($compose_cmd exec -T db psql -U mileage -d mileage -Atc "SELECT postgis_lib_version()")"
+postgres_version="$(exec_db psql -U mileage -d mileage -Atc "SHOW server_version")"
+postgis_version="$(exec_db psql -U mileage -d mileage -Atc "SELECT postgis_lib_version()")"
 
 # git absence/failure must not fail the backup -- "unknown" is a fine
 # manifest value when this isn't a git checkout at all.

@@ -7,8 +7,9 @@ references this document's disaster-recovery steps.
 This covers `scripts/backup_database.sh` and `scripts/restore_database.sh`:
 what they capture, how to schedule and encrypt backups, what to do about
 `.env`, and how to recover a broken installation without touching the data
-you're trying to save. Run every command below from the directory containing
-your `compose.yaml`.
+you're trying to save. Run Compose commands from the directory containing
+your `compose.yaml`; direct-container commands can run from any installation
+checkout.
 
 ## What the archive covers, and what it doesn't
 
@@ -78,6 +79,22 @@ Pick your own output path with `--output`:
 ```sh
 scripts/backup_database.sh --output /path/to/backups/pre-upgrade.dump
 ```
+
+### Direct container backup without Compose
+
+Production installs managed by Podman quadlets may not have a `compose.yaml`
+or a Compose frontend. Pass the running database container name instead:
+
+```sh
+sudo scripts/backup_database.sh --container db --output /safe/path/pre-upgrade.dump
+```
+
+This mode autodetects `podman` first, then `docker`, and invokes the runtime's
+`exec -i` for the dump, archive validation, and manifest queries. Set
+`CONTAINER_RUNTIME` to force a runtime when both are installed, for example
+`CONTAINER_RUNTIME=podman`. It writes the same archive, checksum, and manifest
+artifacts and applies the same refusal-to-overwrite and cleanup guarantees as
+the Compose mode. `scripts/restore_database.sh` remains Compose-only.
 
 ## Verifying an archive
 

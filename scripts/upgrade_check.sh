@@ -357,7 +357,12 @@ wait_for_detected_trip() {
 }
 
 env_value() {
-    grep -m1 "^$2=" "$1" | cut -d= -f2-
+    local file="$1" key="$2" value
+    if ! value="$(grep -m1 "^${key}=" "$file" | cut -d= -f2-)"; then
+        echo "error: required environment key '$key' is missing from '$file'" >&2
+        return 1
+    fi
+    printf '%s\n' "$value"
 }
 
 set_env_value() {
@@ -522,13 +527,36 @@ assert_data_manifests_equal() {
     assert_manifests_equal "$a_data" "$b_data" "$desc"
 }
 
-# --- HTTP helpers for the token-gated setup flow and local login -----------
-# Both /setup and /login/local check a session-bound CSRF token carried as a
-# hidden form field (app/auth.py's _check_form_csrf), so each flow needs its
-# own GET (to mint the session + read the token) before its POST.
+# --- HTTP helpers for setup/signup flows and local login --------------------
+# Both /setup, /signup, and /login/local check a session-bound CSRF token
+# carried as a hidden form field (app/auth.py's _check_form_csrf), so each
+# flow needs its own GET (to mint the session + read the token) before its POST.
 
 csrf_from_html() {
     grep -o 'name="csrf_token" value="[^"]*"' "$1" | head -n1 | sed -E 's/.*value="([^"]*)".*/\1/'
+}
+
+signup_local_admin() {
+    local email="$1" password="$2"
+    local jar html headers csrf status home_status
+    jar="$(mktemp "$SCRATCH/http/signup-cookies.XXXXXX")"
+    html="$(mktemp "$SCRATCH/http/signup-get.XXXXXX")"
+    headers="$(mktemp "$SCRATCH/http/signup-post-headers.XXXXXX")"
+    curl -sS -m 8 -c "$jar" -o "$html" "${BASE_URL}/signup"
+    csrf="$(csrf_from_html "$html")"
+    [ -n "$csrf" ] || { echo "error: could not read csrf token from /signup" >&2; return 1; }
+    status="$(curl -sS -m 8 -o "$SCRATCH/http/signup-post.html" -D "$headers" -w '%{http_code}' \
+        -c "$jar" -b "$jar" \
+        --data-urlencode "email=${email}" \
+        --data-urlencode "password=${password}" \
+        --data-urlencode "password_confirm=${password}" \
+        --data-urlencode "csrf_token=${csrf}" \
+        "${BASE_URL}/signup")"
+    [ "$status" = "303" ] || return 1
+    grep -Eiq '^location:[[:space:]]*/[[:space:]]*(\r)?$' "$headers" || return 1
+    home_status="$(curl -sS -m 8 -b "$jar" -o "$SCRATCH/http/signup-home.html" \
+        -w '%{http_code}' "${BASE_URL}/")"
+    [ "$home_status" = "200" ]
 }
 
 setup_local_admin() {
@@ -715,17 +743,47 @@ step1_base_up() {
 }
 
 step2_seed() {
-    local admin_token seed_url seed_python
-    admin_token="$(env_value "$BASE_DIR/.env" ADMIN_TOKEN)"
-    POSTGRES_PASSWORD="$(env_value "$BASE_DIR/.env" POSTGRES_PASSWORD)"
-    INGEST_PASSWORD="$(env_value "$BASE_DIR/.env" INGEST_PASSWORD)"
+    local admin_token initial_admin_signup bootstrap_mode seed_url seed_python account_count
+    if admin_token="$(env_value "$BASE_DIR/.env" ADMIN_TOKEN 2>/dev/null)"; then
+        :
+    else
+        admin_token=""
+    fi
+    if initial_admin_signup="$(env_value "$BASE_DIR/.env" INITIAL_ADMIN_SIGNUP 2>/dev/null)"; then
+        :
+    else
+        initial_admin_signup=""
+    fi
+    if [ -n "$admin_token" ]; then
+        bootstrap_mode="setup"
+    elif [ "$initial_admin_signup" = "1" ]; then
+        bootstrap_mode="signup"
+    else
+        step_fail "step 2: base provides no scriptable administrator bootstrap (need ADMIN_TOKEN or INITIAL_ADMIN_SIGNUP=1)"
+    fi
+    if ! POSTGRES_PASSWORD="$(env_value "$BASE_DIR/.env" POSTGRES_PASSWORD)"; then
+        step_fail "step 2: missing required POSTGRES_PASSWORD in base environment"
+    fi
+    if ! INGEST_PASSWORD="$(env_value "$BASE_DIR/.env" INGEST_PASSWORD)"; then
+        step_fail "step 2: missing required INGEST_PASSWORD in base environment"
+    fi
     ADMIN_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_urlsafe(18))')"
 
-    setup_local_admin "$admin_token" "$ADMIN_EMAIL" "$ADMIN_PASSWORD" \
-        || step_fail "step 2: /setup did not create the local administrator"
-    login_page_offers_oidc \
-        || step_fail "step 2: legacy base login did not offer OIDC with complete configuration"
-    step_pass "step 2a: local admin created via the token-gated /setup flow and legacy OIDC login is offered"
+    if [ "$bootstrap_mode" = "setup" ]; then
+        setup_local_admin "$admin_token" "$ADMIN_EMAIL" "$ADMIN_PASSWORD" \
+            || step_fail "step 2: /setup did not create the local administrator"
+        login_page_offers_oidc \
+            || step_fail "step 2: legacy base login did not offer OIDC with complete configuration"
+        step_pass "step 2a: local admin created via the token-gated /setup flow and legacy OIDC login is offered"
+    else
+        signup_local_admin "$ADMIN_EMAIL" "$ADMIN_PASSWORD" \
+            || step_fail "step 2: /signup did not create an authenticated local administrator session"
+        account_count="$(db_query "$BASE_DIR" \
+            "SELECT count(*) FROM accounts WHERE email = '${ADMIN_EMAIL}' AND password_hash IS NOT NULL")"
+        [ "$account_count" = "1" ] \
+            || step_fail "step 2: /signup did not create the administrator account exactly once"
+        step_pass "step 2a: local admin created via the capability-gated /signup flow and authenticated session confirmed"
+    fi
 
     # app is stopped for the duration of seeding: its own background
     # detector scheduler could otherwise grab the same per-run advisory
@@ -862,7 +920,7 @@ step7_upgrade() {
 }
 
 step8_rollback() {
-    local v mig local_admin_count
+    local v mig has_accounts oidc_relation local_admin_relation local_admin_count
     compose_base down
     remove_stamp_volumes
     compose_base up -d db
@@ -891,17 +949,31 @@ step8_rollback() {
     if login_local_admin "$ADMIN_EMAIL" "$ROTATED_PASSWORD"; then
         step_fail "step 8: candidate-rotated password incorrectly worked after rollback"
     fi
-    login_page_offers_oidc \
-        || step_fail "step 8: rolled-back legacy login did not offer OIDC from the preserved configuration"
-    [ "$(db_query "$BASE_DIR" "SELECT to_regclass('accounts') IS NULL")" = "t" ] \
-        || step_fail "step 8: candidate-only accounts relation survived rollback"
-    [ "$(db_query "$BASE_DIR" "SELECT to_regclass('oidc_identities') IS NULL")" = "t" ] \
-        || step_fail "step 8: candidate-only OIDC identity state survived rollback"
-    local_admin_count="$(db_query "$BASE_DIR" \
-        "SELECT count(*) FROM local_admin WHERE id = 1 AND email = '${ADMIN_EMAIL}' AND password_hash IS NOT NULL")"
-    [ "$local_admin_count" = "1" ] \
-        || step_fail "step 8: legacy local_admin state was not restored exactly once"
-    step_pass "step 8b: original password and legacy OIDC login restored; rotated password and candidate-only auth state absent"
+    has_accounts="$(db_query "$BASE_DIR" "SELECT to_regclass('accounts') IS NOT NULL")"
+    if [ "$has_accounts" = "t" ]; then
+        oidc_relation="$(db_query "$BASE_DIR" "SELECT to_regclass('oidc_identities') IS NOT NULL")"
+        [ "$oidc_relation" = "t" ] \
+            || step_fail "step 8: restored modern auth schema is missing the oidc_identities relation"
+        local_admin_relation="$(db_query "$BASE_DIR" "SELECT to_regclass('local_admin') IS NULL")"
+        [ "$local_admin_relation" = "t" ] \
+            || step_fail "step 8: restored modern auth schema unexpectedly retained the local_admin relation"
+        if login_page_offers_oidc; then
+            step_fail "step 8: rolled-back modern login offered OIDC without a linked identity"
+        fi
+        step_pass "step 8b: modern accounts schema and local password restored; rotated password and candidate-only OIDC state absent"
+    else
+        [ "$(db_query "$BASE_DIR" "SELECT to_regclass('accounts') IS NULL")" = "t" ] \
+            || step_fail "step 8: candidate-only accounts relation survived rollback"
+        [ "$(db_query "$BASE_DIR" "SELECT to_regclass('oidc_identities') IS NULL")" = "t" ] \
+            || step_fail "step 8: candidate-only OIDC identity state survived rollback"
+        login_page_offers_oidc \
+            || step_fail "step 8: rolled-back legacy login did not offer OIDC from the preserved configuration"
+        local_admin_count="$(db_query "$BASE_DIR" \
+            "SELECT count(*) FROM local_admin WHERE id = 1 AND email = '${ADMIN_EMAIL}' AND password_hash IS NOT NULL")"
+        [ "$local_admin_count" = "1" ] \
+            || step_fail "step 8: legacy local_admin state was not restored exactly once"
+        step_pass "step 8b: original password and legacy OIDC login restored; rotated password and candidate-only auth state absent"
+    fi
 }
 
 # --- run the drill -------------------------------------------------------

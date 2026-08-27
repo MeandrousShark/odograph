@@ -48,10 +48,22 @@ case "$cmd" in
         ;;
     exec)
         log_line "exec $*"
-        [ "${1-}" = "-T" ] && shift
+        is_runtime=0
+        if [ "${1-}" = "-T" ]; then
+            shift
+        elif [ "${1-}" = "-i" ]; then
+            shift
+            is_runtime=1
+        fi
+        if [ "$is_runtime" -eq 1 ] && [ -n "${FAKE_MISSING_CONTAINER:-}" ] && [ "${1-}" = "$FAKE_MISSING_CONTAINER" ]; then
+            exit 125
+        fi
         [ "$#" -ge 1 ] && shift
         tool="${1-}"
         [ "$#" -ge 1 ] && shift
+        if [ -n "${FAKE_TOOL_RAN:-}" ]; then
+            : > "$FAKE_TOOL_RAN"
+        fi
         case "$tool" in
             pg_dump)
                 code="${FAKE_PG_DUMP_EXIT:-0}"
@@ -112,10 +124,18 @@ case "$cmd" in
                         exit 0
                         ;;
                     "SHOW server_version")
+                        code="${FAKE_SERVER_QUERY_EXIT:-0}"
+                        if [ "$code" -ne 0 ]; then
+                            exit "$code"
+                        fi
                         printf '%s\n' "${FAKE_SERVER_VERSION:-16.4}"
                         exit 0
                         ;;
                     "SELECT postgis_lib_version()")
+                        code="${FAKE_POSTGIS_QUERY_EXIT:-0}"
+                        if [ "$code" -ne 0 ]; then
+                            exit "$code"
+                        fi
                         printf '%s\n' "${FAKE_POSTGIS_VERSION:-3.4.2}"
                         exit 0
                         ;;
@@ -367,6 +387,214 @@ def test_restore_verify_only_uses_compose_cmd_override(tmp_path):
     result = run_script(restore_script, ["--verify-only", str(archive)], tmp_path, env)
 
     assert result.returncode == 0, result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Direct container runtime / CONTAINER_RUNTIME override
+# ---------------------------------------------------------------------------
+
+
+def test_backup_container_autodetects_podman_without_compose_frontend(tmp_path):
+    backup_script, _ = install_scripts(tmp_path)
+    (tmp_path / "compose.yaml").unlink()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    install_single_word_fake(bin_dir, "podman")
+    install_always_fail_fake(bin_dir, "docker")
+    install_always_fail_fake(bin_dir, "podman-compose")
+    log_path = tmp_path / "fake.log"
+    archive_src = make_archive_source(tmp_path, FAKE_ARCHIVE_BYTES)
+    archive = tmp_path / "backups" / "container-podman.dump"
+
+    env = base_env(
+        bin_dir,
+        log_path,
+        FAKE_ARCHIVE_FILE=str(archive_src),
+        FAKE_SCHEMA_VERSION="21",
+        FAKE_SERVER_VERSION="16.4.1",
+        FAKE_POSTGIS_VERSION="3.4.3",
+    )
+    result = run_script(
+        backup_script,
+        ["--container", "db", "--output", str(archive)],
+        tmp_path,
+        env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    manifest_data = assert_successful_backup(archive, FAKE_ARCHIVE_BYTES)
+    assert manifest_data["schema_version"] == "21"
+    assert manifest_data["postgres_version"] == "16.4.1"
+    assert manifest_data["postgis_version"] == "3.4.3"
+
+    log = read_log(log_path)
+    assert not any(line.startswith("version") for line in log)
+    execs = exec_lines(log_path)
+    assert execs
+    for line in execs:
+        assert line.startswith("exec -i db ")
+        assert " -T " not in f" {line} "
+
+
+def test_backup_container_uses_docker_runtime_override(tmp_path):
+    backup_script, _ = install_scripts(tmp_path)
+    (tmp_path / "compose.yaml").unlink()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    install_docker_fake(bin_dir)
+    install_always_fail_fake(bin_dir, "podman")
+    install_always_fail_fake(bin_dir, "podman-compose")
+    log_path = tmp_path / "fake.log"
+    archive_src = make_archive_source(tmp_path, FAKE_ARCHIVE_BYTES)
+    archive = tmp_path / "backups" / "container-docker.dump"
+
+    env = base_env(
+        bin_dir,
+        log_path,
+        FAKE_ARCHIVE_FILE=str(archive_src),
+        CONTAINER_RUNTIME="docker",
+    )
+    result = run_script(
+        backup_script,
+        ["--container", "db", "--output", str(archive)],
+        tmp_path,
+        env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert_successful_backup(archive, FAKE_ARCHIVE_BYTES)
+    log = read_log(log_path)
+    assert not any(line.startswith("version") for line in log)
+    execs = exec_lines(log_path)
+    assert execs
+    assert all(line.startswith("exec -i db ") for line in execs)
+
+
+@pytest.mark.parametrize("preexisting_member", ["archive", "sidecar", "manifest"])
+def test_backup_container_refuses_to_overwrite_existing_member(tmp_path, preexisting_member):
+    backup_script, _ = install_scripts(tmp_path)
+    (tmp_path / "compose.yaml").unlink()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    install_single_word_fake(bin_dir, "podman")
+    log_path = tmp_path / "fake.log"
+    archive_src = make_archive_source(tmp_path, FAKE_ARCHIVE_BYTES)
+
+    out_dir = tmp_path / "existing_backups"
+    out_dir.mkdir()
+    archive = out_dir / "mileage-existing.dump"
+    sidecar = archive.with_name(archive.name + ".sha256")
+    manifest = archive.with_name(archive.name + ".manifest")
+    members = {"archive": archive, "sidecar": sidecar, "manifest": manifest}
+    members[preexisting_member].write_text("PREEXISTING")
+
+    env = base_env(bin_dir, log_path, FAKE_ARCHIVE_FILE=str(archive_src))
+    result = run_script(
+        backup_script,
+        ["--container", "db", "--output", str(archive)],
+        tmp_path,
+        env,
+    )
+
+    assert result.returncode != 0
+    assert members[preexisting_member].read_text() == "PREEXISTING"
+    for name, path in members.items():
+        if name != preexisting_member:
+            assert not path.exists()
+    assert read_log(log_path) == []
+
+
+@pytest.mark.parametrize(
+    ("failure_var", "failure_code"),
+    [
+        ("FAKE_PG_DUMP_EXIT", "3"),
+        ("FAKE_PG_RESTORE_LIST_EXIT", "5"),
+        ("FAKE_SERVER_QUERY_EXIT", "7"),
+        ("FAKE_POSTGIS_QUERY_EXIT", "8"),
+    ],
+)
+def test_backup_container_failure_cleans_up_all_artifacts(
+    tmp_path, failure_var, failure_code
+):
+    backup_script, _ = install_scripts(tmp_path)
+    (tmp_path / "compose.yaml").unlink()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    install_single_word_fake(bin_dir, "podman")
+    log_path = tmp_path / "fake.log"
+    archive_src = make_archive_source(tmp_path, FAKE_ARCHIVE_BYTES)
+    archive = tmp_path / "backups" / "container-failure.dump"
+
+    env = base_env(
+        bin_dir,
+        log_path,
+        FAKE_ARCHIVE_FILE=str(archive_src),
+        **{failure_var: failure_code},
+    )
+    result = run_script(
+        backup_script,
+        ["--container", "db", "--output", str(archive)],
+        tmp_path,
+        env,
+    )
+
+    assert result.returncode != 0
+    _assert_no_backup_artifacts(archive.parent)
+
+
+def test_backup_container_missing_container_fails_before_tool_and_cleans_up(tmp_path):
+    backup_script, _ = install_scripts(tmp_path)
+    (tmp_path / "compose.yaml").unlink()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    install_single_word_fake(bin_dir, "podman")
+    log_path = tmp_path / "fake.log"
+    tool_marker = tmp_path / "tool-ran"
+    archive_src = make_archive_source(tmp_path, FAKE_ARCHIVE_BYTES)
+    archive = tmp_path / "backups" / "missing-container.dump"
+
+    env = base_env(
+        bin_dir,
+        log_path,
+        FAKE_ARCHIVE_FILE=str(archive_src),
+        FAKE_MISSING_CONTAINER="missing-db",
+        FAKE_TOOL_RAN=str(tool_marker),
+    )
+    result = run_script(
+        backup_script,
+        ["--container", "missing-db", "--output", str(archive)],
+        tmp_path,
+        env,
+    )
+
+    assert result.returncode != 0
+    assert not tool_marker.exists()
+    log = read_log(log_path)
+    assert len(log) == 1
+    assert log[0].startswith("exec -i missing-db pg_dump ")
+    _assert_no_backup_artifacts(archive.parent)
+
+
+def test_backup_container_missing_runtime_fails_before_creating_output(tmp_path):
+    backup_script, _ = install_scripts(tmp_path)
+    (tmp_path / "compose.yaml").unlink()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "bash").symlink_to("/bin/bash")
+    log_path = tmp_path / "fake.log"
+    archive = tmp_path / "backups" / "missing-runtime.dump"
+
+    env = base_env(bin_dir, log_path, system_path="")
+    result = run_script(
+        backup_script,
+        ["--container", "db", "--output", str(archive)],
+        tmp_path,
+        env,
+    )
+
+    assert result.returncode != 0
+    assert "neither 'podman' nor 'docker' found" in result.stderr
+    assert not archive.parent.exists()
 
 
 # ---------------------------------------------------------------------------
