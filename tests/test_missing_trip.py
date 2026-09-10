@@ -55,8 +55,8 @@ def test_covering_manual_trip_suppresses_badge():
 def test_prefill_url_carries_date_start_time_notes_hint_and_bridge_trip():
     badge = missing_trip_badge(_trip(), threshold_m=1000.0, tz=TZ)
     assert badge is not None
-    assert badge.prefill_url.startswith("/trips?")
-    assert badge.prefill_url.endswith("#manual-trip")
+    assert badge.prefill_url.startswith("/trips/manual?")
+    assert "#manual-trip" not in badge.prefill_url
     assert "manual_date=2026-07-01" in badge.prefill_url
     assert "manual_start=08%3A10" in badge.prefill_url
     assert "bridge_trip=99" in badge.prefill_url

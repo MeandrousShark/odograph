@@ -1,0 +1,19 @@
+{# One source for the archive header's year-to-date figure, rendered both by
+   the full archive build (trips.html) and by the inline-classify tag
+   response, which swaps this fragment out of band under the stable id
+   below so the figure stays correct after a reclassification without a
+   full reload. #}
+<div id="trip-archive-ytd"{% if ytd_oob | default(false, true) %} hx-swap-oob="outerHTML"{% endif %}>
+  {% if ytd_deduction is not none %}
+  <p class="trip-archive-ytd-metric">
+    <span class="trip-archive-ytd-label">Year-to-date ({{ ytd_year }}) business deduction</span>
+    <strong>{{ ytd_deduction | usd }}</strong>
+  </p>
+  {% else %}
+  <p class="trip-archive-ytd-metric trip-archive-ytd-metric-muted">
+    <span class="trip-archive-ytd-label">Year-to-date ({{ ytd_year }}) business deduction</span>
+    <strong class="metric-unavailable">Unavailable</strong>
+    <small>No mileage rate on file for {{ ytd_year }} yet; <a href="/settings">Add one</a>.</small>
+  </p>
+  {% endif %}
+</div>

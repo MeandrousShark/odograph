@@ -3,10 +3,27 @@ from __future__ import annotations
 
 import re
 from datetime import date
+from xml.etree import ElementTree
 
 import pytest
 
 from app.stats import axis_ticks, build_dashboard, nice_axis_max
+
+
+def _assert_chart_accessibility_contract(chart_svg: str) -> None:
+    root = ElementTree.fromstring(chart_svg)
+    assert root.tag == "svg"
+    assert root.get("role") != "img"
+    assert root.get("aria-label", "").strip()
+    chart_title = root.find("title")
+    assert chart_title is not None
+    assert (chart_title.text or "").strip()
+    rects = root.findall(".//rect")
+    assert rects
+    for rect in rects:
+        bar_title = rect.find("title")
+        assert bar_title is not None
+        assert (bar_title.text or "").strip()
 
 
 def test_dashboard_combines_category_totals_and_builds_current_period_charts():
@@ -49,6 +66,37 @@ def test_dashboard_zero_data_is_safe_and_has_no_business_share():
     assert dashboard.business_share is None
     assert "<rect " not in dashboard.weekly_chart
     assert "aria-label=\"Monthly mileage\"" in dashboard.monthly_chart
+
+
+def test_stacked_bar_chart_roots_and_data_bars_have_accessible_titles():
+    dashboard = build_dashboard(
+        2026,
+        date(2026, 1, 1),
+        date(2026, 1, 2),
+        [("business", 1, 1_609.344), ("personal", 1, 1_609.344)],
+        [(date(2025, 12, 29), "business", 1, 1_609.344)],
+        [(date(2026, 1, 1), "personal", 1, 1_609.344)],
+        [], [], 0,
+    )
+
+    _assert_chart_accessibility_contract(dashboard.weekly_chart)
+    _assert_chart_accessibility_contract(dashboard.monthly_chart)
+
+
+def test_dashboard_includes_nondeductible_in_total_and_share_denominator():
+    dashboard = build_dashboard(
+        2026, date(2026, 1, 1), date(2026, 1, 31),
+        [("business", 1, 1000.0), ("nondeductible", 2, 3000.0)],
+        [(date(2026, 1, 5), "nondeductible", 2, 3000.0)],
+        [(date(2026, 1, 1), "nondeductible", 2, 3000.0)],
+        [], [], 0,
+    )
+
+    assert dashboard.trip_count == 3
+    assert dashboard.total_m == 4000.0
+    assert dashboard.nondeductible_m == 3000.0
+    assert dashboard.business_share == pytest.approx(0.25)
+    assert "var(--overlay0)" in dashboard.weekly_chart
 
 
 def test_dashboard_ignores_out_of_window_and_unknown_bucket_rows():
@@ -225,6 +273,22 @@ def test_stacked_bar_chart_tick_labels_are_round_miles_not_round_meters():
 
     tick_labels = re.findall(r'text-anchor="end">([^<]+)</text>', dashboard.monthly_chart)
     assert tick_labels == ["0", "50", "100", "150", "200"]
+
+
+def test_stacked_bar_chart_rounds_axes_in_miles_for_weekly_and_monthly_views():
+    dashboard = build_dashboard(
+        2026,
+        date(2026, 1, 1),
+        date(2026, 1, 2),
+        [("business", 1, 199_558.656)],
+        [(date(2025, 12, 29), "business", 1, 199_558.656)],
+        [(date(2026, 1, 1), "business", 1, 199_558.656)],
+        [], [], 0,
+    )
+
+    for chart in (dashboard.weekly_chart, dashboard.monthly_chart):
+        tick_labels = re.findall(r'text-anchor="end">([^<]+)</text>', chart)
+        assert tick_labels == ["0", "50", "100", "150", "200"]
 
 
 def test_stacked_bar_chart_rects_carry_tooltip_titles():

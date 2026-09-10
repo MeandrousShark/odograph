@@ -17,9 +17,10 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-import app.ui as ui_module
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.ui import make_router
+import app.ui.places as ui_module
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -40,16 +41,10 @@ def _request(pool):
     )
 
 
-async def _reset(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
-
-
 class _ForcedReprocessFailure:
-    """Context manager that makes app.ui's reprocess_places_in raise, then
-    restores the original on exit -- so a failure in one scenario can't leak
-    into the next."""
+    """Context manager that makes app.ui.places's reprocess_places_in raise,
+    then restores the original on exit -- so a failure in one scenario can't
+    leak into the next."""
 
     def __enter__(self):
         self._original = ui_module.reprocess_places_in
@@ -68,7 +63,7 @@ async def _create_place_rollback_scenario() -> None:
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset(pool)
+        await reset_db(pool)
         create = _endpoint("/places")
         with _ForcedReprocessFailure():
             with pytest.raises(RuntimeError, match="forced reprocess failure"):
@@ -92,7 +87,7 @@ async def _delete_place_rollback_scenario() -> None:
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset(pool)
+        await reset_db(pool)
         create = _endpoint("/places")
         delete = _endpoint("/places/{place_id}/delete")
         await create(
@@ -123,7 +118,7 @@ async def _create_rule_rollback_scenario() -> None:
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset(pool)
+        await reset_db(pool)
         # migrations/003_places.sql seeds two default rules, so the baseline
         # is 2, not 0 -- compare against that baseline rather than assuming
         # an empty table.
@@ -162,7 +157,7 @@ async def _create_rule_rejects_a_deleted_place_scenario() -> None:
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset(pool)
+        await reset_db(pool)
         create = _endpoint("/places")
         delete = _endpoint("/places/{place_id}/delete")
         await create(
@@ -194,7 +189,7 @@ async def _delete_rule_rollback_scenario() -> None:
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset(pool)
+        await reset_db(pool)
         create_rule = _endpoint("/rules")
         delete_rule = _endpoint("/rules/{rule_id}/delete")
         # a_kind/b_kind='other' distinguishes this from migrations/003_places.sql's
@@ -236,7 +231,7 @@ async def _place_and_trip_tags_stay_consistent_scenario() -> None:
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             cur = await conn.execute(
                 "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "

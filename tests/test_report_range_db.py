@@ -18,10 +18,12 @@ import pytest
 from fastapi import HTTPException
 from openpyxl import load_workbook
 
-import app.ui as ui
-from app.db import make_pool, run_migrations
+from app.db import make_pool
+from app.export import HEADERS
 from app.main import make_templates
 from app.ui import make_router
+import app.ui.reports as ui
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -47,12 +49,6 @@ def _request(pool):
     )
 
 
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
-
-
 async def _create_vehicle(conn, name: str) -> int:
     cur = await conn.execute("INSERT INTO vehicles (name) VALUES (%s) RETURNING id", (name,))
     return (await cur.fetchone())[0]
@@ -72,7 +68,7 @@ async def _range_page_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             truck_id = await _create_vehicle(conn, "Truck")
             # March 31 and July 1 are outside the Apr 1 - Jun 30 range under
@@ -135,7 +131,7 @@ async def _range_page_invalid_params_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         request = _request(pool)
         page = _endpoint("/report/range")
 
@@ -166,7 +162,7 @@ async def _range_export_invalid_params_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         request = _request(pool)
         export = _endpoint("/report/range/export")
 
@@ -193,7 +189,7 @@ async def _range_export_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             truck_id = await _create_vehicle(conn, "Truck")
             await _insert_trip(
@@ -226,6 +222,47 @@ def test_range_report_export_media_type_filename_and_row_filtering():
     asyncio.run(_range_export_scenario())
 
 
+async def _range_export_endpoint_label_scenario():
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        await reset_db(pool)
+        async with pool.connection() as conn:
+            truck_id = await _create_vehicle(conn, "Truck")
+            # A route_mode=none manual trip: source manual, no place id or
+            # geometry on either endpoint, so migrations/025_manual_trip_labels.sql's
+            # constraints allow both labels. This proves TRIP_COLUMNS'
+            # COALESCE(start_label, saved-place name) actually resolves into
+            # start_place_name/end_place_name for a real row selected by the
+            # real query, not just a hand-built trip dict.
+            await conn.execute(
+                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
+                "vehicle_id, category, start_label, end_label) "
+                "VALUES ('manual', 'manual', %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    datetime(2026, 4, 15, 19, tzinfo=timezone.utc),
+                    datetime(2026, 4, 15, 19, 15, tzinfo=timezone.utc),
+                    20 * 1609.344, truck_id, "business",
+                    "Grandma's house", "Trailhead parking",
+                ),
+            )
+
+        request = _request(pool)
+        export = _endpoint("/report/range/export")
+        response = await export(request, from_="2026-04-01", to="2026-06-30", user=USER)
+
+        wb = load_workbook(BytesIO(response.body))
+        trips_ws = wb["Trips"]
+        assert trips_ws.cell(2, HEADERS.index("Start location") + 1).value == "Grandma's house"
+        assert trips_ws.cell(2, HEADERS.index("End location") + 1).value == "Trailhead parking"
+    finally:
+        await pool.close()
+
+
+def test_range_report_export_resolves_endpoint_labels_through_trip_columns():
+    asyncio.run(_range_export_endpoint_label_scenario())
+
+
 class _FrozenDatetime(datetime):
     """`datetime.now(tz)` fixed at 2027-01-01 03:00 UTC (2026-12-31 19:00 in
     `America/Los_Angeles`) -- the instant a UTC-based "current year" would
@@ -246,7 +283,7 @@ async def _report_page_year_boundary_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         request = _request(pool)
         page = _endpoint("/report/{year}")
 
@@ -271,7 +308,7 @@ async def _report_page_year_boundary_scenario():
 
 
 def test_report_page_next_year_guard_uses_display_timezone_at_new_years_eve_boundary(monkeypatch):
-    # Proves app/ui.py's report_page route passes a tz-localized `now` (not
+    # Proves app/ui/reports.py's report_page route passes a tz-localized `now` (not
     # a naive/UTC one) into next_year_disabled: patching ui.datetime.now to a
     # fixed instant and letting the route localize it via `datetime.now(tz)`
     # is the only way this test can distinguish the two -- a plain

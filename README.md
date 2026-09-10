@@ -14,11 +14,18 @@ It can:
 - Compare tracked mileage against your vehicle's odometer
 - Remind you about trips that still need to be categorized
 
-Your data stays on your own server unless you turn on an external service such
-as hosted geocoding. The [privacy guide](docs/privacy.md) explains exactly what
-each option sends outside your instance. The
+Your stored trips, points, places, vehicles, expenses, and reports stay on
+your own server. Map pages request tiles from OpenStreetMap by default, from
+your browser while you view a map. The [privacy guide](docs/privacy.md)
+explains exactly what each option sends outside your instance. The
 [security guide](docs/security.md) covers the trust model and a hardening
 checklist.
+
+![Odograph dashboard with synthetic data](docs/images/usage-dashboard.png)
+
+*Example dashboard using synthetic locations and account data.*
+
+Start with [Install](#install), then see [Use Odograph](docs/usage.md).
 
 > **US users only:** Odograph's deduction reports use IRS standard mileage
 > rates. Trip tracking still works anywhere, but the tax figures are only
@@ -26,13 +33,22 @@ checklist.
 
 ## Install
 
+The recommended path is the full release checkout and
+`scripts/generate_env.sh` walkthrough below. If you already manage Compose,
+you can use the [minimal Compose installation](docs/install-compose.md) with
+only the two release files.
+
 ### What you need
 
 - A Linux server or VM
 - Git
-- Either Docker Engine with the Compose v2 plugin (`docker compose`) or Podman
-  with podman-compose 1.3.0 or newer. The old `docker-compose` v1 will not work.
+- Either [Docker Engine](https://docs.docker.com/engine/install/) with the
+  [Compose v2 plugin](https://docs.docker.com/compose/install/) (`docker
+  compose`) or [Podman](https://podman.io/docs/installation) with
+  [podman-compose](https://github.com/containers/podman-compose) 1.3.0 or
+  newer. The old `docker-compose` v1 will not work.
 - OpenSSL or Python 3 on the host, used to generate your secrets
+- `curl`, for health checks
 - A domain name pointing at the host
 - A reverse proxy that terminates HTTPS
 - About 2 GB of RAM and 5 GB of free disk to start
@@ -47,25 +63,22 @@ that stays awake rather than one that sleeps.
 
 ## Quick start
 
-Pick the version you want from the GitHub Releases page, then clone the
-repository and check out that exact release tag:
+Pick a published version from the
+[GitHub Releases page](https://github.com/MeandrousShark/odograph/releases).
+Replace `vX.Y.Z` below with that exact release tag:
 
 ```sh
-git clone https://github.com/MeandrousShark/odograph.git
+git clone --branch vX.Y.Z --depth 1 https://github.com/MeandrousShark/odograph.git
 cd odograph
-git checkout vX.Y.Z
-```
-
-Generate your configuration:
-
-```sh
 scripts/generate_env.sh
 ```
 
-Open `.env` and set your timezone:
+Open `.env`, set your timezone, and disable browser signup before starting the
+stack:
 
 ```env
 DISPLAY_TZ=America/Los_Angeles
+INITIAL_ADMIN_SIGNUP=0
 ```
 
 Use your own [IANA timezone name](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones).
@@ -92,35 +105,14 @@ podman-compose up -d
 Compose downloads the immutable image tag pinned by the checked-out release, so
 you always get exactly the version you checked out.
 
-#### Tracking patch releases instead
-
-The registry also publishes a floating tag for each minor version, such as
-`v0.8`, which always points at the newest patch within it. To follow that
-instead of a fixed patch, create `compose.override.yml` next to `compose.yaml`:
-
-```yaml
-services:
-  app:
-    image: ghcr.io/meandrousshark/odograph:v0.8
-```
-
-Both Compose frontends pick that file up automatically. A `pull` then brings in
-`v0.8.1` when it ships, while moving to a new minor version stays a deliberate
-choice. Read the release notes before pulling either way.
-
-There is no `latest` tag on purpose. Minor releases are where database
-migrations land, and Odograph's migrations are one-way: once one runs, going
-back means restoring a backup rather than switching the image. Crossing a minor
-version unattended is a good way to discover that the hard way.
-
-Check that both services came up:
+Run `docker compose ps` until both services report `healthy`:
 
 ```sh
 docker compose ps
 # or: podman-compose ps
 ```
 
-And that the app answers on the host:
+Then check that the app answers on the host:
 
 ```sh
 curl -fsS http://127.0.0.1:8077/healthz
@@ -128,6 +120,23 @@ curl -fsS http://127.0.0.1:8077/healthz
 
 That address is for local health checks and your reverse proxy only. It is not
 how you use Odograph day to day.
+
+### Create your account before public access
+
+Create the only administrator from the running app container. This reads the
+email and password interactively and accepts no password argument:
+
+```sh
+docker compose exec app python -m app.manage_account create-admin
+# or: podman-compose exec app python -m app.manage_account create-admin
+```
+
+Keep `INITIAL_ADMIN_SIGNUP=0`. The account command works with browser signup
+disabled, so the public `/signup` route never lets an unknown visitor create
+the first account.
+
+If an account already exists, this command refuses to replace it. Use the
+password recovery command below when you need to recover an existing account.
 
 ## Set up HTTPS
 
@@ -142,17 +151,11 @@ marked Secure. Confirm this works before going further:
 https://mileage.example.com/healthz
 ```
 
-## Create your account
-
-Open `https://mileage.example.com/signup` and create your administrator
-account, then sign in.
-
-Only the first account can be created this way. Once it exists, public signup
-closes on its own. There is no setup token to copy and no container to
-recreate afterward.
+Then visit `https://mileage.example.com/login` and sign in with the
+administrator account you created above.
 
 You can manage your password and optional sign-in providers later under
-**Settings, then Account Security**.
+**Settings, then Account Settings**.
 
 ## Connect OwnTracks
 
@@ -162,17 +165,28 @@ test data afterward.
 
 Once that works, Odograph starts detecting trips on its own.
 
+## Use Odograph
+
+After you sign in, follow [Use Odograph](docs/usage.md) for a task-oriented
+guide to vehicles, trips, review, expenses, odometer readings, reports, and
+exports.
+
 ## Backups
 
-Before you rely on Odograph, make a backup and prove it restores:
+Before you rely on Odograph, make a backup:
 
 ```sh
 scripts/backup_database.sh --output backups/first-install.dump
-scripts/restore_database.sh --verify-only backups/first-install.dump
 ```
 
-Then pick somewhere encrypted and off this host to keep them, on a schedule.
-[Backups and disaster recovery](docs/backups.md) covers both.
+The script validates the archive table of contents and writes a checksum
+sidecar plus a non-secret manifest. `scripts/restore_database.sh --verify-only`
+checks that checksum and table of contents without restoring
+anything, so it is useful after copying an archive but does not prove that a
+database can be recovered. For a real restore test, follow the fresh-target
+procedure in [Backups and disaster recovery](docs/backups.md). Keep the archive,
+its `.sha256` and `.manifest` files, and an encrypted copy of `.env` somewhere
+off this host.
 
 Your data lives in the Compose `dbdata` volume. Restarts, container recreates,
 and ordinary `down` then `up` cycles all keep it. What destroys it is:
@@ -215,7 +229,7 @@ OIDC is a second way to sign in to the administrator account you already have,
 not a separate account.
 
 Register `https://mileage.example.com/auth/callback` with your provider, set
-the three OIDC variables, then link it from **Settings, then Account Security**
+the three OIDC variables, then link it from **Settings, then Account Settings**
 while signed in with your password. Linking asks for that password and a fresh
 authorization from the provider.
 
@@ -241,8 +255,8 @@ Odograph itself. See the [OSRM guide](docs/osrm.md).
 
 ## Password recovery
 
-While signed in, change your password under **Settings, then Account
-Security**.
+While signed in, open **Settings**, then **Account Settings**, and use
+**Change password** under **Security**.
 
 If you are locked out, reset it from the server and type the new password when
 prompted:
@@ -268,6 +282,13 @@ after sign-in.
 When a new release comes out, follow the [upgrading guide](docs/upgrading.md).
 Take a fresh backup and verify it first, then move from one exact release tag
 to the next. Watch the GitHub Releases page to hear about new versions.
+
+The registry also publishes a floating tag for each minor version, such as
+`v0.8`, which points at the newest patch within that minor release. Use a
+floating tag only when you have chosen that update policy deliberately and
+have read the release notes. There is no `latest` tag. Minor releases can add
+one-way database migrations, so moving back means restoring a backup rather
+than switching the image.
 
 ## Contributing
 

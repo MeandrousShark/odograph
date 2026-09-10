@@ -529,7 +529,7 @@ assert_data_manifests_equal() {
 
 # --- HTTP helpers for setup/signup flows and local login --------------------
 # Both /setup, /signup, and /login/local check a session-bound CSRF token
-# carried as a hidden form field (app/auth.py's _check_form_csrf), so each
+# carried as a hidden form field (app/auth.py's check_form_csrf), so each
 # flow needs its own GET (to mint the session + read the token) before its POST.
 
 csrf_from_html() {

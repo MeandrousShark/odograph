@@ -52,6 +52,30 @@ def test_deduction_only_on_business():
     assert unclassified[ded_idx] == ""
 
 
+def test_exclusion_column_preserves_ledger_rows_and_blocks_deductions():
+    trips = [
+        _trip(purpose="Normal"),
+        _trip(
+            purpose="Other vehicle", category="business",
+            exclusion="not_my_vehicle", distance_m=2 * 1609.344,
+        ),
+        _trip(
+            purpose="Other driver", category="business",
+            exclusion="not_deductible", distance_m=3 * 1609.344,
+        ),
+    ]
+    rows = build_export_rows(trips, RATES, TZ)
+    exclusion_idx = HEADERS.index("Exclusion")
+    purpose_idx = HEADERS.index("Purpose")
+    deduction_idx = HEADERS.index("Deduction ($)")
+
+    assert [row[purpose_idx] for row in rows] == ["Normal", "Other vehicle", "Other driver"]
+    assert [row[exclusion_idx] for row in rows] == ["", "not_my_vehicle", "not_deductible"]
+    assert rows[0][deduction_idx] == round(0.725, 2)
+    assert rows[1][deduction_idx] == ""
+    assert rows[2][deduction_idx] == ""
+
+
 def test_deduction_uses_midyear_second_half_rate():
     # A year with a mid-year change: a July trip must price at the H2 rate,
     # exercising that build_export_rows passes the trip's local month through.
@@ -115,6 +139,57 @@ def test_export_keeps_full_reverse_geocoded_address():
     assert row[HEADERS.index("Start location")] == "123 Main St, Seattle, WA 98101"
 
 
+def test_custom_label_and_saved_place_name_both_render_in_endpoint_columns():
+    # build_export_rows only ever sees the already-resolved start_place_name/
+    # end_place_name key -- TRIP_COLUMNS' COALESCE(start_label, saved-place
+    # name) has already picked one by the time a trip dict reaches here, so a
+    # custom label and a saved-place name exercise the exact same code path
+    # at this boundary. A DB-tier test proves the COALESCE itself resolves
+    # correctly from real columns; this pins that whichever value wins
+    # reaches the Start/End location columns unchanged.
+    label_only = _trip(start_place_name="Grandma's house", end_place_name="Trailhead parking")
+    saved_place = _trip(start_place_name="Downtown Office", end_place_name="Warehouse")
+    rows = build_export_rows([label_only, saved_place], RATES, TZ)
+    start_idx, end_idx = HEADERS.index("Start location"), HEADERS.index("End location")
+    assert rows[0][start_idx] == "Grandma's house"
+    assert rows[0][end_idx] == "Trailhead parking"
+    assert rows[1][start_idx] == "Downtown Office"
+    assert rows[1][end_idx] == "Warehouse"
+
+
+def test_endpoint_fallback_chain_exact_order_for_start_and_end():
+    # Exports are the audit-facing surface, so the full name -> address ->
+    # coordinate -> dash precedence is pinned exactly (not just spot-checked)
+    # and for both endpoints, not just start.
+    named = _trip(
+        start_place_name="Driveway", start_address="123 Main St", start_lat=47.6, start_lon=-122.3,
+        end_place_name="Corner store", end_address="456 Oak Ave", end_lat=47.7, end_lon=-122.2,
+    )
+    address_only = _trip(
+        start_place_name=None, start_address="123 Main St", start_lat=47.6, start_lon=-122.3,
+        end_place_name=None, end_address="456 Oak Ave", end_lat=47.7, end_lon=-122.2,
+    )
+    coords_only = _trip(
+        start_place_name=None, start_address=None, start_lat=47.6, start_lon=-122.3,
+        end_place_name=None, end_address=None, end_lat=47.7, end_lon=-122.2,
+    )
+    neither = _trip(
+        start_place_name=None, start_address=None, start_lat=None, start_lon=None,
+        end_place_name=None, end_address=None, end_lat=None, end_lon=None,
+    )
+    rows = build_export_rows([named, address_only, coords_only, neither], RATES, TZ)
+    start_idx, end_idx = HEADERS.index("Start location"), HEADERS.index("End location")
+
+    assert rows[0][start_idx] == "Driveway"
+    assert rows[0][end_idx] == "Corner store"
+    assert rows[1][start_idx] == "123 Main St"
+    assert rows[1][end_idx] == "456 Oak Ave"
+    assert rows[2][start_idx] == "47.6000,-122.3000"
+    assert rows[2][end_idx] == "47.7000,-122.2000"
+    assert rows[3][start_idx] == "--"
+    assert rows[3][end_idx] == "--"
+
+
 def test_uses_snapped_distance_when_it_differs_from_raw():
     # A snapped trip: display_distance_m (from TRIP_COLUMNS' COALESCE)
     # differs from the noisier raw distance_m -- export must use the
@@ -163,6 +238,42 @@ def test_csv_round_trip():
     assert rows[2][HEADERS.index("Notes")] == ""
 
 
+def test_csv_carries_endpoint_label_and_dash_fallback():
+    trips = [
+        _trip(start_place_name="Grandma's house", end_place_name="Trailhead parking"),
+        _trip(
+            start_place_name=None, start_lat=None, start_lon=None,
+            end_place_name=None, end_lat=None, end_lon=None,
+        ),
+    ]
+    reader = csv.reader(io.StringIO(to_csv(trips, RATES, TZ).decode("utf-8")))
+    rows = list(reader)
+    start_idx, end_idx = HEADERS.index("Start location"), HEADERS.index("End location")
+    assert rows[1][start_idx] == "Grandma's house"
+    assert rows[1][end_idx] == "Trailhead parking"
+    assert rows[2][start_idx] == "--"
+    assert rows[2][end_idx] == "--"
+
+
+def test_csv_label_with_comma_preserves_row_structure():
+    # Parsed with the csv module (not substring-matched against the raw
+    # bytes) so a comma inside a label can't be mistaken for a field
+    # separator that split the row into the wrong number of columns.
+    trip = _trip(start_place_name="Smith, Jones & Co")
+    reader = csv.reader(io.StringIO(to_csv([trip], RATES, TZ).decode("utf-8")))
+    rows = list(reader)
+    assert len(rows[1]) == len(HEADERS)
+    assert rows[1][HEADERS.index("Start location")] == "Smith, Jones & Co"
+
+
+def test_csv_label_with_double_quote_round_trips():
+    trip = _trip(start_place_name='The "Big" Warehouse')
+    reader = csv.reader(io.StringIO(to_csv([trip], RATES, TZ).decode("utf-8")))
+    rows = list(reader)
+    assert len(rows[1]) == len(HEADERS)
+    assert rows[1][HEADERS.index("Start location")] == 'The "Big" Warehouse'
+
+
 def test_xlsx_opens_and_has_totals_row():
     trips = [_trip(category="business", distance_m=1609.344), _trip(category="personal")]
     raw = to_xlsx(trips, RATES, TZ)
@@ -174,6 +285,47 @@ def test_xlsx_opens_and_has_totals_row():
     totals_row = [c.value for c in ws[ws.max_row]]
     assert totals_row[0] == "Total"
     assert totals_row[HEADERS.index("Deduction ($)")] == round(0.725, 2)
+
+
+def test_xlsx_totals_exclude_not_my_vehicle_but_keep_not_deductible_distance():
+    trips = [
+        _trip(category="business", distance_m=1609.344),
+        _trip(category="business", exclusion="not_my_vehicle", distance_m=2 * 1609.344),
+        _trip(category="business", exclusion="not_deductible", distance_m=3 * 1609.344),
+    ]
+    wb = load_workbook(io.BytesIO(to_xlsx(trips, RATES, TZ)))
+    ws = wb.active
+    totals = [cell.value for cell in ws[ws.max_row]]
+
+    assert totals[HEADERS.index("Distance (mi)")] == 4.0
+    assert totals[HEADERS.index("Deduction ($)")] == round(0.725, 2)
+
+
+def test_xlsx_carries_endpoint_label_and_dash_fallback():
+    trips = [
+        _trip(start_place_name="Grandma's house", end_place_name="Trailhead parking"),
+        _trip(
+            start_place_name=None, start_lat=None, start_lon=None,
+            end_place_name=None, end_lat=None, end_lon=None,
+        ),
+    ]
+    wb = load_workbook(io.BytesIO(to_xlsx(trips, RATES, TZ)))
+    ws = wb.active
+    start_idx = HEADERS.index("Start location") + 1
+    end_idx = HEADERS.index("End location") + 1
+    assert ws.cell(2, start_idx).value == "Grandma's house"
+    assert ws.cell(2, end_idx).value == "Trailhead parking"
+    assert ws.cell(3, start_idx).value == "--"
+    assert ws.cell(3, end_idx).value == "--"
+
+
+def test_xlsx_label_with_newline_is_a_literal_cell_value():
+    trip = _trip(start_place_name="Warehouse\nDock 4")
+    wb = load_workbook(io.BytesIO(to_xlsx([trip], RATES, TZ)))
+    ws = wb.active
+    cell = ws.cell(2, HEADERS.index("Start location") + 1)
+    assert cell.value == "Warehouse\nDock 4"
+    assert cell.data_type == "s"  # plain string, not reinterpreted as a formula
 
 
 def test_report_xlsx_trips_and_summary_deduction_totals_agree():
@@ -227,6 +379,30 @@ def test_report_xlsx_has_summary_and_trips_sheets():
     assert summary_ws["B8"].value == "$0.72"  # 1mi @ $0.725/mi, float-rounded
     assert summary_ws["A11"].value == "Month"  # month table header
     assert summary_ws["A12"].value == "Jun"
+
+
+def test_report_xlsx_trips_sheet_carries_endpoint_label_and_dash_fallback():
+    trips = [
+        _trip(
+            category="business", distance_m=1609.344,
+            start_place_name="Grandma's house", end_place_name="Trailhead parking",
+        ),
+        _trip(
+            category="business", distance_m=1609.344,
+            start_place_name=None, start_lat=None, start_lon=None,
+            end_place_name=None, end_lat=None, end_lon=None,
+        ),
+    ]
+    report = build_annual_report(trips, RATES, TZ, 2026)
+    raw = to_report_xlsx(report, trips, RATES, TZ)
+    wb = load_workbook(io.BytesIO(raw))
+    trips_ws = wb["Trips"]
+    start_idx = HEADERS.index("Start location") + 1
+    end_idx = HEADERS.index("End location") + 1
+    assert trips_ws.cell(2, start_idx).value == "Grandma's house"
+    assert trips_ws.cell(2, end_idx).value == "Trailhead parking"
+    assert trips_ws.cell(3, start_idx).value == "--"
+    assert trips_ws.cell(3, end_idx).value == "--"
 
 
 def test_report_xlsx_shows_caveats_when_present():
@@ -424,6 +600,32 @@ def test_range_report_xlsx_trips_sheet_filters_out_of_range_trips():
     ]
     assert "In range" in purposes
     assert "Out of range" not in purposes
+
+
+def test_range_report_xlsx_trips_sheet_carries_endpoint_label_and_dash_fallback():
+    from datetime import date
+
+    trips = [
+        _trip(
+            category="business", distance_m=1609.344,
+            start_place_name="Grandma's house", end_place_name="Trailhead parking",
+        ),
+        _trip(
+            category="business", distance_m=1609.344,
+            start_place_name=None, start_lat=None, start_lon=None,
+            end_place_name=None, end_lat=None, end_lon=None,
+        ),
+    ]
+    report = build_range_report(trips, RATES, TZ, date(2026, 4, 1), date(2026, 6, 30))
+    raw = to_range_report_xlsx(report, trips, RATES, TZ)
+    wb = load_workbook(io.BytesIO(raw))
+    trips_ws = wb["Trips"]
+    start_idx = HEADERS.index("Start location") + 1
+    end_idx = HEADERS.index("End location") + 1
+    assert trips_ws.cell(2, start_idx).value == "Grandma's house"
+    assert trips_ws.cell(2, end_idx).value == "Trailhead parking"
+    assert trips_ws.cell(3, start_idx).value == "--"
+    assert trips_ws.cell(3, end_idx).value == "--"
 
 
 def test_range_report_xlsx_no_odometer_or_expense_sections():

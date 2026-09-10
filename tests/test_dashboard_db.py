@@ -23,10 +23,11 @@ from starlette.responses import RedirectResponse
 
 from app.auth import AuthRedirect
 from app.dashboard import week_bounds
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.main import make_templates
 from app.ui import make_router
 from app.vehicles import create_vehicle
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -45,6 +46,16 @@ def _endpoint():
 DASHBOARD = _endpoint()
 
 
+def _tag_endpoint():
+    for route in make_router().routes:
+        if getattr(route, "path", None) == "/trips/{trip_id}/tag" and "POST" in (route.methods or set()):
+            return route.endpoint
+    raise AssertionError("dashboard tag route missing")
+
+
+TAG = _tag_endpoint()
+
+
 def _request(pool, tz: ZoneInfo = UTC, missing_trip_gap_m: float = 1000.0):
     config = SimpleNamespace(
         display_tz=tz, missing_trip_gap_m=missing_trip_gap_m, app_version="test",
@@ -54,6 +65,7 @@ def _request(pool, tz: ZoneInfo = UTC, missing_trip_gap_m: float = 1000.0):
             pool=pool, templates=make_templates(config), config=config,
         )),
         session={"csrf": "test-csrf"},
+        headers={},
     )
 
 
@@ -62,21 +74,16 @@ async def _call_dashboard(pool, week: str = "", tz: ZoneInfo = UTC):
     return response.context["dashboard"]
 
 
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
-
-
 async def _insert_detected_trip(
     conn, started_at: datetime, ended_at: datetime, category: str = "unclassified",
     device: str = "DASH", distance_m: float = 1000.0, vehicle_id: int | None = None,
+    exclusion: str | None = None,
 ) -> int:
     cur = await conn.execute(
         "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
-        " point_count, detector_version, category, vehicle_id) "
-        "VALUES (%s, 'detected', %s, %s, %s, 2, 2, %s, %s) RETURNING id",
-        (device, started_at, ended_at, distance_m, category, vehicle_id),
+        " point_count, detector_version, category, vehicle_id, exclusion) "
+        "VALUES (%s, 'detected', %s, %s, %s, 2, 2, %s, %s, %s) RETURNING id",
+        (device, started_at, ended_at, distance_m, category, vehicle_id, exclusion),
     )
     return (await cur.fetchone())[0]
 
@@ -95,7 +102,7 @@ def _scenario(coro) -> None:
         pool = make_pool(TEST_DB)
         await pool.open(wait=True)
         try:
-            await _reset_schema(pool)
+            await reset_db(pool)
             await coro(pool)
         finally:
             await pool.close()
@@ -118,6 +125,152 @@ def test_default_week_returns_only_current_week_trips():
         dashboard = await _call_dashboard(pool)
         assert dashboard.trip_count == 1
         assert [t["id"] for g in dashboard.day_groups for t in g.trips] == [in_week]
+
+    _scenario(run)
+
+
+def test_weekly_dashboard_keeps_not_my_vehicle_visible_while_excluding_it_from_metrics():
+    async def run(pool):
+        bounds = week_bounds(date(2026, 7, 13), UTC)
+        async with pool.connection() as conn:
+            business_id = await _insert_detected_trip(
+                conn, bounds.start + timedelta(hours=1), bounds.start + timedelta(hours=2),
+                category="business", distance_m=1000.0,
+            )
+            not_my_vehicle_id = await _insert_detected_trip(
+                conn, bounds.start + timedelta(days=1),
+                bounds.start + timedelta(days=1, hours=1),
+                category="unclassified", distance_m=2000.0,
+                exclusion="not_my_vehicle",
+            )
+            nondeductible_id = await _insert_detected_trip(
+                conn, bounds.start + timedelta(days=2),
+                bounds.start + timedelta(days=2, hours=1),
+                category="business", distance_m=3000.0,
+                exclusion="not_deductible",
+            )
+
+        dashboard = await _call_dashboard(pool, week="2026-07-13")
+        visible_ids = [trip["id"] for group in dashboard.day_groups for trip in group.trips]
+        assert visible_ids == [nondeductible_id, not_my_vehicle_id, business_id]
+        assert dashboard.trip_count == 2
+        assert dashboard.distance.total_m == 4000.0
+        assert dashboard.distance.business_m == 1000.0
+        assert dashboard.distance.nondeductible_m == 3000.0
+        assert dashboard.attention is not None
+        assert dashboard.attention.unclassified_count == 1
+
+    _scenario(run)
+
+
+def test_dashboard_tag_rebuilds_past_week_card_and_hero_consistently():
+    async def run(pool):
+        bounds = week_bounds(date(2026, 7, 13), UTC)
+        async with pool.connection() as conn:
+            target_id = await _insert_detected_trip(
+                conn, bounds.start + timedelta(hours=1), bounds.start + timedelta(hours=2),
+                category="unclassified", distance_m=1000.0,
+            )
+            not_my_vehicle_id = await _insert_detected_trip(
+                conn, bounds.start + timedelta(days=1),
+                bounds.start + timedelta(days=1, hours=1),
+                category="unclassified", distance_m=2000.0,
+                exclusion="not_my_vehicle",
+            )
+            nondeductible_id = await _insert_detected_trip(
+                conn, bounds.start + timedelta(days=2),
+                bounds.start + timedelta(days=2, hours=1),
+                category="business", distance_m=3000.0,
+                exclusion="not_deductible",
+            )
+
+        request = _request(pool)
+        response = await TAG(
+            request, target_id, "business", {"sub": "test"},
+            dashboard_week="2026-07-13",
+        )
+        body = response.body.decode()
+        refreshed = response.context["dashboard"]
+        visible_ids = [trip["id"] for group in refreshed.day_groups for trip in group.trips]
+
+        assert response.status_code == 200
+        assert f'id="trip-{target_id}"' in body
+        row = body[body.index(f'id="trip-{target_id}"'):]
+        quick = row.split('class="trip-quick-actions"', 1)[1].split('</div>', 1)[0]
+        business_button = quick.split('value="business"', 1)[1].split('</form>', 1)[0]
+        personal_button = quick.split('value="personal"', 1)[1].split('</form>', 1)[0]
+        assert 'trip-quick-button-selected' in business_button
+        assert 'aria-pressed="true"' in business_button
+        assert 'trip-quick-button-selected' not in personal_button
+        assert 'aria-pressed' not in personal_button
+        assert body.count('hx-swap-oob="outerHTML"') == 1
+        assert body.count('id="dashboard-hero"') == 1
+        assert visible_ids == [nondeductible_id, not_my_vehicle_id, target_id]
+        assert refreshed.nav.week_start == date(2026, 7, 13)
+        assert refreshed.trip_count == 2
+        assert refreshed.distance.total_m == 4000.0
+        assert refreshed.distance.business_m == 1000.0
+        assert refreshed.distance.nondeductible_m == 3000.0
+        assert refreshed.daily_series[0].business_m == 1000.0
+        assert refreshed.daily_series[1].business_m == 0.0
+        assert refreshed.daily_series[2].nondeductible_m == 3000.0
+        assert refreshed.deduction.available
+        assert refreshed.deduction.amount is not None
+        assert refreshed.deduction.amount > 0.0
+        assert refreshed.attention is not None
+        assert refreshed.attention.unclassified_count == 1
+
+        response = await TAG(
+            request, target_id, "unclassified", {"sub": "test"},
+            dashboard_week="2026-07-13",
+        )
+        reset_dashboard = response.context["dashboard"]
+        assert reset_dashboard.trip_count == 2
+        assert reset_dashboard.distance.business_m == 0.0
+        assert reset_dashboard.deduction.amount == 0.0
+        assert reset_dashboard.attention is not None
+        assert reset_dashboard.attention.unclassified_count == 2
+        assert not_my_vehicle_id in [
+            trip["id"] for group in reset_dashboard.day_groups for trip in group.trips
+        ]
+
+        response = await TAG(
+            request, not_my_vehicle_id, "business", {"sub": "test"},
+            dashboard_week="2026-07-13",
+        )
+        nmv_body = response.body.decode()
+        nmv_dashboard = response.context["dashboard"]
+        assert response.status_code == 200
+        assert f'id="trip-{not_my_vehicle_id}"' in nmv_body
+        nmv_row = nmv_body[nmv_body.index(f'id="trip-{not_my_vehicle_id}"'):]
+        nmv_quick = nmv_row.split('class="trip-quick-actions"', 1)[1].split('</div>', 1)[0]
+        nmv_business_button = nmv_quick.split('value="business"', 1)[1].split('</form>', 1)[0]
+        nmv_personal_button = nmv_quick.split('value="personal"', 1)[1].split('</form>', 1)[0]
+        assert 'trip-quick-button-selected' in nmv_business_button
+        assert 'aria-pressed="true"' in nmv_business_button
+        assert 'trip-quick-button-selected' not in nmv_personal_button
+        assert 'aria-pressed' not in nmv_personal_button
+        assert nmv_body.count('hx-swap-oob="outerHTML"') == 1
+        assert nmv_body.count('id="dashboard-hero"') == 1
+        assert nmv_dashboard.nav.week_start == date(2026, 7, 13)
+        assert nmv_dashboard.trip_count == 2
+        assert nmv_dashboard.distance.total_m == 4000.0
+        assert nmv_dashboard.distance.business_m == 0.0
+        assert nmv_dashboard.distance.unclassified_m == 1000.0
+        assert nmv_dashboard.distance.nondeductible_m == 3000.0
+        assert nmv_dashboard.daily_series[0].business_m == 0.0
+        assert nmv_dashboard.daily_series[0].unclassified_m == 1000.0
+        assert nmv_dashboard.daily_series[1].business_m == 0.0
+        assert nmv_dashboard.daily_series[1].unclassified_m == 0.0
+        assert nmv_dashboard.daily_series[2].nondeductible_m == 3000.0
+        assert nmv_dashboard.deduction.amount == 0.0
+        assert nmv_dashboard.attention is not None
+        assert nmv_dashboard.attention.unclassified_count == 1
+        assert nmv_dashboard.attention.missing_trip_count == 0
+        assert nmv_dashboard.attention.missing_trip_url is None
+        assert not_my_vehicle_id in [
+            trip["id"] for group in nmv_dashboard.day_groups for trip in group.trips
+        ]
 
     _scenario(run)
 
@@ -238,6 +391,25 @@ def test_dashboard_passes_vehicles_and_recent_purposes_for_the_trip_card():
         # 008_vehicles.sql seeds a default "My Car" alongside the one created here.
         assert {v["name"] for v in response.context["vehicles"]} == {"My Car", "Test Car"}
         assert response.context["recent_purposes"] == ["Client visit"]
+
+    _scenario(run)
+
+
+def test_global_review_count_is_independent_from_weekly_attention():
+    async def run(pool):
+        bounds = week_bounds(date(2026, 7, 13), UTC)
+        async with pool.connection() as conn:
+            await _insert_detected_trip(
+                conn,
+                bounds.end + timedelta(days=1),
+                bounds.end + timedelta(days=1, hours=1),
+                category="unclassified",
+            )
+
+        response = await DASHBOARD(_request(pool), {"sub": "test"}, "2026-07-13")
+        attention = response.context["dashboard"].attention
+        assert attention is None or attention.unclassified_count == 0
+        assert response.context["review_count"] == 1
 
     _scenario(run)
 

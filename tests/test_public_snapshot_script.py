@@ -36,6 +36,8 @@ _PRIVATE_HOSTNAME = "sap" + "poro"
 DOC_STUBS = {
     "docs/backups.md": "# Backups\n",
     "docs/configuration.md": "# Configuration\n",
+    "docs/usage.md": "# Use Odograph\n",
+    "docs/install-compose.md": "# Install with Compose\n",
     "docs/osrm.md": "# OSRM\n",
     "docs/owntracks.md": "# OwnTracks\n",
     "docs/privacy.md": "# Privacy\n",
@@ -43,6 +45,10 @@ DOC_STUBS = {
     "docs/reverse-proxy.md": "# Reverse proxy\n",
     "docs/security.md": "# Security\n",
     "docs/upgrading.md": "# Upgrading\n",
+    # The snapshot script treats these as opaque assets. Placeholder bytes
+    # keep the fixture small while still exercising binary-path extraction.
+    "docs/images/usage-dashboard.png": "dashboard image\n",
+    "docs/images/usage-review.png": "review image\n",
 }
 
 
@@ -119,6 +125,12 @@ def test_bootstrap_mode_still_works_against_an_empty_directory(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert (outdir / "docs" / "backups.md").exists()
+    assert {
+        path.relative_to(outdir).as_posix()
+        for path in (outdir / "docs").rglob("*")
+        if path.is_file()
+    } == set(DOC_STUBS)
+    assert not (outdir / "docs" / ("DES" + "IGN.md")).exists()
     assert "git init" in result.stdout
     assert "git remote add origin" in result.stdout
 

@@ -7,7 +7,13 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.dashboard import build_week_dashboard, format_week_range, parse_week_anchor, week_bounds
+from app.dashboard import (
+    DailyDistanceBreakdown,
+    build_week_dashboard,
+    format_week_range,
+    parse_week_anchor,
+    week_bounds,
+)
 from app.rates import YearRate
 
 LA = ZoneInfo("America/Los_Angeles")
@@ -135,6 +141,14 @@ def test_empty_week_zeros():
     assert dashboard.deduction.available is True
     assert dashboard.deduction.amount == 0.0
     assert dashboard.day_groups == []
+    assert [entry.day for entry in dashboard.daily_series] == [
+        date(2026, 7, day) for day in range(13, 20)
+    ]
+    assert all(isinstance(entry, DailyDistanceBreakdown) for entry in dashboard.daily_series)
+    assert all(
+        entry.business_m == entry.personal_m == entry.unclassified_m == entry.nondeductible_m == 0.0
+        for entry in dashboard.daily_series
+    )
     assert dashboard.attention is None
     assert dashboard.nav.week_start == date(2026, 7, 13)
 
@@ -156,6 +170,133 @@ def test_category_breakdown_keeps_unclassified_separate():
     assert dashboard.distance.business_m == 10_000.0
     assert dashboard.distance.personal_m == 5_000.0
     assert dashboard.distance.unclassified_m == 2_000.0
+
+
+def test_exclusions_win_before_category_in_week_dashboard():
+    trips = [
+        _trip(1, datetime(2026, 7, 13, 9, tzinfo=UTC), "business", 1000.0),
+        _trip(
+            2, datetime(2026, 7, 14, 9, tzinfo=UTC), "business", 2000.0,
+            exclusion="not_my_vehicle",
+        ),
+        _trip(
+            3, datetime(2026, 7, 15, 9, tzinfo=UTC), "business", 3000.0,
+            exclusion="not_deductible",
+        ),
+    ]
+    dashboard = build_week_dashboard(
+        trips, Decimal("0.00"), {2026: YearRate(0.70)}, date(2026, 7, 13), LA,
+        datetime(2026, 7, 15, 12, tzinfo=UTC), 1000.0,
+    )
+
+    assert dashboard.trip_count == 2
+    assert dashboard.distance.total_m == 4000.0
+    assert dashboard.distance.business_m == 1000.0
+    assert dashboard.distance.nondeductible_m == 3000.0
+    assert dashboard.deduction.amount == pytest.approx(1000.0 / 1609.344 * 0.70)
+    assert [trip["id"] for group in dashboard.day_groups for trip in group.trips] == [3, 2, 1]
+    daily = {entry.day: entry for entry in dashboard.daily_series}
+    assert daily[date(2026, 7, 13)].business_m == 1000.0
+    assert daily[date(2026, 7, 14)].business_m == 0.0
+    assert daily[date(2026, 7, 15)].nondeductible_m == 3000.0
+    assert all(
+        entry.business_m == entry.personal_m == entry.unclassified_m == entry.nondeductible_m == 0.0
+        for day, entry in daily.items()
+        if day not in {date(2026, 7, 13), date(2026, 7, 15)}
+    )
+
+
+def test_attention_counts_excluded_unclassified_without_changing_mileage_math():
+    trips = [
+        _trip(
+            1, datetime(2026, 7, 13, 9, tzinfo=UTC), "unclassified", 2000.0,
+            exclusion="not_my_vehicle", prev_end_gap_m=5000.0,
+            prev_trip_ended_at=datetime(2026, 7, 13, 8, tzinfo=UTC),
+            start_lat=47.0, start_lon=-122.0,
+        ),
+        _trip(
+            2, datetime(2026, 7, 14, 9, tzinfo=UTC), "unclassified", 3000.0,
+            exclusion="not_deductible",
+        ),
+    ]
+    dashboard = build_week_dashboard(
+        trips, Decimal("0.00"), {}, date(2026, 7, 13), LA,
+        datetime(2026, 7, 15, 12, tzinfo=UTC), 1000.0,
+    )
+
+    assert dashboard.attention is not None
+    assert dashboard.attention.unclassified_count == 2
+    assert dashboard.attention.missing_trip_count == 0
+    assert dashboard.attention.missing_trip_url is None
+    assert dashboard.trip_count == 1
+    assert dashboard.distance.total_m == 3000.0
+    assert dashboard.distance.unclassified_m == 0.0
+    assert dashboard.distance.nondeductible_m == 3000.0
+    assert [trip["id"] for group in dashboard.day_groups for trip in group.trips] == [2, 1]
+    daily = {entry.day: entry for entry in dashboard.daily_series}
+    assert daily[date(2026, 7, 13)].business_m == 0.0
+    assert daily[date(2026, 7, 14)].nondeductible_m == 3000.0
+    assert all(
+        entry.business_m == entry.personal_m == entry.unclassified_m == entry.nondeductible_m == 0.0
+        for day, entry in daily.items()
+        if day not in {date(2026, 7, 14)}
+    )
+
+
+def test_daily_series_maps_each_category_to_its_local_day():
+    trips = [
+        _trip(1, datetime(2026, 7, 13, 9, tzinfo=UTC), "business", 1000.0),
+        _trip(2, datetime(2026, 7, 14, 9, tzinfo=UTC), "personal", 2000.0),
+        _trip(3, datetime(2026, 7, 15, 9, tzinfo=UTC), "unclassified", 3000.0),
+        _trip(
+            4, datetime(2026, 7, 16, 9, tzinfo=UTC), "business", 4000.0,
+            exclusion="not_deductible",
+        ),
+    ]
+    dashboard = build_week_dashboard(
+        trips, Decimal("0"), {2026: YearRate(0.70)}, date(2026, 7, 13), LA,
+        datetime(2026, 7, 20, tzinfo=UTC), 1000.0,
+    )
+
+    assert [entry.day for entry in dashboard.daily_series] == [
+        date(2026, 7, day) for day in range(13, 20)
+    ]
+    assert dashboard.daily_series[0].business_m == 1000.0
+    assert dashboard.daily_series[1].personal_m == 2000.0
+    assert dashboard.daily_series[2].unclassified_m == 3000.0
+    assert dashboard.daily_series[3].nondeductible_m == 4000.0
+    assert dashboard.daily_series[3].business_m == 0.0
+    assert dashboard.daily_series[0].total_m == pytest.approx(1000.0)
+    assert dashboard.daily_series[1].total_m == pytest.approx(2000.0)
+
+
+def test_daily_series_uses_started_at_local_date_for_cross_midnight_trip():
+    trip = _trip(
+        1, datetime(2026, 7, 14, 6, 30, tzinfo=UTC), "business", 1000.0,
+        ended_at=datetime(2026, 7, 14, 8, 30, tzinfo=UTC),
+    )
+    dashboard = build_week_dashboard(
+        [trip], Decimal("0"), {}, date(2026, 7, 13), LA,
+        datetime(2026, 7, 20, tzinfo=UTC), 1000.0,
+    )
+
+    assert dashboard.daily_series[0].day == date(2026, 7, 13)
+    assert dashboard.daily_series[0].business_m == 1000.0
+    assert dashboard.daily_series[1].business_m == 0.0
+    assert dashboard.day_groups[0].day == date(2026, 7, 13)
+
+
+def test_daily_series_has_seven_local_days_in_dst_transition_week():
+    trip = _trip(1, datetime(2026, 3, 8, 9, tzinfo=UTC), "personal", 1000.0)
+    dashboard = build_week_dashboard(
+        [trip], Decimal("0"), {}, date(2026, 3, 8), LA,
+        datetime(2026, 3, 10, tzinfo=UTC), 1000.0,
+    )
+
+    assert [entry.day for entry in dashboard.daily_series] == [
+        date(2026, 3, day) for day in range(2, 9)
+    ]
+    assert dashboard.daily_series[-1].personal_m == 1000.0
 
 
 # --- build_week_dashboard: deduction bucketing ----------------------------

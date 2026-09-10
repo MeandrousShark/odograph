@@ -2,12 +2,18 @@
 {% block title %}{{ range_label(report.start, report.end) }} Report: Odograph{% endblock %}
 {% block content %}
 
-<p>
-  <a href="/report/{{ report.year }}">← {{ report.year }} annual report</a>
-  · <a href="/report/range/export?from={{ report.start.isoformat() }}&to={{ report.end.isoformat() }}">Export XLSX</a>
-</p>
-
-<h2>{{ range_label(report.start, report.end) }} mileage report</h2>
+<div class="report-page">
+  <div class="report-page-header page-title">
+    <div>
+      <p class="page-title-eyebrow">Report</p>
+      <h2 id="report-page-title" class="page-title-heading">{{ range_label(report.start, report.end) }} mileage report</h2>
+      <p class="page-title-subtitle">Mileage totals for the selected dates.</p>
+    </div>
+    <div class="page-title-actions report-page-actions">
+      <a class="control control-secondary" href="/report/{{ report.year }}">← {{ report.year }} annual report</a>
+      <a class="control control-secondary" href="/report/range/export?from={{ report.start.isoformat() }}&to={{ report.end.isoformat() }}">Export XLSX</a>
+    </div>
+  </div>
 
 {% if report.trip_count == 0 %}
   <p class="empty">No trips recorded {{ report.start.isoformat() }} - {{ report.end.isoformat() }}.</p>
@@ -19,4 +25,5 @@
 
 {% endif %}
 
+</div>
 {% endblock %}

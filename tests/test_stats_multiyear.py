@@ -2,8 +2,25 @@
 from __future__ import annotations
 
 import re
+from xml.etree import ElementTree
 
 from app.stats_multiyear import build_multiyear_chart
+
+
+def _assert_chart_accessibility_contract(chart_svg: str) -> None:
+    root = ElementTree.fromstring(chart_svg)
+    assert root.tag == "svg"
+    assert root.get("role") != "img"
+    assert root.get("aria-label", "").strip()
+    chart_title = root.find("title")
+    assert chart_title is not None
+    assert (chart_title.text or "").strip()
+    rects = root.findall(".//rect")
+    assert rects
+    for rect in rects:
+        bar_title = rect.find("title")
+        assert bar_title is not None
+        assert (bar_title.text or "").strip()
 
 
 def _rows():
@@ -41,6 +58,14 @@ def test_single_year_and_empty_rows_do_not_crash():
     single = build_multiyear_chart(_rows(), [2026], cutoff_month=8, cutoff_day=15)
     assert single.years == [2026]
     assert "<rect " in single.chart_svg
+
+
+def test_multi_year_chart_root_and_data_bars_have_accessible_titles():
+    chart = build_multiyear_chart(
+        _rows(), [2024, 2025, 2026], cutoff_month=8, cutoff_day=15
+    )
+
+    _assert_chart_accessibility_contract(chart.chart_svg)
 
 
 def test_svg_uses_per_year_color_custom_properties():

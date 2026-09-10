@@ -1,7 +1,7 @@
 """Odometer readings + GPS-vs-odometer reconciliation. Pure core, no I/O --
-unit-testable the same way `app/report.py`/`app/stats.py` are; `app/ui.py`
-fetches readings/trips with plain SQL and hands them here, and
-`app/report.py`'s `build_annual_report` is deliberately untouched
+unit-testable the same way `app/report.py`/`app/stats.py` are;
+`app/ui/settings.py` fetches readings/trips with plain SQL and hands them
+here, and `app/report.py`'s `build_annual_report` is deliberately untouched
 (reconciliation is computed separately and passed to the report
 template/export as its own object).
 
@@ -130,7 +130,7 @@ def vehicle_coverage_for_report(
 
     `fully_bracketed` is true only when the earliest reading lands exactly
     at `year_start` and the latest at/after `next_year_start`. The caller
-    (`app.ui._fetch_year_odometer_coverage`) fetches readings from
+    (`app.ui.reports._fetch_year_odometer_coverage`) fetches readings from
     `year_start` through `next_year_start` inclusive, so a reading recorded
     exactly at midnight Jan 1 of the following year, the one that actually
     brackets the end of the report year, is included here and can make this

@@ -3,11 +3,15 @@
 {% block content %}
 
 <div class="card auth-card">
-<h2>Create administrator account</h2>
-<p class="muted">This creates the sole administrator for this Odograph instance.</p>
+<div class="page-title auth-page-title">
+  <div>
+    <h2 class="page-title-heading">Create administrator account</h2>
+    <p class="page-title-subtitle">This creates the sole administrator for this Odograph instance.</p>
+  </div>
+</div>
 
 {% if error %}
-<div class="form-error-summary" role="alert">{{ error }}</div>
+<div class="notice notice-danger form-error-summary" role="alert">{{ error }}</div>
 {% endif %}
 
 <form method="post" action="/signup" class="auth-form">
@@ -21,7 +25,7 @@
   <label>Confirm password
     <input type="password" name="password_confirm" required autocomplete="new-password" minlength="8">
   </label>
-  <button type="submit" class="control control-primary">Create administrator</button>
+  <button type="submit" class="control control-primary auth-submit">Create administrator</button>
 </form>
 
 <p class="muted"><a href="/login">Back to sign in</a></p>

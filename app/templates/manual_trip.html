@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Add manual trip: Odograph{% endblock %}
+{% block head %}
+  <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
+  <script src="/static/vendor/leaflet/leaflet.js"></script>
+{% endblock %}
+{% block content %}
+
+<div class="manual-trip-page" id="manual-trip">
+  <div class="manual-trip-page-header">
+    <div>
+      <p><a href="/trips">All trips</a></p>
+      <h2>Add manual trip</h2>
+    </div>
+  </div>
+
+  {% include "_manual_trip_form.html" %}
+</div>
+
+{% include "_manual_trip_script.html" %}
+{% endblock %}

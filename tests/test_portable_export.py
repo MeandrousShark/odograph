@@ -30,9 +30,10 @@ def _bundle(**overrides):
             "started_at": datetime(2026, 6, 15, 15, 0, tzinfo=TZ),
             "ended_at": datetime(2026, 6, 15, 15, 30, tzinfo=TZ),
             "distance_m": 1609.344, "has_gap": False, "category": "business",
+            "exclusion": None,
             "purpose": "Meet client", "notes": "client visit",
             "vehicle_id": 1, "start_place_id": 5, "end_place_id": None,
-            "tag_source": "human",
+            "tag_source": "human", "start_label": None, "end_label": None,
         }],
         expenses=[{
             "vehicle_id": 1, "incurred_on": date(2026, 6, 1), "category": "fuel",
@@ -101,7 +102,43 @@ def test_trip_references_vehicle_and_places_by_dollar_id():
     assert trip["started_at"] == "2026-06-15T15:00:00+00:00"
     assert trip["distance_m"] == 1609.344
     assert trip["category"] == "business"
+    assert trip["exclusion"] is None
     assert trip["tag_source"] == "human"
+
+
+def test_trip_carries_its_exclusion_state():
+    bundle = _bundle(trips=[{
+        "id": 42, "device": "phone1", "source": "detected",
+        "started_at": datetime(2026, 6, 15, 15, 0, tzinfo=TZ),
+        "ended_at": datetime(2026, 6, 15, 15, 30, tzinfo=TZ),
+        "distance_m": 1609.344, "has_gap": False, "category": "personal",
+        "exclusion": "not_my_vehicle",
+        "purpose": None, "notes": None,
+        "vehicle_id": 1, "start_place_id": None, "end_place_id": None,
+        "tag_source": None, "start_label": None, "end_label": None,
+    }])
+    assert bundle["trips"][0]["exclusion"] == "not_my_vehicle"
+
+
+def test_trip_carries_its_endpoint_labels_or_null_when_unset():
+    bundle = _bundle()
+    trip = bundle["trips"][0]
+    assert trip["start_label"] is None
+    assert trip["end_label"] is None
+
+    bundle = _bundle(trips=[{
+        "id": 7, "device": "phone1", "source": "manual",
+        "started_at": datetime(2026, 6, 15, 15, 0, tzinfo=TZ),
+        "ended_at": datetime(2026, 6, 15, 15, 30, tzinfo=TZ),
+        "distance_m": 1000.0, "has_gap": False, "category": "personal",
+        "exclusion": None,
+        "purpose": None, "notes": None,
+        "vehicle_id": None, "start_place_id": None, "end_place_id": None,
+        "tag_source": None, "start_label": "Grandma's house", "end_label": "Lake cabin",
+    }])
+    trip = bundle["trips"][0]
+    assert trip["start_label"] == "Grandma's house"
+    assert trip["end_label"] == "Lake cabin"
 
 
 def test_expense_amount_serializes_as_exact_decimal_string():
@@ -110,6 +147,16 @@ def test_expense_amount_serializes_as_exact_decimal_string():
     assert expense["vehicle"] == 1
     assert expense["amount"] == "45.67"
     assert expense["incurred_on"] == "2026-06-01"
+    assert expense["trip"] is None
+
+
+def test_expense_references_linked_trip_by_bundle_id():
+    bundle = _bundle(expenses=[{
+        "vehicle_id": 1, "trip_id": 42, "incurred_on": date(2026, 6, 1),
+        "category": "fuel", "amount": Decimal("45.67"),
+        "treatment": "business_use_allocated", "notes": None,
+    }])
+    assert bundle["expenses"][0]["trip"] == 42
 
 
 def test_odometer_reading_references_vehicle_by_dollar_id():

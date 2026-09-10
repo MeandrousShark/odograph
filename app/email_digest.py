@@ -270,6 +270,10 @@ class EmailDigestWorker(IntervalWorker):
                     "monthly_summary.txt",
                     month_label=f"{MONTH_ABBR[month]} {year}",
                     business_mi=format_miles(report.business_m),
+                    nondeductible_mi=(
+                        format_miles(report.nondeductible_m)
+                        if report.nondeductible_m else ""
+                    ),
                     deduction=format_usd(report.total_deduction),
                     unclassified=report.caveats.unclassified_trips,
                     report_url=_url(
@@ -298,6 +302,10 @@ class EmailDigestWorker(IntervalWorker):
                     "filing_reminder.txt",
                     year=year,
                     business_mi=format_miles(report.business_m),
+                    nondeductible_mi=(
+                        format_miles(report.nondeductible_m)
+                        if report.nondeductible_m else ""
+                    ),
                     deduction=format_usd(report.total_deduction),
                     report_url=_url(self.app_url, f"/report/{year}"),
                     export_url=_url(self.app_url, f"/report/{year}/export"),

@@ -7,15 +7,18 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import date
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
 from psycopg import errors
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.detector.core import Params
 from app.detector.runner import DetectorRunner
 from app.ui import make_router
+from conftest import reset_db
 from tests.synth import Drive, Stationary, build_track
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -29,12 +32,6 @@ def _endpoint(path: str):
         if getattr(route, "path", None) == path:
             return route.endpoint
     raise AssertionError(f"route missing: {path}")
-
-
-async def _reset(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
 
 
 async def _insert_detectable_track(conn, device: str = "DELETEDEV") -> None:
@@ -129,7 +126,7 @@ async def _delete_and_restore_scenario() -> None:
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset(pool)
+        await reset_db(pool)
         runner = DetectorRunner(pool, Params())
         tracking_pool = TrackingPool(pool)
         snap_worker = FakeSnapWorker(tracking_pool)
@@ -145,6 +142,13 @@ async def _delete_and_restore_scenario() -> None:
                 "RETURNING id"
             )
             manual_id = (await manual.fetchone())[0]
+            await conn.execute(
+                "INSERT INTO expenses "
+                "(vehicle_id, incurred_on, category, amount, treatment, notes, trip_id) "
+                "VALUES (1, '2026-05-04', 'fuel', 17.23, 'business_use_allocated', "
+                "'keep after trip deletion', %s)",
+                (manual_id,),
+            )
 
         response = await delete(request, manual_id, {"sub": "test"})
         assert response.status_code == 204
@@ -153,6 +157,14 @@ async def _delete_and_restore_scenario() -> None:
             cur = await conn.execute("SELECT 1 FROM trips WHERE id = %s", (manual_id,))
             assert await cur.fetchone() is None
             assert await _discard_rows(conn) == []
+            cur = await conn.execute(
+                "SELECT vehicle_id, incurred_on, category::text, amount, treatment::text, "
+                "notes, trip_id FROM expenses"
+            )
+            assert await cur.fetchone() == (
+                1, date(2026, 5, 4), "fuel", Decimal("17.23"),
+                "business_use_allocated", "keep after trip deletion", None,
+            )
 
         async with pool.connection() as conn:
             fragment_manual = await conn.execute(
@@ -162,7 +174,22 @@ async def _delete_and_restore_scenario() -> None:
             fragment_manual_id = (await fragment_manual.fetchone())[0]
         response = await delete(request, fragment_manual_id, {"sub": "test"}, True)
         assert response.status_code == 200
+        assert response.headers["X-Archive-Write"] == "success"
         assert "HX-Redirect" not in response.headers
+        assert response.body == b""
+
+        async with pool.connection() as conn:
+            dashboard_manual = await conn.execute(
+                "INSERT INTO trips (device, source, started_at, ended_at, distance_m) "
+                "VALUES ('manual', 'manual', now() - interval '1 hour', now(), 1000) "
+                "RETURNING id"
+            )
+            dashboard_manual_id = (await dashboard_manual.fetchone())[0]
+        response = await delete(
+            request, dashboard_manual_id, {"sub": "test"}, True, "2026-07-13"
+        )
+        assert response.status_code == 200
+        assert response.headers["HX-Refresh"] == "true"
         assert response.body == b""
 
         async with pool.connection() as conn:
@@ -218,7 +245,7 @@ async def _delete_rollback_scenario() -> None:
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             await _insert_detectable_track(conn)
         runner = DetectorRunner(pool, Params())
@@ -237,17 +264,26 @@ async def _delete_rollback_scenario() -> None:
                 "CREATE TRIGGER reject_trip_delete BEFORE DELETE ON trips "
                 "FOR EACH ROW EXECUTE FUNCTION reject_trip_delete()"
             )
-        delete = _endpoint("/trips/{trip_id}/delete")
-        snap_worker = FakeSnapWorker()
-        with pytest.raises(errors.RaiseException, match="forced delete failure"):
-            await delete(
-                _request(pool, runner, snap_worker), before[0], {"sub": "test"}
-            )
-        assert snap_worker.pokes == 0
+        try:
+            delete = _endpoint("/trips/{trip_id}/delete")
+            snap_worker = FakeSnapWorker()
+            with pytest.raises(errors.RaiseException, match="forced delete failure"):
+                await delete(
+                    _request(pool, runner, snap_worker), before[0], {"sub": "test"}
+                )
+            assert snap_worker.pokes == 0
 
-        async with pool.connection() as conn:
-            assert await _detected_trip(conn) == before
-            assert await _discard_rows(conn) == []
+            async with pool.connection() as conn:
+                assert await _detected_trip(conn) == before
+                assert await _discard_rows(conn) == []
+        finally:
+            # The reset between tests truncates data but leaves schema
+            # objects alone (see tests/conftest.py), so a trigger/function
+            # created here to force this one failure must be dropped here
+            # too, not left for a later test's reset to clean up.
+            async with pool.connection() as conn:
+                await conn.execute("DROP TRIGGER reject_trip_delete ON trips")
+                await conn.execute("DROP FUNCTION reject_trip_delete()")
     finally:
         await pool.close()
 
@@ -260,7 +296,7 @@ async def _surviving_snap_results_scenario() -> None:
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset(pool)
+        await reset_db(pool)
         track = build_track([
             Stationary(900), Drive(km=2), Stationary(1200),
             Drive(km=2), Stationary(1200), Drive(km=2), Stationary(900),
@@ -348,7 +384,7 @@ async def _split_pokes_snap_after_commit_scenario() -> None:
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             await _insert_detectable_track(conn)
         runner = DetectorRunner(pool, Params())

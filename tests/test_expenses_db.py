@@ -14,9 +14,11 @@ from openpyxl import load_workbook
 from psycopg import errors
 
 from app.auth import require_csrf
-from app.db import make_pool, run_migrations
+from app.db import make_pool
+from app.detector.core import Params
 from app.main import make_templates
 from app.ui import make_router
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -35,7 +37,7 @@ def _route(path: str, method: str | None = None):
 
 
 def _request(pool):
-    config = SimpleNamespace(display_tz=TZ, app_version="test")
+    config = SimpleNamespace(display_tz=TZ, app_version="test", detector_params=Params())
     return SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, config=config, templates=make_templates(config),
@@ -44,17 +46,11 @@ def _request(pool):
     )
 
 
-async def _reset(pool):
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
-
-
 async def _crud_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             cur = await conn.execute(
                 "INSERT INTO vehicles (name, active) VALUES ('Retired truck', false) RETURNING id"
@@ -110,11 +106,58 @@ def test_expense_crud_supports_inactive_vehicle_and_exact_money():
     asyncio.run(_crud_scenario())
 
 
+async def _trip_detail_expense_scenario():
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        await reset_db(pool)
+        async with pool.connection() as conn:
+            vehicle_id = (await (await conn.execute(
+                "INSERT INTO vehicles (name) VALUES ('Trip Car') RETURNING id"
+            )).fetchone())[0]
+            trip_id = (await (await conn.execute(
+                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, vehicle_id) "
+                "VALUES ('manual', 'manual', '2026-06-01T01:30:00Z', "
+                "'2026-06-01T02:30:00Z', 1000, %s) RETURNING id",
+                (vehicle_id,),
+            )).fetchone())[0]
+
+        request = _request(pool)
+        add = _route("/trips/{trip_id}/expenses", "POST").endpoint
+        response = await add(
+            request, trip_id=trip_id, category="fuel", amount="12.34",
+            treatment="business_use_allocated", notes="trip receipt",
+            vehicle_id="999", incurred_on="2000-01-01", user=USER,
+        )
+        assert response.status_code == 204
+        assert response.headers["HX-Redirect"] == f"/trips/{trip_id}"
+
+        async with pool.connection() as conn:
+            row = await (await conn.execute(
+                "SELECT vehicle_id, incurred_on, amount, notes, trip_id FROM expenses"
+            )).fetchone()
+        assert row == (vehicle_id, date(2026, 5, 31), Decimal("12.34"), "trip receipt", trip_id)
+
+        detail = await _route("/trips/{trip_id}").endpoint(
+            request, trip_id=trip_id, user=USER
+        )
+        body = detail.body.decode()
+        assert "Expenses for this trip" in body
+        assert "$12.34" in body
+        assert "trip receipt" in body
+    finally:
+        await pool.close()
+
+
+def test_trip_detail_add_expense_uses_trip_vehicle_and_local_date():
+    asyncio.run(_trip_detail_expense_scenario())
+
+
 async def _constraints_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             vehicle_id = (await (await conn.execute(
                 "INSERT INTO vehicles (name) VALUES ('Truck') RETURNING id"
@@ -146,7 +189,7 @@ async def _expense_only_report_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             vehicle_id = (await (await conn.execute(
                 "INSERT INTO vehicles (name) VALUES ('Truck') RETURNING id"
@@ -180,7 +223,7 @@ async def _inconsistent_odometer_report_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             vehicle_id = (await (await conn.execute(
                 "INSERT INTO vehicles (name) VALUES ('Truck') RETURNING id"
@@ -220,8 +263,149 @@ def test_html_report_ignores_positive_odometer_span_smaller_than_business_miles(
     asyncio.run(_inconsistent_odometer_report_scenario())
 
 
+async def _not_deductible_trip_report_scenario():
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        await reset_db(pool)
+        async with pool.connection() as conn:
+            vehicle_id = (await (await conn.execute(
+                "INSERT INTO vehicles (name) VALUES ('Truck') RETURNING id"
+            )).fetchone())[0]
+            # The second trip's own category is 'business': the exclusion
+            # must still keep it out of business_m, or this end-to-end path
+            # would silently undercount the actual-expense denominator's
+            # correction while overcounting the deductible numerator.
+            await conn.execute(
+                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
+                " vehicle_id, category, exclusion) VALUES "
+                "('manual', 'manual', '2026-06-01T12:00:00Z', '2026-06-01T13:00:00Z', "
+                " %s, %s, 'business', NULL), "
+                "('manual', 'manual', '2026-06-02T12:00:00Z', '2026-06-02T13:00:00Z', "
+                " %s, %s, 'business', 'not_deductible')",
+                (80 * 1609.344, vehicle_id, 20 * 1609.344, vehicle_id),
+            )
+            await conn.execute(
+                "INSERT INTO expenses (vehicle_id, incurred_on, category, amount, treatment) "
+                "VALUES (%s, '2026-06-01', 'fuel', 1000.00, 'business_use_allocated')",
+                (vehicle_id,),
+            )
+
+        response = await _route("/report/{year}").endpoint(
+            _request(pool), year=2026, user=USER
+        )
+        body = response.body.decode()
+        # 80 deductible miles out of 100 GPS-total miles in the
+        # actual-expense comparison specifically: the excluded trip's 20
+        # miles still count toward the denominator, just not the business
+        # numerator, so this comparison's percentage is 80%, not 100%. (The
+        # annual report's own business percentage is a separate figure this
+        # test doesn't assert on.)
+        assert "80.0%" in body
+        assert "$800.00" in body
+    finally:
+        await pool.close()
+
+
+def test_html_report_excludes_not_deductible_trip_from_business_pct_even_when_categorized_business():
+    asyncio.run(_not_deductible_trip_report_scenario())
+
+
+async def _link_unlink_preserves_report_outputs_scenario():
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        await reset_db(pool)
+        async with pool.connection() as conn:
+            vehicle_id = (await (await conn.execute(
+                "INSERT INTO vehicles (name) VALUES ('Trip Car') RETURNING id"
+            )).fetchone())[0]
+            trip_id = (await (await conn.execute(
+                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
+                "vehicle_id, category) VALUES ('manual', 'manual', "
+                "'2026-06-02T12:00:00Z', '2026-06-02T13:00:00Z', %s, %s, 'business') "
+                "RETURNING id",
+                (10 * 1609.344, vehicle_id),
+            )).fetchone())[0]
+            expense_id = (await (await conn.execute(
+                "INSERT INTO expenses (vehicle_id, incurred_on, category, amount, treatment, notes) "
+                "VALUES (%s, '2026-06-02', 'fuel', 40.00, 'business_use_allocated', 'receipt') RETURNING id",
+                (vehicle_id,),
+            )).fetchone())[0]
+
+        request = _request(pool)
+        annual = _route("/report/{year}").endpoint
+        date_range = _route("/report/range").endpoint
+        dashboard = _route("/").endpoint
+
+        async def outputs():
+            annual_response = await annual(request, year=2026, user=USER)
+            range_response = await date_range(
+                request, from_="2026-06-01", to="2026-06-07", user=USER
+            )
+            dashboard_response = await dashboard(
+                request, user=USER, week="2026-06-01"
+            )
+            return (
+                annual_response.context["report"].total_deduction,
+                annual_response.context["expense_report"].allocated_total,
+                range_response.context["report"].total_deduction,
+                dashboard_response.context["dashboard"].deduction.amount,
+                annual_response.body,
+                range_response.body,
+                dashboard_response.body,
+            )
+
+        async def expense_row():
+            async with pool.connection() as conn:
+                cur = await conn.execute(
+                    "SELECT vehicle_id, incurred_on, category::text, amount, treatment::text, "
+                    "notes, trip_id FROM expenses WHERE id = %s",
+                    (expense_id,),
+                )
+                return await cur.fetchone()
+
+        before = await outputs()
+        expense_before = await expense_row()
+        await _route("/expenses/{expense_id}/update").endpoint(
+            request, expense_id=expense_id, vehicle_id=vehicle_id,
+            incurred_on="2026-06-02", category="fuel", amount="40.00",
+            treatment="business_use_allocated", notes="receipt", trip_id=str(trip_id),
+            user=USER,
+        )
+        expense_linked = await expense_row()
+        assert expense_linked[:-1] == expense_before[:-1]
+        assert expense_linked[-1] == trip_id
+        linked = await outputs()
+
+        await _route("/expenses/{expense_id}/update").endpoint(
+            request, expense_id=expense_id, vehicle_id=vehicle_id,
+            incurred_on="2026-06-02", category="fuel", amount="40.00",
+            treatment="business_use_allocated", notes="receipt", trip_id="",
+            user=USER,
+        )
+        expense_unlinked = await expense_row()
+        unlinked = await outputs()
+
+        assert expense_unlinked == expense_before
+        assert linked[:4] == before[:4]
+        assert linked[4] == before[4]
+        assert linked[5] == before[5]
+        assert b"1 expense" in linked[6]
+        assert unlinked == before
+    finally:
+        await pool.close()
+
+
+def test_link_and_unlink_leave_annual_range_and_dashboard_deductions_unchanged():
+    asyncio.run(_link_unlink_preserves_report_outputs_scenario())
+
+
 def test_all_mutating_expense_routes_require_csrf():
-    for path in ("/expenses", "/expenses/{expense_id}/update", "/expenses/{expense_id}/delete"):
+    for path in (
+        "/expenses", "/expenses/{expense_id}/update", "/expenses/{expense_id}/delete",
+        "/trips/{trip_id}/expenses",
+    ):
         route = _route(path, "POST")
         assert any(dependency.dependency is require_csrf for dependency in route.dependencies)
 

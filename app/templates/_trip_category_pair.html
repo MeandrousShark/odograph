@@ -1,0 +1,20 @@
+{% from "_icons.html" import icon with context %}
+{# The classify/committed pair shared by the Dashboard row and the archive
+   row: same classes, same behavior, one control to learn across both trip
+   lists. `dashboard_week`, when set, round-trips the Dashboard's current
+   week through the tag submit so the resulting row swap keeps the caller on
+   the same week; the archive has no such parameter to carry, so it omits
+   the argument and the hidden input is left out entirely. #}
+{% macro trip_category_pair(trip, dashboard_week='') -%}
+<div class="trip-quick-actions" aria-label="{{ 'Classify trip' if trip.category == 'unclassified' else 'Trip category: ' ~ (trip.category | capitalize) }}">
+  {% for category, label, category_icon in (('business', 'Business', 'briefcase'), ('personal', 'Personal', 'house')) %}
+  {% set is_selected = trip.category == category %}
+  <form class="trip-quick-form" hx-post="/trips/{{ trip.id }}/tag" hx-target="#trip-{{ trip.id }}" hx-swap="outerHTML">
+    <input type="hidden" name="category" value="{{ category }}">
+    {% if dashboard_week %}<input type="hidden" name="dashboard_week" value="{{ dashboard_week }}">{% endif %}
+    <button type="submit" class="trip-quick-button category-{{ category }}{% if is_selected %} trip-quick-button-selected{% endif %}"
+            {% if is_selected %}aria-pressed="true"{% endif %}>{{ icon(category_icon) }}<span>{{ label }}</span></button>
+  </form>
+  {% endfor %}
+</div>
+{%- endmacro %}

@@ -17,9 +17,10 @@ from zoneinfo import ZoneInfo
 import pytest
 from fastapi import HTTPException
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.main import make_templates
 from app.ui import make_router
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -49,12 +50,6 @@ def _request(pool):
     )
 
 
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
-
-
 async def _create_vehicle(conn, name: str) -> int:
     cur = await conn.execute("INSERT INTO vehicles (name) VALUES (%s) RETURNING id", (name,))
     return (await cur.fetchone())[0]
@@ -69,7 +64,7 @@ async def _odometer_non_finite_scenario(bad_value):
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             truck_id = await _create_vehicle(conn, "Truck")
         add = _endpoint("/settings/odometer")
@@ -98,7 +93,7 @@ async def _odometer_valid_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             truck_id = await _create_vehicle(conn, "Truck")
         add = _endpoint("/settings/odometer")
@@ -126,7 +121,7 @@ async def _rate_non_finite_scenario(bad_value):
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         upsert = _endpoint("/settings/rates")
         request = _request(pool)
         with pytest.raises(HTTPException) as exc_info:
@@ -153,7 +148,7 @@ async def _rate_h2_non_finite_scenario(bad_value):
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         upsert = _endpoint("/settings/rates")
         request = _request(pool)
         with pytest.raises(HTTPException) as exc_info:
@@ -178,7 +173,7 @@ async def _rate_valid_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         upsert = _endpoint("/settings/rates")
         request = _request(pool)
         await upsert(
@@ -217,7 +212,7 @@ async def _place_create_non_finite_radius_scenario(bad_value):
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         create = _endpoint("/places")
         request = _request(pool)
         with pytest.raises(HTTPException) as exc_info:
@@ -243,7 +238,7 @@ async def _place_create_non_finite_lat_scenario(bad_value):
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         create = _endpoint("/places")
         request = _request(pool)
         with pytest.raises(HTTPException) as exc_info:
@@ -268,7 +263,7 @@ async def _place_create_out_of_range_lat_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         create = _endpoint("/places")
         request = _request(pool)
         with pytest.raises(HTTPException) as exc_info:
@@ -293,7 +288,7 @@ async def _place_create_out_of_range_lon_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         create = _endpoint("/places")
         request = _request(pool)
         with pytest.raises(HTTPException) as exc_info:
@@ -318,7 +313,7 @@ async def _place_create_valid_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         create = _endpoint("/places")
         request = _request(pool)
         await create(
@@ -342,7 +337,7 @@ async def _place_update_non_finite_radius_scenario(bad_value):
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         create = _endpoint("/places")
         update = _endpoint("/places/{place_id}/update")
         request = _request(pool)
@@ -376,7 +371,7 @@ async def _place_update_out_of_range_lat_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         create = _endpoint("/places")
         update = _endpoint("/places/{place_id}/update")
         request = _request(pool)
@@ -414,7 +409,7 @@ async def _place_update_valid_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         create = _endpoint("/places")
         update = _endpoint("/places/{place_id}/update")
         request = _request(pool)

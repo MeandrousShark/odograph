@@ -17,8 +17,9 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.snap import SnapWorker
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -27,12 +28,6 @@ pytestmark = pytest.mark.skipif(
 
 DEVICE = "TESTDEV"
 T0 = datetime(2026, 7, 1, 8, 0, 0, tzinfo=timezone.utc)
-
-
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
 
 
 async def _insert_trip(conn, started_at, ended_at, point_count) -> int:
@@ -57,7 +52,7 @@ async def _scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         times = [T0 + timedelta(seconds=15 * i) for i in range(9)]
         shared = times[4]  # the single-fix destination stay of trip1 / origin of trip2
 
@@ -106,7 +101,7 @@ async def _unsnappable_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             trip = await _insert_trip(conn, T0, T0 + timedelta(seconds=60), point_count=1)
             await _insert_point(conn, T0, trip)  # only one usable point
@@ -134,7 +129,7 @@ async def _tidy_disabled_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             trip = await _insert_trip(conn, T0, T0 + timedelta(seconds=15), point_count=2)
             await _insert_point(conn, T0, trip)
@@ -207,7 +202,7 @@ async def _stale_result_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             trip = await _insert_trip(conn, T0, T0 + timedelta(seconds=15), point_count=2)
             await _insert_point(conn, T0, trip)
@@ -249,7 +244,7 @@ async def _no_rewrite_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             trip = await _insert_trip(conn, T0, T0 + timedelta(seconds=15), point_count=2)
             await _insert_point(conn, T0, trip)
@@ -332,7 +327,7 @@ async def _rewrite_during_point_load_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             trip = await _insert_trip(conn, T0, T0 + timedelta(seconds=15), point_count=2)
             await _insert_point(conn, T0, trip)
@@ -400,7 +395,7 @@ async def _manual_trip_immunity_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             detected_id = await _insert_trip(conn, T0, T0 + timedelta(seconds=15), point_count=2)
             await _insert_point(conn, T0, detected_id)

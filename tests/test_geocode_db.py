@@ -13,9 +13,10 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from psycopg.rows import dict_row
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.geocode import GeoapifyProvider, GeocodeWorker
 from app.ui import TRIP_COLUMNS
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -24,12 +25,6 @@ pytestmark = pytest.mark.skipif(
 
 DEVICE = "TESTDEV"
 T0 = datetime(2026, 7, 1, 8, 0, 0, tzinfo=timezone.utc)
-
-
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
 
 
 async def _insert_trip(
@@ -85,7 +80,7 @@ async def _scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             await conn.execute(
                 "INSERT INTO places (name, kind, geom, radius_m) "

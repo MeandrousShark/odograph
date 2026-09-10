@@ -19,6 +19,7 @@ def test_batch_endpoint_wire_defaults_and_csrf_dependency():
 
     assert params["category"].default.default == "keep"
     assert params["vehicle_id"].default.default == "keep"
+    assert params["exclusion"].default.default == "keep"
     assert params["purpose"].default.default == ""
     assert params["set_purpose"].default.default is False
     assert any(dependency.dependency is require_csrf for dependency in route.dependencies)

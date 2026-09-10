@@ -1,7 +1,7 @@
-<section class="stats-section">
-  <h2>Business vs. personal share</h2>
+<section class="stats-section stats-chart-section stats-trend-section" aria-labelledby="stats-trend-heading">
+  <h2 id="stats-trend-heading">{{ 'Classified mileage share' if trend.has_nondeductible else 'Business vs. personal share' }}</h2>
   <div class="chart-scroll">{{ trend.chart_svg | safe }}</div>
-  <p class="stats-legend"><span class="business">Business</span><span class="personal">Personal</span></p>
+  <p class="stats-legend"><span class="business">Business</span><span class="personal">Personal</span>{% if trend.has_nondeductible %}<span class="nondeductible">Non-deductible</span>{% endif %}</p>
   {% if trend.coverage_note %}
   <p class="muted stats-coverage">{{ trend.coverage_note }}</p>
   {% endif %}

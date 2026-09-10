@@ -9,8 +9,9 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.nudge import NudgeWorker
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -19,12 +20,6 @@ pytestmark = pytest.mark.skipif(
 
 TZ = ZoneInfo("America/Los_Angeles")
 WINDOW_END = datetime(2026, 7, 12, 18, tzinfo=TZ)
-
-
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
 
 
 async def _insert_trip(conn, started_at, category="unclassified") -> None:
@@ -46,7 +41,7 @@ async def _ledger_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             await _insert_trip(conn, WINDOW_END - timedelta(days=1))
             await _insert_trip(conn, WINDOW_END - timedelta(days=8))
@@ -82,7 +77,7 @@ async def _retry_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             await _insert_trip(conn, WINDOW_END - timedelta(days=1))
 

@@ -3,7 +3,8 @@
 This application is fed location data by [OwnTracks](https://owntracks.org/),
 a free, open-source location-tracking app for iOS and Android. OwnTracks runs
 in HTTP mode, posting your phone's location straight to your own instance.
-There is no third-party server in between.
+There is no third-party server in between. For the application's normal first
+steps after installation, see the [Odograph usage guide](usage.md).
 
 ## App configuration
 
@@ -54,7 +55,7 @@ OwnTracks iOS also provides two automatic battery-saving controls:
   `adapt` to take effect.
 
 These controls are documented by OwnTracks as app-version features, not iOS
-version features. Check the [iOS guide](https://owntracks.org/booklet/features/)
+version features. Check the [OwnTracks app guide](https://owntracks.org/booklet/guide/apps/)
 if a setting is missing from the installed app.
 
 ### iOS regions for common places
@@ -73,7 +74,7 @@ For automatic monitoring-mode changes, end the region name with
 For example, name a home region `Home|1|2` and a work region `Work|1|2`.
 Entering either region switches from Move to Significant changes. Leaving it
 switches back to Move. OwnTracks documents this syntax in its [iOS region
-guide](https://owntracks.org/booklet/features/).
+guide](https://owntracks.org/booklet/features/ios/).
 
 Also create a separate region named `+follow` with an initial radius greater
 than zero. OwnTracks moves this region along with the phone and adjusts its
@@ -154,8 +155,8 @@ and raw ingest messages), leaving your real data untouched. It shells out to
 `COMPOSE_CMD` to override) to run the deletion against the database
 container.
 
-If the test trip never appears, check the "Device status" section on the
-Settings page: it shows the newest location fix received from every device
+If the test trip never appears, open **Settings**, expand **Diagnostics**, and
+find **Device status**. It shows the newest location fix received from every device
 that has posted to `/ingest`, which tells you whether the test script (or a
 real phone) is actually reaching your instance before you go looking any
 further.

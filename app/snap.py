@@ -115,9 +115,10 @@ async def route_distance_m(
     own loop.
 
     Raises on transport failure or a non-2xx status, like
-    `GeocodeProvider.reverse` (app/geocode.py) -- the caller (app/ui.py)
-    catches broadly and degrades to no suggestion, since a missing hint is
-    never worse than the badge/prefill flow it's decorating.
+    `GeocodeProvider.reverse` (app/geocode.py) -- the caller
+    (app/ui/manual.py) catches broadly and degrades to no suggestion, since
+    a missing hint is never worse than the badge/prefill flow it's
+    decorating.
     """
     url = (
         f"{osrm_url.rstrip('/')}/route/v1/driving/"

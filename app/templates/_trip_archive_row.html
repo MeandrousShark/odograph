@@ -1,0 +1,116 @@
+{% from "_icons.html" import icon with context %}
+{% from "_trip_delete_dialog.html" import trip_delete_dialog %}
+{% from "_trip_category_pair.html" import trip_category_pair %}
+{% set full_start = describe_endpoint(trip.start_place_name, trip.start_lat, trip.start_lon, trip.get('start_address')) %}
+{% set full_end = describe_endpoint(trip.end_place_name, trip.end_lat, trip.end_lon, trip.get('end_address')) %}
+{% set compact_start = describe_compact_endpoint(trip.start_place_name, trip.start_lat, trip.start_lon, trip.get('start_address')) %}
+{% set compact_end = describe_compact_endpoint(trip.end_place_name, trip.end_lat, trip.end_lon, trip.get('end_address')) %}
+{% set missing = missing_trip_badge(trip) %}
+{% set delete_dialog_id = 'trip-delete-archive-' ~ trip.id %}
+{% set default_vehicle_ids = vehicles | default([], true) | selectattr('is_default') | map(attribute='id') | list %}
+{% set vehicle_is_default = trip.vehicle_id is not none and trip.vehicle_id in default_vehicle_ids %}
+{% set vehicle_label = trip.vehicle_name or 'Not assigned' %}
+{% set show_vehicle_inline = not vehicle_is_default %}
+{% set needs_category = trip.category == 'unclassified' and not trip.exclusion %}
+{% set has_statuses = needs_category or trip.exclusion or trip.source == 'manual' or trip.expense_count or trip.has_gap or missing %}
+{#
+  `trip-archive-item` is a bare marker class carrying no CSS of its own,
+  present on both this row and `_trip_edit_card.html`'s root article (shared
+  with the dashboard, not redesigned here). trips.html's selection script
+  targets that marker, not `trip-archive-row`: the row class below turns on
+  this file's own CSS grid layout, and putting the selection script's query
+  on that class instead would hand the edit card's plain card layout that
+  grid display and break it while a row is being edited in place.
+#}
+<article id="trip-{{ trip.id }}" class="trip-archive-item trip-archive-row{% if trip.exclusion == 'not_my_vehicle' %} trip-archive-row-not-my-vehicle{% endif %}{% if trip.exclusion == 'not_deductible' %} trip-archive-row-not-deductible{% endif %}">
+  {# The whole row is a click target for the trip detail page (below), so this
+     is the row's only keyboard tab stop besides the interactive controls
+     that sit above the overlay; the checkbox keeps its own accessible name
+     rather than the removed "Select"/"Selected" text since there's no longer
+     a selection mode to switch that label between. #}
+  <a class="trip-archive-row-link" href="/trips/{{ trip.id }}">
+    <span class="visually-hidden">View trip details</span>
+  </a>
+
+  <label class="trip-archive-row-selector">
+    <input type="checkbox" class="merge-select" value="{{ trip.id }}">
+    <span class="visually-hidden">Select this trip</span>
+  </label>
+
+  <div class="trip-archive-row-time" aria-label="Trip time: {{ trip.started_at | local_dt }} to {{ trip.ended_at | local_dt }}">
+    <div class="trip-archive-row-when">
+      <strong>{{ trip.started_at | local_date }}</strong>
+      <span class="trip-archive-row-when-times"><time datetime="{{ trip.started_at.isoformat() }}">{{ trip.started_at | local_time }}</time> to <time datetime="{{ trip.ended_at.isoformat() }}">{{ trip.ended_at | local_time }}</time></span>
+    </div>
+  </div>
+
+  <div class="trip-archive-row-content">
+    <p class="trip-archive-row-route trip-route" title="{{ full_start }} to {{ full_end }}"
+       aria-label="Route: {{ full_start }} to {{ full_end }}">
+      <span>{{ compact_start }}</span>{{ icon('arrow-right') }}<span>{{ compact_end }}</span>
+    </p>
+    {% if trip.purpose or show_vehicle_inline %}
+    <div class="trip-archive-row-meta" aria-label="Trip details">
+      {% if trip.purpose %}<span class="trip-archive-row-purpose">{{ trip.purpose }}</span>{% endif %}
+      {% if show_vehicle_inline %}<span class="trip-archive-row-vehicle">Vehicle: {{ vehicle_label }}</span>{% endif %}
+    </div>
+    {% endif %}
+    {% if not show_vehicle_inline %}
+    {# Kept out of .trip-archive-row-meta (a flex container) rather than
+       inside an otherwise-empty wrapper: it never reserves layout space
+       there, unlike an empty flex child would, while still being reachable
+       by screen readers and find-in-page. Mirrors the dashboard row's same
+       default-vehicle handling. #}
+    <span class="trip-archive-row-vehicle visually-hidden">Vehicle: {{ vehicle_label }}</span>
+    {% endif %}
+    {% if has_statuses %}
+    <div class="trip-archive-row-statuses" aria-label="Trip status and signals">
+      {% if needs_category %}<span class="status-badge badge-accent">Needs category</span>{% endif %}
+      {% if trip.exclusion %}<span class="status-badge exclusion-badge trip-archive-row-exclusion">{{ exclusion_labels[trip.exclusion] }}</span>{% endif %}
+      {% if trip.source == 'manual' %}<span class="status-badge manual-badge">Manual</span>{% endif %}
+      {% if trip.expense_count %}<span class="status-badge expense-badge">{{ trip.expense_count }} expense{{ 's' if trip.expense_count != 1 }}</span>{% endif %}
+      {% if trip.has_gap %}<span class="status-badge status-warning">Recording gap</span>{% endif %}
+      {% if missing %}<span class="status-badge status-warning missing-trip-badge">Possible missing trip</span>{% endif %}
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="trip-archive-row-category">
+    {{ trip_category_pair(trip) }}
+  </div>
+
+  <strong class="trip-archive-row-distance" aria-label="Trip distance: {{ trip.display_distance_m | mi }} miles">{{ trip.display_distance_m | mi }} <span aria-hidden="true">mi</span></strong>
+
+  <div class="trip-archive-row-actions">
+    <button type="button" class="trip-archive-row-icon-button" title="Edit trip" aria-label="Edit trip"
+            hx-get="/trips/{{ trip.id }}/edit" hx-target="#trip-{{ trip.id }}" hx-swap="outerHTML">
+      {{ icon('pencil') }}
+    </button>
+    <details class="trip-archive-row-more">
+      <summary class="trip-archive-row-more-trigger" title="More trip actions" aria-label="More trip actions">
+        {{ icon('dots-three') }}
+      </summary>
+      <div class="trip-archive-row-more-panel">
+        {% if missing %}
+        {# `trip.html` never renders this badge or its bridge-prefill link
+           (app/missing_trip.py keeps the flag list-page only), so this
+           overflow item is the only place left to reach it once the row's
+           old always-expanded details panel is gone. #}
+        <a class="trip-archive-row-action" href="{{ missing.prefill_url }}">{{ icon('plus') }}<span>Add missing trip</span></a>
+        {% endif %}
+        {% if trip.category != 'unclassified' %}
+        <button type="button" class="trip-archive-row-action" hx-post="/trips/{{ trip.id }}/tag"
+                hx-vals='{"category": "unclassified"}'
+                hx-target="#trip-{{ trip.id }}" hx-swap="outerHTML">
+          {{ icon('x') }}<span>Clear category</span>
+        </button>
+        {% endif %}
+        {{ trip_delete_dialog(
+          trip, delete_dialog_id, '/trips/' ~ trip.id ~ '/delete',
+          trigger_label='Delete trip', trigger_title='Delete trip',
+          hx_target='#trip-' ~ trip.id, hx_swap='delete', fragment=true
+        ) }}
+      </div>
+    </details>
+  </div>
+</article>

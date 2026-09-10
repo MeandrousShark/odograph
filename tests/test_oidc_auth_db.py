@@ -12,11 +12,12 @@ from starlette.responses import RedirectResponse
 
 import app.auth as auth_module
 from app.auth import AuthRedirect, make_router, require_user
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.ingest import FailedAuthLimiter
 from app.local_auth import hash_password
 from app.main import make_templates
 from app.oidc_identities import IdentityLinkRejectedError
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -82,12 +83,6 @@ def _request(
     )
 
 
-async def _reset_schema(pool):
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
-
-
 async def _create_account(pool, password="local password"):
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -117,7 +112,7 @@ async def _link_and_exact_login_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         account = await _create_account(pool)
         oauth_client = _OAuthClient(
             {
@@ -201,7 +196,7 @@ async def _link_and_unlink_failures_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         await _create_account(pool)
         oauth_client = _OAuthClient({"sub": "subject-1", "email": "local@example.com"})
         user = {
@@ -338,7 +333,7 @@ async def _legacy_establishment_and_email_fallback_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         oauth_client = _OAuthClient()
         legacy_session = {
             "legacy_oidc": {
@@ -399,7 +394,7 @@ async def _failed_legacy_establishment_scenario(monkeypatch):
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         oauth_client = _OAuthClient()
         request = _request(
             pool,
@@ -445,7 +440,7 @@ async def _no_provider_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         await _create_account(pool)
         request = _request(
             pool,

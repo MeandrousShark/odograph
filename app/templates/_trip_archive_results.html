@@ -1,0 +1,41 @@
+{# hx-history-elt marks this root, and only this root, as what htmx snapshots
+   and restores. Restoring the whole body instead would invalidate the page's
+   dialog element references and risk rerunning its scripts. htmx stores the
+   root's innerHTML only, so the server-resolved state a restore needs sits in
+   the child node below rather than on the root itself. The JSON attribute is
+   single-quoted: the tojson filter escapes single quotes but not double ones. #}
+<div id="trip-archive-results" class="trip-archive-results" hx-history-elt>
+<div class="trip-archive-state" data-archive-state='{{ (archive_state | default({}, true)) | tojson }}' hidden></div>
+{% if not months %}
+  {% if archive_filters_active | default(false, true) %}
+  <p class="empty">No trips match the current filters.</p>
+  {% else %}
+  <p class="empty">No trips yet. Once OwnTracks starts posting and you take a drive,
+    detected trips will appear here (about 5 minutes after you arrive).</p>
+  {% endif %}
+{% endif %}
+
+{% for month in months %}
+  <h2 class="trip-archive-month-heading">{{ month.label }}</h2>
+  {% include "_trip_month_summary.html" %}
+  <div class="trip-archive-row-list" data-archive-month="{{ '%04d-%02d' | format(month.year, month.month_num) }}">
+    {# Decorative column labels only: the grid below isn't a native table,
+       so each row's own cells already carry the accessible name a table's
+       <th> would otherwise supply (see _trip_archive_row.html's
+       aria-labels), and repeating that in visible text here for every
+       screen reader user would be redundant. #}
+    <div class="trip-archive-row-header" aria-hidden="true">
+      <span class="trip-archive-row-header-select"></span>
+      <span class="trip-archive-row-header-time">Date &amp; time</span>
+      <span class="trip-archive-row-header-content">Trip</span>
+      <span class="trip-archive-row-header-category">Category</span>
+      <span class="trip-archive-row-header-distance">Distance</span>
+      <span class="trip-archive-row-header-actions">Actions</span>
+    </div>
+    {% set trips = month.trips %}
+    {% set has_more = month.has_more %}
+    {% set next_url = month.next_url %}
+    {% include "_trip_page_rows.html" %}
+  </div>
+{% endfor %}
+</div>

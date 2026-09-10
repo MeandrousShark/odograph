@@ -19,11 +19,12 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.detector.core import Params
 from app.detector.runner import DetectorRunner
 from app.main import make_templates
 from app.ui import make_router
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -43,6 +44,7 @@ REVIEW_PAGE = _endpoint("/review")
 REVIEW_CARD = _endpoint("/review/card")
 REVIEW_TAG = _endpoint("/review/{trip_id}/tag")
 REVIEW_SKIP = _endpoint("/review/{trip_id}/skip")
+REVIEW_EXCLUSION = _endpoint("/review/{trip_id}/exclusion")
 REVIEW_UNDO = _endpoint("/review/{trip_id}/undo")
 REVIEW_DELETE = _endpoint("/review/{trip_id}/delete")
 
@@ -67,20 +69,19 @@ def _request(pool):
     )
 
 
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
-
-
 async def _insert_trip(
     conn, started_at: datetime, category: str = "unclassified", vehicle_id: int | None = None,
     source: str = "manual", notes: str | None = None,
+    exclusion: str | None = None,
 ) -> int:
     cur = await conn.execute(
         "INSERT INTO trips (device, source, started_at, ended_at, distance_m, category, "
-        "vehicle_id, notes) VALUES ('phone', %s, %s, %s, 1000, %s, %s, %s) RETURNING id",
-        (source, started_at, started_at + timedelta(minutes=15), category, vehicle_id, notes),
+        "vehicle_id, notes, exclusion) VALUES "
+        "('phone', %s, %s, %s, 1000, %s, %s, %s, %s) RETURNING id",
+        (
+            source, started_at, started_at + timedelta(minutes=15), category,
+            vehicle_id, notes, exclusion,
+        ),
     )
     return (await cur.fetchone())[0]
 
@@ -98,34 +99,37 @@ async def _insert_default_vehicle(conn, name: str) -> int:
     return (await cur.fetchone())[0]
 
 
-async def _ordering_and_classified_exclusion_scenario():
+async def _ordering_and_category_only_eligibility_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             await _insert_trip(conn, BASE, category="business")
-            oldest_id = await _insert_trip(conn, BASE + timedelta(hours=1))
+            excluded_id = await _insert_trip(
+                conn, BASE + timedelta(minutes=30), exclusion="not_my_vehicle"
+            )
+            await _insert_trip(conn, BASE + timedelta(hours=1))
             await _insert_trip(conn, BASE + timedelta(hours=2))
 
         request = _request(pool)
         response = await REVIEW_PAGE(request, {"sub": "test"}, "", "", "", "")
         assert response.context["state"] == "card"
-        assert response.context["trip"]["id"] == oldest_id
-        assert response.context["remaining"] == 2
+        assert response.context["trip"]["id"] == excluded_id
+        assert response.context["remaining"] == 3
     finally:
         await pool.close()
 
 
-def test_review_page_picks_oldest_unclassified_and_excludes_classified():
-    asyncio.run(_ordering_and_classified_exclusion_scenario())
+def test_review_page_uses_category_only_eligibility_and_excludes_classified():
+    asyncio.run(_ordering_and_category_only_eligibility_scenario())
 
 
 async def _date_filter_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             await _insert_trip(conn, BASE)
             in_range_id = await _insert_trip(conn, BASE + timedelta(days=31))
@@ -135,6 +139,7 @@ async def _date_filter_scenario():
         response = await REVIEW_PAGE(request, {"sub": "test"}, "2026-02-01", "2026-02-28", "", "")
         assert response.context["trip"]["id"] == in_range_id
         assert response.context["remaining"] == 1
+        assert response.context["review_count"] == 3
     finally:
         await pool.close()
 
@@ -147,7 +152,7 @@ async def _vehicle_filter_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             truck_id = await _insert_vehicle(conn, "Truck")
             sedan_id = await _insert_vehicle(conn, "Sedan")
@@ -171,7 +176,7 @@ async def _unassigned_vehicle_filter_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             truck_id = await _insert_vehicle(conn, "Truck")
             # Earlier overall, but assigned -- must not win under vehicle=none.
@@ -194,15 +199,17 @@ async def _tag_and_advance_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
+            vehicle_id = await _insert_vehicle(conn, "Truck")
             first_id = await _insert_trip(conn, BASE)
             second_id = await _insert_trip(conn, BASE + timedelta(hours=1))
 
         request = _request(pool)
         response = await REVIEW_TAG(
             request, first_id, "business", "  Client meeting  ", "", "", "", {"sub": "test"},
-            q="",
+            notes="Gate code", vehicle_id=str(vehicle_id), q="",
+            exclusion="not_deductible",
         )
         assert response.context["state"] == "card"
         assert response.context["trip"]["id"] == second_id
@@ -210,9 +217,13 @@ async def _tag_and_advance_scenario():
 
         async with pool.connection() as conn:
             cur = await conn.execute(
-                "SELECT category::text, purpose, tag_source::text FROM trips WHERE id = %s", (first_id,)
+                "SELECT category::text, purpose, notes, vehicle_id, exclusion::text, "
+                "tag_source::text FROM trips WHERE id = %s", (first_id,)
             )
-            assert await cur.fetchone() == ("business", "Client meeting", "human")
+            assert await cur.fetchone() == (
+                "business", "Client meeting", "Gate code", vehicle_id,
+                "not_deductible", "human",
+            )
 
         # Tagging the last remaining trip exhausts the pass -- "done", not
         # "empty" (a fresh /review load would still find nothing today, but
@@ -226,22 +237,75 @@ async def _tag_and_advance_scenario():
         await pool.close()
 
 
-def test_review_tag_advances_to_next_card_and_sets_human_tag_source():
+def test_review_tag_atomically_saves_visible_fields_and_advances():
     asyncio.run(_tag_and_advance_scenario())
+
+
+async def _independent_exclusion_scenario():
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        await reset_db(pool)
+        async with pool.connection() as conn:
+            first_id = await _insert_trip(conn, BASE)
+            second_id = await _insert_trip(conn, BASE + timedelta(hours=1))
+
+        request = _request(pool)
+        response = await REVIEW_EXCLUSION(
+            request, first_id, "not_deductible", "  Saved purpose  ", "", "", "",
+            {"sub": "test"}, "Saved notes", "", "",
+        )
+        assert response.status_code == 204
+        async with pool.connection() as conn:
+            row = await (await conn.execute(
+                "SELECT exclusion::text, purpose, notes FROM trips WHERE id = %s",
+                (first_id,),
+            )).fetchone()
+        assert row == ("not_deductible", "Saved purpose", "Saved notes")
+
+        page = await REVIEW_PAGE(request, {"sub": "test"}, "", "", "", "")
+        assert page.context["trip"]["id"] == first_id
+        assert page.context["remaining"] == 2
+
+        response = await REVIEW_EXCLUSION(
+            request, first_id, "", "Saved purpose", "", "", "",
+            {"sub": "test"}, "Saved notes", "", "",
+        )
+        assert response.status_code == 204
+        async with pool.connection() as conn:
+            assert await (await conn.execute(
+                "SELECT exclusion FROM trips WHERE id = %s", (first_id,)
+            )).fetchone() == (None,)
+            assert await (await conn.execute(
+                "SELECT category::text FROM trips WHERE id = %s", (second_id,)
+            )).fetchone() == ("unclassified",)
+    finally:
+        await pool.close()
+
+
+def test_review_exclusion_sets_and_clears_without_advancing():
+    asyncio.run(_independent_exclusion_scenario())
 
 
 async def _invalid_category_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             trip_id = await _insert_trip(conn, BASE)
 
         request = _request(pool)
+        for category in ("unclassified", "bogus"):
+            with pytest.raises(HTTPException) as exc_info:
+                await REVIEW_TAG(
+                    request, trip_id, category, "", "", "", "", {"sub": "test"}, q="",
+                )
+            assert exc_info.value.status_code == 400
+
         with pytest.raises(HTTPException) as exc_info:
-            await REVIEW_TAG(
-                request, trip_id, "unclassified", "", "", "", "", {"sub": "test"}, q="",
+            await REVIEW_EXCLUSION(
+                request, trip_id, "bogus", "", "", "", "", {"sub": "test"}, "", "", "",
             )
         assert exc_info.value.status_code == 400
 
@@ -252,7 +316,7 @@ async def _invalid_category_scenario():
         await pool.close()
 
 
-def test_review_tag_rejects_category_outside_business_or_personal():
+def test_review_rejects_invalid_category_and_exclusion():
     asyncio.run(_invalid_category_scenario())
 
 
@@ -260,7 +324,7 @@ async def _skip_saves_purpose_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             first_id = await _insert_trip(conn, BASE)
             second_id = await _insert_trip(conn, BASE + timedelta(hours=1))
@@ -285,7 +349,7 @@ async def _action_saves_all_review_fields_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             vehicle_id = await _insert_default_vehicle(conn, "Default")
             first_id = await _insert_trip(conn, BASE)
@@ -294,17 +358,22 @@ async def _action_saves_all_review_fields_scenario():
         await REVIEW_SKIP(
             request, first_id, "Site visit", "", "", "", {"sub": "test"},
             notes="Gate code", vehicle_id=str(vehicle_id), q="",
+            exclusion="not_my_vehicle",
         )
         async with pool.connection() as conn:
             cur = await conn.execute(
-                "SELECT purpose, notes, vehicle_id FROM trips WHERE id = %s", (first_id,)
+                "SELECT category::text, purpose, notes, vehicle_id, exclusion::text "
+                "FROM trips WHERE id = %s",
+                (first_id,),
             )
-            assert await cur.fetchone() == ("Site visit", "Gate code", vehicle_id)
+            assert await cur.fetchone() == (
+                "unclassified", "Site visit", "Gate code", vehicle_id, "not_my_vehicle",
+            )
     finally:
         await pool.close()
 
 
-def test_review_skip_atomically_saves_purpose_notes_and_vehicle():
+def test_review_skip_ignores_draft_category_and_saves_non_category_fields():
     asyncio.run(_action_saves_all_review_fields_scenario())
 
 
@@ -312,7 +381,7 @@ async def _undo_tag_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             vehicle_id = await _insert_vehicle(conn, "Truck")
             first_id = await _insert_trip(conn, BASE, vehicle_id=vehicle_id)
@@ -325,6 +394,7 @@ async def _undo_tag_scenario():
         response = await REVIEW_TAG(
             request, first_id, "business", "Client meeting",
             from_str, to_str, vehicle_str, {"sub": "test"}, vehicle_id=vehicle_str, q="",
+            exclusion="not_deductible",
         )
         assert response.context["trip"]["id"] == second_id
 
@@ -332,7 +402,7 @@ async def _undo_tag_scenario():
         # view's tag route uses: category back to 'unclassified',
         # tag_source stays 'human' (never NULL) so the auto-tagger can't
         # re-tag a trip a human just touched, and the human-entered purpose
-        # is untouched. Filters round-trip exactly like the other three
+        # is untouched. Filters round-trip exactly like the other
         # /review/{id}/* actions.
         response = await REVIEW_UNDO(
             request, first_id, "tag", from_str, to_str, vehicle_str, {"sub": "test"}, q="",
@@ -345,10 +415,13 @@ async def _undo_tag_scenario():
 
         async with pool.connection() as conn:
             cur = await conn.execute(
-                "SELECT category::text, purpose, tag_source::text FROM trips WHERE id = %s",
+                "SELECT category::text, purpose, exclusion::text, tag_source::text "
+                "FROM trips WHERE id = %s",
                 (first_id,),
             )
-            assert await cur.fetchone() == ("unclassified", "Client meeting", "human")
+            assert await cur.fetchone() == (
+                "unclassified", "Client meeting", "not_deductible", "human",
+            )
     finally:
         await pool.close()
 
@@ -361,7 +434,7 @@ async def _undo_skip_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             first_id = await _insert_trip(conn, BASE)
             second_id = await _insert_trip(conn, BASE + timedelta(hours=1))
@@ -369,13 +442,14 @@ async def _undo_skip_scenario():
         request = _request(pool)
         response = await REVIEW_SKIP(
             request, first_id, "Deliver records", "", "", "", {"sub": "test"}, q="",
+            exclusion="not_my_vehicle",
         )
         assert response.context["trip"]["id"] == second_id
 
-        # A skip writes only purpose; undoing it reverses no write, only
-        # re-presents the trip -- the saved purpose is left exactly as the
-        # user typed it, and tag_source is untouched (still NULL: this trip
-        # was never human-tagged).
+        # A skip saves every visible field; undoing it reverses no write, only
+        # re-presents the trip. The saved values stay exactly as the user set
+        # them, and tag_source is untouched (still NULL: this trip was never
+        # human-tagged).
         response = await REVIEW_UNDO(
             request, first_id, "skip", "", "", "", {"sub": "test"}, q="",
         )
@@ -384,10 +458,13 @@ async def _undo_skip_scenario():
 
         async with pool.connection() as conn:
             cur = await conn.execute(
-                "SELECT category::text, purpose, tag_source::text FROM trips WHERE id = %s",
+                "SELECT category::text, purpose, exclusion::text, tag_source::text "
+                "FROM trips WHERE id = %s",
                 (first_id,),
             )
-            assert await cur.fetchone() == ("unclassified", "Deliver records", None)
+            assert await cur.fetchone() == (
+                "unclassified", "Deliver records", "not_my_vehicle", None,
+            )
     finally:
         await pool.close()
 
@@ -400,13 +477,13 @@ async def _undo_rejects_unknown_kind_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             trip_id = await _insert_trip(conn, BASE)
 
         request = _request(pool)
         with pytest.raises(HTTPException) as exc_info:
-            await REVIEW_UNDO(request, trip_id, "delete", "", "", "", {"sub": "test"}, "")
+            await REVIEW_UNDO(request, trip_id, "exclusion", "", "", "", {"sub": "test"}, "")
         assert exc_info.value.status_code == 400
 
         async with pool.connection() as conn:
@@ -424,7 +501,7 @@ async def _undo_vanished_trip_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             trip_id = await _insert_trip(conn, BASE)
             await conn.execute("DELETE FROM trips WHERE id = %s", (trip_id,))
@@ -445,7 +522,7 @@ async def _skip_cursor_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             # Same started_at: the row-value comparison's stable tiebreak
             # must fall back to id.
@@ -489,7 +566,7 @@ async def _empty_state_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             await _insert_trip(conn, BASE, category="business")
 
@@ -510,7 +587,7 @@ async def _delete_and_advance_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             included_vehicle = await _insert_vehicle(conn, "Included")
             excluded_vehicle = await _insert_vehicle(conn, "Excluded")
@@ -582,7 +659,7 @@ async def _review_search_filter_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             matching_id = await _insert_trip(conn, BASE, notes="Zephyr pickup")
             await _insert_trip(conn, BASE + timedelta(hours=1), notes="Ordinary errand")
@@ -604,7 +681,7 @@ async def _undo_within_search_filtered_pass_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             first_id = await _insert_trip(conn, BASE, notes="Zephyr pickup")
             second_id = await _insert_trip(conn, BASE + timedelta(hours=1), notes="Zephyr dropoff")

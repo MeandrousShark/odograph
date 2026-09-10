@@ -11,7 +11,8 @@ from psycopg.rows import dict_row
 
 import app.auth as auth_module
 from app.auth import AuthRedirect, make_router, require_admin, require_user
-from app.db import MIGRATIONS_DIR, make_pool, run_migrations
+from app.db import MIGRATIONS_DIR, make_pool
+from conftest import drop_and_recreate_schema, full_schema_reset, reset_db
 from app.ingest import FailedAuthLimiter
 from app.local_auth import hash_password, verify_password
 from app.main import make_templates
@@ -28,12 +29,6 @@ def _endpoint(path: str, method: str):
         if getattr(route, "path", None) == path and method in route.methods:
             return route.endpoint
     raise AssertionError(f"{method} {path} route missing")
-
-
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
 
 
 def _request(
@@ -73,7 +68,7 @@ async def _migration_shape_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             await conn.execute(
                 "INSERT INTO accounts (email, password_hash) VALUES ('a@example.com', 'hash')"
@@ -103,37 +98,60 @@ async def _migration_preserves_local_admin_scenario():
     await pool.open(wait=True)
     old_hash = hash_password("old password")
     try:
-        async with pool.connection() as conn:
-            await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-            for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
-                if int(path.name.split("_", 1)[0]) >= 20:
-                    break
-                await conn.execute(path.read_text())
-            await conn.execute(
-                "INSERT INTO local_admin "
-                "(id, email, password_hash, consumed_token_hash) "
-                "VALUES (1, 'admin@example.com', %s, 'obsolete')",
-                (old_hash,),
-            )
-            await conn.execute((MIGRATIONS_DIR / "020_accounts.sql").read_text())
+        await drop_and_recreate_schema(pool)
+        try:
+            paths = sorted(MIGRATIONS_DIR.glob("*.sql"))
+            async with pool.connection() as conn:
+                for path in paths:
+                    if int(path.name.split("_", 1)[0]) >= 20:
+                        break
+                    await conn.execute(path.read_text())
+                await conn.execute(
+                    "INSERT INTO local_admin "
+                    "(id, email, password_hash, consumed_token_hash) "
+                    "VALUES (1, 'admin@example.com', %s, 'obsolete')",
+                    (old_hash,),
+                )
+                await conn.execute((MIGRATIONS_DIR / "020_accounts.sql").read_text())
 
-        account = await _account(pool)
-        assert account["id"] == 1
-        assert account["email"] == "admin@example.com"
-        assert account["password_hash"] == old_hash
-        assert verify_password("old password", account["password_hash"])
-        login_request = _request(pool, signup=False)
-        login_response = await _endpoint("/login/local", "POST")(
-            login_request,
-            email="admin@example.com",
-            password="old password",
-            csrf_token="test-csrf",
-        )
-        assert login_response.status_code == 303
-        assert login_request.session["account_id"] == 1
-        async with pool.connection() as conn:
-            cur = await conn.execute("SELECT to_regclass('local_admin')")
-            assert (await cur.fetchone())[0] is None
+            account = await _account(pool)
+            assert account["id"] == 1
+            assert account["email"] == "admin@example.com"
+            assert account["password_hash"] == old_hash
+            assert verify_password("old password", account["password_hash"])
+
+            # The login endpoint below is HEAD application code, not the
+            # historical migration 020 -- it queries whatever columns
+            # get_sole_account currently selects, so the rest of the
+            # migrations (021+) have to be applied too before it can run,
+            # even though only 020's data-preserving behavior is under test
+            # above.
+            async with pool.connection() as conn:
+                for path in paths:
+                    if int(path.name.split("_", 1)[0]) < 21:
+                        continue
+                    await conn.execute(path.read_text())
+
+            login_request = _request(pool, signup=False)
+            login_response = await _endpoint("/login/local", "POST")(
+                login_request,
+                email="admin@example.com",
+                password="old password",
+                csrf_token="test-csrf",
+            )
+            assert login_response.status_code == 303
+            assert login_request.session["account_id"] == 1
+            async with pool.connection() as conn:
+                cur = await conn.execute("SELECT to_regclass('local_admin')")
+                assert (await cur.fetchone())[0] is None
+        finally:
+            # The loops above apply every migration by executing the files
+            # directly, which bypasses the runner: schema_migrations is
+            # never populated. Correctness must not depend on collection
+            # order, so restore canonical, fully-migrated state before any
+            # other test can see this one, regardless of whether the
+            # assertions above passed.
+            await full_schema_reset(pool)
     finally:
         await pool.close()
 
@@ -146,7 +164,7 @@ async def _signup_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         get_signup = _endpoint("/signup", "GET")
         post_signup = _endpoint("/signup", "POST")
         assert (await get_signup(_request(pool))).status_code == 200
@@ -189,7 +207,7 @@ async def _signup_disabled_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         for method in ("GET", "POST"):
             endpoint = _endpoint("/signup", method)
             with pytest.raises(Exception) as exc_info:
@@ -216,7 +234,7 @@ async def _signup_csrf_and_limiter_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         endpoint = _endpoint("/signup", "POST")
         with pytest.raises(Exception) as csrf_error:
             await endpoint(
@@ -261,7 +279,7 @@ async def _signup_invalid_email_scenario(email):
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         response = await _endpoint("/signup", "POST")(
             _request(pool),
             email=email,
@@ -285,7 +303,7 @@ async def _concurrent_signup_scenario(monkeypatch):
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         original = auth_module._signup_available
         ready = 0
         release = asyncio.Event()
@@ -337,7 +355,7 @@ async def _password_change_revokes_sessions_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         old_hash = hash_password("old password")
         async with pool.connection() as conn:
             await conn.execute(
@@ -378,7 +396,7 @@ async def _password_change_failure_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         password_hash = hash_password("old password")
         async with pool.connection() as conn:
             await conn.execute(
@@ -447,7 +465,7 @@ async def _legacy_session_boundary_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         session = {
             "legacy_oidc": {
                 "issuer": "https://idp.example.com",
@@ -487,7 +505,7 @@ async def _pre_account_session_bridge_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         request = _request(
             pool,
             signup=False,

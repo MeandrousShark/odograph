@@ -3,10 +3,24 @@
 {% block title %}Settings: Odograph{% endblock %}
 {% block content %}
 
-<h2>Appearance</h2>
+<div class="settings-page">
+<div class="settings-page-header page-title">
+  <div>
+    <p class="page-title-eyebrow">Settings</p>
+    <h2 id="settings-page-title" class="page-title-heading">Preferences and data</h2>
+    <p class="page-title-subtitle">Manage browser preferences, mileage data, vehicles, places, and diagnostics.</p>
+  </div>
+</div>
+
 {% if user.is_admin and user.id %}
-<p><a href="/settings/account">Manage your login and password in Account Security</a>.</p>
+<section class="settings-account-section" aria-labelledby="account-heading">
+<h2 id="account-heading">Account</h2>
+<p><a href="/settings/account">Manage your avatar, login, and password in Account Settings</a>.</p>
+</section>
 {% endif %}
+
+<section class="settings-section settings-appearance">
+<h2>Appearance</h2>
 <p class="muted">Follows your device's light/dark setting unless overridden here.
   Applies immediately and is remembered only in this browser.</p>
 
@@ -16,41 +30,88 @@
   <label><input type="radio" name="theme-choice" value="light"> Light</label>
   <label><input type="radio" name="theme-choice" value="dark"> Dark</label>
 </fieldset>
+<fieldset class="theme-picker accent-picker" id="accent-picker">
+  <legend>Accent</legend>
+  <label><input type="radio" name="accent-choice" value="purple"> Purple</label>
+  <label><input type="radio" name="accent-choice" value="blue"> Blue</label>
+  <label><input type="radio" name="accent-choice" value="green"> Green</label>
+  <label><input type="radio" name="accent-choice" value="red"> Red</label>
+</fieldset>
 <script nonce="{{ csp_nonce }}">
 (function () {
-  // Client-side only, with no server state. Keeping System as an explicit choice
-  // is what lets a browser return to following the OS after a persisted
-  // light or dark override.
+  // Client-side only, with no server state. Each preference is independent so
+  // returning to System never resets the chosen accent.
   var picker = document.getElementById("theme-picker");
-  function currentChoice() {
-    var stored = localStorage.getItem("theme");
-    return (stored === "light" || stored === "dark") ? stored : "system";
-  }
-  function apply(choice) {
-    if (choice === "system") {
-      localStorage.removeItem("theme");
-      document.documentElement.removeAttribute("data-theme");
-    } else {
-      localStorage.setItem("theme", choice);
-      document.documentElement.setAttribute("data-theme", choice);
+  var accentPicker = document.getElementById("accent-picker");
+  var accents = ["purple", "blue", "green", "red"];
+  function read(key) {
+    try {
+      return localStorage.getItem(key);
+    } catch (error) {
+      return null;
     }
   }
-  var checked = picker.querySelector('input[value="' + currentChoice() + '"]');
+  function currentTheme() {
+    var stored = read("theme");
+    return (stored === "light" || stored === "dark") ? stored : "system";
+  }
+  function currentAccent() {
+    var stored = read("accent");
+    return accents.indexOf(stored) >= 0 ? stored : "purple";
+  }
+  function applyTheme(choice) {
+    if (choice !== "system" && choice !== "light" && choice !== "dark") return;
+    if (choice === "system") {
+      document.documentElement.removeAttribute("data-theme");
+      try {
+        localStorage.removeItem("theme");
+      } catch (error) {
+        // The DOM preference still applies when storage is unavailable.
+      }
+    } else {
+      document.documentElement.setAttribute("data-theme", choice);
+      try {
+        localStorage.setItem("theme", choice);
+      } catch (error) {
+        // The DOM preference still applies when storage is unavailable.
+      }
+    }
+  }
+  function applyAccent(choice) {
+    if (accents.indexOf(choice) < 0) return;
+    document.documentElement.setAttribute("data-accent", choice);
+    try {
+      localStorage.setItem("accent", choice);
+    } catch (error) {
+      // The DOM preference still applies when storage is unavailable.
+    }
+  }
+  var checked = picker.querySelector('input[value="' + currentTheme() + '"]');
+  if (checked) checked.checked = true;
+  checked = accentPicker.querySelector('input[value="' + currentAccent() + '"]');
   if (checked) checked.checked = true;
   picker.addEventListener("change", function (event) {
     if (event.target.name !== "theme-choice") return;
-    apply(event.target.value);
+    applyTheme(event.target.value);
+  });
+  accentPicker.addEventListener("change", function (event) {
+    if (event.target.name !== "accent-choice") return;
+    applyAccent(event.target.value);
   });
 })();
 </script>
+</section>
 
+<section class="settings-section settings-rates">
 <h2>Mileage rates</h2>
 <p class="muted">IRS standard mileage rate per business mile, used for the deduction
   estimates on the trip list. A <code>MILEAGE_RATE_&lt;YEAR&gt;</code> environment
   variable overrides the stored rate for that year until the app restarts.</p>
 
 {% include "_rates_table.html" %}
+</section>
 
+<section class="settings-section settings-vehicles">
 <h2>Vehicles</h2>
 <p class="muted">Trips can be assigned to a vehicle so the deduction can be broken
   out per vehicle on the annual report. Deactivating a vehicle removes it from the
@@ -67,7 +128,9 @@
     Assign the default vehicle to newly detected trips
   </label>
 </p>
+</section>
 
+<section class="settings-section settings-odometer">
 <h2>Odometer readings</h2>
 <p class="muted">Log a dashboard odometer value now and then to reconcile it against GPS-
   detected distance. This catches driving the tracker missed (dead zones, app not
@@ -75,7 +138,9 @@
   It doesn't change the standard-mileage deduction shown elsewhere in the app.</p>
 
 {% include "_odometer_table.html" %}
+</section>
 
+<section class="settings-section settings-places">
 <h2>Places</h2>
 <p class="muted">Named locations used to auto-tag trips. Radius is how close (in
   meters) a trip's start/end must be to count as "at" this place.</p>
@@ -130,7 +195,9 @@ document.addEventListener('click', function (event) {
   document.getElementById('address-results').innerHTML = '';
 });
 </script>
+</section>
 
+<section class="settings-section settings-rules">
 <h2>Auto-tag rules</h2>
 <p class="muted">Rules match a trip's start/end locations to auto-set a category
   when neither side has been tagged by hand. Commuting between home and a regular
@@ -194,6 +261,7 @@ document.addEventListener('click', function (event) {
     <button type="submit" class="control control-secondary">Add rule</button>
   </form>
 </details>
+</section>
 
 <details class="section-disclosure" id="manual-trip-edits">
   <summary><h2>Manual trip edits ({{ boundary_overrides | length }})</h2></summary>
@@ -238,19 +306,30 @@ document.addEventListener('click', function (event) {
   // The undo button's response is an HX-Redirect (full page reload), so the
   // open/closed state has to survive that reload here rather than in memory.
   var details = document.getElementById("manual-trip-edits");
-  if (localStorage.getItem("manualTripEditsOpen") === "1") {
+  var open = false;
+  try {
+    open = localStorage.getItem("manualTripEditsOpen") === "1";
+  } catch (error) {
+    // The disclosure remains usable when browser storage is blocked.
+  }
+  if (open) {
     details.open = true;
   }
   details.addEventListener("toggle", function () {
-    if (details.open) {
-      localStorage.setItem("manualTripEditsOpen", "1");
-    } else {
-      localStorage.removeItem("manualTripEditsOpen");
+    try {
+      if (details.open) {
+        localStorage.setItem("manualTripEditsOpen", "1");
+      } else {
+        localStorage.removeItem("manualTripEditsOpen");
+      }
+    } catch (error) {
+      // The disclosure state is still available for this page visit.
     }
   });
 })();
 </script>
 
+<section class="settings-section settings-data">
 <h2>Data export / import</h2>
 <p class="muted">Export the whole ledger: vehicles, places, auto-tag rules,
   mileage rates, trips (category/purpose/notes/vehicle/place assignments),
@@ -262,13 +341,15 @@ document.addEventListener('click', function (event) {
 
 <p><a href="/settings/export/data">Download export</a></p>
 
-<form method="post" action="/settings/import/data" enctype="multipart/form-data">
+<form class="settings-import-form" method="post" action="/settings/import/data" enctype="multipart/form-data">
   <input type="hidden" name="csrf_token" value="{{ csrf }}">
-  <label>Bundle file <input type="file" name="file" accept="application/json,.json" required></label>
-  <label><input type="checkbox" name="dry_run" value="1"> Dry run (validate only, don't write)</label>
+  <label class="settings-file-field">Bundle file <input type="file" name="file" accept="application/json,.json" required></label>
+  <label class="settings-checkbox-field"><input type="checkbox" name="dry_run" value="1"> Dry run (validate only, don't write)</label>
   <button type="submit" class="control control-secondary">Import</button>
 </form>
+</section>
 
+<section class="settings-section settings-diagnostics">
 <details class="section-disclosure" id="diagnostics">
   <summary><h2>Diagnostics</h2></summary>
 
@@ -375,5 +456,7 @@ document.addEventListener('click', function (event) {
   <p class="muted">No location fixes received yet.</p>
   {% endif %}
 </details>
+</section>
 
+</div>
 {% endblock %}

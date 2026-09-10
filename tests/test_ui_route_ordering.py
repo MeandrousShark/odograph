@@ -66,6 +66,24 @@ def test_trip_card_and_edit_routes_resolve_to_literal_actions():
     assert _first_matching_route("POST", "/trips/42/edit").path == "/trips/{trip_id}/edit"
 
 
+def test_trip_exclusion_route_resolves_before_trip_detail():
+    route = _first_matching_route("POST", "/trips/42/exclusion")
+    assert route is not None
+    assert route.path == "/trips/{trip_id}/exclusion"
+    assert {
+        dependency.call.__name__ for dependency in route.dependant.dependencies
+    } == {"require_user", "require_csrf"}
+
+
+def test_trip_expense_route_resolves_before_trip_detail_and_requires_csrf():
+    route = _first_matching_route("POST", "/trips/42/expenses")
+    assert route is not None
+    assert route.path == "/trips/{trip_id}/expenses"
+    assert {
+        dependency.call.__name__ for dependency in route.dependant.dependencies
+    } == {"require_user", "require_csrf"}
+
+
 def test_existing_literal_trip_routes_are_not_swallowed_by_trip_detail():
     assert _first_matching_route("GET", "/trips/month/2026/7").path == "/trips/month/{year}/{month}"
     assert _first_matching_route("POST", "/trips/merge_selected").path == "/trips/merge_selected"
@@ -78,7 +96,16 @@ def test_trips_archive_route_is_not_swallowed_by_trip_detail():
     # `/trips/{trip_id}` -- same swallowing hazard as the other literal
     # `/trips/...` segments above, just for the newly-added archive route.
     assert _first_matching_route("GET", "/trips").path == "/trips"
+    assert _first_matching_route("GET", "/trips/list").path == "/trips/list"
     assert _first_matching_route("GET", "/trips/month/2026/7").path == "/trips/month/{year}/{month}"
+
+
+def test_trips_archive_list_requires_ui_authentication():
+    route = _first_matching_route("GET", "/trips/list")
+    assert route is not None
+    assert {
+        dependency.call.__name__ for dependency in route.dependant.dependencies
+    } == {"require_user"}
 
 
 def test_trip_card_routes_keep_ui_auth_and_edit_csrf_dependencies():

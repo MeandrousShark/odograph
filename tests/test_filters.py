@@ -160,6 +160,7 @@ def test_filter_sql_search_term_matches_notes_purpose_places_and_addresses():
         "WHERE (notes ILIKE %s ESCAPE '\\' OR purpose ILIKE %s ESCAPE '\\' OR "
         "(SELECT name FROM places WHERE id = trips.start_place_id) ILIKE %s ESCAPE '\\' OR "
         "(SELECT name FROM places WHERE id = trips.end_place_id) ILIKE %s ESCAPE '\\' OR "
+        "start_label ILIKE %s ESCAPE '\\' OR end_label ILIKE %s ESCAPE '\\' OR "
         "(SELECT address FROM geocode_cache\n"
         "     WHERE lat = ROUND(ST_Y(trips.start_geom::geometry)::numeric, 4)\n"
         "       AND lon = ROUND(ST_X(trips.start_geom::geometry)::numeric, 4)) "
@@ -169,7 +170,7 @@ def test_filter_sql_search_term_matches_notes_purpose_places_and_addresses():
         "       AND lon = ROUND(ST_X(trips.end_geom::geometry)::numeric, 4)) "
         "ILIKE %s ESCAPE '\\')"
     )
-    assert params == ["%zephyr%"] * 6
+    assert params == ["%zephyr%"] * 8
 
 
 def test_filter_sql_search_term_combines_with_category_vehicle_and_range():
@@ -182,7 +183,7 @@ def test_filter_sql_search_term_combines_with_category_vehicle_and_range():
         "AND started_at < %s AND (notes ILIKE %s ESCAPE '\\'"
     )
     assert params[:4] == ["business", 3, from_dt, to_dt]
-    assert params[4:] == ["%zephyr%"] * 6
+    assert params[4:] == ["%zephyr%"] * 8
 
 
 def test_escape_ilike_term_escapes_percent_underscore_and_backslash():

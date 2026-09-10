@@ -6,9 +6,10 @@ import os
 
 import pytest
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.local_auth import verify_password
 from app.manage_account import main
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -20,9 +21,7 @@ async def _reset_schema():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        async with pool.connection() as conn:
-            await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-        await run_migrations(pool)
+        await reset_db(pool)
     finally:
         await pool.close()
 

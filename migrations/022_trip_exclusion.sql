@@ -1,0 +1,22 @@
+-- A trip a detector or the maintainer recorded is not always a trip that
+-- belongs in the mileage records: the maintainer may have been a passenger,
+-- taken transit, or handed their own car to someone else for a while.
+-- `exclusion` tags that case separately from `category`.
+--
+-- A brand new enum type, not a value folded into `trip_category`.
+-- `ALTER TYPE ... ADD VALUE` cannot run inside the same transaction as code
+-- that uses the new value (see migrations/015_discard_trip_override.sql), and
+-- this migration needs no such workaround since the type is created fresh.
+-- It also leaves the business/personal split assumption untouched across the
+-- roughly twenty modules that read `category`, and keeps the trip's own
+-- category meaningful if the exclusion is later cleared.
+--
+-- `NULL` means a normal trip and is the default, so every existing query
+-- keeps working unchanged; aggregation sites opt in by adding a filter
+-- rather than every reader having to learn a new state.
+--
+-- No DETECTOR_VERSION bump: this is a tagging concern layered on top of
+-- detection, the same reasoning migrations/008_vehicles.sql gives for
+-- vehicle_id.
+CREATE TYPE trip_exclusion AS ENUM ('not_my_vehicle', 'not_deductible');
+ALTER TABLE trips ADD COLUMN exclusion trip_exclusion;

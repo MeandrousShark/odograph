@@ -5,7 +5,8 @@ detected stay -- an arbitrary, non-contiguous
 selection can't be bridged by the suppress-override mechanism
 (app/detector/core.py), since a suppress override only removes one real stay
 between two trips that are already next to each other. This validates a
-selection is exactly a contiguous run before app/ui.py inserts any overrides.
+selection is exactly a contiguous run before app/ui/merge_split.py inserts
+any overrides.
 """
 from __future__ import annotations
 

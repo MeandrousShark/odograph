@@ -1,7 +1,7 @@
 """DB-backed tests for GET /settings/export/data.
 
 Same conventions as tests/test_vehicles_db.py: skipped unless
-TEST_DATABASE_URL is set, a fresh schema per test via _reset_schema, and a
+TEST_DATABASE_URL is set, a reset database per test via reset_db, and a
 bare FastAPI app driven through httpx.ASGITransport rather than the real
 create_app().
 """
@@ -17,10 +17,11 @@ import pytest
 from fastapi import FastAPI
 from starlette.middleware.sessions import SessionMiddleware
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.main import make_templates
 from app.portable import FORMAT, FORMAT_VERSION, make_router
 from app.vehicles import create_vehicle
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -28,12 +29,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 NOW = datetime(2026, 6, 15, 15, 0, tzinfo=timezone.utc)
-
-
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
 
 
 def _bare_app(pool) -> FastAPI:
@@ -54,7 +49,7 @@ def _scenario(coro_factory) -> None:
         pool = make_pool(TEST_DB)
         await pool.open(wait=True)
         try:
-            await _reset_schema(pool)
+            await reset_db(pool)
             await coro_factory(pool)
         finally:
             await pool.close()
@@ -77,7 +72,7 @@ def test_export_on_a_freshly_migrated_instance_reflects_seed_state():
         bundle = await _export(pool)
         assert bundle["format"] == FORMAT
         assert bundle["format_version"] == FORMAT_VERSION
-        assert bundle["schema_version"] == 21
+        assert bundle["schema_version"] == 25
         assert len(bundle["vehicles"]) == 1
         assert bundle["vehicles"][0]["name"] == "My Car"
         assert bundle["vehicles"][0]["is_default"] is True
@@ -110,9 +105,9 @@ def test_export_reflects_a_populated_instance():
             )
             trip_id = (await trip_cur.fetchone())[0]
             await conn.execute(
-                "INSERT INTO expenses (vehicle_id, incurred_on, category, amount, treatment) "
-                "VALUES (%s, '2026-06-01', 'fuel', 45.67, 'business_use_allocated')",
-                (truck_id,),
+                "INSERT INTO expenses (vehicle_id, incurred_on, category, amount, treatment, trip_id) "
+                "VALUES (%s, '2026-06-01', 'fuel', 45.67, 'business_use_allocated', %s)",
+                (truck_id, trip_id),
             )
             await conn.execute(
                 "INSERT INTO odometer_readings (vehicle_id, recorded_at, odometer_m) "
@@ -131,17 +126,40 @@ def test_export_reflects_a_populated_instance():
         assert trip["$id"] == trip_id
         assert trip["vehicle"] == vehicle_ids["Truck"]
         assert trip["start_place"] == place_dollar_id
+        assert trip["exclusion"] is None
         assert trip["purpose"] == "Client visit"
         assert trip["distance_m"] == 1609.344
+        assert trip["start_label"] is None
+        assert trip["end_label"] is None
 
         assert bundle["expenses"] == [{
             "vehicle": vehicle_ids["Truck"], "incurred_on": "2026-06-01", "category": "fuel",
             "amount": "45.67", "treatment": "business_use_allocated", "notes": None,
+            "trip": trip_id,
         }]
         assert bundle["odometer_readings"] == [{
             "vehicle": vehicle_ids["Truck"], "recorded_at": NOW.isoformat(),
             "odometer_m": 1000.0, "note": None,
         }]
+
+    _scenario(run)
+
+
+def test_export_includes_a_trip_endpoint_label_when_set():
+    async def run(pool):
+        async with pool.connection() as conn:
+            await conn.execute(
+                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, category, "
+                " start_label, end_label) "
+                "VALUES ('manual', 'manual', %s, %s, 1609.344, 'personal', "
+                " 'Grandma''s house', 'Lake cabin')",
+                (NOW, NOW),
+            )
+
+        bundle = await _export(pool)
+        trip = bundle["trips"][0]
+        assert trip["start_label"] == "Grandma's house"
+        assert trip["end_label"] == "Lake cabin"
 
     _scenario(run)
 

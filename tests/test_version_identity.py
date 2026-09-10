@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 import app.ui as ui
+import app.ui.settings as ui_settings
 from app.config import Config
 from app.db import _fetch_schema_version
 from app.detector.runner import DETECTOR_VERSION
@@ -178,19 +179,20 @@ def test_authenticated_settings_context_uses_config_and_live_schema(monkeypatch)
         "_fetch_boundary_overrides_rows",
         "_fetch_device_fixes",
     ):
-        monkeypatch.setattr(ui, name, empty_rows)
-    monkeypatch.setattr(ui, "_fetch_schema_version", schema_version)
-    monkeypatch.setattr(ui, "get_auto_assign_default_vehicle", auto_assign_off)
+        monkeypatch.setattr(ui_settings, name, empty_rows)
+    monkeypatch.setattr(ui_settings, "_fetch_schema_version", schema_version)
+    monkeypatch.setattr(ui_settings, "get_auto_assign_default_vehicle", auto_assign_off)
 
     class _Templates:
-        def TemplateResponse(self, request, name, context):
+        def TemplateResponse(self, request, name, context, *, status_code=200):
             assert name == "settings.html"
+            assert status_code == 200
             return context
 
     request = SimpleNamespace(
         app=SimpleNamespace(
             state=SimpleNamespace(
-                pool=_Pool(_Connection()),
+                pool=_Pool(_Connection((0,))),
                 templates=_Templates(),
                 config=SimpleNamespace(
                     geocode_provider=None,

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-# Shared by app/ui.py (place CRUD, trip tag rules) and app/portable.py
-# (bundle validation) -- lives here, not in either of those, because this
-# module already has zero imports of its own, so importing PLACE_KINDS from
-# it can never create a cycle.
+# Shared by app/ui/places.py (place CRUD, trip tag rules) and
+# app/portable/normalize.py (bundle validation) -- lives here, not in either
+# of those, because this module already has zero imports of its own, so
+# importing PLACE_KINDS from it can never create a cycle.
 PLACE_KINDS = ("home", "work", "other")
 
 

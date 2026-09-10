@@ -1,8 +1,8 @@
 """DB-backed tests for POST /trips/manual/route-preview: the manual-trip
 form's routing preview, which resolves a place-pair or map-picked pair of
 coordinates and calls OSRM, but never writes anything. Same fixture
-conventions as tests/test_trip_card_edit_db.py: a fresh schema per test via
-_reset_schema, and the route's endpoint function called directly (bypassing
+conventions as tests/test_trip_card_edit_db.py: a reset database per test via
+reset_db, and the route's endpoint function called directly (bypassing
 FastAPI's own dependency injection, which never runs on a bare function
 call) rather than through a live ASGI app.
 """
@@ -18,8 +18,9 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.ui import make_router
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -59,12 +60,6 @@ async def _preview(request, **overrides):
     return await PREVIEW(request, user=USER, **values)
 
 
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
-
-
 async def _insert_place(conn, name, lat, lon) -> int:
     row = await conn.execute(
         "INSERT INTO places (name, geom) VALUES "
@@ -99,7 +94,7 @@ def _run(coro_factory) -> None:
         pool = make_pool(TEST_DB)
         await pool.open(wait=True)
         try:
-            await _reset_schema(pool)
+            await reset_db(pool)
             await coro_factory(pool)
         finally:
             await pool.close()

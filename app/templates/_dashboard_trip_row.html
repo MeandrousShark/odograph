@@ -1,0 +1,97 @@
+{% from "_icons.html" import icon with context %}
+{% from "_trip_delete_dialog.html" import trip_delete_dialog %}
+{% from "_trip_category_pair.html" import trip_category_pair %}
+{% set full_start = describe_endpoint(trip.start_place_name, trip.start_lat, trip.start_lon, trip.get('start_address')) %}
+{% set full_end = describe_endpoint(trip.end_place_name, trip.end_lat, trip.end_lon, trip.get('end_address')) %}
+{% set compact_start = describe_compact_endpoint(trip.start_place_name, trip.start_lat, trip.start_lon, trip.get('start_address')) %}
+{% set compact_end = describe_compact_endpoint(trip.end_place_name, trip.end_lat, trip.end_lon, trip.get('end_address')) %}
+{% set missing = missing_trip_badge(trip) %}
+{% set row_dashboard_week = dashboard_week | default('', true) %}
+{% if not row_dashboard_week and dashboard is defined and dashboard %}{% set row_dashboard_week = dashboard.nav.week_start.isoformat() %}{% endif %}
+{% set delete_dialog_id = 'trip-delete-dashboard-' ~ trip.id %}
+{% set default_vehicle_ids = vehicles | default([], true) | selectattr('is_default') | map(attribute='id') | list %}
+{% set vehicle_is_default = trip.vehicle_id is not none and trip.vehicle_id in default_vehicle_ids %}
+{% set vehicle_label = trip.vehicle_name or 'Not assigned' %}
+{% set show_vehicle_inline = not vehicle_is_default %}
+{% set has_statuses = trip.exclusion or trip.source == 'manual' or trip.expense_count or trip.has_gap or missing %}
+{% set edit_url = '/trips/' ~ trip.id ~ '/edit' ~ ('?dashboard_week=' ~ row_dashboard_week if row_dashboard_week else '') %}
+<article id="trip-{{ trip.id }}" class="dashboard-trip-row{% if trip.exclusion == 'not_my_vehicle' %} dashboard-trip-row-not-my-vehicle{% endif %}{% if trip.exclusion == 'not_deductible' %} dashboard-trip-row-not-deductible{% endif %}">
+  <div class="dashboard-row-time" aria-label="Trip time: {{ trip.started_at | local_dt }} to {{ trip.ended_at | local_dt }}">
+    <time datetime="{{ trip.started_at.isoformat() }}">{{ trip.started_at | local_time }}</time>
+  </div>
+
+  <div class="dashboard-row-content">
+    <p class="dashboard-row-route trip-route" title="{{ full_start }} to {{ full_end }}"
+       aria-label="Route: {{ full_start }} to {{ full_end }}">
+      <span>{{ compact_start }}</span>{{ icon('arrow-right') }}<span>{{ compact_end }}</span>
+    </p>
+    {% if trip.purpose or show_vehicle_inline %}
+    <div class="dashboard-row-meta" aria-label="Trip details">
+      {% if trip.purpose %}<span class="dashboard-row-purpose">{{ trip.purpose }}</span>{% endif %}
+      {% if show_vehicle_inline %}<span class="dashboard-row-vehicle">Vehicle: {{ vehicle_label }}</span>{% endif %}
+    </div>
+    {% endif %}
+    {% if not show_vehicle_inline %}
+    {# Kept out of .dashboard-row-meta (a grid container) rather than inside
+       an otherwise-empty wrapper: absolutely positioned, so it never
+       reserves grid gap or row space, unlike an empty flex/grid child
+       would. Screen readers and find-in-page still reach it here. #}
+    <span class="dashboard-row-vehicle visually-hidden">Vehicle: {{ vehicle_label }}</span>
+    {% endif %}
+    {% if has_statuses %}
+    <div class="dashboard-row-statuses" aria-label="Trip status and signals">
+      {% if trip.exclusion %}<span class="status-badge exclusion-badge dashboard-row-exclusion">{{ exclusion_labels[trip.exclusion] }}</span>{% endif %}
+      {% if trip.source == 'manual' %}<span class="status-badge manual-badge">Manual</span>{% endif %}
+      {% if trip.expense_count %}<span class="status-badge expense-badge">{{ trip.expense_count }} expense{{ 's' if trip.expense_count != 1 }}</span>{% endif %}
+      {% if trip.has_gap %}<span class="status-badge status-warning">Recording gap</span>{% endif %}
+      {% if missing %}<span class="status-badge status-warning missing-trip-badge">Possible missing trip</span>{% endif %}
+    </div>
+    {% endif %}
+  </div>
+
+  {# Classify, distance, and the action cluster stay direct grid children
+     (not wrapped in a shared container) so each keeps its own named grid
+     area and can reflow independently at the 760px card breakpoint through
+     the same grid-template-areas technique time/content already use. A
+     wrapper here would need display: contents to visually group them on
+     desktop without losing that independent reflow, which this codebase
+     avoids for its accessibility-tree risk in some browsers. #}
+  <div class="dashboard-row-category">
+    <span class="dashboard-row-classify-label">{{ 'Classify' if trip.category == 'unclassified' else 'Category' }}</span>
+    {{ trip_category_pair(trip, dashboard_week=row_dashboard_week) }}
+  </div>
+
+  <strong class="dashboard-row-distance" aria-label="Trip distance: {{ trip.display_distance_m | mi }} miles">{{ trip.display_distance_m | mi }} <span aria-hidden="true">mi</span></strong>
+
+  <div class="dashboard-row-actions">
+    <button type="button" class="dashboard-row-icon-button" title="Edit trip" aria-label="Edit trip"
+            hx-get="{{ edit_url }}" hx-target="#trip-{{ trip.id }}" hx-swap="outerHTML">
+      {{ icon('pencil') }}
+    </button>
+    <details class="dashboard-row-more">
+      <summary class="dashboard-row-more-trigger" title="More trip actions" aria-label="More trip actions">
+        {{ icon('dots-three') }}
+      </summary>
+      <div class="dashboard-row-more-panel">
+        <a class="dashboard-row-action" href="/trips/{{ trip.id }}">{{ icon('arrow-right') }}<span>View details</span></a>
+        <button type="button" class="dashboard-row-action" hx-get="{{ edit_url }}"
+                hx-target="#trip-{{ trip.id }}" hx-swap="outerHTML">
+          {{ icon('pencil') }}<span>Edit</span>
+        </button>
+        {% if trip.category != 'unclassified' %}
+        <button type="button" class="dashboard-row-action" hx-post="/trips/{{ trip.id }}/tag"
+                hx-vals='{"category": "unclassified"{% if row_dashboard_week %}, "dashboard_week": "{{ row_dashboard_week }}"{% endif %}}'
+                hx-target="#trip-{{ trip.id }}" hx-swap="outerHTML">
+          {{ icon('x') }}<span>Clear category</span>
+        </button>
+        {% endif %}
+        {{ trip_delete_dialog(
+          trip, delete_dialog_id, '/trips/' ~ trip.id ~ '/delete',
+          trigger_label='Delete trip', trigger_title='Delete trip',
+          hx_target='#trip-' ~ trip.id, hx_swap='delete', fragment=true,
+          dashboard_week=row_dashboard_week
+        ) }}
+      </div>
+    </details>
+  </div>
+</article>

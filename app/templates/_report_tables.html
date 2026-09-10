@@ -3,7 +3,7 @@
      markup, for the same rationale as format_rate_periods/caveat_lines being
      single-sourced in app/report.py. Expects `report` in context. -->
 <div class="table-wrapper">
-  <table>
+  <table class="report-table report-month-table">
     <thead>
       <tr><th>Month</th><th>Trips</th><th>Business miles</th><th>Rate ($/mi)</th><th>Deduction</th></tr>
     </thead>
@@ -24,15 +24,21 @@
 {% if report.by_vehicle %}
 <h2>By vehicle</h2>
 <div class="table-wrapper">
-  <table>
+  <table class="report-table report-vehicle-table">
     <thead>
-      <tr><th>Vehicle</th><th>Business miles</th><th>Total miles</th><th>Deduction</th></tr>
+      <tr>
+        <th>Vehicle</th><th>Business miles</th><th>Personal miles</th>
+        {% if report.nondeductible_m %}<th>Non-deductible miles</th>{% endif %}
+        <th>Total miles</th><th>Deduction</th>
+      </tr>
     </thead>
     <tbody>
       {% for v in report.by_vehicle %}
       <tr>
         <td>{{ v.vehicle_name }}</td>
         <td class="num">{{ v.business_m | mi }} mi</td>
+        <td class="num">{{ v.personal_m | mi }} mi</td>
+        {% if report.nondeductible_m %}<td class="num">{{ v.nondeductible_m | mi }} mi</td>{% endif %}
         <td class="num">{{ v.total_m | mi }} mi</td>
         <td class="num">{{ v.deduction | usd }}</td>
       </tr>

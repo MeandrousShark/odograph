@@ -20,7 +20,7 @@ import pytest
 from fastapi import FastAPI
 from starlette.middleware.sessions import SessionMiddleware
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.main import make_templates
 from app.ui import make_router
 from app.vehicles import (
@@ -32,6 +32,7 @@ from app.vehicles import (
     set_default_vehicle,
     update_vehicle,
 )
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -39,12 +40,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 NOW = datetime.now(timezone.utc)
-
-
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
 
 
 async def _insert_trip(conn, vehicle_id: int | None) -> int:
@@ -60,7 +55,7 @@ async def _crud_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
 
         async with pool.connection() as conn:
             # 008_vehicles.sql seeds one default vehicle ("My Car").
@@ -97,7 +92,7 @@ async def _single_default_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
 
         async with pool.connection() as conn:
             seeded = (await list_vehicles(conn))[0]
@@ -129,7 +124,7 @@ async def _delete_detaches_trip_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
 
         async with pool.connection() as conn:
             truck_id = await create_vehicle(conn, "Truck")
@@ -155,7 +150,7 @@ async def _deactivate_clears_default_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
 
         async with pool.connection() as conn:
             # 008_vehicles.sql seeds "My Car" as the default.
@@ -182,13 +177,13 @@ async def _app_settings_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
 
         async with pool.connection() as conn:
             versions = await conn.execute(
                 "SELECT COALESCE(max(version), 0) FROM schema_migrations"
             )
-            assert (await versions.fetchone())[0] == 21
+            assert (await versions.fetchone())[0] == 25
 
             row = await conn.execute("SELECT count(*) FROM app_settings")
             assert (await row.fetchone())[0] == 1
@@ -233,7 +228,7 @@ async def _auto_assign_route_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         transport = httpx.ASGITransport(app=_bare_app(pool))
         async with httpx.AsyncClient(
             transport=transport, base_url="http://testserver",

@@ -1,5 +1,5 @@
 """Non-ASCII CSRF token handling for check_form_csrf (app/auth.py, the plain
-<form> POST check used by login, signup, and Account Security) and require_csrf
+<form> POST check used by login, signup, and Account Settings) and require_csrf
 (the X-CSRF-Token header check used by /logout and other htmx POSTs):
 hmac.compare_digest raises TypeError on non-ASCII `str` operands, which
 turned a merely-wrong CSRF token into a 500 instead of a 403. No DB needed --

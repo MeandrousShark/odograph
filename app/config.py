@@ -16,6 +16,10 @@ DEFAULT_MAP_TILE_ATTRIBUTION = (
     '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
 )
 DEFAULT_MISSING_TRIP_GAP_M = 1000.0
+# Single source of truth for the avatar upload cap: also read back by
+# app/auth.py as the getattr fallback for test doubles whose config double
+# predates this field.
+DEFAULT_ACCOUNT_AVATAR_MAX_BYTES = 512000
 
 
 def _f(name: str, default: float) -> float:
@@ -88,6 +92,7 @@ class Config:
     map_tile_attribution: str
     hsts_max_age: int
     portable_import_max_bytes: int
+    account_avatar_max_bytes: int
 
     @property
     def map_tile_host(self) -> str:
@@ -307,5 +312,12 @@ class Config:
             # json.loads even has to run on it.
             portable_import_max_bytes=int(
                 os.environ.get("PORTABLE_IMPORT_MAX_BYTES", 50 * 1024 * 1024)
+            ),
+            # A profile picture, not a photo library: 500KB comfortably fits
+            # a PNG/JPEG/WebP at the small size this app ever displays one,
+            # while still keeping a single-account instance's accounts row
+            # far from unwieldy.
+            account_avatar_max_bytes=int(
+                os.environ.get("ACCOUNT_AVATAR_MAX_BYTES", DEFAULT_ACCOUNT_AVATAR_MAX_BYTES)
             ),
         )

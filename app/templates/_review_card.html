@@ -2,34 +2,56 @@
 {% from "_trip_delete_dialog.html" import trip_delete_dialog %}
 {% from "_vehicle_select.html" import vehicle_select %}
 {% from "_notes_field.html" import notes_field %}
-<div id="review-card">
+{% from "_category_segmented.html" import category_segmented %}
+<div id="review-card" class="review-card">
 {% if state == 'card' %}
-  <p class="review-remaining muted">{{ remaining }} remaining</p>
-
-  <h3>{{ trip.started_at | local_date }}
-    {% if trip.source == 'manual' %}<span class="manual-badge">manual</span>{% endif %}
-    {% if trip.has_gap %}<span class="status-badge status-warning" title="Distance may under-read">Recording gap</span>{% endif %}
-  </h3>
-  <p>{{ trip.started_at | local_time }} → {{ trip.ended_at | local_time }} · {{ trip | duration }}</p>
-  <p>{{ trip.display_distance_m | mi }} mi <span class="muted">({{ trip.display_distance_m | km }} km)</span></p>
-  <p style="font-size:.9rem">
-    {{ describe_endpoint(trip.start_place_name, trip.start_lat, trip.start_lon, trip.get('start_address')) }}
-    →
-    {{ describe_endpoint(trip.end_place_name, trip.end_lat, trip.end_lon, trip.get('end_address')) }}
+  <p class="review-remaining" role="status" aria-live="polite">
+    <strong>{{ remaining }}</strong> remaining
   </p>
 
-  {% if trip.source == 'detected' %}
-  {# Geometry rides in on data attributes, not an inline script: a fragment
-     swapped in by htmx keeps the document's original CSP nonce, so a
-     per-fragment <script> would be blocked as a nonce mismatch. review.html's
-     page-level script (loaded once, correct nonce) reads this element and
-     builds the map. #}
-  <div id="review-map"
-       data-start-lat="{{ trip.start_lat }}" data-start-lon="{{ trip.start_lon }}"
-       data-end-lat="{{ trip.end_lat }}" data-end-lon="{{ trip.end_lon }}"
-       {% if path_geojson %}data-path="{{ path_geojson }}"{% endif %}
-       {% if path_snapped_geojson %}data-path-snapped="{{ path_snapped_geojson }}"{% endif %}></div>
-  {% endif %}
+  <section class="review-trip-overview{% if trip.source != 'detected' %} review-trip-overview-no-map{% endif %}"
+           aria-labelledby="review-trip-heading">
+    <div class="review-trip-summary">
+      <h3 id="review-trip-heading" class="review-trip-date">
+        {{ trip.started_at | local_date }}
+        {% if trip.source == 'manual' %}<span class="manual-badge">manual</span>{% endif %}
+        {% if trip.has_gap %}<span class="status-badge status-warning" title="Distance may under-read">Recording gap</span>{% endif %}
+      </h3>
+      <p class="review-trip-distance" aria-label="{{ trip.display_distance_m | mi }} miles">
+        <strong>{{ trip.display_distance_m | mi }}</strong>
+        <span class="review-trip-distance-unit">mi</span>
+        <span class="review-trip-distance-secondary muted">({{ trip.display_distance_m | km }} km)</span>
+      </p>
+      <p class="review-trip-time">
+        {{ trip.started_at | local_time }} <span aria-hidden="true">→</span>
+        {{ trip.ended_at | local_time }} <span class="muted">· {{ trip | duration }}</span>
+      </p>
+    </div>
+
+    <div class="review-route-endpoints" aria-label="Route endpoints">
+      <p class="review-endpoint">
+        <span class="review-endpoint-marker" aria-hidden="true"></span>
+        <span>{{ describe_endpoint(trip.start_place_name, trip.start_lat, trip.start_lon, trip.get('start_address')) }}</span>
+      </p>
+      <p class="review-endpoint">
+        <span class="review-endpoint-marker review-endpoint-marker-end" aria-hidden="true"></span>
+        <span>{{ describe_endpoint(trip.end_place_name, trip.end_lat, trip.end_lon, trip.get('end_address')) }}</span>
+      </p>
+    </div>
+
+    {% if trip.source == 'detected' %}
+    {# Geometry rides in on data attributes, not an inline script: a fragment
+       swapped in by htmx keeps the document's original CSP nonce, so a
+       per-fragment <script> would be blocked as a nonce mismatch. review.html's
+       page-level script (loaded once, correct nonce) reads this element and
+       builds the map. #}
+    <div id="review-map" class="review-map"
+         data-start-lat="{{ trip.start_lat }}" data-start-lon="{{ trip.start_lon }}"
+         data-end-lat="{{ trip.end_lat }}" data-end-lon="{{ trip.end_lon }}"
+         {% if path_geojson %}data-path="{{ path_geojson }}"{% endif %}
+         {% if path_snapped_geojson %}data-path-snapped="{{ path_snapped_geojson }}"{% endif %}></div>
+    {% endif %}
+  </section>
 
   <!-- All editable fields and actions live in one form so the advancing
        request saves the visible values atomically. The individual field
@@ -41,33 +63,54 @@
     <input type="hidden" name="to" value="{{ filter_to }}">
     <input type="hidden" name="vehicle" value="{{ filter_vehicle }}">
     <input type="hidden" name="q" value="{{ filter_q }}">
-    <p>
-      Purpose
+    <div class="review-detail-fields">
+      <div class="review-detail-field review-vehicle-field">
+        <span class="field-label">Vehicle</span>
+        {{ vehicle_select(trip, vehicles, default_if_unassigned=true) }}
+      </div>
+      <div class="review-detail-field review-exclusion-field">
+        <label for="review-exclusion">Exclusion</label>
+        <select id="review-exclusion" name="exclusion"
+                hx-post="/review/{{ trip.id }}/exclusion" hx-trigger="change" hx-swap="none">
+          <option value="" {{ 'selected' if not trip.exclusion }}>Normal trip</option>
+          {% for value, label in exclusion_labels.items() %}
+          <option value="{{ value }}" {{ 'selected' if trip.exclusion == value }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="review-detail-field review-purpose-field">
+        <span class="field-label">Purpose</span>
       {{ purpose_field(
         recent_purposes | default([], true), trip.purpose, input_class='notes',
         hx_post='/trips/' ~ trip.id ~ '/purpose', hx_swap='none'
       ) }}
-    </p>
-    <p>
-      Vehicle
-      {{ vehicle_select(trip, vehicles, default_if_unassigned=true) }}
-    </p>
-    <p>
-      Notes
-      {{ notes_field(trip) }}
-    </p>
-    <p class="tags">
-      <button type="button" id="review-business" hx-post="/review/{{ trip.id }}/tag"
-              hx-vals='{"category": "business"}'>Business (b)</button>
-      <button type="button" id="review-personal" hx-post="/review/{{ trip.id }}/tag"
-              hx-vals='{"category": "personal"}'>Personal (p)</button>
-      <button type="button" id="review-skip" hx-post="/review/{{ trip.id }}/skip">Skip (s)</button>
-      <button type="button" id="review-undo" disabled>Undo (z)</button>
-    </p>
+      </div>
+      <div class="review-detail-field review-notes-field">
+        <span class="field-label">Notes</span>
+        {{ notes_field(trip) }}
+      </div>
+    </div>
+    <!-- Keep one set of category and action controls in the advancing form
+         at every width to avoid duplicate ids and submitted values. -->
+    <div class="review-action-region">
+      <div class="review-detail-field review-category-field">
+        {{ category_segmented(trip.category, 'review', two_option=true) }}
+      </div>
+      <div class="review-actions">
+        <button type="button" id="review-next" class="control control-primary review-primary-action"
+                hx-post="/review/{{ trip.id }}/tag"
+                {{ 'disabled' if trip.category == 'unclassified' }}>Next</button>
+        <div class="review-secondary-actions">
+          <button type="button" id="review-skip" class="control control-secondary"
+                  hx-post="/review/{{ trip.id }}/skip" hx-params="not category">Skip</button>
+          <button type="button" id="review-undo" class="control control-secondary" disabled>Undo Last</button>
+        </div>
+      </div>
+    </div>
   </form>
 
   <div class="review-card-actions">
-    <a href="/trips/{{ trip.id }}">View trip detail →</a>
+    <a class="review-detail-link" href="/trips/{{ trip.id }}">View trip detail →</a>
     {{ trip_delete_dialog(
       trip, 'trip-delete-review-' ~ trip.id, '/review/' ~ trip.id ~ '/delete',
       hx_target='#review-card', hx_swap='outerHTML',
@@ -77,13 +120,22 @@
   </div>
 
 {% elif state == 'done' %}
-  <p class="empty">No more unclassified trips in this pass.</p>
-  <p><button type="button" id="review-undo" disabled>Undo (z)</button></p>
-  <p><a href="{{ review_url }}">Start over</a> · <a href="/trips">Back to trip list</a></p>
+  <div class="review-state review-state-done">
+    <p class="empty review-state-message">No more unclassified trips in this pass.</p>
+    <div class="review-state-actions">
+      <button type="button" id="review-undo" class="control control-secondary" disabled>Undo Last</button>
+      <a class="control control-secondary" href="{{ review_url }}">Start over</a>
+      <a class="control control-quiet" href="/trips">Back to trip list</a>
+    </div>
+  </div>
 
 {% else %}
-  <p class="empty">Nothing to review.</p>
-  <p><a href="/trips">Back to trip list</a></p>
+  <div class="review-state review-state-empty">
+    <p class="empty review-state-message">Nothing to review.</p>
+    <div class="review-state-actions">
+      <a class="control control-secondary" href="/trips">Back to trip list</a>
+    </div>
+  </div>
 {% endif %}
 {% if undo_notice %}<p class="status-message" role="status">{{ undo_notice }}</p>{% endif %}
 </div>

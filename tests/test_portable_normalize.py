@@ -5,6 +5,8 @@ TEST_DATABASE_URL skip marker and no pool.
 """
 from __future__ import annotations
 
+import pytest
+
 from app.portable import FORMAT, FORMAT_VERSION, normalize_bundle
 
 BASE_VEHICLE = {
@@ -73,6 +75,34 @@ def test_fully_populated_valid_bundle_is_accepted():
     assert len(normalized["trips"]) == 1
     assert len(normalized["expenses"]) == 1
     assert len(normalized["odometer_readings"]) == 1
+
+
+def test_expense_trip_reference_must_match_a_bundle_trip_id():
+    bundle = _bundle(
+        trips=[dict(BASE_TRIP)],
+        expenses=[{
+            "vehicle": 1, "trip": 1, "incurred_on": "2026-06-01", "category": "fuel",
+            "amount": "45.67", "treatment": "business_use_allocated", "notes": None,
+        }],
+    )
+    normalized, issues = normalize_bundle(bundle)
+    assert issues == []
+    assert normalized["expenses"][0]["trip"] == 1
+
+    bundle["expenses"][0]["trip"] = 999
+    normalized, issues = normalize_bundle(bundle)
+    assert normalized is None
+    assert any("trip references unknown trip" in issue for issue in issues)
+
+
+def test_version_one_expense_without_trip_remains_unlinked():
+    bundle = _bundle(format_version=1, trips=[], expenses=[{
+        "vehicle": 1, "incurred_on": "2026-06-01", "category": "fuel",
+        "amount": "45.67", "treatment": "business_use_allocated", "notes": None,
+    }])
+    normalized, issues = normalize_bundle(bundle)
+    assert issues == []
+    assert normalized["expenses"][0]["trip"] is None
 
 
 # --- FIX 1: is_default/active/has_gap must be real booleans -----------------
@@ -253,3 +283,202 @@ def test_empty_vehicles_array_is_rejected():
     normalized, issues = normalize_bundle(bundle)
     assert normalized is None
     assert any("vehicles" in issue and "at least one" in issue for issue in issues)
+
+
+# --- trip exclusion -----------------------------------------------------------
+
+def test_trip_exclusion_not_my_vehicle_and_not_deductible_are_accepted():
+    bundle = _bundle(trips=[
+        {**BASE_TRIP, "$id": 1, "exclusion": "not_my_vehicle"},
+        {**BASE_TRIP, "$id": 2, "exclusion": "not_deductible"},
+    ])
+    normalized, issues = normalize_bundle(bundle)
+    assert issues == []
+    exclusions = {row["$id"]: row["exclusion"] for row in normalized["trips"]}
+    assert exclusions == {1: "not_my_vehicle", 2: "not_deductible"}
+
+
+def test_trip_exclusion_explicit_null_normalizes_to_none():
+    bundle = _bundle(trips=[{**BASE_TRIP, "exclusion": None}])
+    normalized, issues = normalize_bundle(bundle)
+    assert issues == []
+    assert normalized["trips"][0]["exclusion"] is None
+
+
+def test_trip_exclusion_absent_normalizes_to_none():
+    # BASE_TRIP itself carries no "exclusion" key, exactly what a
+    # format_version 1 bundle looks like -- this is also covered end to end
+    # by test_format_version_1_bundle_imports_trips_as_normal below.
+    assert "exclusion" not in BASE_TRIP
+    bundle = _bundle(trips=[dict(BASE_TRIP)])
+    normalized, issues = normalize_bundle(bundle)
+    assert issues == []
+    assert normalized["trips"][0]["exclusion"] is None
+
+
+def test_trip_exclusion_bogus_value_is_rejected():
+    bundle = _bundle(trips=[{**BASE_TRIP, "exclusion": "not_a_real_state"}])
+    normalized, issues = normalize_bundle(bundle)
+    assert normalized is None
+    assert any("exclusion" in issue and "null" in issue for issue in issues)
+
+
+# --- format_version -------------------------------------------------------
+
+def test_format_version_2_is_accepted():
+    bundle = _bundle(format_version=2)
+    normalized, issues = normalize_bundle(bundle)
+    assert issues == []
+    assert normalized is not None
+    assert normalized["format_version"] == 2
+
+
+def test_format_version_1_bundle_imports_trips_as_normal():
+    # A pre-existing v1 backup has no "exclusion" field on any trip at all;
+    # it must still import, with every trip arriving as a normal
+    # (non-excluded) trip rather than being rejected outright.
+    bundle = _bundle(format_version=1, trips=[dict(BASE_TRIP)])
+    normalized, issues = normalize_bundle(bundle)
+    assert issues == []
+    assert normalized is not None
+    assert normalized["trips"][0]["exclusion"] is None
+
+
+def test_format_version_neither_1_nor_2_is_rejected_with_a_useful_message():
+    bundle = _bundle(format_version=3)
+    normalized, issues = normalize_bundle(bundle)
+    assert normalized is None
+    assert any("format_version" in issue and "1" in issue and "2" in issue for issue in issues)
+
+
+@pytest.mark.parametrize("value", [True, 1.0, "1"])
+def test_format_version_must_be_an_integer_not_a_coercible_value(value):
+    normalized, issues = normalize_bundle(_bundle(format_version=value))
+    assert normalized is None
+    assert any("format_version" in issue for issue in issues)
+
+
+# --- trip endpoint labels (schema 25) ----------------------------------------
+
+def test_trip_endpoint_labels_accept_string_or_explicit_null():
+    bundle = _bundle(trips=[{
+        **BASE_TRIP, "start_place": None, "end_place": None,
+        "start_label": "Grandma's house", "end_label": None,
+    }])
+    normalized, issues = normalize_bundle(bundle)
+    assert issues == []
+    assert normalized["trips"][0]["start_label"] == "Grandma's house"
+    assert normalized["trips"][0]["end_label"] is None
+
+
+def test_trip_endpoint_labels_missing_keys_default_to_null():
+    # BASE_TRIP carries no start_label/end_label key at all, the same shape
+    # an older bundle (schema 21-24) has for both.
+    assert "start_label" not in BASE_TRIP and "end_label" not in BASE_TRIP
+    bundle = _bundle(trips=[{**BASE_TRIP, "start_place": None}])
+    normalized, issues = normalize_bundle(bundle)
+    assert issues == []
+    assert normalized["trips"][0]["start_label"] is None
+    assert normalized["trips"][0]["end_label"] is None
+
+
+def test_trip_start_label_non_string_is_rejected():
+    bundle = _bundle(trips=[{**BASE_TRIP, "start_place": None, "start_label": 123}])
+    normalized, issues = normalize_bundle(bundle)
+    assert normalized is None
+    assert any("start_label" in issue and "string" in issue for issue in issues)
+
+
+def test_trip_end_label_non_string_is_rejected():
+    bundle = _bundle(trips=[{**BASE_TRIP, "end_place": None, "end_label": 123}])
+    normalized, issues = normalize_bundle(bundle)
+    assert normalized is None
+    assert any("end_label" in issue and "string" in issue for issue in issues)
+
+
+def test_trip_start_label_at_one_hundred_characters_is_accepted():
+    label = "x" * 100
+    bundle = _bundle(trips=[{**BASE_TRIP, "start_place": None, "start_label": label}])
+    normalized, issues = normalize_bundle(bundle)
+    assert issues == []
+    assert normalized["trips"][0]["start_label"] == label
+
+
+def test_trip_start_label_over_one_hundred_characters_is_rejected():
+    label = "x" * 101
+    bundle = _bundle(trips=[{**BASE_TRIP, "start_place": None, "start_label": label}])
+    normalized, issues = normalize_bundle(bundle)
+    assert normalized is None
+    assert any("start_label" in issue and "100" in issue for issue in issues)
+
+
+def test_trip_label_on_a_detected_trip_is_refused_at_normalization():
+    # Migration 025's trips_start_label_manual_only constraint would refuse
+    # this at the database too; catching it here means the whole import is
+    # rejected with a named issue up front instead of failing mid-insert.
+    bundle = _bundle(trips=[{
+        **BASE_TRIP, "source": "detected", "start_place": None, "start_label": "Depot",
+    }])
+    normalized, issues = normalize_bundle(bundle)
+    assert normalized is None
+    assert any("start_label" in issue and "manual" in issue for issue in issues)
+
+
+def test_trip_label_alongside_start_place_is_refused_at_normalization():
+    # BASE_TRIP already references start_place $id 1.
+    bundle = _bundle(trips=[{**BASE_TRIP, "start_label": "Depot"}])
+    normalized, issues = normalize_bundle(bundle)
+    assert normalized is None
+    assert any("start_label" in issue and "start_place" in issue for issue in issues)
+
+
+def test_trip_label_alongside_end_place_is_refused_at_normalization():
+    bundle = _bundle(trips=[{
+        **BASE_TRIP, "start_place": None, "end_place": 1, "end_label": "Depot",
+    }])
+    normalized, issues = normalize_bundle(bundle)
+    assert normalized is None
+    assert any("end_label" in issue and "end_place" in issue for issue in issues)
+
+
+def test_trip_start_label_with_surrounding_whitespace_is_rejected():
+    # Migration 025's trips_start_label_trimmed_nonblank constraint would
+    # refuse this at the database too, since " Depot " isn't equal to its
+    # own btrim; catching it here gives a named issue instead of an opaque
+    # insert failure.
+    bundle = _bundle(trips=[{**BASE_TRIP, "start_place": None, "start_label": " Depot "}])
+    normalized, issues = normalize_bundle(bundle)
+    assert normalized is None
+    assert any("start_label" in issue and "whitespace" in issue for issue in issues)
+
+
+def test_trip_end_label_with_surrounding_whitespace_is_rejected():
+    bundle = _bundle(trips=[{**BASE_TRIP, "end_place": None, "end_label": " Depot "}])
+    normalized, issues = normalize_bundle(bundle)
+    assert normalized is None
+    assert any("end_label" in issue and "whitespace" in issue for issue in issues)
+
+
+def test_trip_start_label_empty_string_is_rejected():
+    bundle = _bundle(trips=[{**BASE_TRIP, "start_place": None, "start_label": ""}])
+    normalized, issues = normalize_bundle(bundle)
+    assert normalized is None
+    assert any("start_label" in issue and "non-empty" in issue for issue in issues)
+
+
+def test_trip_start_label_whitespace_only_is_rejected():
+    bundle = _bundle(trips=[{**BASE_TRIP, "start_place": None, "start_label": "   "}])
+    normalized, issues = normalize_bundle(bundle)
+    assert normalized is None
+    assert any("start_label" in issue and "non-empty" in issue for issue in issues)
+
+
+def test_trip_endpoint_labels_already_trimmed_values_are_accepted():
+    bundle = _bundle(trips=[{
+        **BASE_TRIP, "start_place": None, "end_place": None,
+        "start_label": "Depot", "end_label": "Grandma's house",
+    }])
+    normalized, issues = normalize_bundle(bundle)
+    assert issues == []
+    assert normalized["trips"][0]["start_label"] == "Depot"
+    assert normalized["trips"][0]["end_label"] == "Grandma's house"

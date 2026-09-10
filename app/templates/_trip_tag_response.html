@@ -1,0 +1,9 @@
+{# The archive's inline-classify response: the reclassified row (the
+   htmx-targeted swap) plus out-of-band fragments for the two rollups a
+   reclassification can move, the affected month's summary and the
+   year-to-date figure. `month` is None when the affected month's summary
+   is not safe to recompute (see _fetch_month_summary), in which case that
+   fragment is skipped entirely rather than swapped in broken or stale. #}
+{% include "_trip_archive_row.html" %}
+{% if month %}{% include "_trip_month_summary.html" %}{% endif %}
+{% include "_trip_archive_ytd.html" %}

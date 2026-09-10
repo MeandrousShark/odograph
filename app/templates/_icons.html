@@ -1,0 +1,10 @@
+{# Import this macro with context so static_version is available. Pass
+   decorative=false and an explicit label for every icon-only control. #}
+{% macro icon(name, label=None, decorative=true, extra_class="") -%}
+<svg class="icon icon-{{ name }}{% if extra_class %} {{ extra_class }}{% endif %}"
+     viewBox="0 0 24 24" fill="none" stroke="currentColor" focusable="false"
+     {% if decorative %}aria-hidden="true"
+     {% else %}role="img" aria-label="{{ label }}" title="{{ label }}"{% endif %}>
+  <use href="/static/icons.svg?v={{ static_version }}#{{ name }}"></use>
+</svg>
+{%- endmacro %}

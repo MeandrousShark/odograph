@@ -1,7 +1,7 @@
 """DB-backed tests for POST /trips/manual's routed-entry behavior: resolving
 a place-pair or map-picked pair, calling OSRM, and choosing the final stored
 distance according to whether the user overrode it. Same fixture
-conventions as tests/test_trip_card_edit_db.py: a fresh schema per test, and
+conventions as tests/test_trip_card_edit_db.py: a reset database per test, and
 the route's endpoint function called directly (bypassing FastAPI's own
 dependency injection, which never runs on a bare function call).
 """
@@ -17,9 +17,10 @@ import pytest
 from fastapi import HTTPException
 from psycopg.rows import dict_row
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.rates import METERS_PER_MILE
 from app.ui import MANUAL_ROUTE_UNAVAILABLE_NOTICE, make_router
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -60,12 +61,6 @@ async def _add(request, **overrides):
     values = dict(DEFAULT_FORM)
     values.update(overrides)
     return await ADD(request, user=USER, **values)
-
-
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
 
 
 async def _insert_place(conn, name, lat, lon) -> int:
@@ -120,7 +115,7 @@ def _run(coro_factory) -> None:
         pool = make_pool(TEST_DB)
         await pool.open(wait=True)
         try:
-            await _reset_schema(pool)
+            await reset_db(pool)
             await coro_factory(pool)
         finally:
             await pool.close()

@@ -13,8 +13,9 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.odometer_reminder import OdometerReminderWorker
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -26,9 +27,7 @@ QUARTER_START = datetime(2026, 7, 1, 9, tzinfo=TZ)
 
 
 async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
+    await reset_db(pool)
     # migrations/008_vehicles.sql seeds an active default vehicle ("My Car")
     # that every scenario below would otherwise see as permanently due (it
     # never gets a reading) -- deactivate it so each scenario's assertions

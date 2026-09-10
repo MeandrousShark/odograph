@@ -205,7 +205,7 @@ def test_address_search_failure_never_logs_api_key_or_query_text(caplog):
 
 
 def test_missing_trip_osrm_suggestion_failure_never_logs_coordinates(monkeypatch, caplog):
-    import app.ui as ui_module
+    import app.ui.manual as ui_module
 
     async def fake_fetch_trip(pool, trip_id):
         return {

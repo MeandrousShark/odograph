@@ -34,7 +34,7 @@ class _Connection:
         return _Cursor(next(self.result_sets))
 
 
-def test_count_unclassified_trips_uses_half_open_window():
+def test_count_unclassified_trips_uses_category_only_and_half_open_window():
     start = datetime(2026, 7, 5, 18, tzinfo=timezone.utc)
     end = datetime(2026, 7, 12, 18, tzinfo=timezone.utc)
     conn = _Connection([[(3,)]])

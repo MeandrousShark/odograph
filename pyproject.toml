@@ -1,2 +1,7 @@
 [tool.pytest.ini_options]
 pythonpath = ["."]
+markers = [
+    "unit: no DB, no subprocess (pure logic, templates, formatting)",
+    "ops: shells out or reads repo metadata (scripts, workflows, compose, release contract)",
+    "db: needs TEST_DATABASE_URL",
+]

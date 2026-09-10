@@ -2,11 +2,11 @@
 GET /settings/export/data).
 
 Same conventions as tests/test_vehicles_db.py: skipped unless
-TEST_DATABASE_URL is set, a fresh schema per test via _reset_schema, a bare
+TEST_DATABASE_URL is set, a reset database per test via reset_db, a bare
 FastAPI app driven through httpx.ASGITransport, and the CSRF token scraped
-from a rendered page (app/ui.py's router is included here too, purely to
-render /settings and get a real token -- the import route itself is
-app/portable.py's).
+from a rendered page (the app/ui/ package's router is included here too,
+purely to render /settings and get a real token -- the import route itself
+is app/portable/routes.py's).
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import RedirectResponse
 
 from app.auth import AuthRedirect
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.detector.core import Params
 from app.detector.runner import DetectorRunner
 from app.main import make_templates
@@ -34,6 +34,7 @@ from app.portable import make_router as make_portable_router
 from app.rates import YearRate, deduction
 from app.ui import make_router as make_ui_router
 from app.vehicles import create_vehicle
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -41,12 +42,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 CSRF_RE = re.compile(r'X-CSRF-Token": "([^"]+)"')
-
-
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
 
 
 def _bare_app(pool, *, dev_no_auth: bool = True, portable_import_max_bytes: int = 50 * 1024 * 1024) -> FastAPI:
@@ -74,7 +69,7 @@ def _scenario(coro_factory) -> None:
         pool = make_pool(TEST_DB)
         await pool.open(wait=True)
         try:
-            await _reset_schema(pool)
+            await reset_db(pool)
             await coro_factory(pool)
         finally:
             await pool.close()
@@ -133,7 +128,7 @@ def _minimal_bundle_text(
     Python version's json.dumps happens to do with a float('nan') today.
     """
     return (
-        '{"format":"odograph-portable","format_version":1,"schema_version":21,'
+        '{"format":"odograph-portable","format_version":1,"schema_version":24,'
         '"exported_at":"2026-08-05T00:00:00+00:00",'
         f'"vehicles":{vehicles},"places":{places},"tag_rules":{tag_rules},'
         f'"mileage_rates":{mileage_rates},"trips":{trips},"expenses":{expenses},'
@@ -164,12 +159,19 @@ def _comparable(bundle: dict) -> dict:
     """
     vehicle_names = {v["$id"]: v["name"] for v in bundle["vehicles"]}
     place_names = {p["$id"]: p["name"] for p in bundle["places"]}
+    trip_keys = {
+        trip["$id"]: (trip["started_at"], trip["ended_at"])
+        for trip in bundle["trips"]
+    }
 
     def veh(v):
         return vehicle_names[v] if v is not None else None
 
     def plc(p):
         return place_names[p] if p is not None else None
+
+    def trip_ref(trip):
+        return trip_keys[trip] if trip is not None else None
 
     return {
         "vehicles": sorted(
@@ -201,7 +203,10 @@ def _comparable(bundle: dict) -> dict:
             key=lambda r: r["started_at"],
         ),
         "expenses": sorted(
-            ({**row, "vehicle": veh(row["vehicle"])} for row in bundle["expenses"]),
+            (
+                {**row, "vehicle": veh(row["vehicle"]), "trip": trip_ref(row.get("trip"))}
+                for row in bundle["expenses"]
+            ),
             key=lambda r: (r["incurred_on"], r["amount"]),
         ),
         "odometer_readings": sorted(
@@ -251,14 +256,15 @@ async def _populate_source(pool) -> None:
             (office_id,),
         )
 
-        await conn.execute(
+        first_trip = await conn.execute(
             "INSERT INTO trips (device, source, started_at, ended_at, distance_m, category, "
             " purpose, notes, vehicle_id, start_place_id, end_place_id, tag_source) "
             "VALUES ('phone1', 'detected', '2026-06-15T15:00:00+00:00', "
             " '2026-06-15T15:30:00+00:00', 16093.44, 'business', 'Client visit', 'parked on 3rd', "
-            " %s, %s, %s, 'human')",
+            " %s, %s, %s, 'human') RETURNING id",
             (truck_id, office_id, depot_id),
         )
+        first_trip_id = (await first_trip.fetchone())[0]
         await conn.execute(
             "INSERT INTO trips (device, source, started_at, ended_at, distance_m, category, vehicle_id) "
             "VALUES ('manual', 'manual', '2026-06-16T12:00:00+00:00', "
@@ -266,9 +272,9 @@ async def _populate_source(pool) -> None:
             (truck_id,),
         )
         await conn.execute(
-            "INSERT INTO expenses (vehicle_id, incurred_on, category, amount, treatment, notes) "
-            "VALUES (%s, '2026-06-01', 'fuel', 45.67, 'business_use_allocated', 'receipt 1')",
-            (truck_id,),
+            "INSERT INTO expenses (vehicle_id, incurred_on, category, amount, treatment, notes, trip_id) "
+            "VALUES (%s, '2026-06-01', 'fuel', 45.67, 'business_use_allocated', 'receipt 1', %s)",
+            (truck_id, first_trip_id),
         )
         await conn.execute(
             "INSERT INTO odometer_readings (vehicle_id, recorded_at, odometer_m, note) "
@@ -291,7 +297,7 @@ def test_round_trip_preserves_ledger_content_and_report_totals():
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             source_bundle = await _export(client)
 
-        await _reset_schema(pool)
+        await reset_db(pool)
 
         transport = httpx.ASGITransport(app=_bare_app(pool))
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -313,6 +319,302 @@ def test_round_trip_preserves_ledger_content_and_report_totals():
     _scenario(run)
 
 
+def _exclusion_trip(dollar_id: int, exclusion: str | None, *, category: str = "personal") -> dict:
+    return {
+        "$id": dollar_id, "device": "phone1", "source": "manual",
+        "started_at": f"2026-06-{10 + dollar_id:02d}T15:00:00+00:00",
+        "ended_at": f"2026-06-{10 + dollar_id:02d}T15:30:00+00:00",
+        "distance_m": 1000.0 * dollar_id, "has_gap": False, "category": category,
+        "exclusion": exclusion,
+        "purpose": None, "notes": None,
+        "vehicle": 1, "start_place": None, "end_place": None, "tag_source": None,
+    }
+
+
+def test_round_trip_preserves_trip_exclusion_for_both_states():
+    async def run(pool):
+        bundle = _minimal_bundle(25)
+        bundle["trips"] = [
+            _exclusion_trip(1, "not_my_vehicle"),
+            _exclusion_trip(2, "not_deductible", category="business"),
+        ]
+
+        transport = httpx.ASGITransport(app=_bare_app(pool))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            csrf = await _csrf(client)
+            response = await _import(client, csrf, bundle)
+            assert response.status_code == 200
+            assert response.json()["ok"] is True
+
+            exported = await _export(client)
+
+        exclusions = sorted(trip["exclusion"] for trip in exported["trips"])
+        assert exclusions == ["not_deductible", "not_my_vehicle"]
+
+    _scenario(run)
+
+
+def test_format_version_1_bundle_with_no_exclusion_field_imports_trips_as_normal():
+    """Acceptance criterion 7's compatibility promise: a pre-existing v1
+    backup has no "exclusion" key on any trip at all (not even an explicit
+    null), and must still import, arriving as a normal (non-excluded) trip.
+    """
+    async def run(pool):
+        bundle = _minimal_bundle(21)  # the actual schema of a pre-feature v1 export
+        assert bundle["format_version"] == 1
+        bundle["trips"] = [{
+            "$id": 1, "device": "phone1", "source": "manual",
+            "started_at": "2026-06-15T15:00:00+00:00",
+            "ended_at": "2026-06-15T15:30:00+00:00",
+            "distance_m": 1000.0, "has_gap": False, "category": "business",
+            "purpose": None, "notes": None,
+            "vehicle": 1, "start_place": None, "end_place": None, "tag_source": None,
+        }]
+        bundle["expenses"] = [{
+            "vehicle": 1, "incurred_on": "2026-06-15", "category": "fuel",
+            "amount": "12.34", "treatment": "business_use_allocated", "notes": "legacy",
+        }]
+        assert "exclusion" not in bundle["trips"][0]
+
+        transport = httpx.ASGITransport(app=_bare_app(pool))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            csrf = await _csrf(client)
+            response = await _import(client, csrf, bundle)
+
+        assert response.status_code == 200
+        assert response.json()["ok"] is True
+
+        async with pool.connection() as conn:
+            cur = await conn.execute("SELECT exclusion FROM trips")
+            assert await cur.fetchone() == (None,)
+            cur = await conn.execute("SELECT trip_id, notes FROM expenses")
+            assert await cur.fetchone() == (None, "legacy")
+
+    _scenario(run)
+
+
+def test_schema_23_format_2_bundle_preserves_an_expense_trip_link():
+    async def run(pool):
+        bundle = _minimal_bundle(23)
+        bundle["format_version"] = 2
+        bundle["trips"] = [{
+            "$id": 7, "device": "phone1", "source": "manual",
+            "started_at": "2026-06-15T15:00:00+00:00",
+            "ended_at": "2026-06-15T15:30:00+00:00",
+            "distance_m": 1000.0, "has_gap": False, "category": "business",
+            "exclusion": None, "purpose": None, "notes": None,
+            "vehicle": 1, "start_place": None, "end_place": None, "tag_source": None,
+        }]
+        bundle["expenses"] = [{
+            "vehicle": 1, "trip": 7, "incurred_on": "2026-06-15",
+            "category": "fuel", "amount": "12.34",
+            "treatment": "business_use_allocated", "notes": "linked legacy expense",
+        }]
+
+        transport = httpx.ASGITransport(app=_bare_app(pool))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            csrf = await _csrf(client)
+            response = await _import(client, csrf, bundle)
+
+        assert response.status_code == 200
+        assert response.json()["ok"] is True
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT e.trip_id, t.id, e.notes FROM expenses e JOIN trips t ON t.id = e.trip_id"
+            )
+            assert await cur.fetchone() == (1, 1, "linked legacy expense")
+
+    _scenario(run)
+
+
+def test_schema_24_format_2_bundle_imports_trips_with_null_endpoint_labels():
+    """A schema-24 bundle predates start_label/end_label (added in schema
+    25), so it never carries those keys at all. The losslessness claim for
+    this transition is that the imported trip ends up with both columns
+    NULL rather than the import failing or defaulting to something else.
+    """
+    async def run(pool):
+        bundle = _minimal_bundle(24)
+        bundle["format_version"] = 2
+        bundle["trips"] = [{
+            "$id": 7, "device": "phone1", "source": "manual",
+            "started_at": "2026-06-15T15:00:00+00:00",
+            "ended_at": "2026-06-15T15:30:00+00:00",
+            "distance_m": 1000.0, "has_gap": False, "category": "business",
+            "exclusion": None, "purpose": None, "notes": None,
+            "vehicle": 1, "start_place": None, "end_place": None, "tag_source": None,
+        }]
+
+        transport = httpx.ASGITransport(app=_bare_app(pool))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            csrf = await _csrf(client)
+            response = await _import(client, csrf, bundle)
+
+        assert response.status_code == 200
+        assert response.json()["ok"] is True
+        async with pool.connection() as conn:
+            cur = await conn.execute("SELECT start_label, end_label FROM trips")
+            assert await cur.fetchone() == (None, None)
+
+    _scenario(run)
+
+
+def _labeled_trip(
+    dollar_id: int, start_label: str | None, end_label: str | None, *, source: str = "manual",
+    start_place: int | None = None, end_place: int | None = None,
+) -> dict:
+    return {
+        "$id": dollar_id, "device": "phone1", "source": source,
+        "started_at": f"2026-06-{10 + dollar_id:02d}T15:00:00+00:00",
+        "ended_at": f"2026-06-{10 + dollar_id:02d}T15:30:00+00:00",
+        "distance_m": 1000.0 * dollar_id, "has_gap": False, "category": "personal",
+        "exclusion": None, "purpose": None, "notes": None,
+        "vehicle": 1, "start_place": start_place, "end_place": end_place, "tag_source": None,
+        "start_label": start_label, "end_label": end_label,
+    }
+
+
+def test_round_trip_preserves_endpoint_labels_including_unicode():
+    async def run(pool):
+        bundle = _minimal_bundle(25)
+        bundle["format_version"] = 2
+        bundle["trips"] = [
+            _labeled_trip(1, "Café de la Gare", "山小屋 🏕"),
+            _labeled_trip(2, None, None),
+        ]
+
+        transport = httpx.ASGITransport(app=_bare_app(pool))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            csrf = await _csrf(client)
+            response = await _import(client, csrf, bundle)
+            assert response.status_code == 200
+            assert response.json()["ok"] is True
+
+            exported = await _export(client)
+
+        labels = sorted(
+            (trip["start_label"] or "", trip["end_label"] or "") for trip in exported["trips"]
+        )
+        assert labels == [
+            ("", ""),
+            ("Café de la Gare", "山小屋 🏕"),
+        ]
+
+    _scenario(run)
+
+
+def test_label_on_a_detected_trip_is_refused_with_a_clear_issue_not_a_db_error():
+    async def run(pool):
+        bundle = _minimal_bundle(25)
+        bundle["trips"] = [_labeled_trip(1, "Depot", None, source="detected")]
+
+        transport = httpx.ASGITransport(app=_bare_app(pool))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            csrf = await _csrf(client)
+            response = await _import(client, csrf, bundle)
+
+        assert response.status_code == 400
+        body = response.json()
+        assert body["ok"] is False
+        assert body["error"] == "malformed_bundle"
+        assert any("start_label" in issue and "manual" in issue for issue in body["issues"])
+
+        async with pool.connection() as conn:
+            assert (await (await conn.execute("SELECT count(*) FROM trips")).fetchone())[0] == 0
+
+    _scenario(run)
+
+
+def test_label_alongside_a_place_reference_is_refused_with_a_clear_issue_not_a_db_error():
+    async def run(pool):
+        bundle = _minimal_bundle(25)
+        bundle["places"] = [
+            {"$id": 1, "name": "Office", "kind": "work", "lat": 47.6, "lon": -122.3, "radius_m": 100},
+        ]
+        bundle["trips"] = [_labeled_trip(1, "Depot", None, start_place=1)]
+
+        transport = httpx.ASGITransport(app=_bare_app(pool))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            csrf = await _csrf(client)
+            response = await _import(client, csrf, bundle)
+
+        assert response.status_code == 400
+        body = response.json()
+        assert body["ok"] is False
+        assert body["error"] == "malformed_bundle"
+        assert any("start_label" in issue and "start_place" in issue for issue in body["issues"])
+
+        async with pool.connection() as conn:
+            assert (await (await conn.execute("SELECT count(*) FROM trips")).fetchone())[0] == 0
+            assert (await (await conn.execute("SELECT count(*) FROM places")).fetchone())[0] == 0
+
+    _scenario(run)
+
+
+def test_label_with_surrounding_whitespace_is_refused_with_a_clear_issue_not_a_db_error():
+    # Migration 025's trips_start_label_trimmed_nonblank constraint would
+    # refuse this at the database too, since " Depot " isn't equal to its
+    # own btrim; the import must be caught here instead, as a named
+    # malformed_bundle issue rather than an opaque insert_failed error.
+    async def run(pool):
+        bundle = _minimal_bundle(25)
+        bundle["trips"] = [_labeled_trip(1, " Depot ", None)]
+
+        transport = httpx.ASGITransport(app=_bare_app(pool))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            csrf = await _csrf(client)
+            response = await _import(client, csrf, bundle)
+
+        assert response.status_code == 400
+        body = response.json()
+        assert body["ok"] is False
+        assert body["error"] == "malformed_bundle"
+        assert any("start_label" in issue and "whitespace" in issue for issue in body["issues"])
+
+        async with pool.connection() as conn:
+            assert (await (await conn.execute("SELECT count(*) FROM trips")).fetchone())[0] == 0
+
+    _scenario(run)
+
+
+def test_schema_21_compatibility_is_limited_to_format_version_1():
+    async def run(pool):
+        bundle = _minimal_bundle(21)
+        bundle["format_version"] = 2
+
+        transport = httpx.ASGITransport(app=_bare_app(pool))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            csrf = await _csrf(client)
+            response = await _import(client, csrf, bundle)
+
+        assert response.status_code == 409
+        assert response.json()["error"] == "schema_version_mismatch"
+
+    _scenario(run)
+
+
+def test_bogus_trip_exclusion_value_rejected_with_clear_issue():
+    async def run(pool):
+        bundle = _minimal_bundle(24)
+        bundle["trips"] = [_exclusion_trip(1, "not_a_real_state")]
+
+        transport = httpx.ASGITransport(app=_bare_app(pool))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            csrf = await _csrf(client)
+            response = await _import(client, csrf, bundle)
+
+        assert response.status_code == 400
+        body = response.json()
+        assert body["ok"] is False
+        assert body["error"] == "malformed_bundle"
+        assert any("exclusion" in issue for issue in body["issues"])
+
+        async with pool.connection() as conn:
+            assert (await (await conn.execute("SELECT count(*) FROM trips")).fetchone())[0] == 0
+
+    _scenario(run)
+
+
 def test_detector_run_after_import_does_not_delete_imported_trips():
     """Regression test for the bug where the detector's reconcile pass
     treated every imported source='detected' trip as stale and deleted it.
@@ -327,7 +629,7 @@ def test_detector_run_after_import_does_not_delete_imported_trips():
     """
     async def run(pool):
         bundle = {
-            "format": "odograph-portable", "format_version": 1, "schema_version": 21,
+            "format": "odograph-portable", "format_version": 1, "schema_version": 25,
             "exported_at": "2026-08-05T00:00:00+00:00",
             "vehicles": [{
                 "$id": 1, "name": "Car", "make": None, "model": None, "plate": None,
@@ -413,7 +715,7 @@ def test_detector_run_after_import_does_not_delete_imported_trips():
 
 def _two_imported_detected_trips_bundle() -> dict:
     return {
-        "format": "odograph-portable", "format_version": 1, "schema_version": 21,
+        "format": "odograph-portable", "format_version": 1, "schema_version": 25,
         "exported_at": "2026-08-05T00:00:00+00:00",
         "vehicles": [{
             "$id": 1, "name": "Car", "make": None, "model": None, "plate": None,
@@ -444,10 +746,10 @@ def _two_imported_detected_trips_bundle() -> dict:
 
 
 def test_merge_selected_refuses_imported_trips_with_clear_400_not_500():
-    """Regression test: before app/ui.py's merge path excluded imported
-    trips, _merge_trips_core would suppress a "stay" between two imported
-    trips that has no points to back it (an imported trip carries no points
-    in this instance), reprocess, then fail its own final lookup with an
+    """Regression test: before app/ui/merge_split.py's merge path excluded
+    imported trips, _merge_trips_core would suppress a "stay" between two
+    imported trips that has no points to back it (an imported trip carries
+    no points in this instance), reprocess, then fail its own final lookup with an
     opaque HTTPException(500, "Merge did not produce the expected trip").
     The new early guard must refuse before any of that runs, and leave the
     imported trips and the (empty) trip_boundary_overrides table untouched.
@@ -538,7 +840,7 @@ def test_import_into_non_clean_target_is_refused_and_leaves_target_unchanged():
         transport = httpx.ASGITransport(app=_bare_app(pool))
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             csrf = await _csrf(client)
-            response = await _import(client, csrf, _minimal_bundle(21))
+            response = await _import(client, csrf, _minimal_bundle(25))
 
         assert response.status_code == 409
         body = response.json()
@@ -570,7 +872,7 @@ def test_import_into_target_with_leftover_points_is_refused():
         transport = httpx.ASGITransport(app=_bare_app(pool))
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             csrf = await _csrf(client)
-            response = await _import(client, csrf, _minimal_bundle(21))
+            response = await _import(client, csrf, _minimal_bundle(25))
 
         assert response.status_code == 409
         body = response.json()
@@ -587,7 +889,7 @@ def test_import_into_target_with_leftover_points_is_refused():
 ])
 def test_wrong_format_or_version_rejected(mutate, expected_field):
     async def run(pool):
-        bundle = _minimal_bundle(21)
+        bundle = _minimal_bundle(24)
         mutate(bundle)
 
         transport = httpx.ASGITransport(app=_bare_app(pool))
@@ -629,7 +931,7 @@ def test_mismatched_schema_version_rejected():
 
 def test_duplicate_mileage_rate_year_rejected():
     async def run(pool):
-        bundle = _minimal_bundle(21)
+        bundle = _minimal_bundle(24)
         bundle["mileage_rates"] = [
             {"year": 2026, "rate_per_mi": 0.7, "rate_h2_per_mi": None, "h2_start_month": None},
             {"year": 2026, "rate_per_mi": 0.75, "rate_h2_per_mi": None, "h2_start_month": None},
@@ -653,7 +955,7 @@ def test_duplicate_mileage_rate_year_rejected():
 
 def test_duplicate_odometer_reading_vehicle_and_time_rejected():
     async def run(pool):
-        bundle = _minimal_bundle(21)
+        bundle = _minimal_bundle(24)
         bundle["vehicles"] = [{
             "$id": 1, "name": "Car", "make": None, "model": None, "plate": None,
             "is_default": True, "active": True,
@@ -682,7 +984,7 @@ def test_duplicate_odometer_reading_vehicle_and_time_rejected():
 
 def test_duplicate_place_name_rejected():
     async def run(pool):
-        bundle = _minimal_bundle(21)
+        bundle = _minimal_bundle(24)
         bundle["places"] = [
             {"$id": 1, "name": "Home", "kind": "home", "lat": 47.6, "lon": -122.3, "radius_m": 150},
             {"$id": 2, "name": "Home", "kind": "other", "lat": 47.7, "lon": -122.4, "radius_m": 150},
@@ -706,7 +1008,7 @@ def test_duplicate_place_name_rejected():
 
 def test_dangling_dollar_id_reference_rejected():
     async def run(pool):
-        bundle = _minimal_bundle(21)
+        bundle = _minimal_bundle(24)
         bundle["trips"] = [{
             "$id": 1, "device": "phone1", "source": "manual",
             "started_at": "2026-01-01T00:00:00+00:00", "ended_at": "2026-01-01T00:30:00+00:00",
@@ -801,7 +1103,7 @@ def test_dry_run_produces_same_summary_and_leaves_target_unchanged():
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             bundle = await _export(client)
 
-        await _reset_schema(pool)
+        await reset_db(pool)
 
         transport = httpx.ASGITransport(app=_bare_app(pool))
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -835,7 +1137,7 @@ def test_import_requires_csrf_token(bad_token):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             await _csrf(client)  # primes the session's real token
             response = await _import(
-                client, "unused", _minimal_bundle(21), override_csrf=bad_token
+                client, "unused", _minimal_bundle(24), override_csrf=bad_token
             )
         assert response.status_code == 403
 
@@ -851,7 +1153,7 @@ def test_import_requires_authentication():
         async with httpx.AsyncClient(
             transport=transport, base_url="http://testserver", follow_redirects=False,
         ) as client:
-            files = {"file": ("bundle.json", json.dumps(_minimal_bundle(21)).encode(), "application/json")}
+            files = {"file": ("bundle.json", json.dumps(_minimal_bundle(24)).encode(), "application/json")}
             response = await client.post(
                 "/settings/import/data", data={"csrf_token": "x"}, files=files,
             )
@@ -931,8 +1233,9 @@ def test_seeded_constants_match_a_freshly_migrated_database():
     """SEEDED_VEHICLE/SEEDED_TAG_RULES are hand-copied from what
     008_vehicles.sql and 003_places.sql insert, with nothing tying the two
     together in code. Pins them against a real freshly migrated database
-    (the same one _scenario's _reset_schema gives every other test in this
-    file) so a future migration edit to either surfaces here, not as an
+    (the same content _scenario's reset_db call gives every other test in
+    this file, per tests/conftest.py's capture-and-restore) so a future
+    migration edit to either surfaces here, not as an
     opaque target_not_clean on every genuinely clean instance's first
     import.
     """

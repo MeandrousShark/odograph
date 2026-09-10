@@ -1,0 +1,110 @@
+{% from "_purpose_field.html" import purpose_field %}
+
+{% if manual_prefill %}
+<p class="manual-prefill-context" role="status">
+  The date, start time, and notes were prefilled from the possible missing-trip window.
+  Enter the end time and distance, then review every field before adding the trip.
+</p>
+{% endif %}
+<form class="manual-trip-form" hx-post="/trips/manual" id="manual-trip-form">
+  <label>Date <input type="date" name="date"
+    value="{{ manual_prefill.date if manual_prefill and manual_prefill.date else now_local().strftime('%Y-%m-%d') }}" required></label>
+  <label>Start
+    <span class="time-now-field">
+      <input type="time" name="start_time" value="{{ manual_prefill.start_time if manual_prefill else '' }}" required>
+      <button type="button" class="now-btn" data-time-now-field="start_time">now</button>
+    </span>
+  </label>
+  <label>End
+    <span class="time-now-field">
+      <input type="time" name="end_time" required>
+      <button type="button" class="now-btn" data-time-now-field="end_time">now</button>
+    </span>
+  </label>
+
+  <div class="route-picker">
+    <fieldset class="route-mode-fieldset">
+      <legend>Route</legend>
+      <label class="route-mode-option"><input type="radio" name="route_mode" value="none" checked> No route</label>
+      <label class="route-mode-option"><input type="radio" name="route_mode" value="places"> Named places</label>
+      <label class="route-mode-option"><input type="radio" name="route_mode" value="map"> Pick on map</label>
+    </fieldset>
+
+    <div class="route-mode-panel" data-route-panel="none">
+      <label>Start location name
+        <input type="text" name="start_label" maxlength="100">
+      </label>
+      <label>End location name
+        <input type="text" name="end_label" maxlength="100">
+      </label>
+    </div>
+
+    <div class="route-mode-panel" data-route-panel="places" hidden>
+      <label>Start place
+        <select name="start_place">
+          <option value=""></option>
+          {% for p in places %}
+          <option value="{{ p.id }}">{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>End place
+        <select name="end_place">
+          <option value=""></option>
+          {% for p in places %}
+          <option value="{{ p.id }}">{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+
+    <div class="route-mode-panel" data-route-panel="map" hidden>
+      <p class="route-map-hint">Click the map to set the start, then the end.</p>
+      <button type="button" class="control control-secondary" data-route-map-reset>Reset points</button>
+      <input type="hidden" name="start_lat">
+      <input type="hidden" name="start_lon">
+      <input type="hidden" name="end_lat">
+      <input type="hidden" name="end_lon">
+    </div>
+
+    <div id="route-picker-map" class="route-picker-map" hidden></div>
+    <p class="route-picker-status" role="status"></p>
+    <input type="hidden" name="routed_distance">
+  </div>
+
+  <label>Distance (mi)
+    <span class="route-distance-hint" hidden>(optional with a route selected)</span>
+    <input type="number" name="distance" step="0.1" min="0.1" required style="width:5rem">
+  </label>
+  {% if manual_prefill and manual_prefill.osrm_hint %}
+  <span class="osrm-hint" title="Suggested road distance between the two trips' endpoints (OSRM)">{{ manual_prefill.osrm_hint }}</span>
+  {% endif %}
+  <label>Category
+    <select name="category">
+      <option value="unclassified">--</option>
+      <option value="business">Business</option>
+      <option value="personal">Personal</option>
+    </select>
+  </label>
+  <label>Vehicle
+    <select name="vehicle_id">
+      <option value="">--</option>
+      {% for v in vehicles %}
+      <option value="{{ v.id }}" {{ 'selected' if v.is_default or vehicles | length == 1 }}>{{ v.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Exclusion
+    <select name="exclusion">
+      <option value="">Normal trip</option>
+      {% for value, label in exclusion_labels.items() %}
+      <option value="{{ value }}">{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Purpose {{ purpose_field(recent_purposes | default([], true)) }}</label>
+  <label>Notes <input type="text" name="notes" value="{{ manual_prefill.notes if manual_prefill else '' }}"></label>
+  <div class="manual-trip-submit-row">
+    <button type="submit" class="control control-primary">Add</button>
+  </div>
+</form>

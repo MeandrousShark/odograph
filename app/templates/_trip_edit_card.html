@@ -1,7 +1,15 @@
 {% from "_purpose_field.html" import purpose_field %}
 {% from "_field_error.html" import field_error %}
-<article id="trip-{{ trip.id }}" class="card trip-card trip-edit-card">
+{% from "_category_segmented.html" import category_segmented %}
+{# `trip-archive-item` carries no CSS: it's the bare marker trips.html's
+   selection script queries for, shared with _trip_archive_row.html, so a
+   row being edited in place stays part of Select all / is-selected
+   reconciliation the same as before this class existed. See the comment on
+   _trip_archive_row.html's root article for why that script doesn't query
+   `trip-archive-row` (this card's own layout, untouched here) instead. #}
+<article id="trip-{{ trip.id }}" class="card trip-card trip-edit-card trip-archive-item">
   <form hx-post="/trips/{{ trip.id }}/edit" hx-target="#trip-{{ trip.id }}" hx-swap="outerHTML">
+    {% if dashboard_week %}<input type="hidden" name="dashboard_week" value="{{ dashboard_week }}">{% endif %}
     <div class="trip-edit-heading">
       <h3>Edit {{ 'manual' if trip.source == 'manual' else 'detected' }} trip</h3>
       {% if errors %}
@@ -33,18 +41,40 @@
                {% if errors.distance %}aria-invalid="true" aria-describedby="edit-distance-{{ trip.id }}-error"{% endif %}>
         {{ field_error(errors, 'distance', 'edit-distance', trip.id) }}
       </label>
+      {# Mirrors migrations/025_manual_trip_labels.sql's own constraint
+         exactly (manual source, no saved place, no geometry) rather than
+         just `trip.source == 'manual'`: a routed manual trip already has
+         one or both endpoints named by a place or reverse-geocoded
+         coordinate, and the save handler rejects a label for either one.
+         An eligible input always renders, even with a null stored label, or
+         there would be no way to submit the blank that clears it -- an
+         ineligible one never renders at all, so the save can't touch it. #}
+      {% if trip.source == 'manual' and trip.start_place_id is none and trip.start_lat is none %}
+      <label>Start location name
+        <input type="text" name="start_label" value="{{ values.start_label }}" maxlength="100"
+               {% if errors.start_label %}aria-invalid="true" aria-describedby="edit-start-label-{{ trip.id }}-error"{% endif %}>
+        {{ field_error(errors, 'start_label', 'edit-start-label', trip.id) }}
+      </label>
+      {% endif %}
+      {% if trip.source == 'manual' and trip.end_place_id is none and trip.end_lat is none %}
+      <label>End location name
+        <input type="text" name="end_label" value="{{ values.end_label }}" maxlength="100"
+               {% if errors.end_label %}aria-invalid="true" aria-describedby="edit-end-label-{{ trip.id }}-error"{% endif %}>
+        {{ field_error(errors, 'end_label', 'edit-end-label', trip.id) }}
+      </label>
+      {% endif %}
     </div>
     {% endif %}
 
     <div class="trip-edit-grid">
-      <label>Category
-        <select name="category" {% if errors.category %}aria-invalid="true" aria-describedby="edit-category-{{ trip.id }}-error"{% endif %}>
-          {% for category in ('unclassified', 'business', 'personal') %}
-          <option value="{{ category }}" {{ 'selected' if values.category == category }}>{{ category | capitalize }}</option>
-          {% endfor %}
-        </select>
+      <div class="trip-edit-field">
+        {{ category_segmented(
+          values.category, 'edit-category-' ~ trip.id,
+          invalid=errors.category,
+          describedby=('edit-category-' ~ trip.id ~ '-error') if errors.category else ''
+        ) }}
         {{ field_error(errors, 'category', 'edit-category', trip.id) }}
-      </label>
+      </div>
       <label>Vehicle
         <select name="vehicle_id" {% if errors.vehicle_id %}aria-invalid="true" aria-describedby="edit-vehicle-{{ trip.id }}-error"{% endif %}>
           <option value="">Not assigned</option>
@@ -56,6 +86,15 @@
           {% endif %}
         </select>
         {{ field_error(errors, 'vehicle_id', 'edit-vehicle', trip.id) }}
+      </label>
+      <label>Exclusion
+        <select name="exclusion" {% if errors.exclusion %}aria-invalid="true" aria-describedby="edit-exclusion-{{ trip.id }}-error"{% endif %}>
+          <option value="" {{ 'selected' if not values.exclusion }}>Normal trip</option>
+          {% for value, label in exclusion_labels.items() %}
+          <option value="{{ value }}" {{ 'selected' if values.exclusion == value }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        {{ field_error(errors, 'exclusion', 'edit-exclusion', trip.id) }}
       </label>
       <label>Purpose
         {{ purpose_field(
@@ -73,7 +112,7 @@
     <div class="trip-edit-actions">
       <button type="submit" class="control control-primary">Save</button>
       <button type="button" class="control control-secondary"
-              hx-get="/trips/{{ trip.id }}/card"
+              hx-get="/trips/{{ trip.id }}/card{% if dashboard_week %}?dashboard_week={{ dashboard_week }}{% endif %}"
               hx-target="#trip-{{ trip.id }}" hx-swap="outerHTML">Cancel</button>
     </div>
   </form>

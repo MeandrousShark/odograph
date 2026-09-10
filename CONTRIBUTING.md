@@ -1,5 +1,8 @@
 # Contributing
 
+Thanks for helping with Odograph. The notes below describe the smallest safe
+development setup and the project rules that matter when changing behavior.
+
 ## Project scope
 
 This is a single-user, self-hosted mileage tracker. It is deliberately

@@ -1,21 +1,12 @@
 {% extends "base.html" %}
 {% from "_purpose_field.html" import purpose_field %}
-{% from "_field_pills.html" import field_pills %}
 {% from "_selection_dialog_footer.html" import selection_dialog_footer %}
+{% from "_icons.html" import icon with context %}
 {% block title %}Trips: Odograph{% endblock %}
 {% block head %}
-  <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
-  <script src="/static/vendor/leaflet/leaflet.js"></script>
+  <script src="/static/archive_state.js"></script>
 {% endblock %}
 {% block content %}
-
-{% if ytd_deduction is not none %}
-<p class="ytd-deduction">Year-to-date ({{ ytd_year }}) business deduction:
-  <strong>{{ ytd_deduction | usd }}</strong></p>
-{% else %}
-<p class="ytd-deduction muted">No mileage rate on file for {{ ytd_year }} yet;
-  deduction estimates are unavailable. <a href="/settings">Add one</a>.</p>
-{% endif %}
 
 {% if notice == 'route_unavailable' %}
 <p class="route-saved-notice" role="status">
@@ -23,176 +14,1068 @@
 </p>
 {% endif %}
 
-{% set filters_active = filter_category or filter_from or filter_to or filter_vehicle or filter_q %}
-<div class="trip-page-disclosures">
-<details class="trip-page-disclosure trip-tools" {{ 'open' if filters_active }}>
-  <summary>Filters &amp; tools</summary>
-  <div class="filter-bar trip-filter-bar">
-    {{ field_pills('Category', [
-      {'href': filter_url(''), 'text': 'All', 'active': not filter_category},
-      {'href': filter_url('business'), 'text': 'Business', 'active': filter_category == 'business'},
-      {'href': filter_url('personal'), 'text': 'Personal', 'active': filter_category == 'personal'},
-      {'href': filter_url('unclassified'), 'text': 'Unclassified', 'active': filter_category == 'unclassified'},
-    ], extra_class='trip-filter-category') }}
-    <form class="date-range trip-filter-form" method="get">
-      <input type="hidden" name="category" value="{{ filter_category }}">
+{# The archive header groups the year-to-date figure with the cross-cutting
+   actions (export, manual trip) that used to be split between a loose
+   paragraph above the disclosures and a link cluster nested inside the
+   "Filters & tools" disclosure. #}
+<div class="trip-archive-header">
+  <div class="trip-archive-header-summary">
+    {% include "_trip_archive_ytd.html" %}
+  </div>
+  <div class="trip-archive-header-actions">
+    {# Echoes _dashboard_trip_row.html's overflow-menu <details>: the same
+       summary trigger and absolutely positioned panel, instead of
+       field_pills' label-above-pills layout, which is what put Export out of
+       line with the header's other bare controls. Unlike that row menu, this
+       trigger keeps a visible "Export" label rather than being icon-only.
+       data-header-disclosure opts this into the delegated script in
+       base.html that already gives the Account and More disclosures
+       outside-click dismissal, Escape dismissal with focus restoration, and
+       mutual exclusion. #}
+    <details class="trip-archive-export" data-header-disclosure="export">
+      <summary class="control control-secondary trip-archive-export-trigger">{{ icon('download') }}Export</summary>
+      {% include "_trip_archive_export.html" %}
+    </details>
+    <a class="control control-secondary" href="/trips/manual">{{ icon('plus') }}Add manual trip</a>
+  </div>
+</div>
+
+{% set filters_active = filter_category or filter_from or filter_to or filter_vehicle or filter_q or filter_exclusion %}
+{% set active_date_preset = archive_date_preset | default('all', true) %}
+{# The archive filter surface keeps the high-frequency search and category
+   choices together, with compact secondary controls below them. #}
+<div class="filter-bar trip-filter-bar trip-filter-surface"
+     data-archive-filter-surface data-archive-filter-active="{{ 'true' if filters_active else 'false' }}">
+  <button type="button" class="control control-secondary trip-filter-toggle"
+          data-archive-filter-toggle hidden aria-expanded="false"
+          aria-controls="trip-filter-controls">
+    <span>Filters</span>
+    <span class="trip-filter-active-indicator" data-archive-filter-active-indicator hidden>Active</span>
+  </button>
+  <div id="trip-filter-controls" class="trip-filter-controls">
+    <form class="trip-filter-form" method="get"
+          data-archive-filter-form>
+    <div class="trip-filter-primary">
       <div class="filter-search-row">
         <label>Search
           <input type="search" name="q" value="{{ filter_q }}"
                  placeholder="Notes, purpose, places, addresses">
         </label>
       </div>
-      <div class="filter-date-row">
-        <label>From <input type="date" name="from" value="{{ filter_from }}"></label>
-        <label>To <input type="date" name="to" value="{{ filter_to }}"></label>
-      </div>
-      <div class="filter-apply-row">
-        <label>Vehicle
-          <select name="vehicle">
-            <option value="">All</option>
-            <option value="none" {{ 'selected' if filter_vehicle == 'none' }}>Unassigned</option>
-            {% for v in vehicles %}
-            <option value="{{ v.id }}" {{ 'selected' if filter_vehicle == v.id | string }}>{{ v.name }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <button type="submit">Filter</button>
-        {% if filters_active %}<a class="control control-secondary filter-clear" href="/trips">Clear</a>{% endif %}
-      </div>
-    </form>
-    <div class="filter-link-groups">
-      {{ field_pills('Export', [
-        {'href': export_url('csv'), 'text': 'CSV'},
-        {'href': export_url('xlsx'), 'text': 'XLSX'},
-      ]) }}
-      {{ field_pills('Triage', [{'href': review_url, 'text': 'Review unclassified'}]) }}
-    </div>
-  </div>
-</details>
-
-<details class="trip-page-disclosure trip-manual add-manual" id="manual-trip" {{ 'open' if manual_open }}>
-  <summary>Add manual trip</summary>
-  <div class="trip-manual-content">
-  {% if manual_prefill %}
-  <p class="manual-prefill-context" role="status">
-    The date, start time, and notes were prefilled from the possible missing-trip window.
-    Enter the end time and distance, then review every field before adding the trip.
-  </p>
-  {% endif %}
-  <form hx-post="/trips/manual" id="manual-trip-form">
-    <label>Date <input type="date" name="date"
-      value="{{ manual_prefill.date if manual_prefill and manual_prefill.date else now_local().strftime('%Y-%m-%d') }}" required></label>
-    <label>Start
-      <span class="time-now-field">
-        <input type="time" name="start_time" value="{{ manual_prefill.start_time if manual_prefill else '' }}" required>
-        <button type="button" class="now-btn" data-time-now-field="start_time">now</button>
-      </span>
-    </label>
-    <label>End
-      <span class="time-now-field">
-        <input type="time" name="end_time" required>
-        <button type="button" class="now-btn" data-time-now-field="end_time">now</button>
-      </span>
-    </label>
-
-    <div class="route-picker">
-      <fieldset class="route-mode-fieldset">
-        <legend>Route</legend>
-        <label class="route-mode-option"><input type="radio" name="route_mode" value="none" checked> No route</label>
-        <label class="route-mode-option"><input type="radio" name="route_mode" value="places"> Named places</label>
-        <label class="route-mode-option"><input type="radio" name="route_mode" value="map"> Pick on map</label>
+      <fieldset class="category-segmented trip-filter-category">
+        <legend>Category</legend>
+        <div class="category-segmented-options">
+          <input class="category-segmented-input" type="radio" id="trip-filter-category-all" name="category" value=""{% if not filter_category %} checked{% endif %}>
+          <label class="category-segmented-option category-segmented-all" for="trip-filter-category-all">All</label>
+          <input class="category-segmented-input" type="radio" id="trip-filter-category-business" name="category" value="business"{% if filter_category == 'business' %} checked{% endif %}>
+          <label class="category-segmented-option category-segmented-business" for="trip-filter-category-business">Business</label>
+          <input class="category-segmented-input" type="radio" id="trip-filter-category-personal" name="category" value="personal"{% if filter_category == 'personal' %} checked{% endif %}>
+          <label class="category-segmented-option category-segmented-personal" for="trip-filter-category-personal">Personal</label>
+          <input class="category-segmented-input" type="radio" id="trip-filter-category-unclassified" name="category" value="unclassified"{% if filter_category == 'unclassified' %} checked{% endif %}>
+          <label class="category-segmented-option category-segmented-unclassified" for="trip-filter-category-unclassified">Unclassified</label>
+        </div>
       </fieldset>
-
-      <div class="route-mode-panel" data-route-panel="places" hidden>
-        <label>Start place
-          <select name="start_place">
-            <option value=""></option>
-            {% for p in places %}
-            <option value="{{ p.id }}">{{ p.name }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <label>End place
-          <select name="end_place">
-            <option value=""></option>
-            {% for p in places %}
-            <option value="{{ p.id }}">{{ p.name }}</option>
-            {% endfor %}
-          </select>
-        </label>
-      </div>
-
-      <div class="route-mode-panel" data-route-panel="map" hidden>
-        <p class="route-map-hint">Click the map to set the start, then the end.</p>
-        <button type="button" class="control control-secondary" data-route-map-reset>Reset points</button>
-        <input type="hidden" name="start_lat">
-        <input type="hidden" name="start_lon">
-        <input type="hidden" name="end_lat">
-        <input type="hidden" name="end_lon">
-      </div>
-
-      <div id="route-picker-map" class="route-picker-map" hidden></div>
-      <p class="route-picker-status" role="status"></p>
-      <input type="hidden" name="routed_distance">
     </div>
-
-    <label>Distance (mi)
-      <span class="route-distance-hint" hidden>(optional with a route selected)</span>
-      <input type="number" name="distance" step="0.1" min="0.1" required style="width:5rem">
-    </label>
-    {% if manual_prefill and manual_prefill.osrm_hint %}
-    <span class="osrm-hint" title="Suggested road distance between the two trips' endpoints (OSRM)">{{ manual_prefill.osrm_hint }}</span>
-    {% endif %}
-    <label>Category
-      <select name="category">
-        <option value="unclassified">--</option>
-        <option value="business">Business</option>
-        <option value="personal">Personal</option>
-      </select>
-    </label>
-    <label>Vehicle
-      <select name="vehicle_id">
-        <option value="">--</option>
-        {% for v in vehicles %}
-        <option value="{{ v.id }}" {{ 'selected' if v.is_default or vehicles | length == 1 }}>{{ v.name }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>Purpose {{ purpose_field(recent_purposes | default([], true)) }}</label>
-    <label>Notes <input type="text" name="notes" value="{{ manual_prefill.notes if manual_prefill else '' }}"></label>
-    <button type="submit">Add</button>
-  </form>
+    <div class="trip-filter-secondary filter-apply-row">
+      <label class="trip-filter-date">Date
+        <select name="date_preset" data-archive-date-preset>
+          <option value="all"{% if active_date_preset == 'all' %} selected{% endif %}>All dates</option>
+          <option value="this_month"{% if active_date_preset == 'this_month' %} selected{% endif %}>This month</option>
+          <option value="last_month"{% if active_date_preset == 'last_month' %} selected{% endif %}>Last month</option>
+          <option value="this_year"{% if active_date_preset == 'this_year' %} selected{% endif %}>This year</option>
+          <option value="custom"{% if active_date_preset == 'custom' %} selected{% endif %}>Custom</option>
+        </select>
+      </label>
+      <div class="trip-filter-custom-dates filter-date-row" data-custom-date-range{% if active_date_preset != 'custom' %} hidden{% endif %}>
+        <label>From <input type="date" name="from" value="{{ filter_from }}"{% if active_date_preset != 'custom' %} disabled{% endif %}></label>
+        <label>To <input type="date" name="to" value="{{ filter_to }}"{% if active_date_preset != 'custom' %} disabled{% endif %}></label>
+      </div>
+      <label>Vehicle
+        <select name="vehicle">
+          <option value="">All</option>
+          <option value="none" {{ 'selected' if filter_vehicle == 'none' }}>Unassigned</option>
+          {% for v in vehicles %}
+          <option value="{{ v.id }}" {{ 'selected' if filter_vehicle == v.id | string }}>{{ v.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Exclusion
+        <select name="exclusion">
+          <option value=""{{ ' selected' if not filter_exclusion }}>All</option>
+          <option value="none"{{ ' selected' if filter_exclusion == 'none' }}>Normal trips</option>
+          {% for value, label in exclusion_labels.items() %}
+          <option value="{{ value }}"{{ ' selected' if filter_exclusion == value }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% if filters_active %}<a class="control control-secondary filter-clear" href="/trips">Clear</a>{% endif %}
+    </div>
+    </form>
   </div>
-</details>
+  {# One archive-wide status region, outside the swapped results root so it
+     survives every refresh. Retry reissues the last attempted request; it
+     stays hidden unless one actually failed. #}
+  <div class="trip-archive-status">
+    <p id="archive-status" class="trip-archive-status-message" role="status" aria-live="polite"></p>
+    <button type="button" id="archive-status-retry" class="control control-secondary" hidden>Retry</button>
+  </div>
 </div>
 
-<div class="selection-toolbar">
-  <button type="button" id="selection-start" class="control control-secondary">Select trips</button>
-  <button type="button" id="selection-done" class="control control-secondary" hidden>Done</button>
-</div>
+<script nonce="{{ csp_nonce }}">
+  // Archive controller. Filter changes, "Load more" pagination, and history
+  // restoration all move through one request generation, so a slow older
+  // response can never overwrite a newer view, its URL, its export links, or
+  // its summaries. Handlers are bound once here, by delegation, because a
+  // history restore replaces the results root's contents and would otherwise
+  // accumulate duplicate listeners.
+  (() => {
+    const helpers = window.ArchiveState;
+    if (!helpers) return;
 
-{% if not months %}
-  <p class="empty">No trips yet. Once OwnTracks starts posting and you take a drive,
-  detected trips will appear here (about 5 minutes after you arrive).</p>
-{% endif %}
+    const SEARCH_DELAY_MS = 350;
+    const FILTER_NAMES = ['q', 'category', 'date_preset', 'from', 'to', 'vehicle', 'exclusion'];
+    const RESULTS_SELECTOR = '#trip-archive-results';
+    // The generation travels with the request instead of through a variable
+    // held across the htmx.ajax() call: htmx does not always issue a request
+    // synchronously (it queues one behind another already in flight on the
+    // same element), and an unadopted request would lose its stale-response
+    // guard, its busy flag, and its status message. The server ignores this
+    // header.
+    const REQUEST_TOKEN_HEADER = 'X-Archive-Request';
+    // Archive requests are attributed to the filter surface rather than
+    // document.body so htmx's per-element in-flight and sync bookkeeping
+    // cannot entangle them with unrelated requests elsewhere on the page.
+    // The surface itself is used rather than the form inside it because htmx
+    // collects a form source's fields as request parameters and validates
+    // them, which would duplicate the query this controller already built and
+    // let a half-typed date silently cancel the request.
+    const REQUEST_SOURCE_SELECTOR = '.trip-filter-surface';
+    // htmx 1.9 keeps its history snapshots under this localStorage key.
+    const HISTORY_CACHE_KEY = 'htmx-history-cache';
+    const ARCHIVE_HISTORY_STATE_KEY = 'odographArchive';
 
-{% for month in months %}
-  <h2>{{ month.label }}</h2>
-  <div class="month-summary">
-    {{ month.trip_count }} trips ·
-    {{ month.total_m | mi }} mi total ·
-    {{ month.business_m | mi }} mi business
-    {% if month.business_deduction is not none %}
-    · {{ month.business_deduction | usd }} deduction
-    {% endif %}
-  </div>
-  <div class="trip-card-list">
-    {% set trips = month.trips %}
-    {% set has_more = month.has_more %}
-    {% set next_url = month.next_url %}
-    {% include "_trip_page_rows.html" %}
-  </div>
-{% endfor %}
+    const scope = helpers.createRequestScope();
+    const tokens = new WeakMap();
+    const archiveMutations = new WeakMap();
+    // The query a filter request would apply on success reaches its XHR by
+    // generation, then travels with the request itself, because a pager
+    // request can share that generation and must not be mistaken for the
+    // filter change that started it.
+    const queryHandoff = new Map();
+    const queries = new WeakMap();
+    const historyMisses = new Map();
+    const historyRetry = helpers.createHistoryRetry();
+    let composing = false;
+    let lastApplied = '';
+    let lastAttempt = null;
+    let draftPreset = null;
+    let filterDisclosureOpen = null;
+    let depthRestorePending = false;
+    let depthRestoreFailed = false;
+    // A batch write and the refresh that follows it are one operation: a
+    // filter or pager response landing between them would show rows that
+    // predate the write, or append a page to a list about to be replaced.
+    let writeInFlight = false;
+    let deferredApply = false;
+    let deferredHistoryPath = null;
+    let writeQuery = null;
+    const writeRefreshTokens = new Set();
+    const writeCoordinator = helpers.createWriteCoordinator();
+
+    const filterForm = () => document.querySelector('[data-archive-filter-form]');
+    const results = () => document.querySelector(RESULTS_SELECTOR);
+    const filterSurface = () => document.querySelector('[data-archive-filter-surface]');
+    const filterToggle = () => document.querySelector('[data-archive-filter-toggle]');
+    const filterControls = () => document.getElementById('trip-filter-controls');
+
+    const announce = (message) => {
+      const region = document.getElementById('archive-status');
+      if (region) region.textContent = message;
+    };
+
+    const showRetry = (visible) => {
+      const retry = document.getElementById('archive-status-retry');
+      if (retry) retry.hidden = !visible;
+    };
+
+    const syncFilterDisclosure = (active) => {
+      const surface = filterSurface();
+      const toggle = filterToggle();
+      const controls = filterControls();
+      if (!surface || !toggle || !controls) return;
+      const isActive = Boolean(active);
+      const isMobile = typeof window.matchMedia === 'function'
+        ? window.matchMedia('(max-width: 760px)').matches
+        : window.innerWidth <= 760;
+      surface.dataset.archiveFilterActive = isActive ? 'true' : 'false';
+      const indicator = toggle.querySelector('[data-archive-filter-active-indicator]');
+      if (indicator) indicator.hidden = !isActive;
+      if (filterDisclosureOpen === null) filterDisclosureOpen = isActive;
+      const resolvedLayout = helpers.filterDisclosureState(isMobile, filterDisclosureOpen);
+      toggle.hidden = !resolvedLayout.showToggle;
+      toggle.setAttribute('aria-expanded', String(filterDisclosureOpen));
+      controls.hidden = resolvedLayout.hideControls;
+    };
+
+    const initializeFilterDisclosure = () => {
+      const surface = filterSurface();
+      const toggle = filterToggle();
+      if (!surface || !toggle) return;
+      surface.classList.add('is-js-enhanced');
+      filterDisclosureOpen = surface.dataset.archiveFilterActive === 'true';
+      toggle.addEventListener('click', () => {
+        filterDisclosureOpen = !filterDisclosureOpen;
+        syncFilterDisclosure(surface.dataset.archiveFilterActive === 'true');
+      });
+      const refreshForViewport = () => {
+        syncFilterDisclosure(surface.dataset.archiveFilterActive === 'true');
+      };
+      const media = typeof window.matchMedia === 'function'
+        ? window.matchMedia('(max-width: 760px)')
+        : null;
+      if (media && typeof media.addEventListener === 'function') {
+        media.addEventListener('change', refreshForViewport);
+      } else if (media && typeof media.addListener === 'function') {
+        media.addListener(refreshForViewport);
+      } else {
+        window.addEventListener('resize', refreshForViewport);
+      }
+      syncFilterDisclosure(filterDisclosureOpen);
+    };
+
+    const setBusy = (busy) => {
+      const root = results();
+      if (!root) return;
+      if (busy) {
+        root.setAttribute('aria-busy', 'true');
+      } else {
+        root.removeAttribute('aria-busy');
+      }
+    };
+
+    const setFieldValue = (form, name, value) => {
+      const field = form.querySelector(`[name="${name}"]`);
+      if (field) field.value = value;
+    };
+
+    const setRadioValue = (form, name, value) => {
+      form.querySelectorAll(`input[name="${name}"]`).forEach((radio) => {
+        radio.checked = radio.value === value;
+      });
+    };
+
+    const updateCustomDates = () => {
+      const form = filterForm();
+      const preset = form && form.querySelector('[data-archive-date-preset]');
+      const custom = form && form.querySelector('[data-custom-date-range]');
+      if (!preset || !custom) return;
+      const isCustom = preset.value === 'custom';
+      custom.hidden = !isCustom;
+      custom.querySelectorAll('input[type="date"]').forEach((input) => {
+        input.disabled = !isCustom;
+      });
+    };
+
+    const filterPairs = () => {
+      const form = filterForm();
+      if (!form) return [];
+      // Read the date values directly because FormData drops disabled inputs.
+      // Presets leave their resolved concrete bounds disabled, but those
+      // bounds are the canonical applied state and must survive later edits.
+      const data = new FormData(form);
+      return FILTER_NAMES.map((name) => {
+        const field = form.querySelector(`[name="${name}"]`);
+        const value = field && field.type === 'radio'
+          ? data.get(name)
+          : field ? field.value : data.get(name);
+        return [name, (value || '').toString().trim()];
+      });
+    };
+
+    const currentQuery = (options) => helpers.archiveFilterQuery(filterPairs(), options);
+
+    const currentDraftQuery = () => {
+      const form = filterForm();
+      const preset = form && form.querySelector('[data-archive-date-preset]');
+      const transientPreset = draftPreset && preset && preset.value === draftPreset;
+      return currentQuery(transientPreset ? { transientPreset: true } : undefined);
+    };
+
+    const abortSuperseded = () => {
+      scope.takeSuperseded().forEach((request) => {
+        const historyMiss = historyMisses.get(request);
+        if (historyMiss) {
+          historyMisses.delete(request);
+          if (writeInFlight) deferredHistoryPath = historyMiss.path;
+          if (historyRetry.path() === historyMiss.path) historyRetry.clear();
+        }
+        if (request && typeof request.abort === 'function') request.abort();
+      });
+    };
+
+    const adopt = (token, xhr) => {
+      tokens.set(xhr, token);
+      scope.retain(token, xhr);
+      abortSuperseded();
+    };
+
+    const isArchiveMutation = (detail) => {
+      const config = detail && detail.requestConfig;
+      const method = config && String(config.verb || '').toLowerCase();
+      const elt = detail && detail.elt;
+      return method !== 'get' && Boolean(
+        elt && elt.closest && elt.closest(RESULTS_SELECTOR)
+      );
+    };
+
+    const archiveWriteSucceeded = (xhr) => (
+      xhr && typeof xhr.getResponseHeader === 'function'
+      && xhr.getResponseHeader('X-Archive-Write') === 'success'
+    );
+
+    const requestArchive = (query, options) => {
+      const settings = options || {};
+      const depthRecovery = Boolean(
+        settings.depthRestore || depthRestorePending || depthRestoreFailed
+      );
+      if (!settings.depthRestore && !depthRecovery) {
+        // A newer filter or write intent supersedes a depth restore. The new
+        // response will establish a fresh safe rendered state instead.
+        depthRestorePending = false;
+        depthRestoreFailed = false;
+      }
+      if (writeInFlight && !settings.afterWrite) {
+        deferredApply = true;
+        writeCoordinator.deferDraft();
+        return;
+      }
+      if (settings.afterWrite && writeInFlight && writeCoordinator.isRefreshing()
+          && writeCoordinator.retryRefresh() === null) return;
+      if (lastAttempt && lastAttempt.kind === 'history') historyRetry.clear();
+      // The applied filter state is what the address bar, the exports, and
+      // the next comparison describe. It differs from the request's own
+      // query only for a post-write refresh, which adds transient depth
+      // metadata that is not a filter and must not become part of any URL
+      // the user can keep.
+      const applied = settings.applied === undefined ? query : settings.applied;
+      lastAttempt = {
+        query: query,
+        applied: applied,
+        afterWrite: Boolean(settings.afterWrite),
+        depthRestore: depthRecovery,
+      };
+      const token = scope.start();
+      queryHandoff.set(token, applied);
+      if (settings.afterWrite) writeRefreshTokens.add(token);
+      announce('Updating trips');
+      showRetry(false);
+      const headers = {};
+      headers[REQUEST_TOKEN_HEADER] = String(token);
+      // htmx applies the out-of-band export and year-to-date fragments from
+      // the same response on its own.
+      htmx.ajax('GET', query ? `/trips/list?${query}` : '/trips/list', {
+        source: REQUEST_SOURCE_SELECTOR,
+        target: RESULTS_SELECTOR,
+        swap: 'outerHTML',
+        headers: headers,
+      });
+    };
+
+    const applyFilters = () => {
+      if (writeInFlight) {
+        // The controls already hold the new choice, so the change is run
+        // once the write and its refresh have settled rather than dropped.
+        deferredHistoryPath = null;
+        deferredApply = true;
+        writeCoordinator.deferDraft();
+        return;
+      }
+      // No depth metadata here: a filter change deliberately resets each
+      // month's pagination.
+      const query = currentDraftQuery();
+      if (helpers.sameFilters(query, lastApplied) && scope.pending() === 0) return;
+      requestArchive(query);
+    };
+
+    const searchDebounce = helpers.createDebouncer({
+      run: applyFilters,
+      delay: SEARCH_DELAY_MS,
+      schedule: (fn, delay) => window.setTimeout(fn, delay),
+      cancel: (handle) => window.clearTimeout(handle),
+    });
+
+    // How many rows each month has already rendered. A refresh redraws that
+    // same depth, so a selected trip on a later page does not disappear
+    // merely because the list refreshed. It is transient request metadata,
+    // never part of the canonical archive URL or the export links.
+    const loadedDepthEntries = () => {
+      const entries = [];
+      document.querySelectorAll(`${RESULTS_SELECTOR} [data-archive-month]`).forEach((list) => {
+        entries.push([
+          list.dataset.archiveMonth,
+          list.querySelectorAll('.trip-archive-item').length,
+        ]);
+      });
+      return helpers.loadedDepthMap(entries);
+    };
+
+    const loadedDepthParam = (depth) => JSON.stringify(depth || loadedDepthEntries());
+
+    const readSavedLoadedDepth = () => {
+      const state = window.history && window.history.state;
+      if (!state || typeof state !== 'object') return { valid: true, depth: {} };
+      const archive = state[ARCHIVE_HISTORY_STATE_KEY];
+      if (archive === undefined) return { valid: true, depth: {} };
+      if (!archive || typeof archive !== 'object' || Array.isArray(archive)) {
+        return { valid: false, depth: {} };
+      }
+      const depth = helpers.validateLoadedDepth(archive.loadedDepth);
+      return depth === null
+        ? { valid: false, depth: {} }
+        : { valid: true, depth };
+    };
+
+    // Keep htmx's own history marker and any state it adds, while attaching
+    // the rendered depth to the current entry. The URL is intentionally left
+    // alone so this metadata cannot leak into bookmarks or exports.
+    const persistLoadedDepth = () => {
+      if (!window.history || typeof window.history.replaceState !== 'function') return;
+      const current = window.history.state;
+      const next = current && typeof current === 'object' && !Array.isArray(current)
+        ? { ...current }
+        : {};
+      const prior = next[ARCHIVE_HISTORY_STATE_KEY];
+      next[ARCHIVE_HISTORY_STATE_KEY] = {
+        ...(prior && typeof prior === 'object' && !Array.isArray(prior) ? prior : {}),
+        loadedDepth: helpers.validateLoadedDepth(loadedDepthEntries()) || {},
+      };
+      window.history.replaceState(next, document.title, window.location.href);
+    };
+
+    const appendLoadedDepth = (query, depth) => {
+      const metadata = `loaded_depth=${encodeURIComponent(loadedDepthParam(depth))}`;
+      return query ? `${query}&${metadata}` : metadata;
+    };
+
+    const restoreLoadedDepth = () => {
+      const rendered = loadedDepthEntries();
+      const saved = readSavedLoadedDepth();
+      const restoration = saved.valid
+        ? helpers.loadedDepthRestore(saved.depth, rendered)
+        : { valid: false, depth: rendered, needsRestore: false };
+
+      if (!restoration.valid || !restoration.needsRestore) {
+        // Invalid state is discarded locally. It must never be sent to the
+        // endpoint, and the currently rendered rows are the safe replacement.
+        persistLoadedDepth();
+        depthRestorePending = false;
+        depthRestoreFailed = false;
+        window.archiveSelectionBusyChanged?.();
+        return;
+      }
+
+      const query = currentQuery();
+      depthRestorePending = true;
+      depthRestoreFailed = false;
+      window.archiveSelectionBusyChanged?.();
+      requestArchive(appendLoadedDepth(query, restoration.depth), {
+        applied: query,
+        depthRestore: true,
+      });
+    };
+
+    const endWriteWindow = () => {
+      const historyPath = deferredHistoryPath;
+      deferredHistoryPath = null;
+      const shouldApply = writeCoordinator.completeRefresh();
+      writeInFlight = false;
+      writeQuery = null;
+      window.archiveSelectionBusyChanged?.();
+      if (historyPath) {
+        deferredApply = false;
+        historyRetry.clear();
+        window.location.href = historyPath;
+        return;
+      }
+      if (!deferredApply && !shouldApply) return;
+      deferredApply = false;
+      applyFilters();
+    };
+
+    const beginWrite = () => {
+      if (!writeCoordinator.begin(lastApplied)) return false;
+      writeInFlight = true;
+      if (historyRetry.pending() && lastAttempt && lastAttempt.kind === 'history') {
+        deferredHistoryPath = historyRetry.path();
+      }
+      historyRetry.clear();
+      // The refresh has to describe the view the write acted on. A filter
+      // change during the write is deferred, but its control already holds
+      // the new value, so reading the filters afterwards would silently turn
+      // the refresh into a navigation the selection is meant to survive.
+      writeQuery = lastApplied;
+      if (searchDebounce.isPending() || !helpers.sameFilters(currentDraftQuery(), lastApplied)) {
+        deferredApply = true;
+        writeCoordinator.deferDraft();
+      }
+      searchDebounce.cancel();
+      // Any history snapshot from before this mutation is unsafe to restore.
+      // A history intent that races the write is captured by abortSuperseded
+      // and replayed as a fresh full navigation after the write settles.
+      invalidateArchiveHistoryCache();
+      // A write must never race a list response from before the mutation.
+      scope.start();
+      abortSuperseded();
+      window.archiveSelectionBusyChanged?.();
+      return true;
+    };
+
+    // A successful write is followed by a read at the depth already on
+    // screen. A failed POST has nothing to read, so it reopens normal
+    // interaction and releases any deferred draft.
+    const finishWrite = (refresh) => {
+      if (!refresh) {
+        const historyPath = deferredHistoryPath;
+        deferredHistoryPath = null;
+        const shouldApply = writeCoordinator.failPost();
+        writeInFlight = false;
+        writeQuery = null;
+        setBusy(false);
+        window.archiveSelectionBusyChanged?.();
+        if (historyPath) {
+          deferredApply = false;
+          historyRetry.clear();
+          window.location.href = historyPath;
+          return;
+        }
+        if (deferredApply || shouldApply) {
+          deferredApply = false;
+          applyFilters();
+        }
+        return;
+      }
+      const query = writeQuery === null ? currentQuery() : writeQuery;
+      writeCoordinator.startRefresh();
+      requestArchive(appendLoadedDepth(query), {
+        applied: query,
+        afterWrite: true,
+      });
+    };
+
+    // The selection script is a separate closure and needs exactly this much
+    // of the archive: the write window it must serialize against, the
+    // in-place refresh that replaces its old document reload, and the shared
+    // status region.
+    window.archiveController = {
+      beginWrite: () => {
+        if (depthRestorePending || depthRestoreFailed) return false;
+        return beginWrite();
+      },
+      finishWrite,
+      announce,
+      isWriteBusy: () => writeInFlight,
+      isWriteUnavailable: () => depthRestorePending || depthRestoreFailed,
+    };
+
+    const resetFilters = () => {
+      const form = filterForm();
+      if (!form) return;
+      setFieldValue(form, 'q', '');
+      setRadioValue(form, 'category', '');
+      setFieldValue(form, 'date_preset', 'all');
+      setFieldValue(form, 'from', '');
+      setFieldValue(form, 'to', '');
+      setFieldValue(form, 'vehicle', '');
+      setFieldValue(form, 'exclusion', '');
+      updateCustomDates();
+    };
+
+    const clearArchiveSelection = () => {
+      if (typeof window.archiveClearSelection === 'function') window.archiveClearSelection();
+    };
+
+    // A cached snapshot predates any mutation, so restoring it would bring
+    // back pre-edit rows and month totals. Dropping the cache makes a later
+    // restore refetch instead.
+    const invalidateArchiveHistoryCache = () => {
+      try {
+        window.localStorage.removeItem(HISTORY_CACHE_KEY);
+      } catch (error) {
+        // Blocked storage means there is no cache to invalidate anyway.
+      }
+    };
+    window.invalidateArchiveHistoryCache = invalidateArchiveHistoryCache;
+
+    const syncClearControl = (active) => {
+      const row = document.querySelector('[data-archive-filter-form] .trip-filter-secondary');
+      if (!row) return;
+      const existing = row.querySelector('.filter-clear');
+      if (active === Boolean(existing)) return;
+      if (!active) {
+        existing.remove();
+        return;
+      }
+      const clear = document.createElement('a');
+      clear.className = 'control control-secondary filter-clear';
+      clear.href = '/trips';
+      clear.textContent = 'Clear';
+      row.appendChild(clear);
+    };
+
+    const syncExportLinks = (state) => {
+      document.querySelectorAll('#trip-archive-export-links .trip-archive-export-action')
+        .forEach((link) => {
+          // The link's own text is the format, so this stays correct however
+          // the two links are ordered.
+          const href = state['export_' + link.textContent.trim().toLowerCase()];
+          if (href) link.href = href;
+        });
+    };
+
+    const archiveState = () => {
+      const node = document.querySelector(`${RESULTS_SELECTOR} [data-archive-state]`);
+      if (!node) return null;
+      try {
+        return JSON.parse(node.dataset.archiveState || '{}');
+      } catch (error) {
+        return null;
+      }
+    };
+
+    // A preset is resolved into concrete dates by the server, and whether any
+    // filter is active at all is its answer too, so the Custom inputs and the
+    // Clear control follow the response. Without this, revealing Custom after
+    // a preset would show stale bounds that the next control change would
+    // then apply. Draft search text is never written back here.
+    const syncResolvedControls = (state) => {
+      const form = filterForm();
+      if (form) {
+        setFieldValue(form, 'date_preset', state.date_preset || 'all');
+        setFieldValue(form, 'from', state.from || '');
+        setFieldValue(form, 'to', state.to || '');
+        updateCustomDates();
+      }
+      syncClearControl(Boolean(
+        state.category || state.from || state.to || state.vehicle || state.q || state.exclusion
+      ));
+      syncFilterDisclosure(Boolean(
+        state.category || state.from || state.to || state.vehicle || state.q || state.exclusion
+      ));
+    };
+
+    // Everything outside the restored root has to be rebuilt from the state
+    // the server rendered inside it: the controls, the Custom reveal, Clear,
+    // and both export links.
+    const restoreFromArchiveState = () => {
+      const state = archiveState();
+      if (!state) return;
+      const form = filterForm();
+      if (form) {
+        setFieldValue(form, 'q', state.q || '');
+        setRadioValue(form, 'category', state.category || '');
+        setFieldValue(form, 'date_preset', state.date_preset || 'all');
+        setFieldValue(form, 'vehicle', state.vehicle || '');
+        setFieldValue(form, 'exclusion', state.exclusion || '');
+        updateCustomDates();
+      }
+      syncResolvedControls(state);
+      syncExportLinks(state);
+      searchDebounce.cancel();
+      draftPreset = null;
+      lastApplied = helpers.archiveStateQuery(state);
+      lastAttempt = null;
+      clearArchiveSelection();
+      restoreLoadedDepth();
+    };
+
+    const isPagerRequest = (elt) => Boolean(
+      elt && elt.closest && elt.closest(`${RESULTS_SELECTOR} .trip-pager`)
+    );
+
+    document.addEventListener('htmx:beforeRequest', (event) => {
+      const detail = event.detail;
+      const config = detail.requestConfig;
+      const tagged = config && config.headers ? config.headers[REQUEST_TOKEN_HEADER] : null;
+      let token = null;
+      if (tagged !== undefined && tagged !== null) {
+        token = Number(tagged);
+        if (queryHandoff.has(token)) {
+          queries.set(detail.xhr, queryHandoff.get(token));
+          queryHandoff.delete(token);
+        }
+      } else if (isPagerRequest(detail.elt)) {
+        if (writeInFlight || historyMisses.size > 0 || depthRestorePending || depthRestoreFailed) {
+          // The refresh redraws this month at its current depth anyway, and
+          // a page appended in the meantime would be rows from before the
+          // write or history restore. The pager is still there to press
+          // afterwards.
+          event.preventDefault();
+          return;
+        }
+        // Pagination joins the generation already on screen instead of
+        // starting one. Months paginate independently, so one month's "Load
+        // more" must not supersede another's, and a newer filter still leaves
+        // both stale so neither can append rows to the new list.
+        token = scope.currentToken();
+      } else if (isArchiveMutation(detail)) {
+        // Every archive row write owns the same write window as a batch
+        // action. Its partial response is only a transport detail: a
+        // canonical filtered refresh must reconcile ordering, month totals,
+        // and rows that moved outside the current view.
+        if (!beginWrite()) {
+          event.preventDefault();
+          return;
+        }
+        token = scope.currentToken();
+        archiveMutations.set(detail.xhr, true);
+      } else {
+        if (writeInFlight && String(config && config.verb || '').toLowerCase() === 'get'
+            && detail.elt && detail.elt.closest
+            && detail.elt.closest(RESULTS_SELECTOR)) {
+          event.preventDefault();
+        }
+        return;
+      }
+      adopt(token, detail.xhr);
+      setBusy(true);
+    });
+
+    // Fires before both the main swap and the out-of-band ones, so this is
+    // the single place a superseded response can be stopped from touching
+    // the rows, the export links, the summaries, or the address bar.
+    document.addEventListener('htmx:beforeSwap', (event) => {
+      const token = tokens.get(event.detail.xhr);
+      if (token !== undefined && scope.isCurrent(token)
+          && archiveMutations.has(event.detail.xhr)
+          && archiveWriteSucceeded(event.detail.xhr)) {
+        // A committed row response is intentionally discarded. The following
+        // canonical GET is the only response allowed to establish the row's
+        // filtered position and all affected summaries.
+        event.detail.shouldSwap = false;
+        event.detail.isError = false;
+        return;
+      }
+      if (token === undefined || scope.isCurrent(token)) return;
+      event.detail.shouldSwap = false;
+      // Stale, not broken: an error here would surface a failure the user
+      // never caused and hide the newer request that replaced it.
+      event.detail.isError = false;
+    });
+
+    document.addEventListener('htmx:afterRequest', (event) => {
+      const xhr = event.detail.xhr;
+      const token = tokens.get(xhr);
+      if (token === undefined) return;
+      scope.release(xhr);
+      // A successful post-write refresh closes the write window below. A
+      // failed refresh deliberately keeps it open for the read-only retry.
+      const afterWrite = writeRefreshTokens.delete(token);
+      const query = queries.get(xhr);
+      if (!scope.isCurrent(token)) return;
+      if (archiveMutations.has(xhr)) {
+        archiveMutations.delete(xhr);
+        if (event.detail.successful && archiveWriteSucceeded(xhr)) {
+          if (String(event.detail.requestConfig?.path || '').endsWith('/delete')) {
+            event.detail.elt?.closest?.('dialog')?.close();
+          }
+          finishWrite(true);
+        } else {
+          // A 200 edit response can be a validation redisplay. It has no
+          // success marker, so retain that card and release the write gate
+          // without replacing it with a refresh.
+          finishWrite(false);
+          if (!event.detail.successful) {
+            announce('The update could not be saved.');
+          }
+        }
+        return;
+      }
+      // A generation can hold more than one request, so the archive stays
+      // busy until the last of them settles.
+      if (scope.pending() === 0) setBusy(false);
+      if (query === undefined) {
+        // Pager responses replace only their own pager node and carry no
+        // archive-state marker. They still advance the current entry's depth.
+        if (event.detail.successful) persistLoadedDepth();
+        return;
+      }
+      if (event.detail.successful) {
+        const state = archiveState();
+        if (!state) {
+          // A list response without its state marker cannot establish a
+          // canonical applied query. Keep the prior view and offer the same
+          // read retry used for transport failures.
+          announce(afterWrite
+            ? 'The update was saved, but the trip list could not be refreshed.'
+            : 'The trip list could not be updated.');
+          if (lastAttempt && lastAttempt.depthRestore) {
+            depthRestorePending = false;
+            depthRestoreFailed = true;
+            window.archiveSelectionBusyChanged?.();
+          }
+          showRetry(true);
+          return;
+        }
+        // A deferred draft owns the controls until its separate navigation
+        // starts. Copying the write refresh's dates here would erase a
+        // Custom range the user entered while the POST was outstanding.
+        if (!afterWrite || !deferredApply) syncResolvedControls(state);
+        // A preset selected while the write was in flight is still a draft;
+        // keep its transient marker until the deferred navigation consumes it.
+        if (!afterWrite || !deferredApply) draftPreset = null;
+        lastApplied = helpers.archiveStateQuery(state);
+        if (lastAttempt && lastAttempt.depthRestore) {
+          depthRestorePending = false;
+          depthRestoreFailed = false;
+        }
+        persistLoadedDepth();
+        window.archiveSelectionBusyChanged?.();
+        announce(afterWrite ? 'Trips updated' : 'Trip list updated');
+        showRetry(false);
+        // A batch update keeps its selection so the next field can be
+        // changed on the same trips; only a filter navigation ends it.
+        if (!afterWrite) clearArchiveSelection();
+        if (afterWrite) endWriteWindow();
+        return;
+      }
+      // A failure keeps the last successful view, its URL, its exports, and
+      // the selection; only the retry path can move off it. After a write
+      // the failure is the read alone, and saying so is what keeps the user
+      // from repeating an update that already happened.
+      announce(afterWrite
+        ? 'The update was saved, but the trip list could not be refreshed.'
+        : 'The trip list could not be updated.');
+      if (lastAttempt && lastAttempt.depthRestore) {
+        depthRestorePending = false;
+        depthRestoreFailed = true;
+        window.archiveSelectionBusyChanged?.();
+      }
+      showRetry(true);
+    });
+
+    // Row-level mutations (tag, edit, delete, exclusion) leave the history
+    // snapshot describing rows that no longer exist, so a Back navigation
+    // could restore it over a successful edit. Any non-GET archive request
+    // that succeeded is enough to make that snapshot wrong.
+    document.addEventListener('htmx:afterRequest', (event) => {
+      const detail = event.detail;
+      const config = detail.requestConfig;
+      if (!detail.successful || !config || config.verb === 'get') return;
+      const elt = detail.elt;
+      if (!elt || !elt.closest || !elt.closest(RESULTS_SELECTOR)) return;
+      invalidateArchiveHistoryCache();
+    });
+
+    // A cache miss refetches the canonical /trips URL and extracts the marked
+    // results root from that full-page response. It bypasses the swap guard
+    // above and its load event is not cancelable, so the only way a newer
+    // archive request can win is by aborting this one. Keep the path because
+    // a failed miss must retry the history destination, not the draft form.
+    const failHistoryMiss = (xhr) => {
+      const miss = xhr && historyMisses.get(xhr);
+      if (!miss || !scope.isCurrent(miss.token)) return;
+      historyMisses.delete(xhr);
+      historyRetry.start(miss.path);
+      scope.release(xhr);
+      if (scope.pending() === 0) setBusy(false);
+      announce('The trip list could not be restored.');
+      showRetry(true);
+    };
+
+    document.addEventListener('htmx:historyCacheMiss', (event) => {
+      searchDebounce.cancel();
+      const path = event.detail.path || '/trips';
+      const xhr = event.detail.xhr;
+      if (writeInFlight) {
+        // htmx emits this before opening the XHR, so retain it in the active
+        // generation and defer aborting until htmx has completed open/send.
+        // Otherwise the obsolete response can still replace the archive
+        // before the write refresh settles.
+        deferredHistoryPath = path;
+        historyRetry.clear();
+        const token = scope.currentToken();
+        historyMisses.set(xhr, { token, path, suppress: true });
+        if (xhr) {
+          tokens.set(xhr, token);
+          scope.retain(token, xhr);
+          helpers.defer(() => {
+            const miss = historyMisses.get(xhr);
+            if (!miss || miss.token !== token || !miss.suppress) return;
+            historyMisses.delete(xhr);
+            scope.release(xhr);
+            try {
+              xhr.abort();
+            } catch (error) {
+              // The XHR may have failed before it reached the send step.
+            }
+          });
+        }
+        return;
+      }
+      const token = scope.start();
+      historyMisses.set(xhr, { token, path });
+      adopt(token, xhr);
+      // htmx emits its custom load-error event for HTTP failures, but a
+      // network or timeout failure only reaches the native XHR. Superseded
+      // aborts are ignored because abortSuperseded removes this entry first.
+      if (xhr && typeof xhr.addEventListener === 'function') {
+        const fail = () => failHistoryMiss(xhr);
+        xhr.addEventListener('error', fail, { once: true });
+        xhr.addEventListener('timeout', fail, { once: true });
+        xhr.addEventListener('abort', fail, { once: true });
+      }
+      historyRetry.start(path);
+      lastAttempt = { kind: 'history', path };
+      announce('Restoring trips');
+      showRetry(false);
+      setBusy(true);
+    });
+
+    // History cache misses do not emit htmx:afterRequest. HTTP failures arrive
+    // here; native XHR listeners above cover network, timeout, and abort
+    // failures, all releasing state for a distinct full-navigation retry.
+    document.addEventListener('htmx:historyCacheMissLoadError', (event) => {
+      const xhr = event.detail && event.detail.xhr;
+      failHistoryMiss(xhr);
+    });
+
+    document.addEventListener('htmx:historyRestore', (event) => {
+      searchDebounce.cancel();
+      const restoredPath = event.detail && event.detail.path;
+      if (writeInFlight) {
+        // A cache hit swaps immediately and a miss swaps when its XHR loads.
+        // In either case, the write's applied-view refresh must settle before
+        // this history destination is navigated to for fresh data.
+        deferredHistoryPath = helpers.historyRestorePath(
+          deferredHistoryPath, event.detail,
+        );
+        historyRetry.clear();
+        return;
+      }
+      // A cache miss's XHR has just supplied the response and is no longer an
+      // active archive request. A cache hit has no such request, so it starts
+      // a generation to retire any reads from the previous view.
+      const miss = Array.from(historyMisses.entries()).find((entry) => (
+        entry[1].path === restoredPath
+      )) || Array.from(historyMisses.entries()).find((entry) => (
+        scope.isCurrent(entry[1].token)
+      ));
+      if (miss) {
+        historyMisses.delete(miss[0]);
+        scope.release(miss[0]);
+        historyRetry.clear();
+      } else {
+        scope.start();
+        abortSuperseded();
+      }
+      setBusy(false);
+      announce('');
+      showRetry(false);
+      restoreFromArchiveState();
+    });
+
+    document.addEventListener('input', (event) => {
+      const form = filterForm();
+      if (!form || event.target.name !== 'q' || !form.contains(event.target)) return;
+      if (composing) return;
+      if (writeInFlight) deferredHistoryPath = null;
+      searchDebounce.request();
+    });
+
+    document.addEventListener('compositionstart', (event) => {
+      const form = filterForm();
+      if (!form || event.target.name !== 'q' || !form.contains(event.target)) return;
+      composing = true;
+      searchDebounce.cancel();
+    });
+
+    document.addEventListener('compositionend', (event) => {
+      const form = filterForm();
+      if (!form || event.target.name !== 'q' || !form.contains(event.target)) return;
+      composing = false;
+      searchDebounce.request();
+    });
+
+    document.addEventListener('change', (event) => {
+      const form = filterForm();
+      if (!form || !form.contains(event.target)) return;
+      // The search field is owned by the debounce and the Enter flush below;
+      // handling its change event as well would apply the same text twice.
+      if (event.target.name === 'q') return;
+      if (event.target.name === 'date_preset') {
+        updateCustomDates();
+        // Opening Custom only reveals the inputs; the applied range does not
+        // change until one of them does.
+        if (event.target.value === 'custom') return;
+        // Preset ranges are resolved by the server at request time. Keep the
+        // request transient until its response supplies the concrete bounds.
+        draftPreset = event.target.value;
+      }
+      // Any pending search text is part of this request, so the pending run
+      // has nothing left to do.
+      searchDebounce.cancel();
+      applyFilters();
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' || composing) return;
+      const form = filterForm();
+      if (!form || event.target.name !== 'q' || !form.contains(event.target)) return;
+      // A form with no submit button and several date/text fields does not
+      // reliably raise implicit submission, so Enter is flushed here as well
+      // as guarded below. flush() runs a pending search at most once, so the
+      // two paths cannot apply the same text twice.
+      event.preventDefault();
+      searchDebounce.flush();
+    });
+
+    document.addEventListener('submit', (event) => {
+      const form = filterForm();
+      if (!form || event.target !== form) return;
+      // The form is method="get" and would otherwise navigate.
+      event.preventDefault();
+      searchDebounce.flush();
+    });
+
+    document.addEventListener('click', (event) => {
+      const clear = event.target.closest('.trip-filter-surface .filter-clear');
+      if (clear) {
+        // The href keeps Clear working without JavaScript; with the
+        // controller active it resets through the same in-place flow.
+        event.preventDefault();
+        searchDebounce.cancel();
+        resetFilters();
+        applyFilters();
+        return;
+      }
+      if (event.target.closest('#archive-status-retry') && lastAttempt !== null) {
+        if (historyRetry.pending() && lastAttempt.kind === 'history') {
+          // The history request itself is deliberately not replayed through
+          // htmx. Full navigation lets htmx perform its normal cache-miss
+          // lifecycle with the exact canonical destination that failed.
+          window.location.href = historyRetry.path();
+          return;
+        }
+        // Always a read: after a write that already succeeded, this reissues
+        // the refresh alone and never the update.
+        requestArchive(lastAttempt.query, {
+          applied: lastAttempt.applied,
+          afterWrite: lastAttempt.afterWrite,
+          depthRestore: lastAttempt.depthRestore,
+        });
+      }
+    });
+
+    initializeFilterDisclosure();
+    updateCustomDates();
+    lastApplied = currentQuery();
+    // The initial result root appears immediately after this script, so wait
+    // until parsing finishes before inspecting rendered month depths.
+    window.addEventListener('DOMContentLoaded', restoreLoadedDepth, { once: true });
+  })();
+</script>
+
+{% include "_trip_archive_results.html" %}
 
 <div id="selection-action-bar" class="selection-action-bar" hidden>
   <span id="selection-count" aria-live="polite"></span>
@@ -203,16 +1086,20 @@
           aria-haspopup="dialog" aria-controls="purpose-dialog">Purpose</button>
   <button type="button" id="vehicle-dialog-open" class="control control-secondary" disabled
           aria-haspopup="dialog" aria-controls="vehicle-dialog">Vehicle</button>
+  <button type="button" id="exclusion-dialog-open" class="control control-secondary" disabled
+          aria-haspopup="dialog" aria-controls="exclusion-dialog">Exclusion</button>
   <details class="selection-more">
     <summary>More</summary>
     <div class="selection-more-menu">
       <button type="button" id="merge-dialog-open" class="control control-secondary" disabled
               aria-haspopup="dialog" aria-controls="merge-dialog">Merge selected…</button>
-      <span id="merge-minimum" class="selection-minimum">Merging needs at least two selected trips.</span>
+      {# Covers both reasons Merge can be unavailable: too few trips, and a
+         selection reaching trips this view is not showing, whose eligibility
+         the client cannot establish. #}
+      <span id="merge-minimum" class="selection-minimum">Merging needs at least two selected trips. All of them must be shown in this view.</span>
     </div>
   </details>
   <button type="button" id="selection-clear" class="control control-secondary">Clear selection</button>
-  <button type="button" id="selection-bar-done" class="control control-secondary">Done</button>
 </div>
 
 <dialog id="category-dialog" class="app-dialog selection-dialog" aria-labelledby="category-dialog-title">
@@ -225,6 +1112,20 @@
       <label><input type="radio" name="category" value="unclassified"> Unclassified</label>
     </fieldset>
     {{ selection_dialog_footer('category-dialog-confirm', 'Set category') }}
+  </form>
+</dialog>
+
+<dialog id="exclusion-dialog" class="app-dialog selection-dialog" aria-labelledby="exclusion-dialog-title">
+  <form class="selection-dialog-content" data-selection-dialog-confirm="exclusion-dialog-confirm">
+    <h2 id="exclusion-dialog-title">Set exclusion for <span data-selection-count>0 trips</span></h2>
+    <fieldset class="selection-dialog-fieldset">
+      <legend>Exclusion</legend>
+      <label><input type="radio" name="exclusion" value=""> Normal trip</label>
+      {% for value, label in exclusion_labels.items() %}
+      <label><input type="radio" name="exclusion" value="{{ value }}"> {{ label }}</label>
+      {% endfor %}
+    </fieldset>
+    {{ selection_dialog_footer('exclusion-dialog-confirm', 'Set exclusion') }}
   </form>
 </dialog>
 
@@ -299,396 +1200,98 @@
   // expressible as one static form.
   const CSRF_TOKEN = "{{ csrf }}";
 
-  // The manual-trip "now" buttons fill a time input with the current clock
-  // reading in the app's display timezone, not the browser's, so the value
-  // agrees with how /trips/manual interprets the submitted naive time (it
-  // stamps display_tz onto it). formatToParts avoids the "24:00-at-midnight"
-  // quirk some engines emit for hour12:false hour formatting.
-  const DISPLAY_TZ = "{{ display_tz }}";
-  function setTimeNow(fieldName) {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: DISPLAY_TZ, hour: "2-digit", minute: "2-digit", hour12: false,
-    }).formatToParts(new Date());
-    const part = (t) => parts.find((p) => p.type === t).value;
-    const hour = part("hour") === "24" ? "00" : part("hour");
-    const field = document.querySelector(`[name="${fieldName}"]`);
-    if (field) field.value = `${hour}:${part("minute")}`;
-  }
-  document.addEventListener('click', function (event) {
-    const btn = event.target.closest('[data-time-now-field]');
-    if (btn) setTimeNow(btn.dataset.timeNowField);
-  });
-
-  // Manual-trip route picker. Every lookup below re-queries the DOM by
-  // name/attribute rather than caching element references at script-parse
-  // time, the same delegated-handler approach the "now" buttons above use --
-  // it costs nothing here and keeps this working if the form is ever
-  // reinserted by htmx instead of only ever appearing once per full page load.
-  const ROUTE_COORD_FIELDS = ['start_lat', 'start_lon', 'end_lat', 'end_lon'];
-
-  function manualTripForm() {
-    return document.getElementById('manual-trip-form');
-  }
-  function routeField(name) {
-    return manualTripForm()?.querySelector(`[name="${name}"]`);
-  }
-  function routePanel(mode) {
-    return manualTripForm()?.querySelector(`[data-route-panel="${mode}"]`);
-  }
-  function currentRouteMode() {
-    return manualTripForm()?.querySelector('input[name="route_mode"]:checked')?.value || 'none';
-  }
-  function setRouteFieldValue(name, value) {
-    const field = routeField(name);
-    if (field) field.value = value;
-  }
-  function setRouteStatus(message) {
-    const status = manualTripForm()?.querySelector('.route-picker-status');
-    if (status) status.textContent = message;
-  }
-  function setDistanceRequired(required) {
-    const distance = routeField('distance');
-    if (distance) distance.required = required;
-  }
-
-  let routeMap = null;
-  let routeStartMarker = null;
-  let routeEndMarker = null;
-  let routeLine = null;
-  // Bumped whenever in-flight preview state is invalidated (mode change,
-  // reset, or a newer preview starting), so a stale response that resolves
-  // after a newer one can recognize itself as stale and no-op instead of
-  // overwriting the field with an outdated distance.
-  let routePreviewSeq = 0;
-
-  function ensureRouteMap() {
-    if (routeMap) return routeMap;
-    const mapEl = document.getElementById('route-picker-map');
-    if (!mapEl) return null;
-    routeMap = L.map(mapEl);
-    // Same hazard trip.html's detail map guards against: a vector layer
-    // added before the map has a view leaves its pixel bounds undefined and
-    // throws on the next redraw, so a plausible view is set before anything
-    // else touches this map.
-    routeMap.setView([0, 0], 2);
-    L.tileLayer({{ map_tile_url | tojson }}, {
-      maxZoom: 19,
-      attribution: {{ map_tile_attribution | tojson }}
-    }).addTo(routeMap);
-    routeMap.on('click', onRoutePickerMapClick);
-    return routeMap;
-  }
-
-  function showRouteMap() {
-    const mapEl = document.getElementById('route-picker-map');
-    if (!mapEl) return;
-    mapEl.hidden = false;
-    const map = ensureRouteMap();
-    // The container starts hidden, so Leaflet measured a zero-size viewport
-    // at construction time; invalidateSize() re-measures now that it is
-    // actually visible, or the tiles render into that zero-size box.
-    requestAnimationFrame(() => map.invalidateSize());
-  }
-
-  function hideRouteMap() {
-    const mapEl = document.getElementById('route-picker-map');
-    if (mapEl) mapEl.hidden = true;
-  }
-
-  function clearRouteMapLayers() {
-    if (!routeMap) return;
-    if (routeStartMarker) { routeMap.removeLayer(routeStartMarker); routeStartMarker = null; }
-    if (routeEndMarker) { routeMap.removeLayer(routeEndMarker); routeEndMarker = null; }
-    if (routeLine) { routeMap.removeLayer(routeLine); routeLine = null; }
-  }
-
-  // A failed preview always leaves the drawn line stale, since it belongs to
-  // a route the server just rejected. Markers are different by mode: in
-  // named-places mode the markers came from the previous preview response's
-  // start/end coordinates, so they are part of the same invalidated
-  // selection and must go with the line. In map-picked mode the markers are
-  // the points the user themselves clicked -- still their current selection
-  // even though no route connects them -- so removing them would silently
-  // discard input the user has to redo.
-  function clearStaleRouteLine() {
-    if (!routeMap) return;
-    if (routeLine) { routeMap.removeLayer(routeLine); routeLine = null; }
-    if (currentRouteMode() === 'places') {
-      if (routeStartMarker) { routeMap.removeLayer(routeStartMarker); routeStartMarker = null; }
-      if (routeEndMarker) { routeMap.removeLayer(routeEndMarker); routeEndMarker = null; }
-    }
-  }
-
-  function clearRoutePlaceSelection() {
-    const startSelect = routeField('start_place');
-    const endSelect = routeField('end_place');
-    if (startSelect) startSelect.value = '';
-    if (endSelect) endSelect.value = '';
-  }
-
-  // `distance` and `routed_distance` must always move together. The server
-  // (app/ui.py, add_manual_trip) treats a submitted `distance` that differs
-  // from `routed_distance` as a deliberate user override and stores it
-  // exactly as entered, geometry and all. If a route selection is
-  // invalidated without also clearing `distance`, a leftover preview value
-  // sitting in `distance` becomes indistinguishable from something the user
-  // actually typed -- so every place that blanks `routed_distance` because
-  // the current selection/preview is no longer trustworthy must also blank
-  // `distance`, but only when `distance` still holds exactly the value the
-  // last preview put there. A value the user retyped themselves, even to the
-  // same number, must survive. `routed_distance` has to be read here, before
-  // the caller clears it, or there is nothing left to compare against.
-  function clearDistanceIfPreviewOwned() {
-    const distance = routeField('distance');
-    const routedDistance = routeField('routed_distance');
-    if (!distance || !routedDistance) return;
-    const current = parseFloat(distance.value);
-    const hint = parseFloat(routedDistance.value);
-    if (!Number.isNaN(current) && !Number.isNaN(hint) && current === hint) {
-      distance.value = '';
-    }
-  }
-
-  function clearRouteEndpoints() {
-    routePreviewSeq++;
-    clearRoutePlaceSelection();
-    clearRouteMapLayers();
-    ROUTE_COORD_FIELDS.forEach((name) => setRouteFieldValue(name, ''));
-    clearDistanceIfPreviewOwned();
-    setRouteFieldValue('routed_distance', '');
-    setRouteStatus('');
-  }
-
-  function updateRoutePanels(mode) {
-    const placesPanel = routePanel('places');
-    const mapPanel = routePanel('map');
-    if (placesPanel) placesPanel.hidden = mode !== 'places';
-    if (mapPanel) mapPanel.hidden = mode !== 'map';
-    const hint = manualTripForm()?.querySelector('.route-distance-hint');
-    if (hint) hint.hidden = mode === 'none';
-    if (mode === 'none') {
-      hideRouteMap();
-    } else {
-      showRouteMap();
-    }
-  }
-
-  // Changing mode must never let a stale hidden coordinate or place id from
-  // the mode just left silently ride along into a submit under the new mode.
-  // Required always goes back on here, even switching into a routing mode:
-  // it only comes back off once that mode's own preview actually succeeds.
-  document.addEventListener('change', (event) => {
-    if (event.target.name !== 'route_mode') return;
-    const mode = event.target.value;
-    clearRouteEndpoints();
-    setDistanceRequired(true);
-    updateRoutePanels(mode);
-  });
-
-  document.addEventListener('click', (event) => {
-    if (!event.target.closest('[data-route-map-reset]')) return;
-    routePreviewSeq++;
-    clearRouteMapLayers();
-    ROUTE_COORD_FIELDS.forEach((name) => setRouteFieldValue(name, ''));
-    clearDistanceIfPreviewOwned();
-    setRouteFieldValue('routed_distance', '');
-    setRouteStatus('');
-    setDistanceRequired(true);
-  });
-
-  document.addEventListener('change', (event) => {
-    if (!event.target.matches('select[name="start_place"], select[name="end_place"]')) return;
-    maybePreviewRoute();
-  });
-
-  function onRoutePickerMapClick(event) {
-    if (currentRouteMode() !== 'map') return;
-    if (routeStartMarker && routeEndMarker) return; // both set; Reset first.
-    // The map opens on a world view, where Leaflet renders repeated copies of
-    // the world side by side. A click on a repeated copy reports the raw
-    // projected longitude, which lands outside [-180, 180], and the server
-    // correctly rejects it. wrap() gives back the equivalent LatLng with the
-    // longitude normalized into range, matching where the point actually is.
-    const latlng = event.latlng.wrap();
-    const lat = latlng.lat.toFixed(6);
-    const lon = latlng.lng.toFixed(6);
-    if (!routeStartMarker) {
-      routeStartMarker = L.marker(latlng, { title: 'Start' }).addTo(routeMap);
-      setRouteFieldValue('start_lat', lat);
-      setRouteFieldValue('start_lon', lon);
-    } else {
-      routeEndMarker = L.marker(latlng, { title: 'End' }).addTo(routeMap);
-      setRouteFieldValue('end_lat', lat);
-      setRouteFieldValue('end_lon', lon);
-    }
-    maybePreviewRoute();
-  }
-
-  function drawRoutePreview(data) {
-    const map = ensureRouteMap();
-    if (!map) return;
-    if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
-    const theme = getComputedStyle(document.documentElement);
-    const routeColor = theme.getPropertyValue('--route').trim() || '#2d6a4f';
-    if (data.geometry) {
-      routeLine = L.geoJSON(data.geometry, { style: { color: routeColor, weight: 4 } }).addTo(map);
-      map.fitBounds(routeLine.getBounds().pad(0.15));
-    }
-    // Named-places mode has no click flow to place markers, so the preview
-    // response's own start/end coordinates are what places them.
-    if (currentRouteMode() === 'places') {
-      if (routeStartMarker) map.removeLayer(routeStartMarker);
-      if (routeEndMarker) map.removeLayer(routeEndMarker);
-      if (data.start) routeStartMarker = L.marker(data.start, { title: 'Start' }).addTo(map);
-      if (data.end) routeEndMarker = L.marker(data.end, { title: 'End' }).addTo(map);
-    }
-  }
-
-  async function maybePreviewRoute() {
-    const mode = currentRouteMode();
-    if (mode === 'none') return;
-    let body;
-    if (mode === 'places') {
-      const startId = routeField('start_place')?.value;
-      const endId = routeField('end_place')?.value;
-      if (!startId || !endId) return;
-      body = new URLSearchParams({ route_mode: 'places', start_place: startId, end_place: endId });
-    } else {
-      const startLat = routeField('start_lat')?.value;
-      const startLon = routeField('start_lon')?.value;
-      const endLat = routeField('end_lat')?.value;
-      const endLon = routeField('end_lon')?.value;
-      if (!startLat || !startLon || !endLat || !endLon) return;
-      body = new URLSearchParams({
-        route_mode: 'map', start_lat: startLat, start_lon: startLon, end_lat: endLat, end_lon: endLon,
-      });
-    }
-    // A newer call to maybePreviewRoute (a further endpoint change) also
-    // supersedes this one, the same as an explicit mode change or reset.
-    const seq = ++routePreviewSeq;
-    // Required goes back on for the duration of the request: a preview that
-    // never resolves (or resolves to unavailable) must not have left the
-    // browser thinking a blank distance is fine to submit.
-    setDistanceRequired(true);
-    setRouteStatus('Looking up the route…');
-    let resp;
-    try {
-      resp = await fetch('/trips/manual/route-preview', {
-        method: 'POST',
-        headers: { 'X-CSRF-Token': CSRF_TOKEN },
-        body,
-      });
-    } catch (err) {
-      if (seq !== routePreviewSeq) return; // superseded; ignore this response
-      clearStaleRouteLine();
-      setRouteStatus('Could not check the route. Enter the distance.');
-      clearDistanceIfPreviewOwned();
-      setRouteFieldValue('routed_distance', '');
-      return;
-    }
-    if (seq !== routePreviewSeq) return; // superseded; ignore this response
-    if (!resp.ok) {
-      // Never render the response body: a 400 here is a short developer-ish
-      // message about the selection, not something meant for this status region.
-      clearStaleRouteLine();
-      setRouteStatus('Could not check the route. Enter the distance.');
-      clearDistanceIfPreviewOwned();
-      setRouteFieldValue('routed_distance', '');
-      return;
-    }
-    const data = await resp.json().catch(() => ({ ok: false }));
-    if (seq !== routePreviewSeq) return; // superseded; ignore this response
-    if (!data.ok) {
-      clearStaleRouteLine();
-      setRouteStatus('Automatic routing is unavailable. Enter the distance.');
-      clearDistanceIfPreviewOwned();
-      setRouteFieldValue('routed_distance', '');
-      return;
-    }
-    const distanceInput = routeField('distance');
-    if (distanceInput) distanceInput.value = data.distance_miles;
-    setRouteFieldValue('routed_distance', data.distance_miles);
-    setDistanceRequired(false);
-    setRouteStatus(`Route found: ${data.distance_miles} mi.`);
-    drawRoutePreview(data);
-  }
-
   const selection = new Set();
   const selectionBar = document.getElementById('selection-action-bar');
   const selectionCount = document.getElementById('selection-count');
-  const selectionStart = document.getElementById('selection-start');
   const selectionClear = document.getElementById('selection-clear');
-  const selectionDone = document.getElementById('selection-done');
-  const selectionBarDone = document.getElementById('selection-bar-done');
   const selectionSelectAll = document.getElementById('selection-select-all');
   const categoryOpen = document.getElementById('category-dialog-open');
   const purposeOpen = document.getElementById('purpose-dialog-open');
   const vehicleOpen = document.getElementById('vehicle-dialog-open');
+  const exclusionOpen = document.getElementById('exclusion-dialog-open');
   const mergeOpen = document.getElementById('merge-dialog-open');
   const mergeMinimum = document.getElementById('merge-minimum');
-  let selectionMode = false;
+
+  const selectionHelpers = window.ArchiveState;
 
   function tripCountLabel(n) {
     return `${n} ${n === 1 ? 'trip' : 'trips'}`;
   }
 
-  function updateSelectionShell() {
-    document.body.classList.toggle('selection-mode', selectionMode);
-    selectionStart.hidden = selectionMode;
-    selectionDone.hidden = !selectionMode;
-    // Hiding the bar only on mode-exit (not on an empty selection) keeps
-    // "Clear selection" visibly distinct from "Done": Clear empties the
-    // selection but leaves the bar open with its buttons greyed out via
-    // hasSelection/canMerge below, while Done is the only action that
-    // actually hides the bar and the per-card checkboxes.
-    selectionBar.hidden = !selectionMode;
+  function renderedTripCards() {
+    const cards = new Map();
+    document.querySelectorAll('.trip-archive-item').forEach((card) => {
+      const match = card.id.match(/^trip-(\d+)$/);
+      if (match) cards.set(parseInt(match[1], 10), card);
+    });
+    return cards;
+  }
+
+  // Every path that changes the selection or the rows on screen comes
+  // through here. The intent is what decides whether ids with no rendered
+  // row survive; the rule itself lives in the shared archive state module.
+  function updateSelectionShell(intent) {
+    const cards = renderedTripCards();
+    const view = selectionHelpers.reconcileSelection(
+      selection, Array.from(cards.keys()), { intent: intent || 'refresh' },
+    );
+    if (view.selected.length !== selection.size) {
+      selection.clear();
+      view.selected.forEach((id) => selection.add(id));
+    }
+
+    // No selection mode any more: the bar's own visibility is driven purely
+    // by whether anything is checked, appearing on the first check and
+    // leaving once the last one clears.
+    selectionBar.hidden = selection.size < 1;
 
     const hasSelection = selection.size >= 1;
-    categoryOpen.disabled = !hasSelection;
-    purposeOpen.disabled = !hasSelection;
-    vehicleOpen.disabled = !hasSelection;
+    const writeBusy = Boolean(window.archiveController?.isWriteBusy?.());
+    const archiveUnavailable = Boolean(window.archiveController?.isWriteUnavailable?.());
+    categoryOpen.disabled = !hasSelection || writeBusy || archiveUnavailable;
+    purposeOpen.disabled = !hasSelection || writeBusy || archiveUnavailable;
+    vehicleOpen.disabled = !hasSelection || writeBusy || archiveUnavailable;
+    exclusionOpen.disabled = !hasSelection || writeBusy || archiveUnavailable;
 
-    const canMerge = selection.size >= 2;
-    mergeOpen.disabled = !canMerge;
+    const counts = { total: view.selected.length, rendered: view.rendered.length };
+    const canMerge = selectionHelpers.canMergeSelection(counts);
+    mergeOpen.disabled = !canMerge || writeBusy || archiveUnavailable;
     mergeMinimum.hidden = canMerge;
 
+    // The dialogs describe the write, which applies to the whole selection,
+    // so they keep the plain total. The bar itself has to say when part of
+    // that selection is not on screen.
     document.querySelectorAll('[data-selection-count]').forEach((el) => {
       el.textContent = tripCountLabel(selection.size);
     });
-    selectionCount.textContent = `${tripCountLabel(selection.size)} selected`;
+    selectionCount.textContent = selectionHelpers.selectionCountLabel(counts);
 
-    document.querySelectorAll('.trip-card').forEach((card) => {
-      const match = card.id.match(/^trip-(\d+)$/);
-      if (!match) return;
-      const selected = selection.has(parseInt(match[1], 10));
+    cards.forEach((card, id) => {
+      const selected = selection.has(id);
       card.classList.toggle('is-selected', selected);
-      const selector = card.querySelector('.trip-card-selector');
       const checkbox = card.querySelector('.merge-select');
-      if (selector) selector.hidden = !selectionMode;
       if (checkbox) checkbox.checked = selected;
     });
   }
 
+  // Clear selection means all of it, including ids whose rows are no longer
+  // rendered, and a successful filter navigation ends it the same way.
   function clearSelection() {
-    selection.clear();
-    updateSelectionShell();
+    updateSelectionShell('navigate');
   }
 
-  function setSelectionMode(enabled) {
-    selectionMode = enabled;
-    if (!enabled) selection.clear();
-    updateSelectionShell();
-  }
+  // The archive controller clears the transient selection once a filter
+  // navigation or history restore has actually succeeded. It gets this one
+  // explicit entry point rather than its own copy of the selection state.
+  window.archiveClearSelection = clearSelection;
+  window.archiveSelectionBusyChanged = updateSelectionShell;
 
-  selectionStart.addEventListener('click', () => setSelectionMode(true));
   selectionClear.addEventListener('click', clearSelection);
-  selectionDone.addEventListener('click', () => setSelectionMode(false));
-  selectionBarDone.addEventListener('click', () => setSelectionMode(false));
 
   // Only the cards currently in the DOM -- a trip beyond an unopened "Load
   // more" page was never fetched, so there's nothing here to select it into.
   selectionSelectAll.addEventListener('click', () => {
-    document.querySelectorAll('.trip-card').forEach((card) => {
+    document.querySelectorAll('.trip-archive-item').forEach((card) => {
       const match = card.id.match(/^trip-(\d+)$/);
       if (match) selection.add(parseInt(match[1], 10));
     });
@@ -696,12 +1299,12 @@
   });
 
   // Escape's browser-native effect is closing an open <dialog>; give it a
-  // consistent "back out of whatever's active" meaning by also exiting
-  // selection mode when no dialog is open.
+  // consistent "back out of whatever's active" meaning by also clearing the
+  // current selection (which hides the bar) when no dialog is open.
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (document.querySelector('dialog[open]')) return;
-    if (selectionMode) setSelectionMode(false);
+    if (selection.size >= 1) clearSelection();
   });
 
   // A merge navigates away via window.location.href; if the browser then
@@ -713,7 +1316,7 @@
   });
 
   document.addEventListener('change', (e) => {
-    if (!selectionMode || !e.target.matches('.merge-select')) return;
+    if (!e.target.matches('.merge-select')) return;
     const id = parseInt(e.target.value, 10);
     if (e.target.checked) {
       selection.add(id);
@@ -723,15 +1326,28 @@
     updateSelectionShell();
   });
 
+  // Reapplies the selection to whatever rows are on screen now, after a
+  // refresh, a row swap, or a newly loaded page. A missing row is not
+  // evidence that a trip is gone: a batch update can move a selected trip
+  // outside the current filters, and it stays a valid target for the next
+  // batch write.
   function reconcileSelection() {
-    for (const id of Array.from(selection)) {
-      const card = document.getElementById('trip-' + id);
-      if (!card) {
-        selection.delete(id);
-      }
-    }
     updateSelectionShell();
   }
+
+  // Deletion is the one case where the trip really is gone. The batch
+  // endpoint validates every id atomically, so a deleted id left in the
+  // selection would fail the whole next batch.
+  const TRIP_DELETE_PATH = /^\/trips\/(\d+)\/delete$/;
+
+  document.addEventListener('htmx:afterRequest', (event) => {
+    const config = event.detail.requestConfig;
+    if (!event.detail.successful || !config) return;
+    const deleted = TRIP_DELETE_PATH.exec(config.path || '');
+    if (!deleted) return;
+    selection.delete(parseInt(deleted[1], 10));
+    updateSelectionShell();
+  });
 
   document.addEventListener('htmx:afterSwap', () => {
     setTimeout(reconcileSelection, 0);
@@ -762,7 +1378,19 @@
 
   document.addEventListener('click', (e) => {
     const cancel = e.target.closest('[data-selection-dialog-cancel]');
-    if (cancel) cancel.closest('dialog')?.close('cancel');
+    if (!cancel) return;
+    const dialog = cancel.closest('dialog');
+    if (dialog && dialog.dataset.archiveBusy === 'true') {
+      e.preventDefault();
+      return;
+    }
+    dialog?.close('cancel');
+  });
+
+  document.addEventListener('cancel', (e) => {
+    if (e.target.matches('dialog') && e.target.dataset.archiveBusy === 'true') {
+      e.preventDefault();
+    }
   });
 
   // Each dialog's content is a <form> (for fieldset/label semantics), so a
@@ -797,34 +1425,89 @@
     err.textContent = '';
   }
 
-  // A failed batch/merge request re-shows the dialog's own error and keeps
-  // it open with the selection untouched, rather than reloading or
-  // clearing state, so the user can correct the request without
-  // reselecting trips.
+  function setDialogBusy(dialog, busy) {
+    dialog.dataset.archiveBusy = busy ? 'true' : 'false';
+    dialog.setAttribute('aria-busy', busy ? 'true' : 'false');
+    dialog.querySelectorAll('button, input, select, textarea').forEach((control) => {
+      if (busy) {
+        control.dataset.archiveWasDisabled = control.disabled ? 'true' : 'false';
+        control.disabled = true;
+      } else {
+        control.disabled = control.dataset.archiveWasDisabled === 'true';
+        delete control.dataset.archiveWasDisabled;
+      }
+    });
+  }
+
+  const dialogIsBusy = (dialog) => dialog.dataset.archiveBusy === 'true';
+
+  function dialogConfirmButton(dialog) {
+    const form = dialog.querySelector('[data-selection-dialog-confirm]');
+    const confirmId = form && form.dataset.selectionDialogConfirm;
+    return confirmId ? document.getElementById(confirmId) : null;
+  }
+
+  // A failed batch request re-shows the dialog's own error and keeps it open
+  // with the selection untouched, so the user can correct the request
+  // without reselecting trips.
+  //
+  // A successful one writes, then refreshes the archive in place at the
+  // depth already on screen: the selection and the action bar survive, so
+  // the next field can be changed on the same trips. The write and its
+  // refresh are one operation as far as the rest of the archive is
+  // concerned, and the confirm button is held down for the write so a
+  // second press cannot repeat it.
   async function submitBatchUpdate(dialog, body) {
     clearDialogError(dialog);
-    const resp = await fetch('/trips/batch_update', {
-      method: 'POST',
-      headers: { 'X-CSRF-Token': CSRF_TOKEN },
-      body,
-    });
-    if (resp.ok) {
-      window.location.reload();
+    if (!window.archiveController.beginWrite()) return;
+    const confirmButton = dialogConfirmButton(dialog);
+    if (confirmButton) confirmButton.disabled = true;
+    setDialogBusy(dialog, true);
+    let resp;
+    try {
+      resp = await fetch('/trips/batch_update', {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': CSRF_TOKEN },
+        body,
+      });
+    } catch (error) {
+      setDialogBusy(dialog, false);
+      if (confirmButton) confirmButton.disabled = false;
+      window.archiveController.finishWrite(false);
+      showDialogError(dialog, 'Batch update failed.');
+      window.archiveController.announce('The update could not be saved.');
       return;
     }
+    if (resp.ok) {
+      window.invalidateArchiveHistoryCache?.();
+      // Restore the dialog controls before closing. The write guard remains
+      // active through the archive refresh, but a later reopen must be usable.
+      setDialogBusy(dialog, false);
+      if (confirmButton) confirmButton.disabled = false;
+      // Closing before the refresh is what returns focus to the button that
+      // opened the dialog, through the dialog's own close handler.
+      dialog.close();
+      window.archiveController.finishWrite(true);
+      return;
+    }
+    setDialogBusy(dialog, false);
+    if (confirmButton) confirmButton.disabled = false;
+    window.archiveController.finishWrite(false);
     const err = await resp.json().catch(() => ({}));
     showDialogError(dialog, err.detail || 'Batch update failed.');
+    window.archiveController.announce('The update could not be saved.');
   }
 
   const categoryDialog = document.getElementById('category-dialog');
   const categoryConfirm = document.getElementById('category-dialog-confirm');
 
   categoryDialog.addEventListener('change', (e) => {
+    if (dialogIsBusy(categoryDialog)) return;
     if (e.target.name === 'category') categoryConfirm.disabled = false;
   });
 
   categoryOpen.addEventListener('click', () => {
-    if (categoryOpen.disabled) return;
+    if (categoryOpen.disabled || window.archiveController.isWriteBusy()) return;
     categoryDialog.querySelectorAll('input[name="category"]').forEach((r) => { r.checked = false; });
     categoryConfirm.disabled = true;
     clearDialogError(categoryDialog);
@@ -840,16 +1523,42 @@
     await submitBatchUpdate(categoryDialog, body);
   });
 
+  const exclusionDialog = document.getElementById('exclusion-dialog');
+  const exclusionConfirm = document.getElementById('exclusion-dialog-confirm');
+
+  exclusionDialog.addEventListener('change', (e) => {
+    if (dialogIsBusy(exclusionDialog)) return;
+    if (e.target.name === 'exclusion') exclusionConfirm.disabled = false;
+  });
+
+  exclusionOpen.addEventListener('click', () => {
+    if (exclusionOpen.disabled || window.archiveController.isWriteBusy()) return;
+    exclusionDialog.querySelectorAll('input[name="exclusion"]').forEach((r) => { r.checked = false; });
+    exclusionConfirm.disabled = true;
+    clearDialogError(exclusionDialog);
+    openDialog(exclusionDialog, exclusionOpen);
+  });
+
+  exclusionConfirm.addEventListener('click', async () => {
+    const chosen = exclusionDialog.querySelector('input[name="exclusion"]:checked');
+    if (!chosen) return;
+    const body = new URLSearchParams();
+    for (const id of selection) body.append('trip_ids', id);
+    body.append('exclusion', chosen.value);
+    await submitBatchUpdate(exclusionDialog, body);
+  });
+
   const purposeDialog = document.getElementById('purpose-dialog');
   const purposeConfirm = document.getElementById('purpose-dialog-confirm');
   const purposeInput = document.getElementById('purpose-dialog-input');
 
   purposeDialog.addEventListener('change', (e) => {
+    if (dialogIsBusy(purposeDialog)) return;
     if (e.target.name === 'purpose-mode') purposeConfirm.disabled = false;
   });
 
   purposeOpen.addEventListener('click', () => {
-    if (purposeOpen.disabled) return;
+    if (purposeOpen.disabled || window.archiveController.isWriteBusy()) return;
     purposeDialog.querySelectorAll('input[name="purpose-mode"]').forEach((r) => { r.checked = false; });
     purposeInput.value = '';
     purposeConfirm.disabled = true;
@@ -872,11 +1581,12 @@
   const vehicleSelect = document.getElementById('vehicle-dialog-select');
 
   vehicleSelect.addEventListener('change', () => {
+    if (dialogIsBusy(vehicleDialog)) return;
     vehicleConfirm.disabled = !vehicleSelect.value;
   });
 
   vehicleOpen.addEventListener('click', () => {
-    if (vehicleOpen.disabled) return;
+    if (vehicleOpen.disabled || window.archiveController.isWriteBusy()) return;
     vehicleSelect.value = '';
     vehicleConfirm.disabled = true;
     clearDialogError(vehicleDialog);
@@ -899,7 +1609,7 @@
   const mergeVehicleSelect = document.getElementById('merge-dialog-vehicle');
 
   mergeOpen.addEventListener('click', () => {
-    if (mergeOpen.disabled) return;
+    if (mergeOpen.disabled || window.archiveController.isWriteBusy()) return;
     mergeCategorySelect.value = 'keep';
     mergePurposeInput.value = '';
     mergeNotesInput.value = '';
@@ -910,7 +1620,9 @@
 
   mergeConfirm.addEventListener('click', async () => {
     if (selection.size < 2) return;
+    if (!window.archiveController.beginWrite()) return;
     clearDialogError(mergeDialog);
+    setDialogBusy(mergeDialog, true);
     const body = new URLSearchParams();
     for (const id of selection) body.append('trip_ids', id);
     const category = mergeCategorySelect.value;
@@ -918,15 +1630,33 @@
     body.append('purpose', mergePurposeInput.value);
     body.append('notes', mergeNotesInput.value);
     body.append('vehicle_id', mergeVehicleSelect.value);
-    const resp = await fetch('/trips/merge_selected', {
-      method: 'POST',
-      headers: { 'X-CSRF-Token': CSRF_TOKEN },
-      body,
-    });
+    let resp;
+    try {
+      resp = await fetch('/trips/merge_selected', {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': CSRF_TOKEN },
+        body,
+      });
+    } catch (error) {
+      setDialogBusy(mergeDialog, false);
+      window.archiveController.finishWrite(false);
+      showDialogError(mergeDialog, 'Merge failed.');
+      return;
+    }
     if (resp.ok) {
-      const data = await resp.json();
+      window.invalidateArchiveHistoryCache?.();
+      const data = await resp.json().catch(() => null);
+      if (!data || data.trip_id === undefined || data.trip_id === null || data.trip_id === '') {
+        setDialogBusy(mergeDialog, false);
+        window.archiveController.finishWrite(false);
+        showDialogError(mergeDialog, 'Merge failed.');
+        window.archiveController.announce('The merge could not be completed.');
+        return;
+      }
       window.location.href = '/trips/' + data.trip_id;
     } else {
+      setDialogBusy(mergeDialog, false);
+      window.archiveController.finishWrite(false);
       const err = await resp.json().catch(() => ({}));
       showDialogError(mergeDialog, err.detail || 'Merge failed.');
     }

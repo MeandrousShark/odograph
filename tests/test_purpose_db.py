@@ -7,25 +7,26 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.detector.runner import reprocess_places
 from app.main import make_templates
 from app.ui import _fetch_recent_purposes, make_router
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
 TZ = timezone.utc
 
 
-def _endpoint(path: str):
+def _endpoint(path: str, method: str):
     for route in make_router().routes:
-        if getattr(route, "path", None) == path:
+        if getattr(route, "path", None) == path and method in (route.methods or set()):
             return route.endpoint
-    raise AssertionError(f"route {path} missing")
+    raise AssertionError(f"{method} route {path} missing")
 
 
-PURPOSE = _endpoint("/trips/{trip_id}/purpose")
-MANUAL = _endpoint("/trips/manual")
+PURPOSE = _endpoint("/trips/{trip_id}/purpose", "POST")
+MANUAL = _endpoint("/trips/manual", "POST")
 
 
 def _request(pool):
@@ -42,9 +43,7 @@ async def _scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        async with pool.connection() as conn:
-            await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-        await run_migrations(pool)
+        await reset_db(pool)
 
         async with pool.connection() as conn:
             migration = await conn.execute(
@@ -85,12 +84,16 @@ async def _scenario():
             end_lon="",
             routed_distance="",
             user={"sub": "test"},
+            exclusion="not_deductible",
         )
         async with pool.connection() as conn:
             cur = await conn.execute(
-                "SELECT purpose, notes FROM trips WHERE started_at='2026-02-01T10:00:00Z'"
+                "SELECT purpose, notes, exclusion::text FROM trips "
+                "WHERE started_at='2026-02-01T10:00:00Z'"
             )
-            assert await cur.fetchone() == ("Deliver documents", "weather note")
+            assert await cur.fetchone() == (
+                "Deliver documents", "weather note", "not_deductible"
+            )
 
             await conn.execute(
                 "UPDATE trips SET purpose='Client planning', updated_at='2026-01-01T00:00:00Z' "
@@ -119,9 +122,7 @@ async def _purpose_edit_claims_human_ownership_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        async with pool.connection() as conn:
-            await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-        await run_migrations(pool)
+        await reset_db(pool)
 
         async with pool.connection() as conn:
             # A rule-owned detected trip -- no geometry needed since there

@@ -104,6 +104,8 @@ def test_exact_positive_integer_account_session_is_accepted():
         "is_admin": True,
         "is_enabled": True,
         "auth_version": 2,
+        "avatar_mime": None,
+        "avatar_updated_at": None,
     }
     request, pool = _request(
         {"account_id": 1, "auth_version": 2, "csrf": "csrf"}, account=account
@@ -112,6 +114,8 @@ def test_exact_positive_integer_account_session_is_accepted():
     user = asyncio.run(require_user(request))
 
     assert user["id"] == 1
+    assert user["has_avatar"] is False
+    assert user["avatar_version"] == 0
     assert pool.connection_count == 1
 
 

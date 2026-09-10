@@ -111,8 +111,8 @@ def test_merge_override_reconcile_keeps_longer_trips_tags():
     """After a suppress-override merge, reconcile's existing
     overlap-based matching keeps whichever original trip was longer (its
     id/tags survive); the shorter original is deleted. Pins the mechanism
-    the merge endpoint's explicit tag/notes overwrite (app/ui.py) then
-    relies on, instead of leaving the result to overlap-luck."""
+    the merge endpoint's explicit tag/notes overwrite (app/ui/merge_split.py)
+    then relies on, instead of leaving the result to overlap-luck."""
     pts = build_track([
         Stationary(duration_s=900),
         Drive(km=3.0),

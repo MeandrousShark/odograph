@@ -56,25 +56,35 @@ def test_env_example_is_only_the_runnable_baseline():
 
 
 def test_quickstart_separates_critical_path_from_post_install_operations():
-    # Boundaries are section headings rather than a single "quickstart" heading
-    # so the prose can be rewritten without weakening the split this guards:
-    # getting an instance running and signed into must not be interleaved with
-    # optional services, backups, or recovery.
+    # Keep the first-use path short and ordered. Optional operations belong in
+    # their own sections so an operator can reach a signed-in instance without
+    # making backup or release-policy decisions first.
     readme = (ROOT / "README.md").read_text()
     critical = readme.split("## Quick start", 1)[1].split("## Connect OwnTracks", 1)[0]
-    post_install = readme.split("## Connect OwnTracks", 1)[1].split(
-        "## Password recovery", 1
-    )[0]
+    clone = critical.index("git clone --branch vX.Y.Z --depth 1")
+    generate_env = critical.index("scripts/generate_env.sh")
+    signup_disabled = critical.index("INITIAL_ADMIN_SIGNUP=0")
+    start = critical.index("docker compose up -d")
+    create_admin = critical.index("python -m app.manage_account create-admin")
+    https = critical.index("## Set up HTTPS")
 
-    assert "git checkout vX.Y.Z" in critical
-    assert "scripts/generate_env.sh" in critical
+    assert clone < generate_env < signup_disabled < start < create_admin
+    assert "git checkout vX.Y.Z" not in critical
     assert "docker compose up -d" in critical
     assert "podman-compose up -d" in critical
     assert "pull app" not in critical
     assert "/signup" in critical
     assert "ADMIN_TOKEN" not in critical
-    assert "backup_database.sh" not in critical
-    assert "Account Security" in post_install
+    assert "backup" not in critical.lower()
+    assert "restore" not in critical.lower()
+    assert "floating tag" not in critical.lower()
+    assert "latest tag" not in critical.lower()
+    assert create_admin < https
+
+    post_install = readme.split("## Connect OwnTracks", 1)[1].split(
+        "## Password recovery", 1
+    )[0]
+    assert "Account Settings" in post_install
     assert "docs/owntracks.md" in post_install
     assert "backup_database.sh" in post_install
     assert "docs/security.md#hardening-checklist" in post_install

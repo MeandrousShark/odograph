@@ -1,0 +1,39 @@
+{% from "_field_error.html" import field_error %}
+{% set label_values = values | default({}, true) %}
+{% set label_errors = errors | default({}, true) %}
+{% set start_eligible = trip.get('source') == 'manual' and trip.get('start_place_id') is none and trip.get('start_lat') is none %}
+{% set end_eligible = trip.get('source') == 'manual' and trip.get('end_place_id') is none and trip.get('end_lat') is none %}
+{% set start_value = (label_values.get('start_label') if 'start_label' in label_values else trip.get('start_label')) or '' %}
+{% set end_value = (label_values.get('end_label') if 'end_label' in label_values else trip.get('end_label')) or '' %}
+
+{% if start_eligible or end_eligible %}
+<section id="trip-label-editor-{{ trip.id }}" class="trip-detail-label-editor" aria-labelledby="trip-label-editor-heading-{{ trip.id }}">
+  <h3 id="trip-label-editor-heading-{{ trip.id }}">Location names</h3>
+  <form hx-post="/trips/{{ trip.id }}/labels" hx-target="#trip-label-editor-{{ trip.id }}" hx-swap="outerHTML">
+    {% if label_errors %}
+    <div class="form-error-summary" role="alert">
+      Check the highlighted {{ 'field' if label_errors | length == 1 else 'fields' }} and try again.
+    </div>
+    {% endif %}
+    <div class="trip-edit-grid">
+      {% if start_eligible %}
+      <label>Start location name
+        <input type="text" name="start_label" value="{{ start_value }}" maxlength="100"
+               {% if label_errors.start_label %}aria-invalid="true" aria-describedby="detail-start-label-{{ trip.id }}-error"{% endif %}>
+        {{ field_error(label_errors, 'start_label', 'detail-start-label', trip.id) }}
+      </label>
+      {% endif %}
+      {% if end_eligible %}
+      <label>End location name
+        <input type="text" name="end_label" value="{{ end_value }}" maxlength="100"
+               {% if label_errors.end_label %}aria-invalid="true" aria-describedby="detail-end-label-{{ trip.id }}-error"{% endif %}>
+        {{ field_error(label_errors, 'end_label', 'detail-end-label', trip.id) }}
+      </label>
+      {% endif %}
+    </div>
+    <div class="trip-edit-actions">
+      <button type="submit" class="control control-primary">Save</button>
+    </div>
+  </form>
+</section>
+{% endif %}

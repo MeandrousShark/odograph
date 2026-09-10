@@ -7,8 +7,9 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.ui import _fetch_month_page
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -19,9 +20,7 @@ async def _scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        async with pool.connection() as conn:
-            await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-        await run_migrations(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             vehicle_id = (await (await conn.execute(
                 "INSERT INTO vehicles (name) VALUES ('Car') RETURNING id"

@@ -1,6 +1,8 @@
 Odograph: {{ year }} filing reminder.
 
 Business miles: {{ business_mi }}
+{% if nondeductible_mi %}Non-deductible miles: {{ nondeductible_mi }}
+{% endif %}
 Deduction: {{ deduction }}
 {% if report_url %}
 Report: {{ report_url }}

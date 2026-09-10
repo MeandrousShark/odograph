@@ -24,23 +24,18 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import RedirectResponse
 
 from app.auth import AuthRedirect
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.detector.core import Params
 from app.detector.runner import DetectorRunner
 from app.main import make_templates
 from app.ui import make_router as make_ui_router
+from conftest import reset_db
 from tests.synth import Drive, Stationary, build_track
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
 
 CSRF_RE = re.compile(r'X-CSRF-Token": "([^"]+)"')
-
-
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
 
 
 def _bare_app(pool) -> FastAPI:
@@ -88,7 +83,7 @@ async def _scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         track = build_track([
             Stationary(900), Drive(km=2), Stationary(1200), Drive(km=2), Stationary(900),
         ])
@@ -149,8 +144,8 @@ async def _scenario():
 
 def test_merge_next_with_no_category_field_preserves_pre_merge_category():
     """Regression test for the trip-page merge_next/merge_prev forms: before
-    trip.html's category <select> had a "Keep" option and app/ui.py's
-    endpoints defaulted to Form("keep"), an untouched merge form posted
-    whatever CATEGORIES' first entry was (a real category, "business") and
-    silently human-locked the merged trip."""
+    trip.html's category <select> had a "Keep" option and
+    app/ui/merge_split.py's endpoints defaulted to Form("keep"), an
+    untouched merge form posted whatever CATEGORIES' first entry was (a
+    real category, "business") and silently human-locked the merged trip."""
     asyncio.run(_scenario())

@@ -6,24 +6,38 @@ import logging
 import secrets
 import time
 from collections.abc import Mapping
+from datetime import datetime, timezone
 
 from authlib.integrations.base_client import OAuthError
 from authlib.integrations.starlette_client import OAuth
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
 from psycopg import errors
+from starlette.datastructures import UploadFile
 from starlette.responses import RedirectResponse
 
 from app.accounts import (
     account_exists,
+    clear_account_avatar,
     create_admin,
     get_account,
+    get_account_avatar,
     get_sole_account,
     normalize_email,
     replace_password,
+    set_account_avatar,
     valid_email,
 )
+from app.avatar_images import (
+    MAX_AVATAR_PIXELS,
+    MAX_AVATAR_SIDE,
+    REASON_TOO_LARGE,
+    detect_avatar as _detect_avatar,
+)
+from app.config import DEFAULT_ACCOUNT_AVATAR_MAX_BYTES
 from app.ingest import FailedAuthLimiter, client_ip
 from app.local_auth import hash_password, verify_password
+from app.page import render_page
+from app.uploads import read_capped_upload
 from app.oidc_identities import (
     IdentityLinkRejectedError,
     create_identity_link,
@@ -83,6 +97,90 @@ def require_csrf(request: Request) -> None:
         raise HTTPException(status_code=403, detail="CSRF token missing or invalid")
 
 
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _avatar_version(avatar_updated_at) -> int:
+    """A stable, URL-safe integer derived from avatar_updated_at at full
+    microsecond precision, used as both the cache-busting query value a
+    template would put on the avatar URL and the ETag GET /account/avatar
+    serves.
+
+    Postgres stores timestamptz to microsecond resolution. A coarser,
+    whole-second validator would let two avatar writes landing in the same
+    wall-clock second (a double-clicked upload, a quick "wrong photo" retry)
+    collide onto the same version/ETag. Computed via timedelta arithmetic
+    rather than timestamp() * 1_000_000 so there's no float round-trip to
+    worry about.
+
+    0 when there's no avatar: no real timestamp is ever exactly the epoch,
+    so 0 stays an unambiguous no-avatar sentinel.
+    """
+    if avatar_updated_at is None:
+        return 0
+    delta = avatar_updated_at - _EPOCH
+    return delta.days * 86_400_000_000 + delta.seconds * 1_000_000 + delta.microseconds
+
+
+def _human_size(num_bytes: int) -> str:
+    """Renders a byte count the way an operator configures it -- whole
+    kilobytes or megabytes when it divides evenly (every default and every
+    sane override does), a raw byte count otherwise -- for the upload-limit
+    hint on the Account Settings page, so a rejection isn't the first time
+    an operator learns there is a limit.
+    """
+    if num_bytes % (1024 * 1024) == 0:
+        return f"{num_bytes // (1024 * 1024)} MB"
+    if num_bytes % 1024 == 0:
+        return f"{num_bytes // 1024} KB"
+    return f"{num_bytes} bytes"
+
+
+def _reject_oversized_avatar_upload(request: Request) -> None:
+    """A route dependency for POST /settings/account/avatar -- mirrors
+    app/portable/routes.py's _reject_oversized_import_upload; see that
+    function's docstring for the full reasoning, all of which applies here
+    unchanged (the confirmed Starlette/FastAPI behavior this depends on, and
+    why the route below must declare no File()/Form() parameters of its
+    own). Falls through to read_capped_upload (app/uploads.py) for the case
+    this can't see: a missing Content-Length under chunked
+    transfer-encoding.
+    """
+    content_length = request.headers.get("content-length")
+    if content_length is None:
+        return
+    try:
+        declared_bytes = int(content_length)
+    except ValueError:
+        return
+    cfg = request.app.state.config
+    if declared_bytes > cfg.account_avatar_max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Upload exceeds the {cfg.account_avatar_max_bytes}-byte limit",
+        )
+
+
+def _if_none_match_matches(header_value: str, etag: str) -> bool:
+    """Minimal If-None-Match handling for a single-resource GET, not a
+    general cache-control parser: RFC 9110 requires GET's If-None-Match to
+    use weak comparison (a client's "W/" prefix must still match our strong
+    tag) and to treat "*" as "matches whatever is there" -- both cheap to
+    honor even though this app always emits the strong form back to itself,
+    so a real client is unlikely to ever send either.
+    """
+    header_value = header_value.strip()
+    if header_value == "*":
+        return True
+    for candidate in header_value.split(","):
+        candidate = candidate.strip()
+        if candidate.startswith("W/"):
+            candidate = candidate[2:]
+        if candidate == etag:
+            return True
+    return False
+
+
 def _account_user(account: dict) -> dict:
     return {
         "id": account["id"],
@@ -90,6 +188,8 @@ def _account_user(account: dict) -> dict:
         "email": account["email"],
         "is_admin": account["is_admin"],
         "legacy_oidc": False,
+        "has_avatar": account["avatar_mime"] is not None,
+        "avatar_version": _avatar_version(account["avatar_updated_at"]),
     }
 
 
@@ -102,10 +202,6 @@ def _set_account_session(request: Request, account: dict) -> None:
 
 def _positive_session_int(value) -> bool:
     return type(value) is int and value > 0
-
-
-def _normalized_issuer(value: str) -> str:
-    return normalize_issuer(value)
 
 
 def _safe_oidc_metadata(userinfo: Mapping) -> tuple[str | None, str | None]:
@@ -147,17 +243,25 @@ def _valid_legacy_oidc_session(value, issuer: str) -> bool:
         isinstance(subject, str)
         and bool(subject)
         and isinstance(value.get("issuer"), str)
-        and value["issuer"] == _normalized_issuer(issuer)
+        and value["issuer"] == normalize_issuer(issuer)
+    )
+
+
+def _signup_gate(cfg) -> bool:
+    return not cfg.dev_no_auth and getattr(cfg, "initial_admin_signup", False)
+
+
+def _legacy_gate(request: Request) -> bool:
+    cfg = request.app.state.config
+    return (
+        not cfg.dev_no_auth
+        and not getattr(cfg, "initial_admin_signup", False)
+        and request.app.state.oauth is not None
     )
 
 
 async def _legacy_oidc_available(request: Request) -> bool:
-    cfg = request.app.state.config
-    if (
-        cfg.dev_no_auth
-        or getattr(cfg, "initial_admin_signup", False)
-        or request.app.state.oauth is None
-    ):
+    if not _legacy_gate(request):
         return False
     async with request.app.state.pool.connection() as conn:
         return not await account_exists(conn)
@@ -187,6 +291,8 @@ async def require_user(request: Request) -> dict:
             "email": None,
             "is_admin": True,
             "legacy_oidc": False,
+            "has_avatar": False,
+            "avatar_version": 0,
         }
 
     has_account_id = "account_id" in request.session
@@ -240,7 +346,7 @@ async def require_user(request: Request) -> dict:
         # state is unambiguous. Convert it once into the isolated compatibility
         # shape that linked-identity work can later claim and retire.
         legacy = {
-            "issuer": _normalized_issuer(cfg.oidc_issuer),
+            "issuer": normalize_issuer(cfg.oidc_issuer),
             "subject": old_subject,
             "name": old_user.get("name"),
             "email": old_user.get("email"),
@@ -257,6 +363,11 @@ async def require_user(request: Request) -> dict:
             "email": legacy.get("email"),
             "is_admin": False,
             "legacy_oidc": True,
+            # No account row exists yet for a legacy session that hasn't
+            # completed /account/establish -- same no-avatar shape as
+            # dev_no_auth's hand-built user, below.
+            "has_avatar": False,
+            "avatar_version": 0,
         }
 
     if has_legacy or has_old_user:
@@ -316,6 +427,64 @@ async def _oidc_authorize_redirect(
     )
 
 
+def _require_oidc_enabled(request: Request) -> None:
+    if request.app.state.oauth is None or request.app.state.config.dev_no_auth:
+        raise HTTPException(status_code=404)
+
+
+class _AccountActionRejected(Exception):
+    """Carries the account row and the response detail a route should
+    re-render with, so the shared preamble can refuse an action without every
+    route repeating the same limiter and password branches.
+    """
+
+    def __init__(self, account: dict, error: str, status_code: int):
+        super().__init__(error)
+        self.account = account
+        self.error = error
+        self.status_code = status_code
+
+
+async def _verified_account(
+    request: Request,
+    user: dict,
+    current_password: str,
+    *,
+    generic_error: str,
+    precheck_error: str | None = None,
+) -> dict:
+    """Shared re-authentication preamble for account-mutating routes
+    (link/unlink OIDC, change password): load the caller's account, apply
+    the failed-auth limiter, and verify the submitted current password.
+
+    `precheck_error`, when set, is reported after the limiter check but
+    before password verification, so a route-specific validation failure
+    (e.g. unlink's missing confirmation checkbox) returns its own status
+    without also counting as a failed credential attempt against the
+    limiter.
+    """
+    limiter: FailedAuthLimiter = request.app.state.login_limiter
+    ip = client_ip(request)
+    async with request.app.state.pool.connection() as conn:
+        account = await get_account(conn, user["id"])
+    if account is None:
+        request.session.clear()
+        raise AuthRedirect()
+    if limiter.blocked(ip):
+        raise _AccountActionRejected(
+            account, "Too many failed attempts. Try again later.", 429
+        )
+    if precheck_error is not None:
+        raise _AccountActionRejected(account, precheck_error, 400)
+    password_ok = await asyncio.to_thread(
+        verify_password, current_password, account["password_hash"]
+    )
+    if not password_ok:
+        limiter.record_failure(ip)
+        raise _AccountActionRejected(account, generic_error, 401)
+    return account
+
+
 def make_router() -> APIRouter:
     router = APIRouter()
 
@@ -330,17 +499,8 @@ def make_router() -> APIRouter:
                 linked_identity = await get_identity_for_account(
                     conn, account["id"], cfg.oidc_issuer
                 )
-        signup_available = bool(
-            account is None
-            and getattr(cfg, "initial_admin_signup", False)
-            and not cfg.dev_no_auth
-        )
-        legacy_oidc_available = bool(
-            account is None
-            and not getattr(cfg, "initial_admin_signup", False)
-            and request.app.state.oauth is not None
-            and not cfg.dev_no_auth
-        )
+        signup_available = _signup_gate(cfg) and account is None
+        legacy_oidc_available = _legacy_gate(request) and account is None
         oidc_login_available = bool(
             account is not None
             and linked_identity is not None
@@ -379,6 +539,7 @@ def make_router() -> APIRouter:
         error: str | None = None,
         success: str | None = None,
         status_code: int = 200,
+        include_review_count: bool = False,
     ):
         oidc_configured = bool(
             request.app.state.oauth is not None
@@ -399,19 +560,33 @@ def make_router() -> APIRouter:
                 }
         if success is None:
             success = request.session.pop("account_notice", None)
+        # getattr, not cfg.account_avatar_max_bytes directly: a number of
+        # route-level tests build a bare config double that predates this
+        # field, and _render_account now runs on every Account Settings
+        # render, including theirs. The fallback is Config's own default
+        # constant, not a second copy of it, so the two cannot drift.
+        avatar_max_bytes = getattr(
+            request.app.state.config,
+            "account_avatar_max_bytes",
+            DEFAULT_ACCOUNT_AVATAR_MAX_BYTES,
+        )
+        context = {
+            "user": user,
+            "csrf": _ensure_csrf(request),
+            "account_email": account["email"],
+            "oidc_configured": oidc_configured,
+            "linked_identity": linked_identity,
+            "avatar_max_bytes": avatar_max_bytes,
+            "avatar_max_label": _human_size(avatar_max_bytes),
+            "error": error,
+            "success": success,
+        }
+        if include_review_count:
+            return await render_page(
+                request, "account_security.html", context, status_code=status_code
+            )
         return request.app.state.templates.TemplateResponse(
-            request,
-            "account_security.html",
-            {
-                "user": user,
-                "csrf": _ensure_csrf(request),
-                "account_email": account["email"],
-                "oidc_configured": oidc_configured,
-                "linked_identity": linked_identity,
-                "error": error,
-                "success": success,
-            },
-            status_code=status_code,
+            request, "account_security.html", context, status_code=status_code
         )
 
     async def _render_establish(
@@ -420,22 +595,36 @@ def make_router() -> APIRouter:
         *,
         error: str | None = None,
         status_code: int = 200,
+        include_review_count: bool = False,
     ):
         legacy = request.session.get("legacy_oidc")
         reported_email = legacy.get("email") if isinstance(legacy, Mapping) else None
         email = normalize_email(reported_email) if isinstance(reported_email, str) else ""
         if not valid_email(email):
             email = ""
+        context = {
+            "user": user,
+            "csrf": _ensure_csrf(request),
+            "email": email,
+            "error": error,
+        }
+        if include_review_count:
+            return await render_page(
+                request, "establish_account.html", context, status_code=status_code
+            )
         return request.app.state.templates.TemplateResponse(
+            request, "establish_account.html", context, status_code=status_code
+        )
+
+    async def _render_rejection(
+        request: Request, user: dict, rejected: _AccountActionRejected
+    ):
+        return await _render_account(
             request,
-            "establish_account.html",
-            {
-                "user": user,
-                "csrf": _ensure_csrf(request),
-                "email": email,
-                "error": error,
-            },
-            status_code=status_code,
+            rejected.account,
+            user,
+            error=rejected.error,
+            status_code=rejected.status_code,
         )
 
     @router.get("/login")
@@ -544,8 +733,7 @@ def make_router() -> APIRouter:
 
     @router.get("/auth/callback", name="auth_callback")
     async def auth_callback(request: Request):
-        if request.app.state.oauth is None or request.app.state.config.dev_no_auth:
-            raise HTTPException(status_code=404)
+        _require_oidc_enabled(request)
 
         callback_state = request.query_params.get("state") or ""
         is_link_callback = callback_state.startswith(OIDC_LINK_STATE_PREFIX)
@@ -600,7 +788,7 @@ def make_router() -> APIRouter:
             raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
         provider_email, display_name = _safe_oidc_metadata(userinfo)
         cfg = request.app.state.config
-        issuer = _normalized_issuer(cfg.oidc_issuer)
+        issuer = normalize_issuer(cfg.oidc_issuer)
 
         if link_attempt is not None:
             async with request.app.state.pool.connection() as conn:
@@ -666,7 +854,7 @@ def make_router() -> APIRouter:
     ):
         if not user["legacy_oidc"]:
             raise HTTPException(status_code=404)
-        return await _render_establish(request, user)
+        return await _render_establish(request, user, include_review_count=True)
 
     @router.post("/account/establish")
     async def establish_account(
@@ -751,36 +939,14 @@ def make_router() -> APIRouter:
         csrf_token: str = Form(...),
         user: dict = Depends(require_admin),
     ):
-        if request.app.state.oauth is None or request.app.state.config.dev_no_auth:
-            raise HTTPException(status_code=404)
+        _require_oidc_enabled(request)
         check_form_csrf(request, csrf_token)
-        limiter: FailedAuthLimiter = request.app.state.login_limiter
-        ip = client_ip(request)
-        async with request.app.state.pool.connection() as conn:
-            account = await get_account(conn, user["id"])
-        if account is None:
-            request.session.clear()
-            raise AuthRedirect()
-        if limiter.blocked(ip):
-            return await _render_account(
-                request,
-                account,
-                user,
-                error="Too many failed attempts. Try again later.",
-                status_code=429,
+        try:
+            account = await _verified_account(
+                request, user, current_password, generic_error=GENERIC_LINK_ERROR
             )
-        password_ok = await asyncio.to_thread(
-            verify_password, current_password, account["password_hash"]
-        )
-        if not password_ok:
-            limiter.record_failure(ip)
-            return await _render_account(
-                request,
-                account,
-                user,
-                error=GENERIC_LINK_ERROR,
-                status_code=401,
-            )
+        except _AccountActionRejected as rejected:
+            return await _render_rejection(request, user, rejected)
         async with request.app.state.pool.connection() as conn:
             existing = await get_identity_for_account(
                 conn, account["id"], request.app.state.config.oidc_issuer
@@ -805,44 +971,20 @@ def make_router() -> APIRouter:
         confirm_unlink: str | None = Form(None),
         user: dict = Depends(require_admin),
     ):
-        if request.app.state.oauth is None or request.app.state.config.dev_no_auth:
-            raise HTTPException(status_code=404)
+        _require_oidc_enabled(request)
         check_form_csrf(request, csrf_token)
-        limiter: FailedAuthLimiter = request.app.state.login_limiter
-        ip = client_ip(request)
-        async with request.app.state.pool.connection() as conn:
-            account = await get_account(conn, user["id"])
-        if account is None:
-            request.session.clear()
-            raise AuthRedirect()
-        if limiter.blocked(ip):
-            return await _render_account(
+        try:
+            account = await _verified_account(
                 request,
-                account,
                 user,
-                error="Too many failed attempts. Try again later.",
-                status_code=429,
+                current_password,
+                generic_error=GENERIC_UNLINK_ERROR,
+                precheck_error=(
+                    GENERIC_UNLINK_ERROR if confirm_unlink != "yes" else None
+                ),
             )
-        if confirm_unlink != "yes":
-            return await _render_account(
-                request,
-                account,
-                user,
-                error=GENERIC_UNLINK_ERROR,
-                status_code=400,
-            )
-        password_ok = await asyncio.to_thread(
-            verify_password, current_password, account["password_hash"]
-        )
-        if not password_ok:
-            limiter.record_failure(ip)
-            return await _render_account(
-                request,
-                account,
-                user,
-                error=GENERIC_UNLINK_ERROR,
-                status_code=401,
-            )
+        except _AccountActionRejected as rejected:
+            return await _render_rejection(request, user, rejected)
         async with request.app.state.pool.connection() as conn:
             identity = await get_identity_for_account(
                 conn, account["id"], request.app.state.config.oidc_issuer
@@ -875,7 +1017,146 @@ def make_router() -> APIRouter:
             account = await get_account(conn, user["id"])
         if account is None:
             raise AuthRedirect()
-        return await _render_account(request, account, user)
+        return await _render_account(request, account, user, include_review_count=True)
+
+    @router.get("/account/avatar")
+    async def account_avatar(request: Request, user: dict = Depends(require_user)):
+        # dev_no_auth's hand-built user (see require_user above) has no
+        # backing account row at all, so there's nothing to look up.
+        if user["id"] is None:
+            raise HTTPException(status_code=404)
+        async with request.app.state.pool.connection() as conn:
+            avatar = await get_account_avatar(conn, user["id"])
+        if avatar is None or avatar["avatar_mime"] is None:
+            raise HTTPException(status_code=404)
+
+        # Strong, byte-exact validator: avatar_bytes, avatar_mime, and
+        # avatar_updated_at only ever change together (migrations/
+        # 024_account_avatar.sql's all-or-nothing CHECK), so the same
+        # microsecond-precision version _account_user hands out as
+        # avatar_version alone identifies this exact image.
+        etag = f'"{_avatar_version(avatar["avatar_updated_at"])}"'
+        # "private" prevents shared caches leaking an account image across
+        # users; "no-cache" makes a browser revalidate after a sign-out or
+        # account change before it reuses its local copy.
+        cache_control = "private, no-cache"
+
+        if_none_match = request.headers.get("if-none-match")
+        if if_none_match is not None and _if_none_match_matches(if_none_match, etag):
+            return Response(
+                status_code=304, headers={"Cache-Control": cache_control, "ETag": etag}
+            )
+
+        return Response(
+            content=avatar["avatar_bytes"],
+            media_type=avatar["avatar_mime"],
+            headers={
+                "Cache-Control": cache_control,
+                "ETag": etag,
+                # The SecurityHeadersMiddleware in app/main.py only sets this
+                # on text/html responses, so an image response has to set it
+                # itself rather than relying on that middleware.
+                "X-Content-Type-Options": "nosniff",
+                "Content-Disposition": "inline",
+            },
+        )
+
+    @router.post(
+        "/settings/account/avatar",
+        dependencies=[Depends(_reject_oversized_avatar_upload)],
+    )
+    async def upload_avatar(request: Request, user: dict = Depends(require_admin)):
+        # file/csrf_token are read from the parsed form by hand, not
+        # declared as File()/Form() parameters on this function -- see
+        # _reject_oversized_avatar_upload's docstring for why that's load-
+        # bearing rather than a style choice.
+        form = await request.form()
+        raw_csrf_token = form.get("csrf_token", "")
+        csrf_token = raw_csrf_token if isinstance(raw_csrf_token, str) else ""
+        check_form_csrf(request, csrf_token)
+
+        async with request.app.state.pool.connection() as conn:
+            account = await get_account(conn, user["id"])
+        if account is None:
+            request.session.clear()
+            raise AuthRedirect()
+
+        file = form.get("file")
+        if not isinstance(file, UploadFile):
+            return await _render_account(
+                request, account, user,
+                error="Choose an image file to upload.", status_code=422,
+            )
+
+        cfg = request.app.state.config
+        raw = await read_capped_upload(file, cfg.account_avatar_max_bytes)
+        if raw is None:
+            return await _render_account(
+                request, account, user,
+                error=f"Avatar exceeds the {_human_size(cfg.account_avatar_max_bytes)} limit.",
+                status_code=413,
+            )
+        if not raw:
+            return await _render_account(
+                request, account, user,
+                error="Choose an image file to upload.", status_code=422,
+            )
+
+        detection = _detect_avatar(raw)
+        if detection.reason == REASON_TOO_LARGE:
+            return await _render_account(
+                request, account, user,
+                error=(
+                    "This image is too large. Avatars can be up to "
+                    f"{MAX_AVATAR_PIXELS // 1_048_576} megapixels, with no side "
+                    f"longer than {MAX_AVATAR_SIDE} pixels."
+                ),
+                status_code=422,
+            )
+        if detection.reason is not None:
+            return await _render_account(
+                request, account, user,
+                error="Unsupported file type. Upload a PNG, JPEG, or WebP image.",
+                status_code=422,
+            )
+        avatar_mime = detection.mime
+
+        # Neither this route nor remove_avatar below re-verifies the current
+        # password, unlike the OIDC link/unlink routes: a display image
+        # doesn't change how this account authenticates, so there's nothing
+        # to re-verify, and neither route bumps auth_version or signs out
+        # other sessions.
+        async with request.app.state.pool.connection() as conn:
+            updated = await set_account_avatar(conn, account["id"], raw, avatar_mime)
+        if updated is None:
+            request.session.clear()
+            raise AuthRedirect()
+
+        request.session["account_notice"] = "Avatar updated."
+        return RedirectResponse("/settings/account", status_code=303)
+
+    @router.post("/settings/account/avatar/remove")
+    async def remove_avatar(
+        request: Request,
+        csrf_token: str = Form(...),
+        confirm_remove: str | None = Form(None),
+        user: dict = Depends(require_admin),
+    ):
+        check_form_csrf(request, csrf_token)
+        if confirm_remove != "yes":
+            raise HTTPException(status_code=400, detail="Avatar removal not confirmed")
+        # See upload_avatar above: no current-password re-verification here
+        # either, for the same reason. Succeeds harmlessly whether or not an
+        # avatar was set (clear_account_avatar clears all three columns
+        # together either way).
+        async with request.app.state.pool.connection() as conn:
+            updated = await clear_account_avatar(conn, user["id"])
+        if updated is None:
+            request.session.clear()
+            raise AuthRedirect()
+
+        request.session["account_notice"] = "Avatar removed."
+        return RedirectResponse("/settings/account", status_code=303)
 
     @router.post("/settings/account/password")
     async def change_password(
@@ -887,36 +1168,12 @@ def make_router() -> APIRouter:
         user: dict = Depends(require_admin),
     ):
         check_form_csrf(request, csrf_token)
-        limiter: FailedAuthLimiter = request.app.state.login_limiter
-        ip = client_ip(request)
-
-        async with request.app.state.pool.connection() as conn:
-            account = await get_account(conn, user["id"])
-        if account is None:
-            request.session.clear()
-            raise AuthRedirect()
-
-        if limiter.blocked(ip):
-            return await _render_account(
-                request,
-                account,
-                user,
-                error="Too many failed attempts. Try again later.",
-                status_code=429,
+        try:
+            account = await _verified_account(
+                request, user, current_password, generic_error=GENERIC_PASSWORD_ERROR
             )
-
-        password_ok = await asyncio.to_thread(
-            verify_password, current_password, account["password_hash"]
-        )
-        if not password_ok:
-            limiter.record_failure(ip)
-            return await _render_account(
-                request,
-                account,
-                user,
-                error=GENERIC_PASSWORD_ERROR,
-                status_code=401,
-            )
+        except _AccountActionRejected as rejected:
+            return await _render_rejection(request, user, rejected)
 
         error = _new_password_error(password, password_confirm)
         if error:
@@ -953,8 +1210,7 @@ def make_router() -> APIRouter:
 
 
 async def _signup_available(request: Request) -> bool:
-    cfg = request.app.state.config
-    if cfg.dev_no_auth or not getattr(cfg, "initial_admin_signup", False):
+    if not _signup_gate(request.app.state.config):
         return False
     async with request.app.state.pool.connection() as conn:
         return not await account_exists(conn)

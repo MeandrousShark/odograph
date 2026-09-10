@@ -3,19 +3,29 @@
 {% block title %}{{ report.year }} Report: Odograph{% endblock %}
 {% block content %}
 
-<p>
-  <a href="/report/{{ report.year - 1 }}">← {{ report.year - 1 }}</a>
-  <strong style="margin: 0 .5rem">{{ report.year }}</strong>
-  {% if next_year_disabled %}
-  <span class="report-year-next" aria-disabled="true">{{ report.year + 1 }} →</span>
-  {% else %}
-  <a href="/report/{{ report.year + 1 }}">{{ report.year + 1 }} →</a>
-  {% endif %}
-  · <a href="/report/{{ report.year }}/export">Export XLSX</a>
-  · <a href="/expenses?year={{ report.year }}">Expense ledger</a>
-</p>
+<div class="report-page">
+  <div class="report-page-header page-title">
+    <div>
+      <p class="page-title-eyebrow">Report</p>
+      <h2 id="report-page-title" class="page-title-heading">{{ report.year }} annual mileage report</h2>
+      <p class="page-title-subtitle">Mileage totals, deductions, and filing details.</p>
+    </div>
+    <div class="page-title-actions report-page-actions">
+      <nav class="report-year-nav" aria-label="Report year">
+        <a href="/report/{{ report.year - 1 }}">← {{ report.year - 1 }}</a>
+        <strong>{{ report.year }}</strong>
+        {% if next_year_disabled %}
+        <span class="report-year-next" aria-disabled="true">{{ report.year + 1 }} →</span>
+        {% else %}
+        <a href="/report/{{ report.year + 1 }}">{{ report.year + 1 }} →</a>
+        {% endif %}
+      </nav>
+      <a class="control control-secondary" href="/report/{{ report.year }}/export">Export XLSX</a>
+      <a class="control control-secondary" href="/expenses?year={{ report.year }}">Expense ledger</a>
+    </div>
+  </div>
 
-<div class="filter-bar">
+<div class="filter-bar report-controls">
   {% set quarter_pills = [] %}
   {% for q in range(1, 5) %}
   {% set qstart, qend = quarter_bounds(report.year, q) %}
@@ -24,15 +34,13 @@
     'text': 'Q' ~ q,
   }) %}
   {% endfor %}
-  {{ field_pills('Quarterly / custom range', quarter_pills) }}
-  <form class="date-range" method="get" action="/report/range">
+  {{ field_pills('Quarterly / custom range', quarter_pills, 'report-quarter-field') }}
+  <form class="date-range report-date-range" method="get" action="/report/range">
     <label>From <input type="date" name="from" required></label>
     <label>To <input type="date" name="to" required></label>
     <button type="submit">View range</button>
   </form>
 </div>
-
-<h2>{{ report.year }} annual mileage report</h2>
 
 {% if report.trip_count == 0 %}
   <p class="empty">No trips recorded in {{ report.year }}.</p>
@@ -43,23 +51,26 @@
 {% include "_report_tables.html" %}
 
 {% if odometer_coverage %}
-<h2>Odometer coverage</h2>
-<ul>
-  {% for line in odometer_coverage %}
-  <li>{{ coverage_line(line) }}</li>
-  {% endfor %}
-</ul>
+<section class="report-coverage" aria-labelledby="report-coverage-heading">
+  <h2 id="report-coverage-heading">Odometer coverage</h2>
+  <ul>
+    {% for line in odometer_coverage %}
+    <li>{{ coverage_line(line) }}</li>
+    {% endfor %}
+  </ul>
+</section>
 {% endif %}
 
 {% endif %}
 
 {% if expense_report.comparisons %}
-<h2>Standard vs. actual expense estimate</h2>
+<section class="report-expense-comparison" aria-labelledby="report-expense-comparison-heading">
+  <h2 id="report-expense-comparison-heading">Standard vs. actual expense estimate</h2>
 <p class="muted">Parking, tolls, and any other fully-business entries are added outside
   both methods. Shared operating expenses are multiplied by the vehicle's business-use
   percentage.</p>
 <div class="table-wrapper">
-<table>
+<table class="report-table report-expense-table">
   <thead>
     <tr>
       <th>Vehicle</th><th>Business miles</th><th>Total miles</th><th>Business use</th>
@@ -101,6 +112,8 @@
   <p>See <a href="https://www.irs.gov/publications/p463">IRS Publication 463</a> and
     <a href="https://www.irs.gov/publications/p946">IRS Publication 946</a>.</p>
 </div>
+</section>
 {% endif %}
 
+</div>
 {% endblock %}

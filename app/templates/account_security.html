@@ -1,20 +1,72 @@
 {% extends "base.html" %}
-{% block title %}Account Security: Odograph{% endblock %}
+{% block title %}Account Settings: Odograph{% endblock %}
 {% block content %}
 
-<div class="card auth-card auth-card-wide">
-<h2>Account Security</h2>
+<div class="account-settings-page">
+<div class="page-title auth-page-title">
+  <div>
+    <h2 class="page-title-heading">Account Settings</h2>
+  </div>
+</div>
 
 {% if error %}
-<div class="form-error-summary" role="alert">{{ error }}</div>
+<div class="notice notice-danger form-error-summary" role="alert">{{ error }}</div>
 {% endif %}
 {% if success %}
-<div class="form-success" role="status">{{ success }}</div>
+<div class="notice notice-success form-success" role="status">{{ success }}</div>
 {% endif %}
 
-<p>Local login email: <strong>{{ account_email }}</strong></p>
+<div class="account-settings-stack">
+<section class="card account-settings-card account-settings-profile" aria-labelledby="profile-heading">
+<h3 id="profile-heading">Profile</h3>
+<section class="account-security-section account-settings-avatar-section" aria-labelledby="account-avatar-heading">
+<h4 id="account-avatar-heading">Avatar</h4>
+<div class="account-security-avatar-row">
+  {% if user.has_avatar %}
+  <img src="/account/avatar?v={{ user.avatar_version }}" alt="" class="account-security-avatar-image">
+  {% else %}
+  <span class="account-avatar account-security-avatar-placeholder" aria-hidden="true">{{ initials }}</span>
+  {% endif %}
+  <div class="account-security-avatar-actions">
+    <form method="post" action="/settings/account/avatar" enctype="multipart/form-data" class="auth-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <label>Upload a new avatar
+        <input type="file" name="file" accept="image/png,image/jpeg,image/webp" required>
+      </label>
+      <p class="muted account-security-avatar-hint">PNG, JPEG, or WebP, up to {{ avatar_max_label }}.</p>
+      <button type="submit" class="control control-primary auth-submit">Upload avatar</button>
+    </form>
+    {% if user.has_avatar %}
+    <button type="button" class="control control-destructive auth-submit"
+            aria-haspopup="dialog" aria-controls="avatar-remove-dialog"
+            data-avatar-remove-open="avatar-remove-dialog">Remove avatar</button>
+    <dialog id="avatar-remove-dialog" class="app-dialog account-avatar-remove-dialog"
+            aria-labelledby="avatar-remove-dialog-title"
+            aria-describedby="avatar-remove-dialog-description">
+      <form method="post" action="/settings/account/avatar/remove"
+            class="account-avatar-remove-dialog-content">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <input type="hidden" name="confirm_remove" value="yes">
+        <h2 id="avatar-remove-dialog-title">Remove avatar?</h2>
+        <p id="avatar-remove-dialog-description">This removes your uploaded avatar and restores your initials.</p>
+        <div class="app-dialog-actions account-avatar-remove-dialog-actions">
+          <button type="button" data-avatar-remove-cancel autofocus>Cancel</button>
+          <button type="submit" class="control control-destructive account-avatar-remove-confirm">Remove avatar</button>
+        </div>
+      </form>
+    </dialog>
+    {% endif %}
+  </div>
+</div>
+</section>
+</section>
 
-<h3>Change password</h3>
+<section class="card account-settings-card account-settings-security" aria-labelledby="security-heading">
+<h3 id="security-heading">Security</h3>
+<section class="account-security-section account-security-local" aria-labelledby="change-password-heading">
+<p class="account-security-email">Local login email: <strong>{{ account_email }}</strong></p>
+
+<h4 id="change-password-heading">Change password</h4>
 <form method="post" action="/settings/account/password" class="auth-form">
   <input type="hidden" name="csrf_token" value="{{ csrf }}">
   <label>Current password
@@ -26,11 +78,12 @@
   <label>Confirm new password
     <input type="password" name="password_confirm" required autocomplete="new-password" minlength="8">
   </label>
-  <button type="submit" class="control control-primary">Change password</button>
+  <button type="submit" class="control control-primary auth-submit">Change password</button>
 </form>
+</section>
 
 <section class="account-security-section" aria-labelledby="oidc-provider-heading">
-  <h3 id="oidc-provider-heading">Optional sign-in provider</h3>
+  <h4 id="oidc-provider-heading">Optional sign-in provider</h4>
   {% if not oidc_configured %}
   <p class="muted">No sign-in provider is configured.</p>
   {% elif linked_identity %}
@@ -54,7 +107,7 @@
       <input type="checkbox" name="confirm_unlink" value="yes" required>
       I understand this removes the linked sign-in provider from this account.
     </label>
-    <button type="submit" class="control control-destructive">Unlink sign-in provider</button>
+    <button type="submit" class="control control-destructive auth-submit">Unlink sign-in provider</button>
   </form>
   {% else %}
   <p>Sign-in provider: available but not linked.</p>
@@ -63,15 +116,19 @@
     <label>Current password
       <input type="password" name="current_password" required autocomplete="current-password">
     </label>
-    <button type="submit" class="control control-primary">Link sign-in provider</button>
+    <button type="submit" class="control control-primary auth-submit">Link sign-in provider</button>
   </form>
   {% endif %}
 </section>
 
-<h3>Operator recovery</h3>
+<section class="account-security-section" aria-labelledby="operator-recovery-heading">
+<h4 id="operator-recovery-heading">Operator recovery</h4>
 <p class="muted">If you lose access, an operator with container access can run
   <code>python -m app.manage_account reset-password</code> inside the app container.
   Password input stays in the terminal or protected standard input.</p>
+</section>
+</section>
+</div>
 </div>
 
 {% endblock %}

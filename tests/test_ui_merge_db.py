@@ -8,10 +8,11 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.detector.core import Params
 from app.detector.runner import DetectorRunner
 from app.ui import make_router
+from conftest import reset_db
 from tests.synth import Drive, Stationary, build_track
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -63,9 +64,7 @@ async def _scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        async with pool.connection() as conn:
-            await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-        await run_migrations(pool)
+        await reset_db(pool)
         track = build_track([
             Stationary(900), Drive(km=2), Stationary(1200), Drive(km=2),
             Stationary(1200), Drive(km=2), Stationary(900),
@@ -127,9 +126,7 @@ async def _reprocess_failure_rolls_back_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        async with pool.connection() as conn:
-            await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-        await run_migrations(pool)
+        await reset_db(pool)
         track = build_track([
             Stationary(900), Drive(km=2), Stationary(1200), Drive(km=2), Stationary(900),
         ])
@@ -208,9 +205,7 @@ async def _vehicle_tristate_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        async with pool.connection() as conn:
-            await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-        await run_migrations(pool)
+        await reset_db(pool)
 
         def _two_trip_track():
             return build_track([
@@ -325,9 +320,7 @@ async def _category_tristate_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        async with pool.connection() as conn:
-            await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-        await run_migrations(pool)
+        await reset_db(pool)
 
         def _two_trip_track():
             return build_track([

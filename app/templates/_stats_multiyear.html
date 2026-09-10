@@ -1,5 +1,5 @@
-<section class="stats-section">
-  <h2>Year-over-year monthly miles</h2>
+<section class="stats-section stats-chart-section stats-multiyear-section" aria-labelledby="stats-multiyear-heading">
+  <h2 id="stats-multiyear-heading">Year-over-year monthly miles</h2>
   <div class="chart-scroll">{{ multiyear.chart_svg | safe }}</div>
   <p class="stats-legend">
     {% for yr in multiyear.years %}

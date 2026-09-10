@@ -13,11 +13,12 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.email_digest import EmailDigestWorker
 from app.mailer import Mailer
 from app.rates import load_rates
 from app.report import build_range_report
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -29,9 +30,7 @@ APP_URL = "https://miles.example.com"
 
 
 async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
+    await reset_db(pool)
     # migrations/008_vehicles.sql seeds an active default vehicle ("My Car")
     # that would otherwise always look "due" to the quarterly-odometer
     # kind's scenarios below -- deactivate it so each scenario's assertions

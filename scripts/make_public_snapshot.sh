@@ -96,10 +96,11 @@ fi
 
 cd "$REPO_ROOT"
 
-# Explicit inclusion, not exclusion: anything not listed here never makes
-# it into the archive, regardless of what exists in the working tree or
-# git history. This is the actual privacy boundary -- everything else in
-# this script is verification on top of it, not the boundary itself.
+# Explicit inclusion, with narrowly scoped pathspec exclusions for tracked
+# private files: anything not listed here, or explicitly excluded below,
+# never makes it into the archive, regardless of what exists in the working
+# tree or git history. This is the actual privacy boundary -- everything
+# else in this script is verification on top of it, not the boundary itself.
 DIR_PATHS=(.github app tests static migrations scripts)
 TOP_LEVEL_FILES=(
     README.md LICENSE SECURITY.md CONTRIBUTING.md THIRD_PARTY_NOTICES.md CHANGELOG.md
@@ -111,8 +112,13 @@ TOP_LEVEL_FILES=(
     pyproject.toml
 )
 DOCS_FILES=(
-    docs/backups.md docs/configuration.md docs/osrm.md docs/owntracks.md docs/privacy.md
-    docs/releasing.md docs/reverse-proxy.md docs/security.md docs/upgrading.md
+    docs/backups.md docs/configuration.md docs/install-compose.md docs/osrm.md
+    docs/owntracks.md docs/privacy.md docs/releasing.md docs/reverse-proxy.md
+    docs/security.md docs/upgrading.md docs/usage.md
+    docs/images/usage-dashboard.png docs/images/usage-review.png
+)
+ARCHIVE_EXCLUDES=(
+    ':!tests/test_handoff_contract.py'
 )
 
 ARCHIVE_PATHS=()
@@ -127,7 +133,7 @@ if [ "${#ARCHIVE_PATHS[@]}" -eq 0 ]; then
     exit 1
 fi
 
-git archive HEAD "${ARCHIVE_PATHS[@]}" | tar -x -C "$OUTDIR"
+git archive HEAD "${ARCHIVE_PATHS[@]}" "${ARCHIVE_EXCLUDES[@]}" | tar -x -C "$OUTDIR"
 
 # Hard-verify the exclusions rather than trusting the allowlist above: a
 # future edit to this script that accidentally widens DIR_PATHS (e.g. to
@@ -135,7 +141,7 @@ git archive HEAD "${ARCHIVE_PATHS[@]}" | tar -x -C "$OUTDIR"
 violations=0
 
 if [ -d "$OUTDIR/docs" ]; then
-    expected_docs=$'docs/backups.md\ndocs/configuration.md\ndocs/osrm.md\ndocs/owntracks.md\ndocs/privacy.md\ndocs/releasing.md\ndocs/reverse-proxy.md\ndocs/security.md\ndocs/upgrading.md'
+    expected_docs=$'docs/backups.md\ndocs/configuration.md\ndocs/images/usage-dashboard.png\ndocs/images/usage-review.png\ndocs/install-compose.md\ndocs/osrm.md\ndocs/owntracks.md\ndocs/privacy.md\ndocs/releasing.md\ndocs/reverse-proxy.md\ndocs/security.md\ndocs/upgrading.md\ndocs/usage.md'
     actual_docs="$(find "$OUTDIR/docs" -type f | sed "s#^$OUTDIR/##" | sort)"
     if [ "$actual_docs" != "$expected_docs" ]; then
         echo "error: snapshot docs do not match the public allowlist." >&2

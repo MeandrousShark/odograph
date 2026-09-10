@@ -1,9 +1,11 @@
 # Configuration reference
 
-The clean-install baseline is intentionally short. Run
-`scripts/generate_env.sh`, set `DISPLAY_TZ`, and leave everything else at its
-generated value unless this reference describes a feature you want. Restart or
-recreate the `app` service after changing `.env`:
+Follow the [README setup steps](../README.md#quick-start) for a new install,
+including your timezone and administrator setup. Use this reference when you
+want to enable an optional feature or change a default.
+
+Recreate the `app` service after changing `.env`. A plain restart does not
+reload container environment variables:
 
 ```sh
 docker compose up -d app
@@ -82,6 +84,7 @@ points.
 | `MAP_TILE_ATTRIBUTION` | OpenStreetMap attribution | HTML attribution rendered with live map tiles. Keep the selected provider's required attribution. |
 | `HSTS_MAX_AGE` | `0` | Adds an HSTS header on requests already seen as HTTPS. `0` disables it. Prefer setting HSTS at the reverse proxy. |
 | `PORTABLE_IMPORT_MAX_BYTES` | `52428800` | Maximum uploaded portable JSON document size in bytes. |
+| `ACCOUNT_AVATAR_MAX_BYTES` | `512000` | Configurable maximum uploaded account avatar size in bytes. Images are also capped at 16,777,216 total decoded pixels and 8192 pixels per side. |
 | `MILEAGE_RATE_<YEAR>` | database rate | Positive dollars-per-mile override for one year, for example `MILEAGE_RATE_2026=0.725`. It replaces any midyear split for that year. Invalid values are ignored with a warning. |
 
 ## Retention

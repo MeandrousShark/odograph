@@ -1,14 +1,17 @@
 <div class="report-summary">
-  <div><span class="muted">Business miles</span><strong>{{ report.business_m | mi }} mi</strong></div>
-  <div><span class="muted">Personal miles</span><strong>{{ report.personal_m | mi }} mi</strong></div>
-  <div><span class="muted">Business share</span>
+  <div class="report-summary-metric report-summary-business"><span class="report-summary-label muted">Business miles</span><strong>{{ report.business_m | mi }} mi</strong></div>
+  <div class="report-summary-metric report-summary-personal"><span class="report-summary-label muted">Personal miles</span><strong>{{ report.personal_m | mi }} mi</strong></div>
+  {% if report.nondeductible_m %}
+  <div class="report-summary-metric report-summary-nondeductible"><span class="report-summary-label muted">Non-deductible miles</span><strong>{{ report.nondeductible_m | mi }} mi</strong></div>
+  {% endif %}
+  <div class="report-summary-metric report-summary-share"><span class="report-summary-label muted">Business share</span>
     <strong>{{ "%.1f"|format(report.business_pct) if report.business_pct is not none else "--" }}%</strong></div>
-  <div><span class="muted">Total deduction</span>
+  <div class="report-summary-metric report-summary-deduction"><span class="report-summary-label muted">Total deduction</span>
     <strong>{{ report.total_deduction | usd }}</strong></div>
 </div>
 
 {% if report.rate_periods %}
-<p class="muted">Rate{{ "s" if report.rate_periods|length > 1 }} applied: {{ format_rate_periods(report.rate_periods) }}</p>
+<p class="report-rate-note muted">Rate{{ "s" if report.rate_periods|length > 1 }} applied: {{ format_rate_periods(report.rate_periods) }}</p>
 {% endif %}
 
 {% if report.caveats.any %}

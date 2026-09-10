@@ -10,20 +10,15 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.ui import _fetch_device_fixes
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
 
 UTC = timezone.utc
 T0 = datetime(2026, 7, 1, 8, 0, 0, tzinfo=UTC)
-
-
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
 
 
 async def _insert_point(conn, device, recorded_at, received_at) -> None:
@@ -38,7 +33,7 @@ async def _scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
 
         async with pool.connection() as conn:
             fixes = await _fetch_device_fixes(conn)

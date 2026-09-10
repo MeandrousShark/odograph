@@ -3,6 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from app.main import make_templates
 
 TZ = ZoneInfo("UTC")
@@ -63,3 +65,28 @@ def test_login_error_is_generic_and_password_is_not_echoed():
     assert "Invalid email or password." in body
     assert '<input type="password" name="password" required autocomplete="current-password">' in body
     assert 'name="password" value=' not in body
+
+
+@pytest.mark.parametrize(
+    ("context", "expected_action"),
+    [
+        ({"account_exists": True}, 'action="/login/local"'),
+        ({"account_exists": True, "oidc_login_available": True}, 'href="/login/oidc"'),
+        ({"signup_available": True}, 'href="/signup"'),
+        ({"legacy_oidc_available": True}, 'href="/login/oidc"'),
+        ({}, "operator recovery command"),
+    ],
+)
+def test_login_availability_states_share_the_auth_page_structure(context, expected_action):
+    body = _render(**context)
+
+    assert '<div class="card auth-card">' in body
+    assert '<div class="page-title auth-page-title">' in body
+    assert '<h2 class="page-title-heading">Sign in</h2>' in body
+    assert expected_action in body
+
+
+def test_login_error_uses_the_shared_danger_notice_and_alert_role():
+    body = _render(error="Invalid email or password.")
+
+    assert 'class="notice notice-danger form-error-summary" role="alert"' in body

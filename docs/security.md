@@ -116,7 +116,7 @@ Everything else in the application (the trip list, trip detail, review
 queue, settings, expenses, and every htmx partial and POST behind them)
 requires an authenticated session, plus a matching `X-CSRF-Token` header on
 every state-changing htmx request or a matching hidden field on the plain
-login, signup, and Account Security forms that can't set custom headers.
+login, signup, and Account Settings forms that can't set custom headers.
 
 ## Rate limiting and proxy trust
 
@@ -216,7 +216,7 @@ configuration files.
 5. **Generate every secret with real entropy, and know which ones you can
    rotate later.** `scripts/generate_env.sh` does this for you at install
    time. `SESSION_SECRET` is safely regenerable at any time. See
-   [Password recovery and session revocation](../README.md#password-recovery-and-session-revocation)
+   [Password recovery and session revocation](../README.md#password-recovery)
    for the account-level recovery commands and session behavior.
    `INGEST_PASSWORD` is also safely regenerable, but every OwnTracks device
    needs its stored password updated to match before it can post again.
@@ -276,7 +276,7 @@ configuration files.
       immediately invalidates every existing signed session cookie,
       including your own, so everyone has to sign back in. It does not touch
       any stored data.
-    - **A local administrator password**: change it in Account Security when
+    - **A local administrator password**: change it in Account Settings when
       signed in, or run `python -m app.manage_account reset-password` inside
       the app container for operator recovery. Either path increments the
       account authentication version and invalidates older sessions.

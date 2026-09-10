@@ -3,10 +3,14 @@
 {% block content %}
 
 <div class="card auth-card">
-<h2>Sign in</h2>
+<div class="page-title auth-page-title">
+  <div>
+    <h2 class="page-title-heading">Sign in</h2>
+  </div>
+</div>
 
 {% if error %}
-<div class="form-error-summary" role="alert">{{ error }}</div>
+<div class="notice notice-danger form-error-summary" role="alert">{{ error }}</div>
 {% endif %}
 
 {% if account_exists %}
@@ -18,13 +22,13 @@
   <label>Password
     <input type="password" name="password" required autocomplete="current-password">
   </label>
-  <button type="submit" class="control control-primary">Sign in</button>
+  <button type="submit" class="control control-primary auth-submit">Sign in</button>
 </form>
 {% endif %}
 
 {% if oidc_login_available or legacy_oidc_available %}
 {% if account_exists %}<p class="auth-divider">or</p>{% endif %}
-<a class="control control-secondary" href="/login/oidc">Sign in with OIDC</a>
+<a class="control control-secondary auth-oidc" href="/login/oidc">Sign in with OIDC</a>
 {% endif %}
 
 {% if signup_available %}

@@ -39,15 +39,20 @@ def validate_release_contract(root: Path, tag: str, image: str) -> None:
         )
 
     readme = (root / "README.md").read_text()
-    required_readme_contracts = (
+    install_contracts = (
         "git checkout vX.Y.Z",
-        "immutable image tag pinned by the checked-out release",
+        "git clone --branch vX.Y.Z --depth 1 https://github.com/MeandrousShark/odograph.git",
     )
-    for contract in required_readme_contracts:
-        if contract not in readme:
-            raise ReleaseContractError(
-                f"README.md is missing the release install contract: {contract}"
-            )
+    if not any(contract in readme for contract in install_contracts):
+        raise ReleaseContractError(
+            "README.md is missing the release install contract: "
+            "an exact release checkout or pinned clone"
+        )
+    if "immutable image tag pinned by the checked-out release" not in readme:
+        raise ReleaseContractError(
+            "README.md is missing the release install contract: "
+            "immutable image tag pinned by the checked-out release"
+        )
     if re.search(r"ghcr\.io/[^\s`]+:latest", readme, re.IGNORECASE):
         raise ReleaseContractError("README.md tells operators to use a latest image")
 

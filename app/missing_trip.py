@@ -1,13 +1,13 @@
 """Missing-trip detection: purely read-time, computed from `TRIP_COLUMNS`'
-`prev_*`/`missing_trip_covered` correlated subselects (app/ui.py) -- no
-migration, no persistence, no detector change.
+`prev_*`/`missing_trip_covered` correlated subselects (app/ui/_common.py) --
+no migration, no persistence, no detector change.
 
 Kept as a pure function (same "pure core, thin I/O wrapper" split as
 app/snap.py, app/rates.py, app/export.py) so the threshold-and-suppression
 logic is unit-testable without a database, and is the one place the flag's
 actual truth condition lives -- `app/main.py` wires it in as a Jinja global,
-`_trip_card.html` is the only template that calls it (deliberately the list
-page only; not review or detail).
+`_trip_archive_row.html` is the only template that calls it (deliberately the
+list page only; not review or detail).
 """
 from __future__ import annotations
 
@@ -32,12 +32,12 @@ def missing_trip_badge(
     entirely without needing every caller to check it separately.
 
     `trip["prev_end_gap_m"]` is `None` for manual rows (no `start_geom` to
-    measure from), a device's first detected trip (no predecessor), and a
-    detected trip whose immediate predecessor lacks `end_geom` -- all three
-    are TRIP_COLUMNS' job, not this function's (`ST_Distance` against a NULL
-    input is NULL, not a false "far away"). `missing_trip_covered` means a
-    manual trip already bridges the gap -- checked last so a covered flag
-    never even needs the distance compared.
+    measure from), a device's first included detected trip (no predecessor),
+    and a detected trip whose previous included trip lacks `end_geom` -- all
+    three are TRIP_COLUMNS' job, not this function's (`ST_Distance` against a
+    NULL input is NULL, not a false "far away"). `missing_trip_covered` means
+    an included manual trip already bridges the gap -- checked last so a
+    covered flag never even needs the distance compared.
     """
     if threshold_m <= 0:
         return None
@@ -71,12 +71,12 @@ def missing_trip_badge(
     }
     trip_id = trip.get("id")
     if trip_id is not None:
-        # Carries which trip the badge belongs to purely so trips_archive()
+        # Carries which trip the badge belongs to purely so the manual page
         # can resolve the OSRM road-distance suggestion without putting raw
         # coordinates in the URL -- add_manual_trip (the POST this form
         # submits to) never reads this param.
         params["bridge_trip"] = str(trip_id)
     return MissingTripBadge(
         gap_m=gap_m,
-        prefill_url="/trips?" + urlencode(params) + "#manual-trip",
+        prefill_url="/trips/manual?" + urlencode(params),
     )

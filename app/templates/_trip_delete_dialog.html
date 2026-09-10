@@ -3,7 +3,7 @@
   trigger_label='Delete trip', trigger_title='Delete trip',
   hx_target=none, hx_swap=none,
   filter_from=none, filter_to=none, filter_vehicle=none, filter_q=none,
-  fragment=false
+  fragment=false, dashboard_week=none
 ) %}
 <button type="button" class="control control-destructive trip-delete-trigger"
         title="{{ trigger_title }}" aria-haspopup="dialog"
@@ -31,6 +31,7 @@
       <input type="hidden" name="q" value="{{ filter_q }}">
     {% endif %}
     {% if fragment %}<input type="hidden" name="fragment" value="true">{% endif %}
+    {% if dashboard_week %}<input type="hidden" name="dashboard_week" value="{{ dashboard_week }}">{% endif %}
     <div class="app-dialog-actions trip-delete-dialog-actions">
       <button type="button" data-trip-delete-cancel autofocus>Cancel</button>
       <button type="button" class="control control-destructive trip-delete-confirm"

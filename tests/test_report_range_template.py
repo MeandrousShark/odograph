@@ -81,6 +81,45 @@ def test_report_summary_partial_renders_metrics_rates_and_caveats():
     assert 'href="/settings"' not in other_caveat_body
 
 
+def test_report_pages_use_the_shared_title_header_and_scoped_report_hooks():
+    annual = _render(
+        "report.html",
+        report=build_annual_report([_trip(1)], RATES, TZ, 2026),
+        odometer_coverage=[], expenses=[],
+        expense_report=SimpleNamespace(comparisons=[]), user=USER, csrf="token",
+        next_year_disabled=True,
+    )
+    quarter = _render(
+        "report_range.html",
+        report=build_range_report(
+            [_trip(4)], RATES, TZ, date(2026, 4, 1), date(2026, 6, 30)
+        ),
+        user=USER, csrf="token",
+    )
+
+    for body, title in (
+        (annual, "2026 annual mileage report"),
+        (quarter, "2026 Q2 mileage report"),
+    ):
+        assert '<div class="report-page">' in body
+        assert '<div class="report-page-header page-title">' in body
+        assert '<p class="page-title-eyebrow">Report</p>' in body
+        assert f'class="page-title-heading">{title}</h2>' in body
+    assert 'class="report-year-nav"' in annual
+    assert 'href="/report/2026/export"' in annual
+    assert 'href="/expenses?year=2026"' in annual
+    assert 'class="filter-bar report-controls"' in annual
+    assert 'class="report-summary-metric report-summary-business"' in annual
+    assert 'class="report-table report-month-table"' in annual
+    assert 'class="report-table report-vehicle-table"' in annual
+    assert 'href="/report/2026"' in quarter
+    assert 'href="/report/range/export?from=2026-04-01&to=2026-06-30"' in quarter
+
+    css = (Path(__file__).parents[1] / "static/style.css").read_text()
+    assert ".report-page .report-summary > div" in css
+    assert ".report-page .table-wrapper" in css
+
+
 def test_report_html_renders_shared_summary_for_non_empty_report():
     report = build_annual_report([_trip(1)], RATES, TZ, 2026)
     body = _render(

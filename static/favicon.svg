@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+  <style>
+    :root { color: #6c4eaa; }
+    @media (prefers-color-scheme: dark) { :root { color: #b9a8ff; } }
+  </style>
+  <title>Odograph</title>
+  <path d="M20.08 9.06A8.6 8.6 0 1 0 19.04 16.93"></path>
+  <path d="M19.04 16.93V12.2H13.95"></path>
+  <path d="M7.62 7.62 6.77 6.77M12 5.8V4.6M16.38 7.62l.85-.85" stroke-width="1.5" opacity=".68"></path>
+  <path d="M12 12.05C11.3 10.9 10.4 10.2 10.4 9.4A1.6 1.6 0 1 1 13.6 9.4C13.6 10.2 12.7 10.9 12 12.05Z" fill="currentColor" stroke="none"></path>
+</svg>

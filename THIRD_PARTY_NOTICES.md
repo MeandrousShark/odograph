@@ -1,11 +1,9 @@
 # Third-Party Notices
 
 This project is licensed under AGPL-3.0 (see [LICENSE](LICENSE)). It also
-uses the following third-party software and services. Licenses below were
-verified against each installed package's own metadata (`pip show
-<package> | grep -i license`, cross-checked against the bundled license
-file inside the package where the metadata field was empty), not merely
-copied from this document's original draft.
+uses the third-party software, map data, and services listed below. The
+license for each dependency is included here so operators and contributors
+can find the relevant terms in one place.
 
 ## Python dependencies (direct)
 
@@ -34,7 +32,7 @@ here; see `requirements.lock` for the full resolved set.
 | Leaflet | 1.9.4 (from the file's own `@preserve` header comment) | BSD-2-Clause | `static/vendor/leaflet/LICENSE` (added; the vendored build did not ship its own license file, so the upstream text was copied in alongside it) |
 | htmx | 1.9.1 (from the file's embedded `version` string) | BSD-2-Clause | `static/vendor/htmx/LICENSE` (added; the vendored build did not ship its own license file, so the upstream text was copied in alongside it) |
 
-## Services (not bundled, used at runtime if configured)
+## External software, data, and services
 
 - **OpenStreetMap**: trip and route maps render OpenStreetMap tiles and
   data, which are © OpenStreetMap contributors and licensed under the Open

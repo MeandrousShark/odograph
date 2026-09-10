@@ -1,5 +1,10 @@
 # Reverse proxy and TLS
 
+Use this guide to give Odograph a secure HTTPS address. A reverse proxy accepts
+browser and phone connections, handles the HTTPS certificate, and passes
+requests to Odograph. In the standard setup, Odograph's own port is reachable
+only from the same host.
+
 See [security.md](security.md) for the full hardening checklist this guide
 feeds into, including HSTS and the `FORWARDED_ALLOW_IPS` risk this document
 covers in depth below.

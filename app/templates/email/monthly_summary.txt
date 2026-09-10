@@ -1,6 +1,8 @@
 Odograph: {{ month_label }} summary.
 
 Business miles: {{ business_mi }}
+{% if nondeductible_mi %}Non-deductible miles: {{ nondeductible_mi }}
+{% endif %}
 Deduction: {{ deduction }}
 Unclassified trips: {{ unclassified }}
 {% if report_url %}

@@ -95,9 +95,9 @@ class DetectorRunner:
         return True
 
     async def reprocess_device_in(self, conn, device: str) -> None:
-        """`conn`-accepting single-device reprocess (app/ui.py's merge/split
-        UI endpoints). A deliberate user action should show its result
-        immediately rather than wait on the debounce/sweep.
+        """`conn`-accepting single-device reprocess (app/ui/merge_split.py's
+        merge/split UI endpoints). A deliberate user action should show its
+        result immediately rather than wait on the debounce/sweep.
 
         Takes the caller's connection instead of opening its own, so a
         caller with other writes to make around the reprocess (merge:
@@ -278,6 +278,15 @@ class DetectorRunner:
                     "detector: deleting trip %s tagged %r (no longer detected after reprocess)",
                     old.id, old.category,
                 )
+            linked_cur = await conn.execute(
+                "SELECT count(*) FROM expenses WHERE trip_id = %s", (old.id,)
+            )
+            linked_expenses = (await linked_cur.fetchone())[0]
+            if linked_expenses:
+                log.warning(
+                    "detector: deleting trip %s with %d linked expenses; expenses detached",
+                    old.id, linked_expenses,
+                )
             await conn.execute("DELETE FROM trips WHERE id = %s", (old.id,))
 
         touched_ids: list[int] = []
@@ -448,8 +457,8 @@ async def load_trip_points(conn, trip_id: int) -> list[tuple]:
 
     Returns raw rows `(id, recorded_at, lat, lon, accuracy_m)`, shared by
     `SnapWorker` (which adapts them into its own `MatchPoint`) and the
-    split-point-picker endpoint (`app/ui.py`), so neither has to depend on
-    the other's types.
+    split-point-picker endpoint (`app/ui/merge_split.py`), so neither has to
+    depend on the other's types.
     """
     cur = await conn.execute(
         "SELECT p.id, p.recorded_at, ST_Y(p.geom::geometry), ST_X(p.geom::geometry), p.accuracy_m "

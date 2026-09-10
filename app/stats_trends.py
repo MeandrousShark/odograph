@@ -28,6 +28,7 @@ class ShareBucket:
     business_m: float
     personal_m: float
     business_share: float | None
+    nondeductible_m: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,7 @@ class ShareTrend:
     chart_svg: str
     coverage_note: str | None
     plottable_quarters: int = 0
+    has_nondeductible: bool = False
 
 
 def _quarter_of(month: int) -> int:
@@ -62,10 +64,12 @@ def _quarterly_buckets(
 
     totals: dict[tuple[int, int], dict[str, float]] = {}
     for year, month, category, _count, meters in rows:
-        if category not in ("business", "personal"):
+        if category not in ("business", "personal", "nondeductible"):
             continue
         key = (year, _quarter_of(month))
-        amounts = totals.setdefault(key, {"business": 0.0, "personal": 0.0})
+        amounts = totals.setdefault(
+            key, {"business": 0.0, "personal": 0.0, "nondeductible": 0.0}
+        )
         amounts[category] += float(meters)
 
     max_year = max(years)
@@ -82,29 +86,34 @@ def _quarterly_buckets(
                 else:
                     clamped = True
                     continue  # entirely future, excluded
-            amounts = totals.get((year, quarter), {"business": 0.0, "personal": 0.0})
+            amounts = totals.get(
+                (year, quarter),
+                {"business": 0.0, "personal": 0.0, "nondeductible": 0.0},
+            )
             business_m = amounts["business"]
             personal_m = amounts["personal"]
-            classified = business_m + personal_m
+            nondeductible_m = amounts["nondeductible"]
+            classified = business_m + personal_m + nondeductible_m
             buckets.append(
                 ShareBucket(
                     label=f"Q{quarter} {year}",
                     business_m=business_m,
                     personal_m=personal_m,
                     business_share=(business_m / classified) if classified else None,
+                    nondeductible_m=nondeductible_m,
                 )
             )
     return buckets, clamped
 
 
 def _share_trend_chart(title: str, buckets: list[ShareBucket]) -> str:
-    """Return a self-contained SVG percentage-stacked bar chart of business share.
+    """Return a percentage-stacked chart of classified mileage share.
 
     Bars are normalized to 100% height rather than raw mileage: the point of
-    this chart is the business/personal split, not trip volume, which the
-    mileage charts in app/stats.py already cover. A quarter with no
-    classified miles has no meaningful split to plot, so its bar is skipped
-    rather than drawn as an empty or misleading zero-height bar.
+    this chart is the classified mileage split, not trip volume, which the
+    mileage charts in app/stats.py already cover. A quarter with no classified
+    miles has no meaningful split to plot, so its bar is skipped rather than
+    drawn as an empty or misleading zero-height bar.
 
     A fixed 0/25/50/75/100 percent axis is used instead of app.stats's
     nice_axis_max/axis_ticks: those size an axis to a mileage maximum, but
@@ -137,36 +146,34 @@ def _share_trend_chart(title: str, buckets: list[ShareBucket]) -> str:
         )
         if bucket.business_share is None:
             continue
-        business_height = bucket.business_share * plot_height
-        personal_height = plot_height - business_height
-        business_pct = bucket.business_share * 100
-        personal_pct = 100 - business_pct
-        business_tip = (
-            f"{bucket.label} business: {bucket.business_m / METERS_PER_MILE:.1f} mi "
-            f"({business_pct:.0f}%)"
-        )
-        personal_tip = (
-            f"{bucket.label} personal: {bucket.personal_m / METERS_PER_MILE:.1f} mi "
-            f"({personal_pct:.0f}%)"
-        )
-        bars.append(
-            f'<rect x="{x:.1f}" y="{top + plot_height - business_height:.1f}" '
-            f'width="{bar_width:.1f}" height="{business_height:.1f}" '
-            f'fill="{CATEGORY_COLORS["business"]}">'
-            f"<title>{escape(business_tip)}</title></rect>"
-        )
-        bars.append(
-            f'<rect x="{x:.1f}" y="{top:.1f}" width="{bar_width:.1f}" '
-            f'height="{personal_height:.1f}" fill="{CATEGORY_COLORS["personal"]}">'
-            f"<title>{escape(personal_tip)}</title></rect>"
-        )
+        classified = bucket.business_m + bucket.personal_m + bucket.nondeductible_m
+        y_cursor = top + plot_height
+        for category, meters in (
+            ("business", bucket.business_m),
+            ("personal", bucket.personal_m),
+            ("nondeductible", bucket.nondeductible_m),
+        ):
+            share = meters / classified
+            segment_height = share * plot_height
+            y_cursor -= segment_height
+            if not meters:
+                continue
+            tip = (
+                f"{bucket.label} {category}: {meters / METERS_PER_MILE:.1f} mi "
+                f"({share * 100:.0f}%)"
+            )
+            bars.append(
+                f'<rect x="{x:.1f}" y="{y_cursor:.1f}" width="{bar_width:.1f}" '
+                f'height="{segment_height:.1f}" fill="{CATEGORY_COLORS[category]}">'
+                f"<title>{escape(tip)}</title></rect>"
+            )
     gridlines = []
     tick_labels = []
     for pct in (0, 25, 50, 75, 100):
         y = top + plot_height - (pct / 100) * plot_height
-        # 50% is the business/personal break-even point, the one line on
-        # this chart worth calling out even now that it's one of five
-        # gridlines rather than the only one.
+        # 50% is the midpoint for business share, the one line on this chart
+        # worth calling out even now that it is one of five gridlines rather
+        # than the only one.
         dash = ' stroke-dasharray="4 3"' if pct == 50 else ""
         gridlines.append(
             f'<line x1="{left}" y1="{y:.1f}" x2="{width - right}" '
@@ -192,10 +199,16 @@ def build_share_trend(
     cutoff_month: int,
 ) -> ShareTrend:
     buckets, clamped = _quarterly_buckets(rows, years, cutoff_month)
-    chart_svg = _share_trend_chart("Business vs. personal share by quarter", buckets)
+    has_nondeductible = any(b.nondeductible_m for b in buckets)
+    title = (
+        "Classified mileage share by quarter"
+        if has_nondeductible else "Business vs. personal share by quarter"
+    )
+    chart_svg = _share_trend_chart(title, buckets)
     plottable_quarters = sum(1 for b in buckets if b.business_share is not None)
     return ShareTrend(
         chart_svg=chart_svg,
         coverage_note=COVERAGE_NOTE if clamped else None,
         plottable_quarters=plottable_quarters,
+        has_nondeductible=has_nondeductible,
     )

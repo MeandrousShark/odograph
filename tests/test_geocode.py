@@ -297,7 +297,8 @@ NOMINATIM_AUTOCOMPLETE_FIXTURE = [
 
 def test_parse_nominatim_autocomplete_response_extracts_label_lat_lon_as_floats():
     # Nominatim returns lat/lon as strings ("47.6205"), unlike Geoapify's
-    # floats -- app/ui.py and the autocomplete contract both expect floats.
+    # floats -- app/ui/places.py and the autocomplete contract both expect
+    # floats.
     results = parse_nominatim_autocomplete_response(NOMINATIM_AUTOCOMPLETE_FIXTURE, US_SUFFIX)
     assert results == [
         {"label": "400 Broad St, Seattle, WA 98109", "lat": 47.6205, "lon": -122.3493},

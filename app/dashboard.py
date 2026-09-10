@@ -1,11 +1,11 @@
 """Weekly dashboard presentation model. Pure core (this module) + thin I/O
-wrapper (the `GET /` route in app/ui.py), same "pure function, thin wrapper"
-split as `app/rates.py` and `app/missing_trip.py` -- the week-normalization
-and bucketing rules are the part that must be exactly right, so they live
-here where they're testable without a database.
+wrapper (the `GET /` route in app/ui/stats.py), same "pure function, thin
+wrapper" split as `app/rates.py` and `app/missing_trip.py` -- the
+week-normalization and bucketing rules are the part that must be exactly
+right, so they live here where they're testable without a database.
 
 Nothing in this module issues a query or knows about FastAPI/Jinja; it
-consumes already-fetched `TRIP_COLUMNS` rows (app/ui.py) and an
+consumes already-fetched `TRIP_COLUMNS` rows (app/ui/_common.py) and an
 already-summed expense total, and returns a tree of frozen dataclasses for a
 template to render.
 """
@@ -39,6 +39,26 @@ class DistanceBreakdown:
     business_m: float
     personal_m: float
     unclassified_m: float
+    nondeductible_m: float = 0.0
+
+
+@dataclass(frozen=True)
+class DailyDistanceBreakdown:
+    """Distance meters for one local calendar day of the dashboard week."""
+
+    day: date
+    business_m: float
+    personal_m: float
+    unclassified_m: float
+    nondeductible_m: float
+
+    @property
+    def total_m(self) -> float:
+        """Return the day's total across all four displayed states."""
+        return (
+            self.business_m + self.personal_m
+            + self.unclassified_m + self.nondeductible_m
+        )
 
 
 @dataclass(frozen=True)
@@ -83,6 +103,7 @@ class WeekNav:
 class WeekDashboard:
     trip_count: int
     distance: DistanceBreakdown
+    daily_series: list[DailyDistanceBreakdown]
     expense_total: Decimal | float
     deduction: DeductionEstimate
     day_groups: list[DayGroup]
@@ -99,12 +120,13 @@ def format_week_range(start: date, end: date) -> str:
 
 
 def parse_week_anchor(week_str: str, tz: ZoneInfo, now: datetime) -> date:
-    """Parse the `week` query value as an anchor date, same forgiving
-    posture as `parse_date_range` (app/ui.py): a bookmarked or hand-edited
+    """Parse the `week` query value as an anchor date, same forgiving posture
+    as `parse_date_range` (app/ui/_common.py): a bookmarked or hand-edited
     `?week=` is never worth a 400, and there's no meaningful "invalid week"
-    state for a dashboard to render, so absent/malformed/nonsense values all
-    fall back to today. The caller still normalizes whatever this returns
-    (including a valid-but-arbitrary weekday) through `week_bounds`.
+    state for a dashboard to render, so absent/malformed/nonsense values
+    all fall back to today. The caller still normalizes whatever this
+    returns (including a valid-but-arbitrary weekday) through
+    `week_bounds`.
     """
     if week_str:
         try:
@@ -121,7 +143,7 @@ def week_bounds(anchor_date: date, tz: ZoneInfo) -> WeekBounds:
 
     `start`/`end` are built by attaching `tz` directly to local calendar-date
     components (`datetime(year, month, day, tzinfo=tz)`), the same
-    convention `_month_bounds` (app/ui.py) uses for month boundaries --
+    convention `_month_bounds` (app/ui/_common.py) uses for month boundaries --
     never by adding a `timedelta` to an already-aware datetime, which would
     silently smear across a DST transition (e.g. "add 7 days" landing at
     23:00 or 01:00 instead of local midnight). Building from calendar dates
@@ -149,10 +171,9 @@ def build_week_dashboard(
     `TRIP_COLUMNS` rows and one already-summed expense total.
 
     Every summary figure below (trip count, distance breakdown, deduction
-    buckets, attention counts) is derived from the same `trips` list that
-    becomes `day_groups` -- never a second aggregate query -- so the summary
-    cards and the trip cards underneath them can never drift apart even if a
-    filter or a future caching layer changes what "the week's trips" means.
+    buckets, attention counts) and `day_groups` is derived from the same
+    exclusion-aware pass over `trips` -- never a second aggregate query -- so
+    the summary cards and the trip cards underneath them cannot drift apart.
 
     `week_start` is re-normalized through `week_bounds` rather than trusted
     as an already-correct Monday, so a caller passing an arbitrary date (or
@@ -167,32 +188,53 @@ def build_week_dashboard(
     today = local_now.date()
     yesterday = today - timedelta(days=1)
 
-    total_m = business_m = personal_m = unclassified_m = 0.0
+    total_m = business_m = personal_m = unclassified_m = nondeductible_m = 0.0
+    counted_trip_count = 0
     business_buckets: dict[tuple[int, int], float] = {}
     day_buckets: dict[date, list[dict]] = {}
+    daily_buckets: dict[date, list[float]] = {}
     unclassified_count = 0
     badges: list[MissingTripBadge] = []
 
     for trip in trips:
         distance_m = float(trip.get("display_distance_m") or 0.0)
-        total_m += distance_m
+        exclusion = trip.get("exclusion")
         category = trip.get("category")
-        if category == "business":
+        if category == "unclassified":
+            unclassified_count += 1
+
+        started_at: datetime = trip["started_at"]
+        local_started = started_at.astimezone(tz)
+        day = local_started.date()
+        day_buckets.setdefault(day, []).append(trip)
+
+        if exclusion == "not_my_vehicle":
+            continue
+
+        counted_trip_count += 1
+        total_m += distance_m
+        if exclusion == "not_deductible":
+            nondeductible_m += distance_m
+        elif category == "business":
             business_m += distance_m
         elif category == "personal":
             personal_m += distance_m
         else:
             unclassified_m += distance_m
-            unclassified_count += 1
 
-        started_at: datetime = trip["started_at"]
-        local_started = started_at.astimezone(tz)
-
-        if category == "business" and distance_m:
+        if not exclusion and category == "business" and distance_m:
             key = (local_started.year, local_started.month)
             business_buckets[key] = business_buckets.get(key, 0.0) + distance_m
 
-        day_buckets.setdefault(local_started.date(), []).append(trip)
+        daily = daily_buckets.setdefault(day, [0.0, 0.0, 0.0, 0.0])
+        if exclusion == "not_deductible":
+            daily[3] += distance_m
+        elif category == "business":
+            daily[0] += distance_m
+        elif category == "personal":
+            daily[1] += distance_m
+        else:
+            daily[2] += distance_m
 
         badge = missing_trip_badge(trip, missing_trip_threshold_m, tz)
         if badge is not None:
@@ -201,6 +243,7 @@ def build_week_dashboard(
     distance = DistanceBreakdown(
         total_m=total_m, business_m=business_m,
         personal_m=personal_m, unclassified_m=unclassified_m,
+        nondeductible_m=nondeductible_m,
     )
 
     deduction_total = 0.0
@@ -226,6 +269,18 @@ def build_week_dashboard(
         for day in sorted(day_buckets, reverse=True)
     ]
 
+    daily_series = []
+    for offset in range(7):
+        day = monday + timedelta(days=offset)
+        meters = daily_buckets.get(day, [0.0, 0.0, 0.0, 0.0])
+        daily_series.append(DailyDistanceBreakdown(
+            day=day,
+            business_m=meters[0],
+            personal_m=meters[1],
+            unclassified_m=meters[2],
+            nondeductible_m=meters[3],
+        ))
+
     review_url = f"/review?from={monday.isoformat()}&to={sunday.isoformat()}"
     attention = None
     if unclassified_count or badges:
@@ -246,8 +301,9 @@ def build_week_dashboard(
     )
 
     return WeekDashboard(
-        trip_count=len(trips),
+        trip_count=counted_trip_count,
         distance=distance,
+        daily_series=daily_series,
         expense_total=expense_total,
         deduction=deduction_estimate,
         day_groups=day_groups,

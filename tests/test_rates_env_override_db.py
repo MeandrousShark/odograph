@@ -9,17 +9,12 @@ import os
 
 import pytest
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.rates import ENV_PREFIX, load_rates
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
-
-
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
 
 
 @pytest.mark.parametrize("bad_value", ["nan", "1e400", "-inf", "0", "-5"])
@@ -32,7 +27,7 @@ async def _bad_override_scenario(monkeypatch, bad_value):
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             rates = await load_rates(conn)
         # 2026 is seeded at 0.7250 by migrations/002_mileage_rates.sql; the
@@ -51,7 +46,7 @@ async def _valid_override_scenario(monkeypatch):
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             rates = await load_rates(conn)
         assert rates[2026].rate_per_mi == pytest.approx(0.7)

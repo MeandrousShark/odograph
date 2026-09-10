@@ -20,8 +20,9 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.ingest import FailedAuthLimiter, _validate_location, make_router
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -31,12 +32,6 @@ pytestmark = pytest.mark.skipif(
 AUTH_HEADER = {
     "Authorization": "Basic " + base64.b64encode(b"owntracks:testpw").decode()
 }
-
-
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
 
 
 def _bare_app(pool) -> FastAPI:
@@ -57,7 +52,7 @@ async def _scenario(coro) -> None:
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         transport = httpx.ASGITransport(app=_bare_app(pool))
         async with httpx.AsyncClient(
             transport=transport, base_url="http://testserver"

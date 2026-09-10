@@ -26,14 +26,15 @@ import os
 import psycopg
 import pytest
 
-import app.main as main_module
 from app.config import Config
-from app.db import DETECTOR_ADVISORY_LOCK_KEY, make_pool, run_migrations
+from app.db import DETECTOR_ADVISORY_LOCK_KEY, make_pool
 from app.detector.core import Params
 from app.detector.runner import DetectorRunner, DetectorScheduler
 from app.diagnose import worker_reports_from_config
+import app.main as main_module
 from app.main import create_app
 from app.worker import RUN_SKIPPED, IntervalWorker, PokeSweepWorker
+from conftest import reset_db
 
 log = logging.getLogger("test-worker-lifecycle")
 
@@ -41,6 +42,9 @@ TEST_DB = os.environ.get("TEST_DATABASE_URL")
 db_only = pytest.mark.skipif(
     not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests"
 )
+# db_only alone only skips when TEST_DATABASE_URL is unset; the three cases
+# below also carry pytest.mark.db directly, since this file's name has no
+# "_db" suffix for tests/conftest.py's automatic tier assignment to key off.
 
 
 # ---- 1. skip vs. success (unit) ------------------------------------------
@@ -87,9 +91,7 @@ async def _run_detector_scheduler_records_skip_scenario():
     await pool.open(wait=True)
     holder = await psycopg.AsyncConnection.connect(TEST_DB)
     try:
-        async with pool.connection() as conn:
-            await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-        await run_migrations(pool)
+        await reset_db(pool)
 
         # Hold the detector's advisory lock in an uncommitted transaction on
         # a second connection, mimicking a concurrent instance's in-flight
@@ -110,6 +112,7 @@ async def _run_detector_scheduler_records_skip_scenario():
 
 
 @db_only
+@pytest.mark.db
 def test_detector_scheduler_run_guarded_records_a_skip_when_advisory_lock_is_held():
     """A real lock-contended detector run, driven through the scheduler
     wrapper (not DetectorRunner.run_once() directly), must land as a skip
@@ -319,6 +322,7 @@ def _capture_pool(monkeypatch) -> dict:
 
 
 @db_only
+@pytest.mark.db
 def test_lifespan_closes_the_pool_when_run_migrations_fails(monkeypatch):
     """run_migrations fails immediately after pool.open() -- before any
     worker exists -- and the pool it already opened must still be closed."""
@@ -348,14 +352,13 @@ async def _reset_schema_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        async with pool.connection() as conn:
-            await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-        await run_migrations(pool)
+        await reset_db(pool)
     finally:
         await pool.close()
 
 
 @db_only
+@pytest.mark.db
 def test_lifespan_stops_an_already_started_worker_when_a_later_worker_fails_to_start(monkeypatch):
     """The retention worker (on by default) starts well before the nudge
     worker in create_app's lifespan. When constructing the nudge worker

@@ -128,6 +128,7 @@ def test_public_snapshot_includes_ci_and_release_files(tmp_path):
     assert (snapshot / "docs" / "releasing.md").read_bytes() == (
         committed_bytes("docs/releasing.md")
     )
+    assert not (snapshot / "tests" / "test_handoff_contract.py").exists()
 
     snapshot_docs = {
         path.relative_to(snapshot).as_posix()
@@ -137,6 +138,9 @@ def test_public_snapshot_includes_ci_and_release_files(tmp_path):
     assert snapshot_docs == {
         "docs/backups.md",
         "docs/configuration.md",
+        "docs/images/usage-dashboard.png",
+        "docs/images/usage-review.png",
+        "docs/install-compose.md",
         "docs/osrm.md",
         "docs/owntracks.md",
         "docs/privacy.md",
@@ -144,4 +148,5 @@ def test_public_snapshot_includes_ci_and_release_files(tmp_path):
         "docs/reverse-proxy.md",
         "docs/security.md",
         "docs/upgrading.md",
+        "docs/usage.md",
     }

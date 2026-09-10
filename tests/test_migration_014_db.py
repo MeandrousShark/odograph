@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from app.db import make_pool, run_migrations
+from conftest import full_schema_reset
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -19,9 +20,7 @@ async def _scenario() -> None:
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        async with pool.connection() as conn:
-            await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-        await run_migrations(pool)
+        await full_schema_reset(pool)
 
         async with pool.connection() as conn:
             versions = await conn.execute(

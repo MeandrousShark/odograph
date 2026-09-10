@@ -31,10 +31,13 @@ def test_account_auth_routes_resolve_and_setup_is_removed():
         ("GET", "/auth/callback"),
         ("GET", "/account/establish"),
         ("POST", "/account/establish"),
+        ("GET", "/account/avatar"),
         ("GET", "/settings/account"),
         ("POST", "/settings/account/password"),
         ("POST", "/settings/account/oidc/link"),
         ("POST", "/settings/account/oidc/unlink"),
+        ("POST", "/settings/account/avatar"),
+        ("POST", "/settings/account/avatar/remove"),
         ("POST", "/logout"),
     }
     for method, path in expected:

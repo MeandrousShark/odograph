@@ -1,5 +1,5 @@
--- A trip that arrived through the portable import (app/portable.py) has no
--- backing rows in this instance's points table -- the source instance's
+-- A trip that arrived through the portable import (app/portable/importer.py)
+-- has no backing rows in this instance's points table -- the source instance's
 -- points never travel with it. The detector's reconcile pass treats every
 -- source = 'detected' trip it doesn't re-derive from points as stale and
 -- deletes it (app/detector/reconcile.py's plan_reconcile), so an imported

@@ -2,10 +2,27 @@
 from __future__ import annotations
 
 import re
+from xml.etree import ElementTree
 
 import pytest
 
 from app.stats_trends import MIN_STEP, ShareBucket, _quarterly_buckets, _share_trend_chart, build_share_trend
+
+
+def _assert_chart_accessibility_contract(chart_svg: str) -> None:
+    root = ElementTree.fromstring(chart_svg)
+    assert root.tag == "svg"
+    assert root.get("role") != "img"
+    assert root.get("aria-label", "").strip()
+    chart_title = root.find("title")
+    assert chart_title is not None
+    assert (chart_title.text or "").strip()
+    rects = root.findall(".//rect")
+    assert rects
+    for rect in rects:
+        bar_title = rect.find("title")
+        assert bar_title is not None
+        assert (bar_title.text or "").strip()
 
 
 def _bucket(buckets, label):
@@ -55,6 +72,37 @@ def test_all_unclassified_quarter_has_no_bar_and_no_share():
 
     chart = _share_trend_chart("Business vs. personal share", buckets)
     assert "<rect" not in chart
+
+
+def test_share_chart_root_and_data_bars_have_accessible_titles():
+    buckets = [
+        ShareBucket(
+            "Q2 2025", 412.3 * 1609.344, 194.1 * 1609.344,
+            0.68, 20 * 1609.344,
+        )
+    ]
+
+    _assert_chart_accessibility_contract(
+        _share_trend_chart("Classified mileage share by quarter", buckets)
+    )
+
+
+def test_nondeductible_is_a_third_classified_share_band():
+    rows = [
+        (2024, 2, "business", 1, 1000.0),
+        (2024, 2, "personal", 1, 1000.0),
+        (2024, 2, "nondeductible", 1, 2000.0),
+    ]
+    buckets, _ = _quarterly_buckets(rows, [2024], 12)
+    q1 = _bucket(buckets, "Q1 2024")
+    chart = _share_trend_chart("Business vs. personal share", buckets)
+
+    assert q1.business_share == pytest.approx(0.25)
+    assert q1.nondeductible_m == 2000.0
+    assert "var(--overlay0)" in chart
+    trend = build_share_trend(rows, [2024], 12)
+    assert trend.has_nondeductible is True
+    assert "Classified mileage share by quarter" in trend.chart_svg
 
 
 def test_coverage_note_set_when_quarters_are_clamped():

@@ -45,13 +45,13 @@ def _render(stats: Dashboard, **context) -> str:
 
 
 def test_ranking_headings_sit_directly_before_their_tables():
-    # "Top named routes" and "Most-used places" are each immediately followed
-    # by a bare <table>, which is why the global first-column padding fix has
-    # to cover this page too. The report's tables no longer share that shape:
-    # they sit inside scroll wrappers, so this page is now the only place the
-    # bare heading-then-table adjacency is asserted.
+    # "Top saved-place routes" and "Most-used places" are each immediately
+    # followed by a bare <table>, which is why the global first-column
+    # padding fix has to cover this page too. The report's tables no longer
+    # share that shape: they sit inside scroll wrappers, so this page is now
+    # the only place the bare heading-then-table adjacency is asserted.
     body = _render(_dashboard())
-    assert "<h2>Top named routes</h2>\n    \n    <table>" in body
+    assert "<h2>Top saved-place routes</h2>\n    \n    <table>" in body
     assert "<h2>Most-used places</h2>\n    \n    <table>" in body
 
     css = (Path(__file__).parents[1] / "static/style.css").read_text()
@@ -112,6 +112,25 @@ def test_heading_shows_plain_year_when_not_date_filtered():
     assert "<h2>2026 driving overview</h2>" in body
 
 
+def test_stats_template_exposes_shared_presentation_hooks():
+    body = _render(_dashboard())
+    assert '<div class="stats-page">' in body
+    assert '<div class="stats-page-header page-title">' in body
+    assert '<p class="page-title-eyebrow">Stats</p>' in body
+    assert '<h2 id="stats-page-title" class="page-title-heading">Driving insights</h2>' in body
+    assert '<nav class="stats-year-nav" aria-label="Stats year">' in body
+    assert '<div class="stats-summary" role="group" aria-label="Mileage summary">' in body
+    assert 'class="stats-section stats-chart-section stats-weekly-section"' in body
+    assert 'class="stats-ranking-card"' in body
+
+    css = (Path(__file__).parents[1] / "static/style.css").read_text()
+    assert ".stats-page .stats-summary {" in css
+    assert ".stats-page .stats-section {" in css
+    stats_mobile = css.index('@media (max-width: 760px) {\n  .stats-page-header')
+    review_styles = css.index("/* Review keeps the task surface")
+    assert stats_mobile < review_styles
+
+
 def test_partials_absent_when_their_context_is_not_supplied():
     body = _render(_dashboard())
     assert "Year-over-year monthly miles" not in body
@@ -137,6 +156,16 @@ def test_trend_partial_renders_when_present():
     body = _render(_dashboard(), trend=trend)
     assert "Business vs. personal share" in body
     assert "<svg>trend</svg>" in body
+
+
+def test_trend_heading_names_all_three_bands_when_nondeductible_is_present():
+    trend = ShareTrend(
+        chart_svg="<svg>trend</svg>", coverage_note=None,
+        plottable_quarters=2, has_nondeductible=True,
+    )
+    body = _render(_dashboard(), trend=trend)
+    assert "Classified mileage share" in body
+    assert "Business vs. personal share" not in body
 
 
 def test_trend_partial_hidden_with_fewer_than_two_plottable_quarters():

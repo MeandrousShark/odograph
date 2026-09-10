@@ -14,9 +14,10 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from psycopg.rows import dict_row
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.missing_trip import missing_trip_badge
 from app.ui import TRIP_COLUMNS, _trip_filter_sql
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -25,12 +26,6 @@ pytestmark = pytest.mark.skipif(
 
 UTC = timezone.utc
 T0 = datetime(2026, 7, 1, 8, 0, 0, tzinfo=UTC)
-
-
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
 
 
 async def _insert_detected_trip(
@@ -82,7 +77,7 @@ async def _scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         # Each scenario group gets its own day, not just its own device: the
         # covering-manual-trip check (below) is deliberately *not* filtered
         # by device -- a manual trip is always stored with device='manual'
@@ -160,6 +155,26 @@ async def _scenario():
                 conn, "COVER", t + timedelta(minutes=20), t + timedelta(hours=1),
             )
 
+            # An excluded detected trip must not become the predecessor used
+            # for a later dashboard warning.
+            t = day(6)
+            excluded_prev_a = await _insert_detected_trip(
+                conn, "EXCLUDED-PREV", t, t + timedelta(minutes=10),
+                47.0, -122.0, 47.0, -122.0,
+            )
+            excluded_prev_mid = await _insert_detected_trip(
+                conn, "EXCLUDED-PREV", t + timedelta(minutes=20), t + timedelta(minutes=30),
+                47.02, -122.0, 47.02, -122.0,
+            )
+            excluded_prev_c = await _insert_detected_trip(
+                conn, "EXCLUDED-PREV", t + timedelta(minutes=40), t + timedelta(minutes=50),
+                47.0, -122.0, 47.0, -122.0,
+            )
+            await conn.execute(
+                "UPDATE trips SET exclusion = 'not_my_vehicle' WHERE id = %s",
+                (excluded_prev_mid,),
+            )
+
         async with pool.connection() as conn:
             row_b = await _fetch_row(conn, gap_b)
             row_c = await _fetch_row(conn, gap_c)
@@ -168,6 +183,7 @@ async def _scenario():
             row_no_geom_b = await _fetch_row(conn, no_geom_b)
             row_page_b_full = await _fetch_row(conn, page_b)
             row_cov_b = await _fetch_row(conn, cov_b)
+            row_excluded_prev_c = await _fetch_row(conn, excluded_prev_c)
 
         # --- Criterion 1 assertions: real measured gap, exact boundary ---
         assert row_b["prev_end_gap_m"] is not None
@@ -215,11 +231,29 @@ async def _scenario():
         assert row_page_b_full["prev_end_gap_m"] is not None
         assert row_page_b_full["prev_end_gap_m"] > 1500
 
+        # The excluded middle row contributes nothing to the dashboard. The
+        # visible successor therefore measures from the earlier normal trip.
+        assert row_excluded_prev_c["prev_end_gap_m"] < 100
+        assert missing_trip_badge(
+            row_excluded_prev_c, threshold_m=1000.0, tz=UTC
+        ) is None
+
         # --- Criterion 4: covering-manual-trip suppression + its removal ---
         assert row_cov_b["prev_end_gap_m"] is not None and row_cov_b["prev_end_gap_m"] > 1500
         assert row_cov_b["missing_trip_covered"] is True
         assert missing_trip_badge(row_cov_b, threshold_m=1000.0, tz=UTC) is None, \
             "a covering manual trip suppresses the badge even though the gap exceeds the threshold"
+
+        async with pool.connection() as conn:
+            await conn.execute(
+                "UPDATE trips SET exclusion = 'not_my_vehicle' WHERE id = %s",
+                (covering_manual,),
+            )
+            row_cov_b_excluded = await _fetch_row(conn, cov_b)
+        assert row_cov_b_excluded["missing_trip_covered"] is False
+        assert missing_trip_badge(
+            row_cov_b_excluded, threshold_m=1000.0, tz=UTC
+        ) is not None, "an excluded manual trip must not suppress a dashboard warning"
 
         async with pool.connection() as conn:
             await conn.execute("DELETE FROM trips WHERE id = %s", (covering_manual,))
@@ -228,7 +262,7 @@ async def _scenario():
         badge = missing_trip_badge(row_cov_b_after, threshold_m=1000.0, tz=UTC)
         assert badge is not None, "deleting the covering manual trip brings the badge back"
         assert badge.gap_m == row_cov_b_after["prev_end_gap_m"]
-        assert "manual_date=" in badge.prefill_url and "#manual-trip" in badge.prefill_url
+        assert badge.prefill_url.startswith("/trips/manual?manual_date=")
         assert f"bridge_trip={cov_b}" in badge.prefill_url
     finally:
         await pool.close()

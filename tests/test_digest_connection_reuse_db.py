@@ -20,9 +20,9 @@ from zoneinfo import ZoneInfo
 import pytest
 from psycopg_pool import AsyncConnectionPool
 
-from app.db import run_migrations
 from app.email_digest import EmailDigestWorker
 from app.mailer import Mailer
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -40,9 +40,7 @@ POOL_TIMEOUT_S = 3.0
 
 
 async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
+    await reset_db(pool)
     async with pool.connection() as conn:
         await conn.execute("UPDATE vehicles SET active = false WHERE name = 'My Car'")
 

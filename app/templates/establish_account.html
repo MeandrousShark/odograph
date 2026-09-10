@@ -3,13 +3,16 @@
 {% block content %}
 
 <div class="card auth-card">
-<h2>Establish administrator account</h2>
-
-<p>Create local login credentials for this existing installation. The current
-sign-in provider identity will be linked to the same administrator account.</p>
+<div class="page-title auth-page-title">
+  <div>
+    <h2 class="page-title-heading">Establish administrator account</h2>
+    <p class="page-title-subtitle">Create local login credentials for this existing installation. The current
+    sign-in provider identity will be linked to the same administrator account.</p>
+  </div>
+</div>
 
 {% if error %}
-<div class="form-error-summary" role="alert">{{ error }}</div>
+<div class="notice notice-danger form-error-summary" role="alert">{{ error }}</div>
 {% endif %}
 
 <form method="post" action="/account/establish" class="auth-form">
@@ -23,7 +26,7 @@ sign-in provider identity will be linked to the same administrator account.</p>
   <label>Confirm new password
     <input type="password" name="password_confirm" required autocomplete="new-password" minlength="8">
   </label>
-  <button type="submit" class="control control-primary">Establish administrator account</button>
+  <button type="submit" class="control control-primary auth-submit">Establish administrator account</button>
 </form>
 
 <p class="muted">If the provider is unavailable, an operator with container

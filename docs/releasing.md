@@ -1,7 +1,11 @@
 # Releasing
 
 This is the maintainer procedure for publishing a versioned release and its
-multi-architecture container image. Releases are built by CI from an immutable
+multi-architecture container image. For installing or updating your own
+instance, use the [README](../README.md#install) and
+[upgrading guide](upgrading.md).
+
+Releases are built by CI from an immutable
 annotated tag. Never publish from a workstation when CI is available, never
 publish `latest`, and never move or reuse a release tag.
 

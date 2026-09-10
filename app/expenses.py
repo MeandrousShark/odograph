@@ -39,6 +39,53 @@ TREATMENT_LABELS = {
     "fully_business": "Fully business",
 }
 
+EXPENSE_CONFLICT_LABELS = {
+    "vehicle": "The expense vehicle does not match the linked trip vehicle.",
+    "date": "The expense date does not match the linked trip's local date.",
+    "not_my_vehicle": (
+        "The linked trip is excluded as not one of my vehicles, so it contributes "
+        "to no vehicle total."
+    ),
+}
+
+
+@dataclass(frozen=True)
+class ExpenseAttribution:
+    """One linked ledger row, kept separate from method arithmetic."""
+
+    trip_id: int
+    expense_id: int | None
+    amount: Decimal
+    conflicts: tuple[str, ...] = ()
+
+
+def expense_conflicts(expense: dict, tz: ZoneInfo) -> tuple[str, ...]:
+    """Return stable conflict codes for a linked expense.
+
+    The expense remains authoritative for its vehicle, date, and amount. These
+    checks only describe disagreements with the linked trip so callers can
+    render the same warning on each expense surface without mutating either
+    record.
+    """
+    if expense.get("trip_id") is None:
+        return ()
+    conflicts: list[str] = []
+    trip_vehicle_id = expense.get("trip_vehicle_id")
+    if "trip_vehicle_id" in expense and trip_vehicle_id != expense.get("vehicle_id"):
+        conflicts.append("vehicle")
+    trip_started_at = expense.get("trip_started_at")
+    if trip_started_at is not None:
+        trip_local_date = (
+            trip_started_at.astimezone(tz).date()
+            if trip_started_at.tzinfo is not None
+            else trip_started_at.date()
+        )
+        if expense.get("incurred_on") != trip_local_date:
+            conflicts.append("date")
+    if expense.get("trip_exclusion") == "not_my_vehicle":
+        conflicts.append("not_my_vehicle")
+    return tuple(conflicts)
+
 
 @dataclass(frozen=True)
 class ExpenseComparison:
@@ -65,6 +112,8 @@ class ExpenseReport:
     allocated_total: Decimal = Decimal("0.00")
     fully_business_total: Decimal = Decimal("0.00")
     ledger_total: Decimal = Decimal("0.00")
+    trip_expenses: dict[int, Decimal] = field(default_factory=dict)
+    attributions: list[ExpenseAttribution] = field(default_factory=list)
 
 
 def default_treatment(category: str) -> str:
@@ -131,6 +180,9 @@ def build_expense_report(
     business_m: dict[int, float] = {}
     gps_total_m: dict[int, float] = {}
     business_by_month: dict[int, dict[int, float]] = {}
+    trips_by_id = {
+        trip["id"]: trip for trip in trips if trip.get("id") is not None
+    }
     for trip in trips:
         vehicle_id = trip.get("vehicle_id")
         if vehicle_id is None:
@@ -138,10 +190,19 @@ def build_expense_report(
         local_start = trip["started_at"].astimezone(tz)
         if local_start.year != year:
             continue
+        # not_my_vehicle: no vehicle of the maintainer's was involved, so the
+        # trip reaches neither the odometer-vs-GPS denominator nor anything
+        # derived from it. not_deductible: the car did the miles, so it still
+        # counts toward gps_total_m, but never toward business_m or the
+        # month-by-month standard-mileage base below, even when its own
+        # category is "business".
+        exclusion = trip.get("exclusion")
+        if exclusion == "not_my_vehicle":
+            continue
         names[vehicle_id] = trip.get("vehicle_name") or f"Vehicle {vehicle_id}"
         distance_m = float(trip["display_distance_m"])
         gps_total_m[vehicle_id] = gps_total_m.get(vehicle_id, 0.0) + distance_m
-        if trip["category"] == "business":
+        if exclusion != "not_deductible" and trip["category"] == "business":
             business_m[vehicle_id] = business_m.get(vehicle_id, 0.0) + distance_m
             months = business_by_month.setdefault(vehicle_id, {})
             months[local_start.month] = months.get(local_start.month, 0.0) + distance_m
@@ -149,6 +210,8 @@ def build_expense_report(
     category_totals: dict[str, Decimal] = {}
     allocated_by_vehicle: dict[int, Decimal] = {}
     fully_by_vehicle: dict[int, Decimal] = {}
+    trip_expenses: dict[int, Decimal] = {}
+    attributions: list[ExpenseAttribution] = []
     for expense in expenses:
         if expense["incurred_on"].year != year:
             continue
@@ -159,6 +222,24 @@ def build_expense_report(
         category_totals[category] = category_totals.get(category, Decimal("0")) + amount
         target = fully_by_vehicle if expense["treatment"] == "fully_business" else allocated_by_vehicle
         target[vehicle_id] = target.get(vehicle_id, Decimal("0")) + amount
+        trip_id = expense.get("trip_id")
+        if trip_id is not None:
+            trip_expenses[trip_id] = trip_expenses.get(trip_id, Decimal("0")) + amount
+            linked_trip = trips_by_id.get(trip_id)
+            conflict_row = expense
+            if linked_trip is not None:
+                conflict_row = {
+                    **expense,
+                    "trip_vehicle_id": linked_trip.get("vehicle_id"),
+                    "trip_started_at": linked_trip.get("started_at"),
+                    "trip_exclusion": linked_trip.get("exclusion"),
+                }
+            attributions.append(ExpenseAttribution(
+                trip_id=trip_id,
+                expense_id=expense.get("id"),
+                amount=_money(amount),
+                conflicts=expense_conflicts(conflict_row, tz),
+            ))
 
     readings_by_vehicle: dict[int, list[dict]] = {}
     for reading in odometer_readings:
@@ -252,4 +333,6 @@ def build_expense_report(
         allocated_total=allocated_total,
         fully_business_total=fully_total,
         ledger_total=_money(allocated_total + fully_total),
+        trip_expenses={trip_id: _money(amount) for trip_id, amount in trip_expenses.items()},
+        attributions=attributions,
     )

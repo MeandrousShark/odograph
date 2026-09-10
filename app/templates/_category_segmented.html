@@ -1,0 +1,24 @@
+{# `two_option` opts a caller into a Business/Personal pair with no Unset
+   choice, for a surface that only ever shows unclassified trips. An
+   unclassified value then matches no option, so the group renders with
+   nothing selected and the caller is responsible for offering another way
+   back to no category. #}
+{% macro category_segmented(value, id_prefix, hx_post='', hx_swap='', invalid=false, describedby='', hx_target='', two_option=false) -%}
+{% set choices = (('business', 'Business'), ('personal', 'Personal')) if two_option
+   else (('personal', 'Personal'), ('unclassified', 'Unset'), ('business', 'Business')) %}
+<fieldset class="category-segmented{% if two_option %} category-segmented-pair{% endif %}"{% if invalid %} aria-invalid="true"{% endif %}{% if describedby %} aria-describedby="{{ describedby }}"{% endif %}>
+  <legend>Category</legend>
+  <div class="category-segmented-options">
+    {% for category, label in choices %}
+    <input class="category-segmented-input" type="radio"
+           id="{{ id_prefix }}-{{ category }}" name="category" value="{{ category }}"
+           {{ 'checked' if value == category }}
+           {% if hx_post %}hx-post="{{ hx_post }}" hx-trigger="change"{% endif %}
+           {% if hx_swap %}hx-swap="{{ hx_swap }}"{% endif %}
+           {% if hx_target %}hx-target="{{ hx_target }}"{% endif %}>
+    <label class="category-segmented-option category-segmented-{{ category }}"
+           for="{{ id_prefix }}-{{ category }}">{{ label }}</label>
+    {% endfor %}
+  </div>
+</fieldset>
+{%- endmacro %}

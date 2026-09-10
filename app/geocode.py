@@ -165,8 +165,8 @@ def parse_nominatim_autocomplete_response(body: list, omit_country: str) -> list
     """Extract `[{"label": str, "lat": float, "lon": float}, ...]` from a
     Nominatim `/search?format=jsonv2` response (a bare list of results,
     unlike Geoapify's GeoJSON `FeatureCollection`). Nominatim returns
-    `lat`/`lon` as strings ("47.6062"), not floats -- `app/ui.py` and the
-    autocomplete contract both expect floats, so a result whose coordinates
+    `lat`/`lon` as strings ("47.6062"), not floats -- `app/ui/places.py` and
+    the autocomplete contract both expect floats, so a result whose coordinates
     won't parse is dropped rather than surfaced half-populated, same as a
     result missing its label entirely.
     """

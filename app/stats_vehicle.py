@@ -27,6 +27,7 @@ class VehicleStats:
     total_m: float
     expense_total: float
     deduction: float | None  # None when no rate is on file for the year
+    nondeductible_m: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,7 @@ class _Accum:
     business_m: float = 0.0
     personal_m: float = 0.0
     unclassified_m: float = 0.0
+    nondeductible_m: float = 0.0
     trip_count: int = 0
     month_business: dict[int, float] = field(default_factory=dict)
 
@@ -75,6 +77,8 @@ def build_vehicle_breakdown(
             acc.personal_m += meters
         elif category == "unclassified":
             acc.unclassified_m += meters
+        elif category == "nondeductible":
+            acc.nondeductible_m += meters
 
     expense_totals: dict[int | None, float] = {}
     for vehicle_id, _vehicle_name, expense_total in expense_rows:
@@ -93,9 +97,13 @@ def build_vehicle_breakdown(
                 business_m=acc.business_m,
                 personal_m=acc.personal_m,
                 unclassified_m=acc.unclassified_m,
-                total_m=acc.business_m + acc.personal_m + acc.unclassified_m,
+                total_m=(
+                    acc.business_m + acc.personal_m + acc.unclassified_m
+                    + acc.nondeductible_m
+                ),
                 expense_total=expense_totals.get(vehicle_id, 0.0),
                 deduction=deduction,
+                nondeductible_m=acc.nondeductible_m,
             )
         )
 

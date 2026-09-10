@@ -27,6 +27,106 @@ reproduced here.
 - Complete before release: list every application, database, configuration,
   and operational break, or state explicitly that there are none.
 
+## [0.10.0] - 2026-09-10
+
+Recordkeeping and interface redesign release. Odograph can now distinguish
+trips that should not be included in particular mileage totals, attach
+trip-specific expenses, and retain optional endpoint labels for manual trips.
+The main pages also receive a responsive visual redesign, with a new weekly
+Dashboard and denser trip workflows. This release includes migrations 022
+through 025.
+
+### Added
+
+- **Trip exclusions.** Mark a trip as `Not one of my vehicles` when it does
+  not belong in any vehicle total, or as `My vehicle, someone else drove`
+  when the miles belong in the vehicle total but not the mileage deduction.
+  Exclusions are available in Trip Detail, inline editing, Review, manual
+  entry, batch actions, and archive filters, and are reflected in Dashboard,
+  Reports, Stats, expenses, odometer reconciliation, notifications, exports,
+  and portable bundles.
+
+- **Trip-linked expenses.** Link an expense to the trip that incurred it and
+  create trip-specific expenses from Trip Detail. Vehicle, date, and excluded
+  trip conflicts are shown as warnings while preserving both records. A link
+  is detached if its trip is deleted, including during reprocessing;
+  reprocessing logs the detachment for operator visibility.
+
+- **Account avatars.** Upload, display, and remove an administrator avatar
+  from Account Settings. Avatar files are checked for supported image content,
+  size, and dimensions before they are stored.
+
+- **Manual trip endpoint labels.** Add optional custom start and end labels to
+  unrouted manual trips. Labels are shown in trip details, archive results,
+  editing surfaces, exports, portable bundles, and archive search, with a
+  100-character limit.
+
+- **Weekly Dashboard.** View weekly mileage totals, category and exclusion
+  states, attention items, and dense trip rows with inline classification.
+
+- **Public usage and installation guides.** The README now provides separate
+  install and usage paths. New guides cover first use and a minimal two-file
+  Compose installation, with updated OwnTracks and operator documentation.
+
+### Changed
+
+- **Interface redesign.** The application has a responsive desktop and mobile
+  shell, shared controls and icons, System/Light/Dark themes, and browser-local
+  Purple, Blue, Green, and Red accent choices. Dashboard, Trips, Review, Trip
+  Detail, Report, Stats, Expenses, Settings, and authentication pages now use
+  the redesigned layouts.
+
+- **Trips archive.** The archive now uses dense responsive rows, date presets,
+  filter controls, canonical filter URLs, in-place history updates, paginated
+  month results, persistent selection for bulk actions, inline classification,
+  and a dedicated manual-trip page.
+
+- **Review and Trip Detail.** Review uses explicit Next, Skip, and Undo
+  actions with redesigned category controls and mobile behavior. Category
+  selection stays as a draft until Next saves it with the other visible fields
+  and advances. Review has no custom keyboard shortcuts. Trip Detail provides
+  the updated route, expense, edit, and endpoint-label presentation.
+
+- **Portable data compatibility.** The portable bundle format advances from
+  format 1 to format 2 to carry trip exclusions and expense links. Format 1
+  bundles remain importable, with omitted new fields treated as unset.
+
+### Fixed
+
+- Responsive layouts and touch controls were corrected across the redesigned
+  pages, including narrow screens, mobile action areas, native disclosure
+  controls, manual-entry controls, file inputs, and expense forms.
+
+- Archive edits, deletion, and classification refresh filtered results and
+  month/year totals. Older navigation responses cannot overwrite newer changes.
+  Totals continue to exclude `Not one of my vehicles` trips.
+
+- Manual route previews discard stale results when endpoints change and
+  preserve distances entered by the user.
+
+- Review saves run in order so older autosaves cannot overwrite newer edits
+  or race with Next and Skip.
+
+### Supported upgrade path
+
+- `v0.9.2` may upgrade directly to `v0.10.0`. Earlier releases should first
+  upgrade to `v0.9.2`.
+- The database schema advances from 21 to 25 through migrations 022, 023,
+  024, and 025. The migrations add nullable trip exclusion, expense-link,
+  account-avatar, and manual-endpoint-label fields, so existing records retain
+  their prior behavior.
+- Apply the migrations in order against the existing database. Take and
+  validate a database backup before upgrading.
+
+### Breaking changes
+
+- None. There are no required configuration changes, route or API contract
+  breaks, new runtime dependencies, or detector-version changes. OSRM remains
+  optional.
+- The migrations are forward-only. If an application rollback is required
+  after migration, restore the validated pre-upgrade database backup and
+  discard writes made after the upgrade before starting the earlier version.
+
 ## [0.9.2] - 2026-08-26
 
 Release tooling maintenance. This release repairs the disposable upgrade and

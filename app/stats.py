@@ -21,6 +21,7 @@ CATEGORY_COLORS = {
     "business": "var(--cat-business)",
     "personal": "var(--cat-personal)",
     "unclassified": "var(--warn)",
+    "nondeductible": "var(--overlay0)",
 }
 CATEGORIES = tuple(CATEGORY_COLORS)
 
@@ -31,14 +32,15 @@ class Bucket:
     business_m: float = 0.0
     personal_m: float = 0.0
     unclassified_m: float = 0.0
+    nondeductible_m: float = 0.0
 
     @property
     def total_m(self) -> float:
-        return self.business_m + self.personal_m + self.unclassified_m
+        return self.business_m + self.personal_m + self.unclassified_m + self.nondeductible_m
 
     @property
     def business_share(self) -> float | None:
-        classified = self.business_m + self.personal_m
+        classified = self.business_m + self.personal_m + self.nondeductible_m
         return self.business_m / classified if classified else None
 
 
@@ -55,14 +57,15 @@ class Dashboard:
     routes: list[dict]
     places: list[dict]
     unnamed_trip_count: int
+    nondeductible_m: float = 0.0
 
     @property
     def total_m(self) -> float:
-        return self.business_m + self.personal_m + self.unclassified_m
+        return self.business_m + self.personal_m + self.unclassified_m + self.nondeductible_m
 
     @property
     def business_share(self) -> float | None:
-        classified = self.business_m + self.personal_m
+        classified = self.business_m + self.personal_m + self.nondeductible_m
         return self.business_m / classified if classified else None
 
 
@@ -81,6 +84,7 @@ def _add_rows(buckets: dict[date, Bucket], rows: Iterable[tuple[date, str, int, 
             old.business_m + amounts.get("business", 0.0),
             old.personal_m + amounts.get("personal", 0.0),
             old.unclassified_m + amounts.get("unclassified", 0.0),
+            old.nondeductible_m + amounts.get("nondeductible", 0.0),
         )
 
 
@@ -158,6 +162,7 @@ def _stacked_bar_chart(
             ("business", bucket.business_m),
             ("personal", bucket.personal_m),
             ("unclassified", bucket.unclassified_m),
+            ("nondeductible", bucket.nondeductible_m),
         ):
             if not meters:
                 continue
@@ -224,6 +229,7 @@ def build_dashboard(
     business_count, business_m = amounts.get("business", (0, 0.0))
     personal_count, personal_m = amounts.get("personal", (0, 0.0))
     unclassified_count, unclassified_m = amounts.get("unclassified", (0, 0.0))
+    nondeductible_count, nondeductible_m = amounts.get("nondeductible", (0, 0.0))
 
     weekly_link_fn = None
     monthly_link_fn = None
@@ -240,7 +246,7 @@ def build_dashboard(
 
     return Dashboard(
         year=year,
-        trip_count=business_count + personal_count + unclassified_count,
+        trip_count=business_count + personal_count + unclassified_count + nondeductible_count,
         business_m=business_m,
         personal_m=personal_m,
         unclassified_m=unclassified_m,
@@ -252,4 +258,5 @@ def build_dashboard(
         routes=routes,
         places=places,
         unnamed_trip_count=unnamed_trip_count,
+        nondeductible_m=nondeductible_m,
     )

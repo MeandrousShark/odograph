@@ -14,9 +14,10 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.main import make_templates
 from app.ui import make_router
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -45,12 +46,6 @@ def _request(pool):
         )),
         session={"csrf": "test"},
     )
-
-
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
 
 
 async def _insert_routed_manual(conn) -> int:
@@ -92,7 +87,7 @@ def _run(coro_factory) -> None:
         pool = make_pool(TEST_DB)
         await pool.open(wait=True)
         try:
-            await _reset_schema(pool)
+            await reset_db(pool)
             await coro_factory(pool)
         finally:
             await pool.close()

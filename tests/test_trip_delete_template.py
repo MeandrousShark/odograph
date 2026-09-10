@@ -68,16 +68,16 @@ def test_native_summary_controls_share_the_control_minimum_height():
     assert "summary { cursor: pointer; align-content: center; }" in stylesheet
 
 
-def test_trip_cards_offer_in_place_delete_for_detected_and_manual_trips():
+def test_trip_rows_offer_in_place_delete_for_detected_and_manual_trips():
     detected = _render(_trip(source="detected"))
     manual = _render(_trip(source="manual"))
 
     _assert_accessible_delete_component(
-        detected, "trip-delete-card-42", "/trips/42/delete",
+        detected, "trip-delete-archive-42", "/trips/42/delete",
         "Stored location data is kept",
     )
     _assert_accessible_delete_component(
-        manual, "trip-delete-card-42", "/trips/42/delete",
+        manual, "trip-delete-archive-42", "/trips/42/delete",
         "This permanently deletes the manual trip",
     )
     assert "hx-confirm" not in detected
@@ -85,10 +85,11 @@ def test_trip_cards_offer_in_place_delete_for_detected_and_manual_trips():
     assert 'name="fragment" value="true"' in detected
     assert 'hx-target="#trip-42"' in detected
     assert 'hx-swap="delete"' in detected
-    assert ">\n  Delete\n</button>" in detected
     assert "It cannot be restored" in manual
     for body in (detected, manual):
-        collapsed, expanded = body.split('<details class="trip-card-details">', 1)
+        # The trigger only becomes reachable once the overflow menu itself
+        # is open, same as every other overflow action.
+        collapsed, expanded = body.split('<details class="trip-archive-row-more">', 1)
         details_body = expanded.split("</details>", 1)[0]
         assert "data-trip-delete-open" not in collapsed
         assert "data-trip-delete-open" in details_body

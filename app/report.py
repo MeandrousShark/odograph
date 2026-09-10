@@ -3,7 +3,7 @@ ranges. `build_range_report` is the one fold -- pure, no I/O, no DB/openpyxl
 imports -- so it's unit-testable the same way `app.export.build_export_rows`
 is; `build_annual_report` is a thin Jan 1-Dec 31 wrapper around it, kept as
 its own function so its existing signature/output type are untouched.
-`app/ui.py` fetches trips with `TRIP_COLUMNS` and hands them here;
+`app/ui/reports.py` fetches trips with `TRIP_COLUMNS` and hands them here;
 `app/export.py`'s `to_report_xlsx` renders the result.
 """
 from __future__ import annotations
@@ -35,7 +35,9 @@ class VehicleLine:
     vehicle_id: int | None
     vehicle_name: str  # NO_VEHICLE_LABEL for trips with no vehicle assigned
     business_m: float
-    total_m: float  # business + personal (excludes unclassified, same as AnnualReport.total_m)
+    personal_m: float
+    nondeductible_m: float
+    total_m: float  # business + personal + nondeductible, excludes unclassified
     deduction: float | None
 
 
@@ -63,6 +65,7 @@ class AnnualReport:
     months: list[MonthLine] = field(default_factory=list)  # ascending, business trips only
     business_m: float = 0.0
     personal_m: float = 0.0
+    nondeductible_m: float = 0.0
     business_pct: float | None = None
     total_deduction: float | None = None  # None only when no rate is on file at all
     rate_periods: list[tuple[float, int, int]] = field(default_factory=list)  # (rate, first_month, last_month)
@@ -72,7 +75,7 @@ class AnnualReport:
 
     @property
     def total_m(self) -> float:
-        return self.business_m + self.personal_m  # excludes unclassified
+        return self.business_m + self.personal_m + self.nondeductible_m
 
 
 @dataclass(frozen=True)
@@ -115,8 +118,8 @@ def sum_month_deductions(
     one flat total) is what lets a mid-year rate change price each half
     correctly -- IRS splits fall on a month boundary, so a month is always
     within one rate period. None if no rate is on file for the year at all.
-    Shared by `app/ui.py`'s YTD stat and `build_annual_report` below so the
-    two can't independently drift on this rule.
+    Shared by `app/ui/trips.py`'s YTD stat and `build_annual_report` below
+    so the two can't independently drift on this rule.
     """
     total = 0.0
     any_rate = False
@@ -267,6 +270,7 @@ def build_range_report(
     count_by_month: dict[int, int] = {}
     business_m = 0.0
     personal_m = 0.0
+    nondeductible_m = 0.0
     trip_count = 0
     gap_trips = 0
     low_conf_trips = 0
@@ -278,20 +282,27 @@ def build_range_report(
     # same reason business_by_month is: sum_month_deductions needs each
     # vehicle's own per-month buckets so a mid-year rate change still prices
     # each vehicle's miles at the rate in force that month, not one blended
-    # rate for the year. personal_by_vehicle isn't month-bucketed since it
-    # only ever feeds VehicleLine.total_m, never a deduction calculation.
+    # rate for the year. Personal and non-deductible vehicle mileage are not
+    # month-bucketed since they only feed VehicleLine.total_m, never a
+    # deduction calculation.
     vehicle_business_by_month: dict[object, dict[int, float]] = {}
     personal_by_vehicle: dict[object, float] = {}
+    nondeductible_by_vehicle: dict[object, float] = {}
     vehicle_names: dict[object, str] = {}
 
     for trip in trips:
         local_start = trip["started_at"].astimezone(tz)
         if not (start <= local_start.date() <= end):
             continue
+        exclusion = trip.get("exclusion")
+        category = trip["category"]
+        if category == "unclassified":
+            unclassified_trips += 1
+        if exclusion == "not_my_vehicle":
+            continue
         trip_count += 1
         month = local_start.month
         distance_m = trip["display_distance_m"]
-        category = trip["category"]
         vehicle_name = trip.get("vehicle_name") or NO_VEHICLE_LABEL
         # Production rows always include vehicle_id. The legacy-name fallback
         # keeps the pure function friendly to older callers/tests while never
@@ -299,7 +310,12 @@ def build_range_report(
         vehicle_key = trip.get("vehicle_id") if "vehicle_id" in trip else ("legacy", vehicle_name)
         vehicle_names[vehicle_key] = vehicle_name
 
-        if category == "business":
+        if exclusion == "not_deductible":
+            nondeductible_m += distance_m
+            nondeductible_by_vehicle[vehicle_key] = (
+                nondeductible_by_vehicle.get(vehicle_key, 0.0) + distance_m
+            )
+        elif category == "business":
             business_by_month[month] = business_by_month.get(month, 0.0) + distance_m
             count_by_month[month] = count_by_month.get(month, 0) + 1
             business_m += distance_m
@@ -310,9 +326,6 @@ def build_range_report(
         elif category == "personal":
             personal_m += distance_m
             personal_by_vehicle[vehicle_key] = personal_by_vehicle.get(vehicle_key, 0.0) + distance_m
-        else:
-            unclassified_trips += 1
-
         if trip.get("has_gap"):
             gap_trips += 1
         if trip.get("snap_status") == "low_confidence":
@@ -347,11 +360,11 @@ def build_range_report(
     ]
 
     total_deduction = sum_month_deductions(list(business_by_month.items()), year, rates)
-    total_m = business_m + personal_m
+    total_m = business_m + personal_m + nondeductible_m
     business_pct = (business_m / total_m * 100.0) if total_m > 0 else None
 
     vehicle_keys = sorted(
-        set(vehicle_business_by_month) | set(personal_by_vehicle),
+        set(vehicle_business_by_month) | set(personal_by_vehicle) | set(nondeductible_by_vehicle),
         key=lambda key: (vehicle_names[key].casefold(), str(key)),
     )
     by_vehicle = [
@@ -359,9 +372,12 @@ def build_range_report(
             vehicle_id=vehicle_key if isinstance(vehicle_key, int) else None,
             vehicle_name=vehicle_names[vehicle_key],
             business_m=sum(vehicle_business_by_month.get(vehicle_key, {}).values()),
+            personal_m=personal_by_vehicle.get(vehicle_key, 0.0),
+            nondeductible_m=nondeductible_by_vehicle.get(vehicle_key, 0.0),
             total_m=(
                 sum(vehicle_business_by_month.get(vehicle_key, {}).values())
                 + personal_by_vehicle.get(vehicle_key, 0.0)
+                + nondeductible_by_vehicle.get(vehicle_key, 0.0)
             ),
             deduction=sum_month_deductions(
                 list(vehicle_business_by_month.get(vehicle_key, {}).items()), year, rates
@@ -375,6 +391,7 @@ def build_range_report(
         months=months,
         business_m=business_m,
         personal_m=personal_m,
+        nondeductible_m=nondeductible_m,
         business_pct=business_pct,
         total_deduction=total_deduction,
         rate_periods=_rate_periods(context_month_rates),

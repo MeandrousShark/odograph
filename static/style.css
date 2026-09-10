@@ -1,162 +1,475 @@
+/* Nocturne-inspired semantic system. Raw values live in the two ramps below,
+   while application selectors consume the semantic variables that follow.
+   Keeping the ramps separate makes theme changes predictable and prevents
+   data meanings from being coupled to the interface accent. */
 :root {
   color-scheme: light dark;
 
-  /* Catppuccin Latte (light) palette tokens */
-  --latte-base: #eff1f5;
-  --latte-mantle: #e6e9ef;
-  --latte-surface0: #ccd0da;
-  --latte-overlay0: #9ca0b0;
-  --latte-text: #4c4f69;
-  --latte-subtext0: #6c6f85;
-  --latte-green: #40a02b;
-  --latte-mauve: #8839ef;
-  --latte-red: #d20f39;
-  --latte-peach: #fe640b;
-  --latte-blue: #1e66f5;
-  --latte-teal: #179299;
-  --latte-yellow: #df8e1d;
-  --latte-pink: #ea76cb;
-  --latte-maroon: #e64553;
+  --light-bg: #f6f7fb;
+  --light-bg-alt: #ebedf4;
+  --light-surface: #f0f2f8;
+  --light-surface-elevated: #ffffff;
+  --light-surface-subtle: #e2e5ee;
+  /* A step darker than --light-surface, for a raised element that needs to
+     separate from a --light-surface page instead of matching it. */
+  --light-surface-raised: #e9ecf4;
+  --light-fg: #202332;
+  --light-fg-muted: #565d6e;
+  --light-fg-disabled: #747b8c;
+  --light-border: #7f8799;
+  --light-border-strong: #6f778a;
 
-  /* Catppuccin Macchiato (dark) palette tokens */
-  --macchiato-base: #24273a;
-  --macchiato-mantle: #1e2030;
-  --macchiato-surface0: #363a4f;
-  --macchiato-overlay0: #6e738d;
-  --macchiato-text: #cad3f5;
-  --macchiato-subtext0: #a5adcb;
-  --macchiato-green: #a6da95;
-  --macchiato-mauve: #c6a0f6;
-  --macchiato-red: #ed8796;
-  --macchiato-peach: #f5a97f;
-  --macchiato-blue: #8aadf4;
-  --macchiato-teal: #8bd5ca;
-  --macchiato-yellow: #eed49f;
-  --macchiato-pink: #f5bde6;
-  --macchiato-maroon: #ee99a0;
+  --dark-bg: #161826;
+  --dark-bg-alt: #1d2030;
+  --dark-surface: #232532;
+  --dark-surface-elevated: #2a2d3b;
+  --dark-surface-subtle: #343847;
+  /* Dark already separates a raised surface from the page without a step,
+     so this maps to the existing surface value and stays unchanged. */
+  --dark-surface-raised: var(--dark-surface);
+  /* --dark-bg is already the darkest ramp entry, so a control filled with it
+     matches the bare page exactly and depends on its hairline border alone.
+     Mixing in black keeps the same blue-black family as the rest of the ramp
+     (instead of introducing an unrelated gray) while stepping darker by
+     roughly the same amount as the other ramp neighbors, so a control still
+     reads as a recessed well on the page as well as on a card. */
+  --dark-control-fill: color-mix(in srgb, var(--dark-bg) 65%, black);
+  --dark-fg: #f0f1f6;
+  --dark-fg-muted: #bdc2d0;
+  --dark-fg-disabled: #8d93a3;
+  --dark-border: #6b7388;
+  --dark-border-strong: #919ab0;
+
+  /* Category, status, route, and chart colors intentionally do not derive
+     from any accent family. The dark values are brighter for contrast. */
+  --light-cat-business: #19764c;
+  --light-cat-personal: #704bb5;
+  --light-cat-unclassified: #5f6675;
+  --light-cat-nondeductible: #a45172;
+  --light-success: #147a4b;
+  --light-warn: #9a5900;
+  --light-danger: #b4233b;
+  --light-route: #236ca9;
+  --light-year-1: #2c64aa;
+  --light-year-2: #087d7f;
+  --light-year-3: #8a6500;
+  --light-year-4: #a33b83;
+  --light-year-5: #8a4650;
+
+  --dark-cat-business: #8de0b0;
+  --dark-cat-personal: #c7b6ff;
+  --dark-cat-unclassified: #c2c5d0;
+  --dark-cat-nondeductible: #f0a8c0;
+  --dark-success: #86e1b1;
+  --dark-warn: #ffc36e;
+  --dark-danger: #ff9aa6;
+  --dark-route: #80b8ff;
+  --dark-year-1: #8db8ff;
+  --dark-year-2: #71ded5;
+  --dark-year-3: #f5d27f;
+  --dark-year-4: #f0a9df;
+  --dark-year-5: #f2afb8;
 }
 
-/* Active flavor mapping. Three layers, lowest to highest priority:
-   1. Latte by default (below).
-   2. System dark preference (@media block).
-   3. Explicit user choice via Settings -- a `data-theme` attribute
-      on <html>, set by JS and persisted in localStorage. Attribute selectors
-      out-specificity the bare `:root` rules below regardless of source
-      order, so an explicit choice always wins over system preference. */
+/* The default is Light. The media layer supplies System mode, and the two
+   attribute rules have higher specificity for an explicit user choice. */
 :root {
-  --base: var(--latte-base); --mantle: var(--latte-mantle);
-  --surface0: var(--latte-surface0); --overlay0: var(--latte-overlay0);
-  --text: var(--latte-text); --subtext0: var(--latte-subtext0);
-  --green: var(--latte-green); --mauve: var(--latte-mauve);
-  --red: var(--latte-red); --peach: var(--latte-peach);
-  --blue: var(--latte-blue); --teal: var(--latte-teal);
-  --yellow: var(--latte-yellow); --pink: var(--latte-pink);
-  --maroon: var(--latte-maroon);
-  --border: var(--latte-surface0);
+  --bg: var(--light-bg); --bg-alt: var(--light-bg-alt);
+  --surface: var(--light-surface); --surface-elevated: var(--light-surface-elevated);
+  --surface-subtle: var(--light-surface-subtle); --surface-raised: var(--light-surface-raised);
+  --fg: var(--light-fg); --fg-muted: var(--light-fg-muted); --fg-disabled: var(--light-fg-disabled);
+  --border: var(--light-border); --border-strong: var(--light-border-strong);
+  --cat-business: var(--light-cat-business); --cat-personal: var(--light-cat-personal);
+  --cat-unclassified: var(--light-cat-unclassified);
+  --cat-nondeductible: var(--light-cat-nondeductible);
+  --success: var(--light-success); --warn: var(--light-warn);
+  --danger: var(--light-danger); --route: var(--light-route);
+  --year-1: var(--light-year-1); --year-2: var(--light-year-2);
+  --year-3: var(--light-year-3); --year-4: var(--light-year-4); --year-5: var(--light-year-5);
+  /* --accent-primary and --accent-soft are set on :root by the [data-accent]
+     family blocks further down the file; custom properties substitute at
+     computed-value time, not source order, so this still resolves correctly
+     even though those declarations appear later in the stylesheet. */
+  --accent-soft-raised: color-mix(in srgb, var(--accent-primary) 12%, var(--accent-soft));
+  /* A control fill needs to read as recessed, not just borderless, so it
+     must sit darker than both the page and a card. --surface-subtle beats
+     --surface-raised here: it is a bigger step down from --surface-elevated
+     and separates more clearly from both --bg and --surface, which is what
+     the shared control primitives actually sit on. */
+  --control-fill: var(--surface-subtle);
+  /* A control sitting on a raised card needs to read as a step above it. In
+     dark, --surface-elevated is too close to --surface-raised, so this steps
+     one lighter; light is unaffected since --surface-elevated is already
+     white there. */
+  --control-fill-raised: var(--surface-elevated);
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --base: var(--macchiato-base); --mantle: var(--macchiato-mantle);
-    --surface0: var(--macchiato-surface0); --overlay0: var(--macchiato-overlay0);
-    --text: var(--macchiato-text); --subtext0: var(--macchiato-subtext0);
-    --green: var(--macchiato-green); --mauve: var(--macchiato-mauve);
-    --red: var(--macchiato-red); --peach: var(--macchiato-peach);
-    --blue: var(--macchiato-blue); --teal: var(--macchiato-teal);
-    --yellow: var(--macchiato-yellow); --pink: var(--macchiato-pink);
-    --maroon: var(--macchiato-maroon);
-    --border: var(--macchiato-surface0);
+    --bg: var(--dark-bg); --bg-alt: var(--dark-bg-alt);
+    --surface: var(--dark-surface); --surface-elevated: var(--dark-surface-elevated);
+    --surface-subtle: var(--dark-surface-subtle); --surface-raised: var(--dark-surface-raised);
+    --fg: var(--dark-fg); --fg-muted: var(--dark-fg-muted); --fg-disabled: var(--dark-fg-disabled);
+    --border: var(--dark-border); --border-strong: var(--dark-border-strong);
+    --cat-business: var(--dark-cat-business); --cat-personal: var(--dark-cat-personal);
+    --cat-unclassified: var(--dark-cat-unclassified);
+    --cat-nondeductible: var(--dark-cat-nondeductible);
+    --success: var(--dark-success); --warn: var(--dark-warn);
+    --danger: var(--dark-danger); --route: var(--dark-route);
+    --year-1: var(--dark-year-1); --year-2: var(--dark-year-2);
+    --year-3: var(--dark-year-3); --year-4: var(--dark-year-4); --year-5: var(--dark-year-5);
+    /* Dark already separates a raised accent fill without an extra mix step,
+       so this maps to the existing soft value and stays unchanged. */
+    --accent-soft-raised: var(--accent-soft);
+    /* --bg is the darkest value on the ramp, so a control filled with it
+       matches the bare page background exactly and depends entirely on its
+       hairline border there. --dark-control-fill steps darker still, so a
+       control keeps its own fill separation on the plain page as well as on
+       a card. */
+    --control-fill: var(--dark-control-fill);
+    --control-fill-raised: var(--surface-subtle);
   }
 }
 :root[data-theme="light"] {
   color-scheme: light;
-  --base: var(--latte-base); --mantle: var(--latte-mantle);
-  --surface0: var(--latte-surface0); --overlay0: var(--latte-overlay0);
-  --text: var(--latte-text); --subtext0: var(--latte-subtext0);
-  --green: var(--latte-green); --mauve: var(--latte-mauve);
-  --red: var(--latte-red); --peach: var(--latte-peach);
-  --blue: var(--latte-blue); --teal: var(--latte-teal);
-  --yellow: var(--latte-yellow); --pink: var(--latte-pink);
-  --maroon: var(--latte-maroon);
-  --border: var(--latte-surface0);
+  --bg: var(--light-bg); --bg-alt: var(--light-bg-alt);
+  --surface: var(--light-surface); --surface-elevated: var(--light-surface-elevated);
+  --surface-subtle: var(--light-surface-subtle); --surface-raised: var(--light-surface-raised);
+  --fg: var(--light-fg); --fg-muted: var(--light-fg-muted); --fg-disabled: var(--light-fg-disabled);
+  --border: var(--light-border); --border-strong: var(--light-border-strong);
+  --cat-business: var(--light-cat-business); --cat-personal: var(--light-cat-personal);
+  --cat-unclassified: var(--light-cat-unclassified); --cat-nondeductible: var(--light-cat-nondeductible);
+  --success: var(--light-success); --warn: var(--light-warn);
+  --danger: var(--light-danger); --route: var(--light-route);
+  --year-1: var(--light-year-1); --year-2: var(--light-year-2);
+  --year-3: var(--light-year-3); --year-4: var(--light-year-4); --year-5: var(--light-year-5);
+  --accent-soft-raised: color-mix(in srgb, var(--accent-primary) 12%, var(--accent-soft));
+  --control-fill: var(--surface-subtle);
+  --control-fill-raised: var(--surface-elevated);
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --base: var(--macchiato-base); --mantle: var(--macchiato-mantle);
-  --surface0: var(--macchiato-surface0); --overlay0: var(--macchiato-overlay0);
-  --text: var(--macchiato-text); --subtext0: var(--macchiato-subtext0);
-  --green: var(--macchiato-green); --mauve: var(--macchiato-mauve);
-  --red: var(--macchiato-red); --peach: var(--macchiato-peach);
-  --blue: var(--macchiato-blue); --teal: var(--macchiato-teal);
-  --yellow: var(--macchiato-yellow); --pink: var(--macchiato-pink);
-  --maroon: var(--macchiato-maroon);
-  --border: var(--macchiato-surface0);
+  --bg: var(--dark-bg); --bg-alt: var(--dark-bg-alt);
+  --surface: var(--dark-surface); --surface-elevated: var(--dark-surface-elevated);
+  --surface-subtle: var(--dark-surface-subtle); --surface-raised: var(--dark-surface-raised);
+  --fg: var(--dark-fg); --fg-muted: var(--dark-fg-muted); --fg-disabled: var(--dark-fg-disabled);
+  --border: var(--dark-border); --border-strong: var(--dark-border-strong);
+  --cat-business: var(--dark-cat-business); --cat-personal: var(--dark-cat-personal);
+  --cat-unclassified: var(--dark-cat-unclassified); --cat-nondeductible: var(--dark-cat-nondeductible);
+  --success: var(--dark-success); --warn: var(--dark-warn);
+  --danger: var(--dark-danger); --route: var(--dark-route);
+  --year-1: var(--dark-year-1); --year-2: var(--dark-year-2);
+  --year-3: var(--dark-year-3); --year-4: var(--dark-year-4); --year-5: var(--dark-year-5);
+  --accent-soft-raised: var(--accent-soft);
+  --control-fill: var(--dark-control-fill);
+  --control-fill-raised: var(--surface-subtle);
 }
 
-/* Semantic layer -- everything else references these, never a flavor color
-   directly, so a future flavor swap only touches the blocks above. */
+/* Four independent interface accent families. Their mode values are selected
+   by the theme rules, then the data-accent attribute chooses the family.
+   Data colors above never pass through these aliases. */
 :root {
-  --bg: var(--base);
-  --bg-alt: var(--mantle);
-  --surface: var(--mantle);
-  --surface-elevated: var(--base);
-  --fg: var(--text);
-  --fg-muted: var(--subtext0);
-  --border-strong: var(--overlay0);
-  --cat-business: var(--green);
-  --cat-personal: var(--mauve);
-  --danger: var(--red);
-  --warn: var(--peach);
-  --year-1: var(--blue);
-  --year-2: var(--teal);
-  --year-3: var(--yellow);
-  --year-4: var(--pink);
-  --year-5: var(--maroon);
-  --route: var(--green);
-  --focus-ring: var(--mauve);
-  --shadow: 0 0.35rem 1.25rem rgb(30 32 48 / 14%);
-  --control-bg: var(--surface-elevated);
-  --control-fg: var(--fg);
+  --accent-purple-primary: #6c4eaa; --accent-purple-focus: #6c4eaa;
+  --accent-purple-active: #61439d; --accent-purple-selected: #6c4eaa;
+  --accent-purple-progress: #6c4eaa; --accent-purple-decorative: #9c86dc;
+  --accent-purple-hover: #5b4095; --accent-purple-pressed: #4c3480;
+  --accent-purple-soft: #eeeaff; --accent-purple-on-primary: #ffffff;
+  --accent-blue-primary: #285f9f; --accent-blue-focus: #285f9f;
+  --accent-blue-active: #21548f; --accent-blue-selected: #285f9f;
+  --accent-blue-progress: #285f9f; --accent-blue-decorative: #6c9ee2;
+  --accent-blue-hover: #1e4e87; --accent-blue-pressed: #173d6d;
+  --accent-blue-soft: #e6f0ff; --accent-blue-on-primary: #ffffff;
+  --accent-green-primary: #21784d; --accent-green-focus: #21784d;
+  --accent-green-active: #19673f; --accent-green-selected: #21784d;
+  --accent-green-progress: #21784d; --accent-green-decorative: #6cb98d;
+  --accent-green-hover: #185e3a; --accent-green-pressed: #124a2d;
+  --accent-green-soft: #e5f5ec; --accent-green-on-primary: #ffffff;
+  --accent-red-primary: #b23f50; --accent-red-focus: #b23f50;
+  --accent-red-active: #9d3042; --accent-red-selected: #b23f50;
+  --accent-red-progress: #b23f50; --accent-red-decorative: #dc8490;
+  --accent-red-hover: #942b3d; --accent-red-pressed: #771f30;
+  --accent-red-soft: #ffebee; --accent-red-on-primary: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --accent-purple-primary: #b9a8ff; --accent-purple-focus: #b9a8ff;
+    --accent-purple-active: #c4b5ff; --accent-purple-selected: #b9a8ff;
+    --accent-purple-progress: #b9a8ff; --accent-purple-decorative: #8f7bd1;
+    --accent-purple-hover: #c8baff; --accent-purple-pressed: #d5caff;
+    --accent-purple-soft: #352f50; --accent-purple-on-primary: #211a35;
+    --accent-blue-primary: #8db8ff; --accent-blue-focus: #8db8ff;
+    --accent-blue-active: #a4c6ff; --accent-blue-selected: #8db8ff;
+    --accent-blue-progress: #8db8ff; --accent-blue-decorative: #648fd0;
+    --accent-blue-hover: #a7c8ff; --accent-blue-pressed: #c0d8ff;
+    --accent-blue-soft: #27384f; --accent-blue-on-primary: #142238;
+    --accent-green-primary: #84d9a8; --accent-green-focus: #84d9a8;
+    --accent-green-active: #9be4ba; --accent-green-selected: #84d9a8;
+    --accent-green-progress: #84d9a8; --accent-green-decorative: #61ad84;
+    --accent-green-hover: #a5ebc1; --accent-green-pressed: #c2f4d2;
+    --accent-green-soft: #243e32; --accent-green-on-primary: #132b20;
+    --accent-red-primary: #ff9aa6; --accent-red-focus: #ff9aa6;
+    --accent-red-active: #ffadb7; --accent-red-selected: #ff9aa6;
+    --accent-red-progress: #ff9aa6; --accent-red-decorative: #d77886;
+    --accent-red-hover: #ffb8c0; --accent-red-pressed: #ffd0d5;
+    --accent-red-soft: #4a2c35; --accent-red-on-primary: #35141e;
+  }
+}
+:root[data-theme="light"] {
+  --accent-purple-primary: #6c4eaa; --accent-purple-focus: #6c4eaa;
+  --accent-purple-active: #61439d; --accent-purple-selected: #6c4eaa;
+  --accent-purple-progress: #6c4eaa; --accent-purple-decorative: #9c86dc;
+  --accent-purple-hover: #5b4095; --accent-purple-pressed: #4c3480;
+  --accent-purple-soft: #eeeaff; --accent-purple-on-primary: #ffffff;
+  --accent-blue-primary: #285f9f; --accent-blue-focus: #285f9f;
+  --accent-blue-active: #21548f; --accent-blue-selected: #285f9f;
+  --accent-blue-progress: #285f9f; --accent-blue-decorative: #6c9ee2;
+  --accent-blue-hover: #1e4e87; --accent-blue-pressed: #173d6d;
+  --accent-blue-soft: #e6f0ff; --accent-blue-on-primary: #ffffff;
+  --accent-green-primary: #21784d; --accent-green-focus: #21784d;
+  --accent-green-active: #19673f; --accent-green-selected: #21784d;
+  --accent-green-progress: #21784d; --accent-green-decorative: #6cb98d;
+  --accent-green-hover: #185e3a; --accent-green-pressed: #124a2d;
+  --accent-green-soft: #e5f5ec; --accent-green-on-primary: #ffffff;
+  --accent-red-primary: #b23f50; --accent-red-focus: #b23f50;
+  --accent-red-active: #9d3042; --accent-red-selected: #b23f50;
+  --accent-red-progress: #b23f50; --accent-red-decorative: #dc8490;
+  --accent-red-hover: #942b3d; --accent-red-pressed: #771f30;
+  --accent-red-soft: #ffebee; --accent-red-on-primary: #ffffff;
+}
+:root[data-theme="dark"] {
+  --accent-purple-primary: #b9a8ff; --accent-purple-focus: #b9a8ff;
+  --accent-purple-active: #c4b5ff; --accent-purple-selected: #b9a8ff;
+  --accent-purple-progress: #b9a8ff; --accent-purple-decorative: #8f7bd1;
+  --accent-purple-hover: #c8baff; --accent-purple-pressed: #d5caff;
+  --accent-purple-soft: #352f50; --accent-purple-on-primary: #211a35;
+  --accent-blue-primary: #8db8ff; --accent-blue-focus: #8db8ff;
+  --accent-blue-active: #a4c6ff; --accent-blue-selected: #8db8ff;
+  --accent-blue-progress: #8db8ff; --accent-blue-decorative: #648fd0;
+  --accent-blue-hover: #a7c8ff; --accent-blue-pressed: #c0d8ff;
+  --accent-blue-soft: #27384f; --accent-blue-on-primary: #142238;
+  --accent-green-primary: #84d9a8; --accent-green-focus: #84d9a8;
+  --accent-green-active: #9be4ba; --accent-green-selected: #84d9a8;
+  --accent-green-progress: #84d9a8; --accent-green-decorative: #61ad84;
+  --accent-green-hover: #a5ebc1; --accent-green-pressed: #c2f4d2;
+  --accent-green-soft: #243e32; --accent-green-on-primary: #132b20;
+  --accent-red-primary: #ff9aa6; --accent-red-focus: #ff9aa6;
+  --accent-red-active: #ffadb7; --accent-red-selected: #ff9aa6;
+  --accent-red-progress: #ff9aa6; --accent-red-decorative: #d77886;
+  --accent-red-hover: #ffb8c0; --accent-red-pressed: #ffd0d5;
+  --accent-red-soft: #4a2c35; --accent-red-on-primary: #35141e;
+}
+
+/* Purple is the default and has an explicit selector so a stored Purple
+   choice behaves exactly like the missing value. */
+:root {
+  --accent-primary: var(--accent-purple-primary); --accent-focus: var(--accent-purple-focus);
+  --accent-active: var(--accent-purple-active); --accent-selected: var(--accent-purple-selected);
+  --accent-progress: var(--accent-purple-progress); --accent-decorative: var(--accent-purple-decorative);
+  --accent-hover: var(--accent-purple-hover); --accent-pressed: var(--accent-purple-pressed);
+  --accent-soft: var(--accent-purple-soft); --accent-on-primary: var(--accent-purple-on-primary);
+}
+:root[data-accent="purple"] {
+  --accent-primary: var(--accent-purple-primary); --accent-focus: var(--accent-purple-focus);
+  --accent-active: var(--accent-purple-active); --accent-selected: var(--accent-purple-selected);
+  --accent-progress: var(--accent-purple-progress); --accent-decorative: var(--accent-purple-decorative);
+  --accent-hover: var(--accent-purple-hover); --accent-pressed: var(--accent-purple-pressed);
+  --accent-soft: var(--accent-purple-soft); --accent-on-primary: var(--accent-purple-on-primary);
+}
+:root[data-accent="blue"] {
+  --accent-primary: var(--accent-blue-primary); --accent-focus: var(--accent-blue-focus);
+  --accent-active: var(--accent-blue-active); --accent-selected: var(--accent-blue-selected);
+  --accent-progress: var(--accent-blue-progress); --accent-decorative: var(--accent-blue-decorative);
+  --accent-hover: var(--accent-blue-hover); --accent-pressed: var(--accent-blue-pressed);
+  --accent-soft: var(--accent-blue-soft); --accent-on-primary: var(--accent-blue-on-primary);
+}
+:root[data-accent="green"] {
+  --accent-primary: var(--accent-green-primary); --accent-focus: var(--accent-green-focus);
+  --accent-active: var(--accent-green-active); --accent-selected: var(--accent-green-selected);
+  --accent-progress: var(--accent-green-progress); --accent-decorative: var(--accent-green-decorative);
+  --accent-soft: var(--accent-green-soft); --accent-hover: var(--accent-green-hover);
+  --accent-pressed: var(--accent-green-pressed); --accent-on-primary: var(--accent-green-on-primary);
+}
+:root[data-accent="red"] {
+  --accent-primary: var(--accent-red-primary); --accent-focus: var(--accent-red-focus);
+  --accent-active: var(--accent-red-active); --accent-selected: var(--accent-red-selected);
+  --accent-progress: var(--accent-red-progress); --accent-decorative: var(--accent-red-decorative);
+  --accent-hover: var(--accent-red-hover); --accent-pressed: var(--accent-red-pressed);
+  --accent-soft: var(--accent-red-soft); --accent-on-primary: var(--accent-red-on-primary);
+}
+
+/* Compatibility aliases keep existing page rules on the same semantic
+   architecture while the new names above carry the production vocabulary. */
+:root {
+  --base: var(--bg); --mantle: var(--bg-alt); --surface0: var(--surface-subtle);
+  --overlay0: var(--border-strong); --text: var(--fg); --subtext0: var(--fg-muted);
+  --green: var(--cat-business); --mauve: var(--cat-personal); --red: var(--danger);
+  --peach: var(--warn); --blue: var(--route); --teal: var(--year-2);
+  --yellow: var(--year-3); --pink: var(--year-4); --maroon: var(--year-5);
+  --focus-ring: var(--accent-focus);
+  --shadow: 0 0.35rem 1.25rem rgb(17 20 34 / 18%);
+  --control-bg: var(--surface-elevated); --control-fg: var(--fg);
   --control-border: var(--border-strong);
-  --control-shadow: 0 .1rem .3rem rgb(30 32 48 / 12%);
-  --space-1: .25rem;
-  --space-2: .5rem;
-  --space-3: .75rem;
-  --space-4: 1rem;
-  --space-6: 1.5rem;
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
+  --control-shadow: 0 .1rem .3rem rgb(17 20 34 / 16%);
+  --space-1: .25rem; --space-2: .5rem; --space-3: .75rem;
+  --space-4: 1rem; --space-5: 1.25rem; --space-6: 1.5rem;
+  --radius-sm: 4px; --radius-md: 8px; --radius-lg: 12px;
   --control-height: 2.75rem;
+  /* Shared Nocturne divider technique: fades to transparent over the outer
+     48px rather than running edge to edge. Paired with background-repeat:
+     no-repeat and a 100% 1px background-size wherever it's consumed. */
+  --rule-fade: linear-gradient(
+    to right, transparent, var(--border) 48px, var(--border) calc(100% - 48px), transparent
+  );
+  /* The header and footer frame the page rather than separating list items,
+     so the shell uses a lighter weight than the row divider while keeping
+     the same fade geometry. */
+  --rule-fade-soft: linear-gradient(
+    to right, transparent,
+    color-mix(in srgb, var(--border) 55%, transparent) 48px,
+    color-mix(in srgb, var(--border) 55%, transparent) calc(100% - 48px),
+    transparent
+  );
 }
 
 *, *::before, *::after { box-sizing: border-box; }
 [hidden] { display: none !important; }
+/* Standard clip-rect pattern: keeps content in the accessibility tree and
+   reachable by find-in-page while removing it from the visual layout and
+   from document flow, so an otherwise-empty wrapper around only a hidden
+   child reserves no visible space. */
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-variant-numeric: tabular-nums;
   max-width: 1100px; margin: 0 auto; padding: var(--space-4) var(--space-6);
   background: var(--bg); color: var(--fg);
 }
 button, input, select, summary { min-height: var(--control-height); }
-button, input, select, textarea {
-  color: var(--control-fg); background-color: var(--control-bg);
-  border: 1px solid var(--control-border); border-radius: var(--radius-sm); font: inherit;
+/* Checkboxes and radios are excluded because this surface is meant for text
+   controls. Browsers disagree about which of these properties a native
+   checkbox honors: Chrome drops the border but keeps the fill, while iOS
+   Safari paints the filled rounded box and then draws its own glyph on top,
+   which reads as a circle sitting over a square. The same exclusion pattern
+   is used on the authentication form's input rule. */
+button, input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+  color: var(--control-fg); background-color: var(--control-fill);
+  border: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  border-radius: var(--radius-md); font: inherit;
 }
-button { padding: 0 var(--space-3); cursor: pointer; box-shadow: var(--control-shadow); }
+button { padding: 0 var(--space-3); cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .55; }
 input[type="checkbox"], input[type="radio"] { min-height: 1rem; min-width: 1rem; }
-header { display: grid; grid-template-columns: auto 1fr auto; gap: var(--space-4); align-items: center;
-         border-bottom: 1px solid var(--border); padding-bottom: var(--space-3); margin-bottom: var(--space-4); }
+/* Browsers paint their own unstyled button inside a file input, which
+   otherwise ignores the border, background, and hover states every other
+   control here shares. The !important on padding beats
+   .auth-form input:not(...):not(...):not(...) at static/style.css:939,
+   whose three :not() clauses give it higher specificity than a plain
+   input[type="file"] selector; the file input needs a smaller inset than
+   that rule's var(--space-3), since the styled button below carries its own
+   padding too. */
+input[type="file"] { padding: 0 var(--space-2) !important; }
+input[type="file"]::file-selector-button {
+  height: calc(var(--control-height) - var(--space-3));
+  margin-right: var(--space-2); padding: 0 var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  border-radius: var(--radius-md);
+  color: var(--control-fg); background: var(--control-fill);
+  font: inherit; cursor: pointer;
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+}
+input[type="file"]::file-selector-button:hover {
+  border-color: var(--accent-hover); background: var(--accent-soft);
+}
+input[type="file"]::file-selector-button:active {
+  border-color: var(--accent-pressed); background: var(--accent-soft);
+}
+header {
+  position: relative; display: grid; grid-template-columns: auto 1fr auto; gap: var(--space-4);
+  min-height: 58px; align-items: center;
+  padding-bottom: var(--space-3); margin-bottom: var(--space-4);
+  background-image: var(--rule-fade-soft); background-repeat: no-repeat;
+  background-position: bottom; background-size: 100% 1px;
+}
 header h1 { font-size: 1.3rem; margin: 0; }
 header h1 a { text-decoration: none; }
-header nav { display: flex; justify-content: center; gap: var(--space-3); flex-wrap: wrap; font-size: .9rem; }
-.header-account { display: flex; gap: var(--space-2); align-items: center; font-size: .85rem; }
+.brand-link {
+  display: inline-flex; align-items: center; gap: var(--space-2);
+  color: var(--accent-primary); text-decoration: none;
+}
+.brand-link:hover { color: var(--accent-primary); }
+.brand-mark {
+  display: inline-block; width: 1.5rem; height: 1.5rem; flex: none;
+  background-color: var(--accent-primary);
+  -webkit-mask: url("/static/favicon.svg") center / contain no-repeat;
+  mask: url("/static/favicon.svg") center / contain no-repeat;
+}
+.mobile-account-menu, .mobile-bottom-nav { display: none; }
+.icon {
+  display: block; width: 1.125rem; height: 1.125rem; flex: none;
+  fill: none; stroke: currentColor; stroke-width: 1.75;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.icon-sm { width: 1rem; height: 1rem; }
+.icon-lg { width: 1.5rem; height: 1.5rem; }
+header nav { display: flex; justify-content: center; gap: var(--space-2); align-items: center; flex-wrap: wrap; font-size: .9rem; }
+header nav a {
+  position: relative; display: inline-flex; min-height: var(--control-height); align-items: center;
+  padding: 0 var(--space-1); color: var(--fg-muted); text-decoration: none;
+}
+header nav a::after {
+  content: ""; position: absolute; right: var(--space-1); bottom: calc(-1 * var(--space-3)); left: var(--space-1);
+  height: 3px; border-radius: 999px; background: transparent;
+}
+header nav a[aria-current="page"] { color: var(--accent-primary); font-weight: 600; }
+header nav a[aria-current="page"]::after { background: var(--accent-primary); }
+.header-account { display: flex; min-width: 0; gap: var(--space-2); align-items: center; font-size: .85rem; }
+.account-identity { display: inline-flex; min-width: 0; min-height: var(--control-height); align-items: center; gap: var(--space-1); }
+.account-avatar {
+  display: inline-flex; width: 1.75rem; height: 1.75rem; flex: none; align-items: center; justify-content: center;
+  border: 1px solid var(--accent-primary); border-radius: 50%; color: var(--accent-primary);
+  background: var(--accent-soft); font-size: .7rem; font-weight: 700; letter-spacing: .02em;
+  object-fit: cover;
+}
+.account-name { max-width: 9rem; overflow: hidden; color: var(--fg-muted); text-overflow: ellipsis; white-space: nowrap; }
+.account-identity-link:hover .account-name,
+.account-identity-link:focus-visible .account-name { color: var(--accent-hover); }
+.account-identity-link[aria-current="page"] .account-name { color: var(--accent-primary); font-weight: 600; }
+.header-action {
+  display: inline-flex; min-height: var(--control-height); align-items: center; gap: var(--space-1);
+  white-space: nowrap;
+}
+.header-action-icon { width: 1rem; height: 1rem; }
+.header-action:hover { color: var(--accent-hover); }
 header .who { color: var(--fg-muted); }
-footer { border-top: 1px solid var(--border); margin-top: var(--space-4); padding-top: var(--space-3); }
+footer {
+  margin-top: var(--space-4); padding-top: var(--space-3);
+  background-image: var(--rule-fade-soft); background-repeat: no-repeat;
+  background-position: top; background-size: 100% 1px;
+}
 footer p { margin: 0; font-size: .8rem; }
 .logout-form { display: inline; }
 .link-button { background: none; border: none; min-height: var(--control-height); padding: 0 var(--space-2); margin: 0; font: inherit;
                color: inherit; text-decoration: underline; cursor: pointer; box-shadow: none; }
+.header-control {
+  display: inline-flex; min-width: 0; min-height: var(--control-height); align-items: center;
+  gap: var(--space-1); padding: 0 var(--space-2); border: 1px solid transparent;
+  border-radius: var(--radius-sm); color: var(--fg-muted); background: transparent;
+  font: inherit; text-decoration: none; box-shadow: none; cursor: pointer;
+  transition: background-color .15s ease, color .15s ease;
+}
+a.header-control:hover, button.header-control:hover,
+a.header-control:focus-visible, button.header-control:focus-visible {
+  color: var(--accent-hover); background: var(--accent-soft); text-decoration: none;
+}
+a.header-control:active, button.header-control:active {
+  color: var(--accent-pressed); background: var(--accent-soft);
+}
+.header-control[aria-current="page"] { color: var(--accent-primary); font-weight: 600; }
+.header-control[aria-current="page"] .account-name { color: inherit; }
+.header-account > .account-identity:not(a) { cursor: default; }
 a, button, input, select, textarea, summary { overflow-wrap: anywhere; }
 /* min-height above gives a native <summary> the shared control target, but
    align-content defaults to start on a block box, so the label would sit at
@@ -168,17 +481,92 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 textarea:focus-visible, summary:focus-visible {
   outline: 3px solid var(--focus-ring); outline-offset: 2px;
 }
+
+@media (min-width: 761px) {
+  header { align-items: end; padding-bottom: var(--space-1); }
+  header h1 { display: flex; min-height: var(--control-height); align-items: center; }
+  header nav a::after { bottom: calc(-1 * var(--space-1)); }
+}
+
+@media (min-width: 761px) and (max-width: 1024px) {
+  header nav { flex-wrap: nowrap; gap: var(--space-2); }
+  header nav a { padding-inline: 0; }
+  .header-account .account-name { display: none; }
+  .header-account .account-identity,
+  .header-account .settings-link,
+  .header-account .logout-form .header-action {
+    width: var(--control-height); min-width: var(--control-height); padding-inline: 0;
+    justify-content: center; gap: 0;
+  }
+  .header-account .settings-link, .header-account .logout-form .header-action { font-size: 0; }
+  .header-account .header-action-icon { width: 1.25rem; height: 1.25rem; }
+}
+
 .control {
   display: inline-flex; min-height: var(--control-height); align-items: center; justify-content: center;
-  border-radius: var(--radius-sm); padding: 0 var(--space-3); cursor: pointer;
-  font: inherit; text-decoration: none; box-shadow: var(--control-shadow);
+  gap: var(--space-2); border-radius: var(--radius-md); padding: 0 var(--space-3); cursor: pointer;
+  font: inherit; text-decoration: none;
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
 }
-.control-primary { color: var(--base); background: var(--cat-business); border: 1px solid var(--cat-business); font-weight: 600; }
-.control-secondary { color: var(--control-fg); background: var(--control-bg); border: 1px solid var(--control-border); }
+.control-compact {
+  min-height: var(--control-height); padding: 0 var(--space-2); gap: var(--space-1);
+  font-size: .85rem;
+}
+.control-compact > .icon { width: 1rem; height: 1rem; }
+.control-primary { color: var(--accent-on-primary); background: var(--accent-primary); border: 1px solid var(--accent-primary); font-weight: 600; }
+.control-secondary { color: var(--control-fg); background: var(--control-fill); border: 1px solid color-mix(in srgb, var(--border) 45%, transparent); }
 .control-quiet { color: var(--fg); background: transparent; border: 1px solid transparent; }
-.control-destructive { color: var(--base); background: var(--danger); border: 1px solid var(--danger); }
+.control-destructive { color: var(--bg); background: var(--danger); border: 1px solid var(--danger); }
+.control-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.control-primary:active { background: var(--accent-pressed); border-color: var(--accent-pressed); }
+.control-secondary:hover, .control-quiet:hover { border-color: var(--accent-hover); background: var(--accent-soft); }
+.control-secondary:active, .control-quiet:active { border-color: var(--accent-pressed); background: var(--accent-soft); }
+a:hover { color: var(--accent-hover); }
+.icon-button {
+  display: inline-flex; width: var(--control-height); min-width: var(--control-height);
+  min-height: var(--control-height); align-items: center; justify-content: center;
+  padding: 0; border: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  border-radius: var(--radius-md);
+  color: var(--control-fg); background: var(--control-fill);
+  text-decoration: none; cursor: pointer;
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+}
+.icon-button:hover { color: var(--accent-hover); border-color: var(--accent-hover); background: var(--accent-soft); }
+.icon-button:active { color: var(--accent-pressed); border-color: var(--accent-pressed); }
+.icon-button:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+.icon-button-primary {
+  color: var(--accent-on-primary); background: var(--accent-primary); border-color: var(--accent-primary);
+}
+.icon-button-primary:hover { color: var(--accent-on-primary); background: var(--accent-hover); border-color: var(--accent-hover); }
+.compact-actions { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
+.compact-actions > .icon-button { flex: none; }
+.progress-track {
+  height: .5rem; overflow: hidden; border-radius: 999px; background: var(--surface-subtle);
+}
+.progress-bar { height: 100%; background: var(--accent-progress); border-radius: inherit; }
+.accent-highlight { color: var(--accent-decorative); }
+.page-title {
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3);
+  flex-wrap: wrap; margin: 0 0 var(--space-4);
+}
+.page-title > :first-child { margin-top: 0; margin-bottom: 0; }
+.page-title-actions { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
+.page-title-heading { margin: 0; color: var(--fg); font-size: 1.5rem; line-height: 1.2; }
+.page-title-eyebrow {
+  margin: 0 0 var(--space-1); color: var(--accent-primary); font-size: .75rem;
+  font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+}
+.page-title-subtitle { margin: var(--space-1) 0 0; color: var(--fg-muted); font-size: .9rem; max-width: 65ch; }
 h2 { font-size: 1.05rem; margin: 1.5rem 0 .25rem; }
-.month-summary { font-size: .85rem; color: var(--fg-muted); margin-bottom: .5rem; }
+/* One size up from the shared h2 (not a change to that rule, which other
+   pages still depend on) so a month grouping reads as a stronger break in
+   the archive than an ordinary section heading. */
+.trip-archive-month-heading { font-size: 1.25rem; margin: 1.5rem 0 .25rem; }
+/* The extra breathing room for the heading group belongs here rather than
+   on the heading itself: .month-summary is the element that actually sits
+   directly above the row list, so a margin added above instead would just
+   widen the gap to .month-summary and never reach the rows underneath it. */
+.month-summary { font-size: .85rem; color: var(--fg-muted); margin-bottom: 1.25rem; }
 .table-wrapper { overflow-x: auto; }
 /* Tables crush their columns to min-content before .table-wrapper's
    overflow-x ever engages, so the global `summary { overflow-wrap: anywhere }`
@@ -194,18 +582,72 @@ th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid var(-
    up with the headings and body text sharing its content column instead
    of sitting half a cell further right. */
 th:first-child, td:first-child { padding-left: 0; }
-th { font-weight: 600; font-size: .8rem; text-transform: uppercase; opacity: .6; }
+th { font-weight: 600; font-size: .8rem; text-transform: uppercase; color: var(--fg-muted); }
 td.num { font-variant-numeric: tabular-nums; }
 .trip-route { overflow-wrap: anywhere; line-height: 1.35; }
-/* Review's three keyboard-mirrored decisions must stay visually grouped;
-   wrapping one label away from the others makes a rapid triage pass easier
-   to misread. */
-.tags { white-space: nowrap; }
-.tags button { border: 1px solid var(--control-border); background: var(--control-bg);
-               color: var(--fg); border-radius: 4px;
-               padding: .15rem .5rem; cursor: pointer; font-size: .8rem; }
-.tags button.active-business { background: var(--cat-business); color: var(--base); border-color: var(--cat-business); }
-.tags button.active-personal { background: var(--cat-personal); color: var(--base); border-color: var(--cat-personal); }
+.category-segmented {
+  width: 100%; min-width: 0; margin: 0; padding: 0; border: 0;
+}
+.category-segmented legend {
+  margin-bottom: .15rem; padding: 0; color: var(--fg-muted); font-size: .75rem;
+}
+.category-segmented-options {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%; min-width: 0;
+}
+/* The opt-in Business/Personal pair drops the Unset choice, so only the
+   track count changes here: the joined edges and collapsed inner border
+   below key off first-of-type, last-of-type and adjacency, which hold at
+   either width. */
+.category-segmented-pair .category-segmented-options {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.category-segmented-options .category-segmented-input {
+  position: absolute; width: 1px; min-width: 1px; height: 1px; min-height: 1px;
+  margin: 0; opacity: 0; clip-path: inset(50%);
+}
+.category-segmented-option {
+  display: flex; min-width: 0; min-height: var(--control-height);
+  align-items: center; justify-content: center; padding: var(--space-2);
+  border: 1px solid var(--control-border); background: var(--control-bg);
+  color: var(--control-fg); cursor: pointer; text-align: center;
+}
+.category-segmented-option:first-of-type {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+.category-segmented-option:last-of-type {
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+.category-segmented-option + .category-segmented-input + .category-segmented-option {
+  border-left: 0;
+}
+.category-segmented-personal {
+  background: color-mix(in srgb, var(--cat-personal) 12%, var(--control-bg));
+}
+.category-segmented-unclassified {
+  background: color-mix(in srgb, var(--fg-muted) 10%, var(--control-bg));
+}
+.category-segmented-business {
+  background: color-mix(in srgb, var(--cat-business) 12%, var(--control-bg));
+}
+.category-segmented-input:checked + .category-segmented-option {
+  position: relative; z-index: 1; border-width: 2px; font-weight: 700;
+  box-shadow: inset 0 -.2rem .35rem rgb(30 32 48 / 22%);
+}
+.category-segmented-input:checked + .category-segmented-personal {
+  border-color: var(--cat-personal);
+  background: color-mix(in srgb, var(--cat-personal) 34%, var(--control-bg));
+}
+.category-segmented-input:checked + .category-segmented-unclassified {
+  border-color: var(--fg-muted); background: var(--surface0);
+}
+.category-segmented-input:checked + .category-segmented-business {
+  border-color: var(--cat-business);
+  background: color-mix(in srgb, var(--cat-business) 34%, var(--control-bg));
+}
+.category-segmented-input:focus-visible + .category-segmented-option {
+  outline: 3px solid var(--focus-ring); outline-offset: 2px; z-index: 2;
+}
 /* Horizontal padding widened from .25rem: the only free-text input in the
    app with its own explicit (and previously too-tight) padding rule, per
    the 2026-08-08 maintainer report. Every other text input relies on the
@@ -222,112 +664,448 @@ input.notes:hover, input.notes:focus { border-color: var(--border-strong); }
   transform: translateY(-70%) rotate(45deg); pointer-events: none;
 }
 .purpose-field-empty::after { opacity: .45; }
+/* overflow: hidden is load-bearing, not cosmetic. This control renders as a
+   native picker, but Safari on iOS still lays its option text out in the
+   render tree. A long recent purpose therefore reached past the viewport from
+   inside a 1.75rem absolutely positioned box, widening the document and
+   leaving the whole page horizontally scrollable and zoomed out. Nothing was
+   visibly wide, which is what made it hard to find. */
 .purpose-recent {
   appearance: none; position: absolute; inset: 0 0 0 auto; width: 1.75rem;
   min-width: 0; border: 0; border-left: 1px solid var(--border-strong);
   border-radius: 0 4px 4px 0; background: var(--control-bg); color: transparent;
-  cursor: pointer;
+  cursor: pointer; overflow: hidden;
 }
 .purpose-recent:focus { outline: 2px solid var(--fg); outline-offset: -2px; }
 .purpose-recent:disabled { cursor: default; opacity: .45; }
 .purpose-recent option { color: var(--fg); background: var(--bg); font-size: .9rem; }
 .manual-badge { font-size: .7rem; border: 1px solid var(--border-strong); border-radius: 4px;
                 padding: 0 .3rem; opacity: .7; }
-.trip-card-list { display: grid; gap: var(--space-3); min-width: 0; }
-/* Shared surface for every card-shaped block in the app. .trip-card and
-   .metric-card previously declared this same padding/border/radius/
-   background/shadow set twice, under two different class names; both now
-   carry this class alongside their own (card trip-card, card metric-card)
-   and add only what's actually theirs on top of it. */
+/* Shared surface for card-shaped blocks including trip, authentication, and
+   account settings cards. Each block adds only the styles specific to its
+   own content on top of this common surface. */
 .card {
   min-width: 0; padding: var(--space-4); border: 1px solid var(--border);
   border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow);
 }
-.trip-card-heading { display: flex; justify-content: space-between; gap: var(--space-3); align-items: baseline; }
-.trip-card-heading > * { min-width: 0; }
-.trip-card-heading-main { display: flex; min-width: 0; align-items: center; gap: var(--space-3); }
-.trip-card-selector {
-  min-height: var(--control-height); align-items: center; gap: var(--space-1);
-  color: var(--fg-muted); font-size: .8rem; white-space: nowrap;
-}
-.trip-card-selector:not([hidden]) { display: inline-flex; }
-.trip-card-selector input { margin: 0; }
 .selected-label { display: none; font-weight: 600; }
 .trip-card.is-selected {
-  border: 2px solid var(--focus-ring); background: var(--surface0);
-  box-shadow: 0 0 0 1px var(--focus-ring), var(--shadow);
+  border: 2px solid var(--accent-selected);
+  background: color-mix(in srgb, var(--accent-selected) 12%, var(--surface-elevated));
+  box-shadow: 0 0 0 1px var(--accent-selected), var(--shadow);
 }
 .trip-card.is-selected .selection-label { display: none; }
 .trip-card.is-selected .selected-label { display: inline; }
-.trip-card-time { margin-left: var(--space-2); color: var(--fg-muted); font-variant-numeric: tabular-nums; }
-.trip-card-distance { white-space: nowrap; font-variant-numeric: tabular-nums; }
-.trip-card-route { margin: var(--space-2) 0; }
-.trip-card-badges { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; }
-.category-badge, .status-badge {
+.badge, .category-badge, .status-badge {
   display: inline-flex; max-width: 100%; padding: .2rem .5rem; border: 1px solid var(--border-strong);
-  border-radius: 999px; font-size: .78rem; overflow-wrap: anywhere;
+  align-items: center; border-radius: 999px; font-size: .78rem; line-height: 1.25; overflow-wrap: anywhere;
 }
+.badge-neutral { border-color: var(--border-strong); background: var(--surface-subtle); }
+.badge-accent {
+  color: var(--accent-primary); border-color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 8%, var(--surface-elevated));
+}
+.badge-success { color: var(--success); border-color: var(--success); }
+.badge-warning { color: var(--warn); border-color: var(--warn); }
+.badge-danger { color: var(--danger); border-color: var(--danger); }
 .category-business { border-color: var(--cat-business); }
 .category-personal { border-color: var(--cat-personal); }
-.category-unclassified, .status-warning { border-color: var(--warn); }
-.trip-card-controls { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: flex-end; margin-top: var(--space-2); }
-.trip-card-control { display: flex; flex-direction: column; gap: .15rem; min-width: 0; flex: 1 1 10rem; }
-/* .filter-bar .field-label (below) is a third, deliberately different
+.category-unclassified { border-color: var(--cat-unclassified); }
+.status-warning { border-color: var(--warn); }
+.notice {
+  margin: var(--space-3) 0; padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border); border-left-width: .3rem; border-radius: var(--radius-sm);
+  color: var(--fg); background: var(--surface-elevated);
+}
+.notice-neutral { border-left-color: var(--border-strong); }
+.notice-success {
+  border-color: var(--success); background: color-mix(in srgb, var(--success) 7%, var(--surface-elevated));
+}
+.notice-warning {
+  border-color: var(--warn); background: color-mix(in srgb, var(--warn) 7%, var(--surface-elevated));
+}
+.notice-danger {
+  border-color: var(--danger); background: color-mix(in srgb, var(--danger) 7%, var(--surface-elevated));
+}
+.notice > :first-child { margin-top: 0; }
+.notice > :last-child { margin-bottom: 0; }
+/* .filter-bar .field-label (below) is a second, deliberately different
    .field-label rule: it omits color, so filter/export/triage/quarterly
-   labels stay full-color while these two stay muted. Not merged into this
+   labels stay full-color while these stay muted. Not merged into this
    selector list, since doing so would silently mute them too. */
-.trip-card-control .field-label, .trip-detail-field .field-label { font-size: .75rem; color: var(--fg-muted); }
-/* `> select` (not the bare descendant selector) so this can never reach the
-   purpose field's *inner* .purpose-recent <select> -- that one is a small
-   absolutely-positioned chevron overlay (see .purpose-recent above) that a
-   `width: 100%` would stretch across the whole field, silently intercepting
-   every click meant for the free-text input underneath it. */
-.trip-card-control > select { width: 100%; min-width: 0; max-width: 14rem; }
-.trip-card-control .purpose-field { width: 100%; min-width: 0; }
-.trip-card-control .purpose-field input { width: 100%; }
-.trip-card-actions {
-  display: grid; grid-template-columns: 6rem max-content max-content minmax(0, 1fr);
-  grid-template-rows: var(--control-height) auto; gap: var(--space-2);
-  align-items: start; margin-top: var(--space-3);
+.trip-detail-field .field-label,
+.review-detail-field .field-label, .review-detail-field > label {
+  font-size: .75rem; color: var(--fg-muted);
 }
-.trip-card-details {
-  display: grid; grid-template-rows: var(--control-height) auto;
-  grid-column: 1 / -1; grid-row: 1 / span 2; min-width: 0;
-}
-.trip-card-details > summary {
-  grid-row: 1; width: fit-content; min-height: var(--control-height); align-content: center;
-  cursor: pointer; white-space: nowrap;
-  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
-  padding: var(--space-2) var(--space-3);
-  background: var(--control-bg); color: var(--control-fg);
-  box-shadow: var(--control-shadow);
-}
-.trip-card-detail-content {
-  grid-row: 2; min-width: 0; width: 100%; margin-top: var(--space-2); padding-top: var(--space-2);
-  border-top: 1px solid var(--border);
-}
-.trip-card-route-action, .trip-card-edit-action { grid-row: 1; position: relative; z-index: 1; }
-.trip-card-route-action { grid-column: 2; }
-.trip-card-edit-action { grid-column: 3; }
-.trip-card-detail-content dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); margin: 0; }
-.trip-card-detail-content dl div, .trip-card-detail-content dd { min-width: 0; overflow-wrap: anywhere; }
-.trip-card-detail-content dt { color: var(--fg-muted); font-size: .75rem; }
-.trip-card-detail-content dd { margin: .15rem 0 0; }
 .trip-warning-callout {
   overflow-wrap: anywhere; margin: var(--space-3) 0 0;
   padding: var(--space-2) var(--space-3); border: 1px solid var(--warn);
   border-left-width: .3rem; border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--warn) 6%, var(--surface-elevated));
-  color: var(--danger);
+  color: var(--warn);
 }
 .trip-warning-callout a { font-weight: 600; text-decoration: underline; }
-.trip-card-detail-actions { margin-top: var(--space-3); }
 .trip-pager { display: flex; justify-content: center; padding: var(--space-3); }
 .trip-edit-card h3 { margin: 0; }
+
+/* Archive rows share one markup shape at every width, the same technique the
+   dashboard's rows (below) use: a dense grid row on desktop that becomes a
+   card at the mobile breakpoint, with no duplicated markup or ids. */
+.trip-archive-row-list {
+  /* One track list for both the header and the data rows below, so the two
+     are structurally guaranteed to agree instead of each sizing its own
+     max-content columns independently and drifting apart. Every track is a
+     fixed length rather than max-content/auto/fit-content, chosen wide
+     enough for worst-case content: the leading select column is a single
+     always-visible checkbox, the time column fits a two-digit hour
+     range joined by "to", the category column fits the full Business/
+     Personal pair alone (no label word sits beside it any more), the
+     distance column fits a four-figure mileage value, and the actions
+     column is the exact width of its two icon buttons plus their gap. */
+  --trip-archive-columns: 1.75rem 7.5rem minmax(0, 1fr) 13.75rem 5rem 3.75rem;
+  display: grid; gap: 0; min-width: 0;
+}
+/* Column labels for sighted desktop users. The list below isn't a native
+   table, so each row's own cells already carry the equivalent aria-label a
+   table's <th> would otherwise have supplied (see .trip-archive-row-time
+   etc.) -- this header is purely decorative and skipped by assistive tech. */
+.trip-archive-row-header {
+  display: grid; min-width: 0;
+  grid-template-columns: var(--trip-archive-columns);
+  grid-template-areas: "select time content category distance actions";
+  gap: 1rem; align-items: center;
+  padding: 0 .875rem var(--space-2); margin: 0 -.875rem;
+  color: var(--fg-muted); font-size: .72rem; font-weight: 650;
+  text-transform: uppercase; letter-spacing: .02em;
+}
+.trip-archive-row-header-select { grid-area: select; }
+.trip-archive-row-header-time { grid-area: time; }
+.trip-archive-row-header-content { grid-area: content; }
+.trip-archive-row-header-category { grid-area: category; }
+.trip-archive-row-header-distance { grid-area: distance; text-align: right; }
+.trip-archive-row-header-actions { grid-area: actions; }
+.trip-archive-row {
+  position: relative; display: grid; min-width: 0;
+  grid-template-columns: var(--trip-archive-columns);
+  grid-template-areas: "select time content category distance actions";
+  gap: 1rem; align-items: center;
+  padding: .8125rem .875rem; margin: 0 -.875rem;
+  background-color: transparent;
+  background-image: var(--rule-fade-soft);
+  background-repeat: no-repeat; background-position: bottom; background-size: 100% 1px;
+  transition: background-color .18s ease;
+}
+.trip-archive-row.is-selected {
+  border: 2px solid var(--accent-selected);
+  background: color-mix(in srgb, var(--accent-selected) 12%, var(--surface-elevated));
+  box-shadow: 0 0 0 1px var(--accent-selected), var(--shadow);
+}
+/* The detail-link overlay sits at the row's stacking root (z-index: 0) so
+   a click anywhere on the row that isn't one of the controls below opens the
+   trip; every interactive control is lifted above it with its own stacking
+   context so the overlay never swallows a click meant for the checkbox, the
+   category pair, the edit button, or the overflow menu. */
+.trip-archive-row-link {
+  position: absolute; inset: 0; z-index: 0;
+}
+/* Positioned as its own zone rather than an in-flow grid child, anchored to
+   the row's own padding box the same way .trip-archive-row-link is (the row
+   is the nearest position: relative ancestor), so left: 0 reaches the row's
+   true left edge -- including the .875rem padding bleed the negative margin
+   above creates. The width then crosses the select track and one grid gap,
+   stopping just short of where the time column's text starts. That gives a
+   stray click anywhere in the left gutter, not just the small checkbox
+   glyph, a chance to toggle selection before it falls through to the
+   detail-link overlay underneath. The select track stays a fixed entry in
+   --trip-archive-columns so the time column doesn't shift left to fill the
+   now out-of-flow space: a fixed track reserves its width regardless of
+   whether an in-flow child occupies it. */
+.trip-archive-row-selector {
+  position: absolute; z-index: 1; left: 0; top: 0; bottom: 0;
+  width: calc(.875rem + 1.75rem + 1rem);
+  display: flex; align-items: center; justify-content: center;
+}
+.trip-archive-row-selector input { margin: 0; }
+.trip-archive-row-time {
+  display: flex; grid-area: time; align-items: center; min-width: 0;
+  color: var(--fg-muted); font-size: .78rem;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.trip-archive-row-when { display: grid; gap: .1rem; align-content: start; }
+.trip-archive-row-when-times { color: var(--fg-disabled); font-size: .7rem; }
+.trip-archive-row-content { display: grid; grid-area: content; gap: var(--space-1); min-width: 0; }
+.trip-archive-row-route {
+  display: block; min-width: 0; margin: 0; overflow: hidden;
+  color: var(--fg); font-weight: 650; text-overflow: ellipsis; white-space: nowrap;
+}
+.trip-archive-row-route .icon {
+  display: inline-block; width: .9rem; height: .9rem; margin: 0 var(--space-1); vertical-align: -.1em;
+}
+.trip-archive-row-meta, .trip-archive-row-statuses {
+  display: flex; min-width: 0; gap: var(--space-2); align-items: center;
+  color: var(--fg-muted); font-size: .75rem; flex-wrap: wrap;
+}
+.trip-archive-row-meta > * { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trip-archive-row-statuses { margin-top: var(--space-1); }
+.trip-archive-row-exclusion { max-width: 100%; }
+.trip-archive-row-category {
+  position: relative; z-index: 1; display: flex; grid-area: category; min-width: 0;
+  gap: var(--space-2); align-items: center; justify-content: flex-start;
+}
+.trip-archive-row-distance {
+  display: block; grid-area: distance; min-width: 3.875rem; text-align: right;
+  color: var(--fg); font-size: .94rem; font-weight: 500;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.trip-archive-row-distance span { color: var(--fg-muted); font-size: .75rem; font-weight: 500; }
+/* Fades out at rest and back in on row hover or focus, same as the
+   dashboard row's action cluster, so it doesn't compete with the route and
+   distance for attention on a row nobody is interacting with. */
+.trip-archive-row-actions {
+  position: relative; z-index: 1; display: flex; grid-area: actions;
+  align-items: center; gap: var(--space-1); opacity: .35;
+  transition: opacity .18s ease;
+}
+.trip-archive-row:hover .trip-archive-row-actions,
+.trip-archive-row-actions:focus-within { opacity: 1; }
+.trip-archive-row-icon-button, .trip-archive-row-more-trigger {
+  display: inline-flex; width: var(--control-height); min-width: var(--control-height); min-height: var(--control-height);
+  align-items: center; justify-content: center; border: none;
+  border-radius: var(--radius-sm); color: var(--fg-muted); background: transparent;
+  box-shadow: none; cursor: pointer; list-style: none;
+}
+.trip-archive-row-icon-button:hover, .trip-archive-row-more-trigger:hover {
+  color: var(--accent-hover); background: var(--accent-soft);
+}
+.trip-archive-row-more { position: relative; }
+.trip-archive-row-more-trigger::marker { content: ""; }
+.trip-archive-row-icon-button .icon, .trip-archive-row-more-trigger .icon { width: 1rem; height: 1rem; }
+.trip-archive-row-more-panel {
+  position: absolute; top: calc(100% + var(--space-1)); right: 0; z-index: 20;
+  display: flex; min-width: 10rem; max-width: calc(100vw - 2 * var(--space-3));
+  flex-direction: column; gap: var(--space-1); padding: var(--space-2);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  background: var(--surface-elevated); box-shadow: var(--shadow);
+}
+.trip-archive-row-action {
+  display: flex; width: 100%; min-width: 0; min-height: var(--control-height); gap: var(--space-2);
+  align-items: center; padding: 0 var(--space-2); border: 1px solid transparent;
+  border-radius: var(--radius-sm); color: var(--fg); background: transparent;
+  font: inherit; text-decoration: none; cursor: pointer; white-space: nowrap;
+}
+.trip-archive-row-action:hover, .trip-archive-row-action:focus-visible {
+  border-color: var(--accent-hover); background: var(--accent-soft);
+}
+.trip-archive-row-action .icon { width: 1rem; height: 1rem; }
+.trip-archive-row-more-panel .trip-delete-trigger {
+  width: 100%; min-height: var(--control-height); padding: 0 var(--space-2);
+  border-color: transparent; background: transparent; color: var(--danger); text-align: left;
+}
+.trip-archive-row-not-my-vehicle .trip-archive-row-route,
+.trip-archive-row-not-my-vehicle .trip-archive-row-meta,
+.trip-archive-row-not-my-vehicle .trip-archive-row-distance { color: var(--fg-muted); }
+.trip-archive-row-not-my-vehicle .trip-archive-row-distance span { color: var(--fg-disabled); }
+.trip-archive-row-not-my-vehicle .trip-archive-row-exclusion { opacity: .8; }
+
+@media (min-width: 761px) {
+  .trip-archive-row:hover {
+    background-color: color-mix(in srgb, var(--fg) 3.5%, transparent);
+  }
+  .trip-archive-row-icon-button, .trip-archive-row-more-trigger {
+    width: 1.75rem; min-width: 1.75rem; min-height: 1.75rem;
+  }
+}
+
+/* Dashboard rows share one markup shape at every width. The grid keeps the
+   time and distance scannable on desktop, then the content becomes a card on
+   smaller screens without duplicating controls or IDs. */
+.dashboard-trip-row-list { display: grid; gap: 0; min-width: 0; }
+.dashboard-day-heading {
+  display: flex; min-width: 0; gap: var(--space-3); align-items: center;
+  margin: var(--space-5) 0 var(--space-2); color: var(--fg);
+}
+.dashboard-day-heading::after {
+  content: ""; height: 1px; min-width: 1rem; flex: 1; order: 2;
+  background: linear-gradient(to right, var(--border-strong), transparent);
+}
+.dashboard-day-heading > span:first-child { order: 1; }
+.dashboard-day-heading:first-of-type { margin-top: 0; }
+.dashboard-day-subtotal {
+  order: 3;
+  color: var(--fg-muted); font-size: .8rem; font-weight: 500;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+/* Bottom fading rule instead of a plain border-bottom, via --rule-fade. The
+   negative margin pulls the row back out to the list's full width so the
+   padding (and the hover tint below) can bleed past the content column.
+   Classify, distance, and the action cluster are three max-content columns
+   packed together at the end rather than one wrapped "trailing" column: a
+   wrapper element grouping them on desktop would need an unwrap-at-mobile
+   display trick this codebase avoids project-wide for its accessibility-tree
+   risk in some browsers, to still let them reflow independently into the
+   mobile card's separate areas below. */
+.dashboard-trip-row {
+  position: relative; display: grid; min-width: 0;
+  grid-template-columns: 74px minmax(0, 1fr) max-content max-content max-content;
+  grid-template-areas: "time content category distance actions";
+  gap: 1rem; align-items: center;
+  padding: .8125rem .875rem; margin: 0 -.875rem;
+  background-color: transparent;
+  background-image: var(--rule-fade);
+  background-repeat: no-repeat; background-position: bottom; background-size: 100% 1px;
+  transition: background-color .18s ease;
+}
+/* The final row of the final day group would otherwise draw its fading
+   rule immediately above the page footer. dashboard.html marks only the
+   last .dashboard-trip-row-list with this modifier, so :last-child here
+   always lands on the true final row regardless of how many day groups
+   render. */
+.dashboard-trip-row-list-last > .dashboard-trip-row:last-child {
+  background-image: none;
+}
+.dashboard-row-time {
+  display: grid; grid-area: time; gap: .1rem; min-width: 4rem;
+  align-content: start; color: var(--fg-muted); font-size: .78rem;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.dashboard-row-time span { color: var(--fg-disabled); font-size: .7rem; }
+.dashboard-row-content { display: grid; grid-area: content; gap: var(--space-1); min-width: 0; }
+.dashboard-row-route {
+  display: block; min-width: 0; margin: 0; overflow: hidden;
+  color: var(--fg); font-weight: 650; text-overflow: ellipsis; white-space: nowrap;
+}
+.dashboard-row-route .icon {
+  display: inline-block; width: .9rem; height: .9rem; margin: 0 var(--space-1); vertical-align: -.1em;
+}
+.dashboard-row-meta, .dashboard-row-statuses {
+  display: flex; min-width: 0; gap: var(--space-2); align-items: center;
+  color: var(--fg-muted); font-size: .75rem; flex-wrap: wrap;
+}
+.dashboard-row-meta > * { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dashboard-row-statuses { margin-top: var(--space-1); }
+.dashboard-row-exclusion { max-width: 100%; }
+.dashboard-row-category {
+  display: flex; grid-area: category; min-width: 0; gap: var(--space-2);
+  align-items: center; justify-content: flex-start;
+}
+.dashboard-row-classify-label { color: var(--fg-muted); font-size: .72rem; font-weight: 650; white-space: nowrap; }
+/* One joined pair, not two separate buttons: a single shared ring
+   (box-shadow on the wrapper) plus one internal divider (box-shadow on the
+   second half) reads as one control with two equally-weighted halves.
+   Neither half may carry selected styling -- an unclassified trip has no
+   category yet, and pre-selecting Business would make it easy to commit the
+   wrong one by accident. */
+.trip-quick-actions {
+  display: inline-flex; min-width: 0; border-radius: 7px; overflow: hidden;
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+.trip-quick-form { display: flex; min-width: 0; }
+.trip-quick-form:last-child { box-shadow: inset 1px 0 0 var(--border-strong); }
+.trip-quick-button {
+  display: inline-flex; min-width: 0; align-items: center; justify-content: center;
+  gap: .35rem; padding: .35rem .7rem; border: none; border-radius: 0;
+  background: transparent; color: var(--fg-muted); font-size: .78rem; box-shadow: none;
+  white-space: nowrap; transition: background-color .18s ease, color .18s ease;
+}
+.trip-quick-button .icon { width: .8125rem; height: .8125rem; }
+.trip-quick-button:hover {
+  background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+  color: var(--accent-hover);
+}
+.trip-quick-button:active {
+  background: color-mix(in srgb, var(--accent-primary) 30%, transparent);
+}
+/* A committed row uses this same pair with one half selected, rather than
+   the earlier separate committed-pill popup: one fewer control to learn,
+   and the reversible action (re-tag, or Clear category from the overflow
+   menu) is exactly the same shape as classifying in the first place. Same
+   34%-mixed category fill the pill used to keep the committed colors. */
+.trip-quick-button.trip-quick-button-selected.category-business {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--cat-business) 34%, var(--control-bg));
+}
+.trip-quick-button.trip-quick-button-selected.category-personal {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--cat-personal) 34%, var(--control-bg));
+}
+.dashboard-row-more-trigger::marker { content: ""; }
+.dashboard-row-distance {
+  display: block; grid-area: distance; min-width: 3.875rem; text-align: right;
+  color: var(--fg); font-size: .94rem; font-weight: 500;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.dashboard-row-distance span { color: var(--fg-muted); font-size: .75rem; font-weight: 500; }
+/* The action cluster fades out at rest and back in on row hover or when
+   either icon button holds keyboard focus, so it doesn't compete with the
+   route and distance for attention on a row nobody is interacting with. */
+.dashboard-row-actions {
+  display: flex; grid-area: actions; align-items: center; gap: var(--space-1); opacity: .35;
+  transition: opacity .18s ease;
+}
+.dashboard-trip-row:hover .dashboard-row-actions,
+.dashboard-row-actions:focus-within { opacity: 1; }
+.dashboard-row-icon-button, .dashboard-row-more-trigger {
+  display: inline-flex; width: var(--control-height); min-width: var(--control-height); min-height: var(--control-height);
+  align-items: center; justify-content: center; border: none;
+  border-radius: var(--radius-sm); color: var(--fg-muted); background: transparent;
+  box-shadow: none; cursor: pointer; list-style: none;
+}
+.dashboard-row-icon-button:hover, .dashboard-row-more-trigger:hover {
+  color: var(--accent-hover); background: var(--accent-soft);
+}
+.dashboard-row-more { position: relative; }
+.dashboard-row-icon-button .icon, .dashboard-row-more-trigger .icon { width: 1rem; height: 1rem; }
+.dashboard-row-more-panel {
+  position: absolute; top: calc(100% + var(--space-1)); right: 0; z-index: 20;
+  display: flex; min-width: 10rem; max-width: calc(100vw - 2 * var(--space-3));
+  flex-direction: column; gap: var(--space-1); padding: var(--space-2);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  background: var(--surface-elevated); box-shadow: var(--shadow);
+}
+.dashboard-row-action {
+  display: flex; width: 100%; min-width: 0; min-height: var(--control-height); gap: var(--space-2);
+  align-items: center; padding: 0 var(--space-2); border: 1px solid transparent;
+  border-radius: var(--radius-sm); color: var(--fg); background: transparent;
+  font: inherit; text-decoration: none; cursor: pointer; white-space: nowrap;
+}
+.dashboard-row-action:hover, .dashboard-row-action:focus-visible {
+  border-color: var(--accent-hover); background: var(--accent-soft);
+}
+.dashboard-row-action .icon { width: 1rem; height: 1rem; }
+.dashboard-row-more-panel .trip-delete-trigger {
+  width: 100%; min-height: var(--control-height); padding: 0 var(--space-2);
+  border-color: transparent; background: transparent; color: var(--danger); text-align: left;
+}
+.dashboard-trip-row-not-my-vehicle .dashboard-row-route,
+.dashboard-trip-row-not-my-vehicle .dashboard-row-meta,
+.dashboard-trip-row-not-my-vehicle .dashboard-row-distance { color: var(--fg-muted); }
+.dashboard-trip-row-not-my-vehicle .dashboard-row-distance span { color: var(--fg-disabled); }
+.dashboard-trip-row-not-my-vehicle .dashboard-row-exclusion { opacity: .8; }
+
+/* Above the 760px card breakpoint the row controls can shrink below the
+   shared --control-height touch target, since a mouse is doing the
+   pointing; at and below it the base rules above (and the touch-target
+   floor a hovering mouse doesn't need) apply unchanged. Hover is scoped
+   here too -- there's no persistent hover on touch, and the mobile card
+   already carries its own solid background. */
+@media (min-width: 761px) {
+  .dashboard-trip-row:hover {
+    background-color: color-mix(in srgb, var(--fg) 3.5%, transparent);
+  }
+  .trip-quick-button {
+    min-height: 1.75rem;
+  }
+  .dashboard-row-icon-button, .dashboard-row-more-trigger {
+    width: 1.75rem; min-width: 1.75rem; min-height: 1.75rem;
+  }
+}
+
 .trip-edit-heading { display: flex; justify-content: space-between; gap: var(--space-3); align-items: start; margin-bottom: var(--space-3); }
 .trip-edit-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
 .trip-edit-grid + .trip-edit-grid { margin-top: var(--space-3); }
-.trip-edit-grid label { display: flex; min-width: 0; flex-direction: column; gap: var(--space-1); font-size: .8rem; }
+.trip-edit-grid label, .trip-edit-field {
+  display: flex; min-width: 0; flex-direction: column; gap: var(--space-1); font-size: .8rem;
+}
 .trip-edit-grid input, .trip-edit-grid select, .trip-edit-grid textarea { width: 100%; min-width: 0; }
 .trip-edit-notes { grid-column: 1 / -1; }
 .trip-edit-actions { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
@@ -353,28 +1131,26 @@ input.notes:hover, input.notes:focus { border-color: var(--border-strong); }
   box-shadow: var(--control-shadow); font-size: .85rem; font-weight: 500; line-height: 1.2;
 }
 .trip-tools > summary { left: 0; }
-.trip-manual > summary { left: calc(var(--trip-page-summary-width) + var(--space-2)); }
 .trip-tools > .trip-filter-bar {
   min-width: 0; width: 100%; margin-top: var(--space-3);
 }
-.trip-page-disclosures > .trip-manual { margin: 0; }
-.trip-manual-content {
-  min-width: 0; width: 100%; margin-top: var(--space-3);
-}
 .filter-bar .field { display: flex; flex-direction: column; gap: .15rem; }
-/* Deliberately no color here, unlike .trip-card-control/.trip-detail-field's
-   .field-label (near .trip-card-controls above): filter/export/triage/
-   quarterly labels stay full-color, not muted. */
+/* Deliberately no color here, unlike .trip-detail-field's .field-label
+   (near .trip-warning-callout above): filter/export/triage/quarterly labels
+   stay full-color, not muted. */
 .filter-bar .field-label { font-size: .75rem; }
 .filter-bar .pills { display: flex; gap: .35rem; min-height: var(--control-height); flex-wrap: wrap; }
-.filter-bar .pills a { display: flex; align-items: center; border: 1px solid var(--control-border);
-                       border-radius: 4px; padding: 0 .55rem; text-decoration: none;
-                       background: var(--control-bg); box-shadow: var(--control-shadow); }
-.filter-bar .pills a.active { background: var(--surface0); font-weight: 600; }
+.filter-bar .pills a { display: flex; align-items: center;
+                       border: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+                       border-radius: var(--radius-md); padding: 0 .55rem; text-decoration: none;
+                       background: var(--control-fill); }
+.filter-bar .pills a.active {
+  background: var(--accent-soft); border-color: var(--accent-active); color: var(--accent-active); font-weight: 600;
+}
 .filter-bar .date-range { display: flex; gap: .5rem; align-items: end; }
 .filter-bar .date-range label { display: flex; flex-direction: column; font-size: .75rem; gap: .15rem; }
 .filter-bar .date-range input[type="date"] { box-sizing: border-box; }
-.filter-search-row, .filter-date-row, .filter-apply-row, .filter-link-groups {
+.filter-search-row, .filter-date-row, .filter-apply-row {
   display: flex; gap: var(--space-2); align-items: end;
 }
 /* The filter form keeps its groups on one line and asks the bar for the
@@ -391,6 +1167,128 @@ input.notes:hover, input.notes:focus { border-color: var(--border-strong); }
 .filter-search-row label { display: flex; flex-direction: column; font-size: .75rem; gap: .15rem; width: 100%; }
 .filter-search-row input[type="search"] { box-sizing: border-box; width: 100%; min-width: 0; }
 .filter-clear { white-space: nowrap; }
+.trip-filter-form {
+  display: grid; width: 100%; min-width: 0; gap: var(--space-3);
+}
+.trip-filter-primary {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-4); align-items: end; min-width: 0;
+}
+.trip-filter-primary .filter-search-row { min-width: 0; }
+.trip-filter-category {
+  min-width: 0;
+}
+.trip-filter-category legend {
+  margin-bottom: var(--space-1); font-size: .75rem;
+}
+/* The filter's category control reuses .category-segmented's styling (see
+   _category_segmented.html) so the page does not carry two differently
+   styled segmented controls. It adds a fourth "All" choice, so the shared
+   four-column grid and a checked-state accent color for "All" are extended
+   here, scoped to this wrapper, rather than touching the shared rules that
+   trip.html, _trip_edit_card.html, and _review_card.html also depend on. */
+.trip-filter-category .category-segmented-options {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.trip-filter-category .category-segmented-input:checked + .category-segmented-all {
+  border-color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 20%, var(--control-bg));
+}
+.trip-filter-secondary {
+  display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: end; min-width: 0;
+}
+.trip-filter-secondary > label,
+.trip-filter-custom-dates label {
+  display: flex; flex-direction: column; gap: var(--space-1); min-width: 7rem;
+  font-size: .75rem;
+}
+.trip-filter-secondary select,
+.trip-filter-secondary input[type="date"] { box-sizing: border-box; min-width: 0; }
+.trip-filter-custom-dates { display: flex; gap: var(--space-2); align-items: end; }
+.trip-filter-custom-dates[hidden] { display: none; }
+/* Its own row under the controls: the filter form already asks the surface
+   for a full-width line of its own. */
+.trip-archive-status {
+  display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center;
+  width: 100%; min-width: 0; font-size: .75rem;
+}
+.trip-archive-status-message { margin: 0; }
+.trip-archive-status-message:empty { display: none; }
+/* A refresh keeps the previous rows readable underneath rather than blanking
+   the list, so the distinction between applied filters and a request still
+   in flight stays visible without moving anything. */
+.trip-archive-results[aria-busy="true"] { opacity: .6; }
+/* The archive header replaces the loose year-to-date paragraph and the
+   export/triage links that used to sit inside the filters disclosure with
+   one strip above the trip list: the deduction figure on one side, Select
+   Trips/export/triage/manual-trip on the other. */
+.trip-archive-header {
+  display: flex; flex-wrap: wrap; gap: var(--space-4); align-items: center;
+  justify-content: space-between; margin-bottom: var(--space-4);
+  padding: var(--space-3) var(--space-4); border-radius: var(--radius-md);
+  background: var(--accent-soft-raised);
+  background-image: var(--rule-fade-soft); background-repeat: no-repeat;
+  background-position: bottom; background-size: 100% 1px;
+}
+.trip-archive-header-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+/* Echoes _dashboard_trip_row.html's overflow-menu <details> (an absolutely
+   positioned panel off a <summary> trigger) rather than field_pills, which
+   stacked a label above its pills while the neighbouring bare controls did
+   not, the actual cause of the header's vertical misalignment. Unlike that
+   row menu, the trigger here keeps a visible "Export" label, so it shares
+   .control/.control-secondary with the header's other bare controls instead
+   of the icon-only .icon-button. */
+.trip-archive-export { position: relative; }
+.trip-archive-export-trigger { list-style: none; }
+.trip-archive-export-trigger::marker { content: ""; }
+.trip-archive-export-trigger .icon { width: 1rem; height: 1rem; }
+.trip-archive-export-panel {
+  position: absolute; top: calc(100% + var(--space-1)); right: 0; z-index: 20;
+  display: flex; min-width: 8rem; flex-direction: column; gap: var(--space-1);
+  padding: var(--space-2); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md); background: var(--surface-elevated); box-shadow: var(--shadow);
+}
+.trip-archive-export-action {
+  display: flex; width: 100%; min-height: var(--control-height); align-items: center;
+  padding: 0 var(--space-2); border-radius: var(--radius-sm); color: var(--fg);
+  text-decoration: none;
+}
+.trip-archive-export-action:hover, .trip-archive-export-action:focus-visible {
+  background: var(--accent-soft); color: var(--accent-hover);
+}
+/* Adds onto .filter-bar/.trip-filter-bar rather than changing either shared
+   rule: stats.html's own Filters disclosure renders with those same two
+   classes and must keep its current (non-sticky, non-raised) look. */
+.trip-filter-surface {
+  justify-content: flex-start; z-index: 5;
+  margin-bottom: var(--space-4); padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md); background: var(--surface-raised);
+  background-image: var(--rule-fade); background-repeat: no-repeat;
+  background-position: bottom; background-size: 100% 1px;
+}
+.trip-filter-controls { width: 100%; min-width: 0; }
+.trip-filter-toggle { display: none; }
+.trip-filter-toggle[hidden], .trip-filter-controls[hidden] { display: none; }
+.trip-filter-active-indicator { color: var(--accent-primary); font-size: .75rem; }
+@media (min-width: 761px) {
+  .trip-filter-surface { position: sticky; top: 0; }
+  /* A sticky bar visually covers whatever scrolls underneath it, but a
+     browser's automatic scroll-into-view on Tab has no idea that is
+     happening -- it only checks the newly focused element's own box against
+     the scrollport, so without this, tabbing into a row control near the
+     top of the list can land it hidden behind the bar. 8rem is an
+     unverified estimate of the surface's worst-case (two-line-wrap)
+     rendered height plus its own padding, pending browser confirmation; the
+     app header itself is never at risk, since it is not sticky and has
+     already scrolled out of view by the time this bar reaches the top.
+     Both selectors are needed: the descendant one covers a focusable
+     element nested inside a later sibling, and the plain sibling one covers
+     a later sibling that is itself focusable. */
+  .trip-filter-surface ~ * :is(a, button, input, select, textarea, summary),
+  .trip-filter-surface ~ :is(a, button, input, select, textarea, summary) {
+    scroll-margin-top: 8rem;
+  }
+}
 .gap { cursor: help; }
 .missing-trip-badge { color: var(--danger); }
 .osrm-hint { font-size: .75rem; opacity: .7; align-self: center; }
@@ -405,6 +1303,24 @@ details.add-manual label { display: flex; flex-direction: column; font-size: .75
 details.add-manual fieldset { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
                               border: 1px solid var(--border); border-radius: 6px; padding: .5rem; }
 details.add-manual legend { font-size: .75rem; opacity: .7; padding: 0 .3rem; }
+.manual-trip-page { max-width: 52rem; margin: 0 auto; }
+.manual-trip-page-header { display: flex; justify-content: space-between; align-items: start; }
+.manual-trip-page-header p { margin: 0 0 var(--space-2); }
+.manual-trip-page-header h2 { margin-top: 0; }
+.manual-trip-form {
+  display: flex; gap: .75rem; flex-wrap: wrap; align-items: end;
+  padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+.manual-trip-form label { display: flex; flex-direction: column; font-size: .8rem; gap: .15rem; }
+.manual-trip-form fieldset { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
+  border: 1px solid var(--border); border-radius: 6px; padding: .5rem; }
+.manual-trip-form legend { font-size: .75rem; opacity: .7; padding: 0 .3rem; }
+.manual-trip-form .route-mode-option { flex-direction: row; align-items: center; gap: .3rem; }
+.manual-trip-form .route-picker { flex-basis: 100%; }
+.manual-trip-submit-row {
+  display: flex; flex: 1 0 100%; justify-content: center; width: 100%;
+}
 .route-saved-notice {
   margin: var(--space-3) 0; padding: var(--space-2) var(--space-3);
   border-left: 3px solid var(--warn); color: var(--fg-muted);
@@ -423,20 +1339,48 @@ details.add-manual .route-mode-option { flex-direction: row; align-items: center
 .route-picker-map { width: 100%; height: 260px; border-radius: var(--radius-sm); border: 1px solid var(--border); }
 .route-picker-status { margin: 0; min-height: 1rem; font-size: .8rem; color: var(--fg-muted); }
 .route-distance-hint { font-size: .75rem; opacity: .7; }
-.theme-picker { display: flex; gap: 1rem; align-items: center; width: fit-content;
+.theme-picker { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;
+                width: fit-content; max-width: 100%;
                 border: 1px solid var(--border); border-radius: 6px; padding: .5rem .75rem; margin: 0; }
-.theme-picker legend { font-size: .75rem; opacity: .7; padding: 0 .3rem; }
+.theme-picker + .theme-picker { margin-top: var(--space-3); }
+.theme-picker legend { font-size: .75rem; color: var(--fg-muted); padding: 0 .3rem; }
 .theme-picker label { display: flex; align-items: center; gap: .3rem; font-size: .85rem; }
+.theme-picker label:hover { color: var(--accent-hover); }
+.theme-picker input[type="radio"] { accent-color: var(--accent-primary); }
 .time-now-field { display: flex; gap: .25rem; align-items: center; }
 .now-btn { border: 1px solid var(--control-border); background: var(--control-bg); color: var(--control-fg);
            border-radius: 4px; padding: .1rem .4rem; cursor: pointer; font-size: .7rem; }
-.expense-edit { min-width: 18rem; display: flex; flex-direction: column; gap: .4rem;
-                padding: .5rem; }
-.expense-edit label { display: flex; flex-direction: column; font-size: .75rem; gap: .15rem; }
+.expense-editor-row > td { padding: 0; }
+.expense-ledger { table-layout: fixed; min-width: 56rem; }
+.expense-ledger-date { width: 9%; }
+.expense-ledger-vehicle { width: 11%; }
+.expense-ledger-category { width: 12%; }
+.expense-ledger-amount { width: 8%; }
+.expense-ledger-treatment { width: 12%; }
+.expense-ledger-trip { width: 10%; }
+.expense-ledger-notes { width: 12%; }
+.expense-ledger-warnings { width: 15%; }
+.expense-ledger-actions { width: 11%; }
+.expense-editor > summary { width: fit-content; padding: 0 var(--space-2); font-size: .8rem;
+                             border: 1px solid var(--border-strong); border-radius: var(--radius-sm); }
+.expense-editor-panel { border: 1px solid var(--border); border-radius: var(--radius-sm);
+                        margin: var(--space-2) 0 var(--space-3); padding: var(--space-3); }
+.expense-editor-panel form { display: flex; flex-direction: column; gap: var(--space-3); }
+.expense-editor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+.expense-editor-field { display: flex; min-width: 0; flex-direction: column; gap: var(--space-1); font-size: .8rem; }
+.expense-editor-field input, .expense-editor-field select { width: 100%; min-width: 0; }
+.expense-editor-notes { grid-column: 1 / -1; }
+.expense-editor-actions { display: flex; gap: var(--space-2); }
+.expense-warning-details { min-width: 8rem; }
+.expense-warning-details > summary { min-height: 0; font-size: .8rem; color: var(--danger); }
+.expense-warning-details .trip-warning-callout { margin-top: var(--space-2); }
+.expense-live-warning { color: var(--danger); font-size: .75rem; line-height: 1.3; }
+.expense-editor-field .expense-live-warning { margin: 0; }
+.expense-add .expense-live-warning { flex: 1 1 100%; margin: -.25rem 0 0; }
 .danger { color: var(--danger); }
 .trip-delete-trigger {
   min-height: var(--control-height); padding: 0 var(--space-3); white-space: nowrap;
-  color: var(--base); background: var(--danger); border: 1px solid var(--danger);
+  color: var(--bg); background: var(--danger); border: 1px solid var(--danger);
   border-radius: var(--radius-sm); cursor: pointer;
 }
 /* Shared by every native <dialog> in the app (the delete-confirmation
@@ -454,12 +1398,18 @@ details.add-manual .route-mode-option { flex-direction: row; align-items: center
 .trip-delete-dialog-content { padding: 1rem; }
 .trip-delete-dialog-content h2 { margin: 0 0 .75rem; }
 .trip-delete-dialog-content p { margin: 0 0 1rem; line-height: 1.4; }
+.account-avatar-remove-dialog-content { padding: 1rem; }
+.account-avatar-remove-dialog-content h2 { margin: 0 0 .75rem; }
+.account-avatar-remove-dialog-content p { margin: 0 0 1rem; line-height: 1.4; }
 .trip-delete-confirm {
-  color: var(--base); background: var(--danger); border: 1px solid var(--danger);
+  color: var(--bg); background: var(--danger); border: 1px solid var(--danger);
   border-radius: 4px; font-weight: 600;
 }
-.review-card-actions { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
-.trip-detail-delete { margin: 1rem 0; }
+.account-avatar-remove-confirm {
+  color: var(--bg); background: var(--danger); border: 1px solid var(--danger);
+  border-radius: 4px; font-weight: 600;
+}
+.trip-detail-delete { flex: 0 0 auto; margin-left: auto; }
 .selection-action-bar {
   position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%);
   display: flex; gap: .75rem; align-items: center; flex-wrap: wrap;
@@ -494,7 +1444,6 @@ details.add-manual .route-mode-option { flex-direction: row; align-items: center
   border: 1px solid var(--border-strong); border-radius: var(--radius-md);
   padding: var(--space-3); box-shadow: var(--shadow);
 }
-.selection-toolbar { display: flex; justify-content: flex-end; margin: var(--space-3) 0; }
 .selection-minimum { max-width: 15rem; color: var(--fg-muted); font-size: .8rem; }
 .selection-dialog-content { padding: 1rem; display: flex; flex-direction: column; gap: var(--space-3); }
 .selection-dialog-content h2 { margin: 0; }
@@ -535,6 +1484,68 @@ details.add-manual .route-mode-option { flex-direction: row; align-items: center
    Workers table) end in a data column, not an action column, and a
    structural last-child selector would reach those too. */
 .settings-table-actions { text-align: right; }
+.settings-page { max-width: 72rem; margin: 0 auto; min-width: 0; }
+.settings-page-header { align-items: center; margin-bottom: var(--space-5); }
+.settings-page-header .page-title-subtitle { max-width: 42rem; }
+.settings-page .settings-account-section,
+.settings-page .settings-section,
+.settings-page > .section-disclosure {
+  min-width: 0; margin: 0 0 var(--space-5); padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--surface); box-shadow: var(--shadow);
+}
+.settings-page .settings-account-section > h2,
+.settings-page .settings-section > h2 { margin-top: 0; }
+.settings-page .settings-account-section p:last-child { margin-bottom: 0; }
+.settings-page .settings-section > .muted { max-width: 72ch; }
+.settings-page .settings-table-scroll { margin-top: var(--space-4); }
+.settings-page .settings-table tbody tr:last-child td { border-bottom: 0; }
+.settings-page .settings-table td { vertical-align: middle; }
+.settings-page .settings-table input:not([type="checkbox"]):not([type="radio"]),
+.settings-page .settings-table select { max-width: 100%; }
+.settings-page details.add-manual { margin: var(--space-4) 0 0; }
+.settings-page details.add-manual > summary,
+.settings-page .section-disclosure > summary {
+  display: list-item; list-style-position: inside; width: fit-content; max-width: 100%;
+  min-height: var(--control-height); padding: 0 var(--space-3); border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm); background: var(--control-bg); color: var(--control-fg);
+  box-shadow: var(--control-shadow);
+}
+.settings-page details.add-manual > summary:hover,
+.settings-page .section-disclosure > summary:hover {
+  border-color: var(--accent-hover); background: var(--accent-soft);
+}
+.settings-page details.add-manual[open] > summary { margin-bottom: var(--space-3); }
+.settings-page details.add-manual form {
+  margin-top: 0; padding: var(--space-4); border-color: var(--border);
+  border-radius: var(--radius-md); background: var(--surface-raised);
+}
+.settings-page details.add-manual fieldset { min-width: 0; }
+.settings-page .settings-appearance .theme-picker {
+  width: 100%; max-width: 42rem; padding: var(--space-3) var(--space-4);
+  border-color: var(--border); border-radius: var(--radius-md); background: var(--surface-raised);
+}
+.settings-page .settings-appearance .theme-picker + .theme-picker { margin-top: var(--space-3); }
+.settings-page .settings-appearance .theme-picker label { min-height: var(--control-height); }
+.settings-page .settings-import-form {
+  display: flex; gap: var(--space-3); align-items: end; flex-wrap: wrap;
+  margin-top: var(--space-4); padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+.settings-page .settings-import-form > label {
+  display: flex; min-width: 0; flex-direction: column; gap: var(--space-1); font-size: .8rem;
+}
+.settings-page .settings-import-form .settings-file-field { flex: 1 1 24rem; }
+.settings-page .settings-import-form input[type="file"] { width: 100%; max-width: 47.5rem; }
+.settings-page .settings-import-form .settings-checkbox-field {
+  flex-direction: row; align-items: center; gap: var(--space-2); min-height: var(--control-height);
+}
+.settings-page .settings-import-form button { flex: none; }
+.settings-page .settings-diagnostics > .section-disclosure {
+  margin: 0; padding: 0; border: 0; background: transparent; box-shadow: none;
+}
+.settings-page .settings-diagnostics > .section-disclosure > summary { margin: 0; }
+.settings-page .settings-diagnostics > .section-disclosure[open] > summary { margin-bottom: var(--space-4); }
 .diagnostics-list {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
   gap: var(--space-3); margin: 0;
@@ -551,26 +1562,46 @@ details.add-manual .route-mode-option { flex-direction: row; align-items: center
   border-radius: var(--radius-sm); background: var(--surface0); color: var(--fg);
   font-size: .85rem;
 }
-a { color: inherit; }
-.empty { opacity: .6; margin: 2rem 0; }
-.muted { opacity: .6; }
+a { color: var(--accent-primary); text-underline-offset: 3px; }
+.empty { color: var(--fg-muted); margin: 2rem 0; }
+.muted { color: var(--fg-muted); }
 /* The four authentication pages (login, signup, establish-account, and the
-   authenticated Account Security page) share one centered card, built from
+   authenticated Account Settings page) share the same centered layout, built from
    the .card surface above with only width and centering added on top, per
-   Package B1's acceptance criterion 3. Account Security carries more
+   Package B1's acceptance criterion 3. Account Settings carries more
    sections than the other three, so it gets the wider variant rather than
    forcing every page to one width. */
 .auth-card { max-width: 26rem; margin: var(--space-6) auto 0; }
 .auth-card-wide { max-width: 34rem; }
+.auth-page-title { margin-bottom: var(--space-3); }
+.auth-page-title .page-title-subtitle { max-width: none; }
 /* Authentication forms use the same label/input stacking as .trip-edit-grid label,
    but a single narrow column -- these forms are never side-by-side with
    other content, unlike the in-page edit grids they borrow the shape from. */
 .auth-form {
   display: flex; flex-direction: column; gap: var(--space-3);
-  max-width: 22rem; margin-top: var(--space-3);
+  width: 100%; margin-top: var(--space-3);
 }
 .auth-form label { display: flex; flex-direction: column; gap: var(--space-1); font-size: .85rem; }
-.account-security-section { margin-top: 1.5rem; }
+.auth-form input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]) {
+  width: 100%; padding: 0 var(--space-3);
+}
+.auth-submit, .auth-oidc { width: 100%; }
+.account-security-section {
+  min-width: 0; margin-top: var(--space-6); padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+.account-security-local { margin-top: var(--space-4); }
+.account-security-email { margin: 0 0 var(--space-4); overflow-wrap: anywhere; }
+.account-security-section h3 { margin: 0; }
+.account-security-section .auth-form { max-width: 26rem; }
+.account-settings-page { max-width: 48rem; margin: var(--space-6) auto 0; }
+.account-settings-stack { display: flex; flex-direction: column; gap: var(--space-4); }
+.account-settings-card > h3 { margin: 0; color: var(--fg); font-size: 1.1rem; }
+.account-settings-profile .account-settings-avatar-section {
+  margin-top: var(--space-3); padding-top: 0; border-top: 0;
+}
+.account-settings-card .account-security-section h4 { margin: 0; }
 .account-security-identity {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: var(--space-2);
   max-width: 28rem; margin: var(--space-3) 0 0;
@@ -580,32 +1611,125 @@ a { color: inherit; }
   border: 1px solid var(--border); border-radius: var(--radius-sm);
 }
 .account-security-identity dt { color: var(--fg-muted); font-size: .8rem; }
-.account-security-identity dd { margin: var(--space-1) 0 0; overflow-wrap: anywhere; }
+.account-security-identity dd { margin: var(--space-1) 0 0; overflow-wrap: anywhere; word-break: break-word; }
+.account-security-avatar-row { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; margin-top: var(--space-3); }
+.account-security-avatar-image {
+  width: 4rem; height: 4rem; flex: none; border-radius: 50%; object-fit: cover; border: 1px solid var(--border);
+}
+.account-security-avatar-placeholder { width: 4rem; height: 4rem; font-size: 1.4rem; }
+.account-security-avatar-actions { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.account-security-avatar-actions .auth-form { margin-top: 0; }
+.account-security-avatar-hint { margin: 0; font-size: .8rem; }
 .auth-form .auth-checkbox { flex-direction: row; align-items: flex-start; }
 .auth-form .auth-checkbox input { margin-top: .2rem; }
-/* Matches .auth-form's own max-width and left alignment (no auto margins),
-   so "or" spans the same run as the sign-in button above and the OIDC
-   control below instead of centering in the wider card while they stay
-   left-aligned. */
+/* Keeps "or" centered over the full-width sign-in and OIDC controls. */
 .auth-divider {
-  max-width: 22rem; text-align: center; color: var(--fg-muted);
+  text-align: center; color: var(--fg-muted);
   font-size: .8rem; margin: var(--space-3) 0;
 }
-.ytd-deduction { font-size: .95rem; margin: .25rem 0 1rem; }
-.ytd-deduction.muted { font-size: .85rem; }
-/* Trip detail's Purpose/Notes/Vehicle block. Purpose and Notes each get
-   their own stacked field: the purpose field's overlaid
-   "Recent…" chevron and the notes input's width:100% previously packed both
-   into one flowing <p>, which read as one tangled control. Vehicle and the
-   Advanced trip tools disclosure have no such overlap risk, so they're
-   allowed to share a row (see the comment in trip.html) and wrap to
-   stacked at narrow widths via the same flex-wrap the row already needs. */
+/* Compact echo of the Dashboard hero's .dashboard-secondary label-then-value
+   treatment (see _dashboard_hero.html), rather than the flat sentence the
+   plain paragraph used to carry. */
+.trip-archive-ytd-metric { display: flex; flex-direction: column; gap: var(--space-1); margin: 0; }
+.trip-archive-ytd-label { color: var(--fg-muted); font-size: .8rem; }
+.trip-archive-ytd-metric strong { font-size: 1.25rem; font-variant-numeric: tabular-nums; }
+.trip-archive-ytd-metric small { color: var(--fg-muted); font-size: .75rem; }
+
+/* Trip Detail shares Review's summary language while keeping its own page
+   surface and source-aware controls. */
+.trip-detail-page { max-width: 68rem; margin: 0 auto; min-width: 0; }
+.trip-detail-page-header { align-items: center; margin-bottom: var(--space-5); }
+.trip-detail-page-header .page-title-eyebrow { margin-bottom: var(--space-1); }
+.trip-detail-page-header .page-title-subtitle { max-width: 42rem; }
+.trip-detail-overview {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(18rem, 1fr);
+  grid-template-areas: "summary map" "route map";
+  gap: var(--space-4) clamp(var(--space-4), 4vw, var(--space-6));
+  min-width: 0; padding: clamp(var(--space-4), 3vw, var(--space-6));
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--surface); box-shadow: var(--shadow);
+}
+.trip-detail-overview-no-map {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "summary" "route";
+}
+.trip-detail-summary { grid-area: summary; min-width: 0; }
+.trip-detail-date {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2);
+  margin: 0 0 var(--space-3); color: var(--accent-primary);
+  font-size: .8rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+}
+.trip-detail-date .status-badge { letter-spacing: normal; text-transform: none; }
+.trip-detail-distance {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2);
+  margin: 0; line-height: 1;
+}
+.trip-detail-distance strong {
+  color: var(--fg); font-size: clamp(3rem, 8vw, 5rem); font-weight: 700;
+  letter-spacing: -.06em;
+}
+.trip-detail-distance-unit { color: var(--fg-muted); font-size: 1.1rem; font-weight: 600; }
+.trip-detail-distance-secondary { font-size: .95rem; }
+.trip-detail-time { margin: var(--space-2) 0 0; color: var(--fg-muted); font-size: .95rem; }
+.trip-detail-meta {
+  display: flex; min-width: 0; flex-wrap: wrap; gap: var(--space-2);
+  margin-top: var(--space-4); color: var(--fg-muted); font-size: .8rem;
+}
+.trip-detail-snap { overflow-wrap: anywhere; }
+.trip-detail-route {
+  grid-area: route; min-width: 0; padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-radius: var(--radius-md); background: var(--surface-raised);
+}
+.trip-detail-endpoint {
+  display: flex; min-width: 0; align-items: flex-start; gap: var(--space-3);
+  margin: 0; overflow-wrap: anywhere; line-height: 1.4;
+}
+.trip-detail-endpoint + .trip-detail-endpoint { margin-top: var(--space-3); }
+.trip-detail-endpoint-marker {
+  width: .55rem; height: .55rem; flex: none; margin-top: .35rem;
+  border: 2px solid var(--accent-primary); border-radius: 50%;
+}
+.trip-detail-endpoint-marker-end { background: var(--accent-primary); }
+.trip-detail-page .trip-detail-map {
+  grid-area: map; width: 100%; height: clamp(16rem, 30vw, 22rem); min-width: 0;
+  margin: 0; overflow: hidden; border: 1px solid var(--border);
+  border-radius: var(--radius-md); background: var(--surface-raised);
+}
+/* Trip detail's editable fields. Category, Vehicle, and Exclusion share the
+   first responsive row. Purpose and Notes stay full-width below it. */
 .trip-detail-fields { display: flex; flex-direction: column; gap: var(--space-3); margin: 1rem 0; }
 .trip-detail-field { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+.trip-detail-fields > .trip-detail-field .purpose-field,
+.trip-detail-fields > .trip-detail-field .purpose-field input { width: 100%; }
 .trip-detail-row { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: flex-end; }
 .trip-detail-row .trip-detail-field { flex: 1 1 12rem; }
-.trip-detail-row .advanced-tools { margin: 0; flex: 1 1 auto; }
-/* Reuses .trip-card-details' control-styled summary rather
+.trip-detail-label-editor {
+  margin: var(--space-5) 0; padding: var(--space-4);
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+.trip-detail-label-editor h3 { margin-top: 0; }
+.trip-detail-label-editor form { margin: 0; }
+.trip-expenses {
+  margin: var(--space-5) 0; padding-top: var(--space-5);
+  background-image: var(--rule-fade); background-repeat: no-repeat;
+  background-position: top; background-size: 100% 1px;
+}
+.trip-expenses h3 { margin-top: 0; }
+.trip-expenses .table-wrapper { margin-bottom: var(--space-4); }
+.trip-detail-actions {
+  display: flex; gap: var(--space-3); align-items: flex-start;
+  width: 100%; margin: 1rem 0;
+}
+.trip-detail-actions > .advanced-tools {
+  flex: 1 1 auto; width: 100%; min-width: 0; margin: 0;
+}
+.review-detail-field { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+.review-detail-fields > .review-detail-field .purpose-field,
+.review-detail-fields > .review-detail-field .purpose-field input { width: 100%; }
+/* Shares the same control-styled <summary> treatment (border, radius,
+   padding, control colors) as this file's other disclosure triggers, rather
    than .add-manual's form-first layout, since this disclosure wraps several
    unrelated sub-tools (merge/split/place-naming) instead of a single form. */
 .advanced-tools { margin: 1.5rem 0; }
@@ -659,6 +1783,226 @@ a { color: inherit; }
 .report-caveats { border: 1px solid var(--warn); border-radius: 6px; padding: .5rem .75rem;
                    margin: 1rem 0; font-size: .85rem; }
 .report-caveats ul { margin: .35rem 0 0; padding-left: 1.25rem; }
+
+/* Report pages use the same title hierarchy as Review and Trip Detail while
+   keeping their existing controls, calculations, and table markup. These
+   selectors stay under .report-page so Expenses keeps its independent
+   summary styles. */
+.report-page { max-width: 72rem; margin: 0 auto; min-width: 0; }
+.report-page-header { align-items: center; margin-bottom: var(--space-5); }
+.report-page-header .page-title-subtitle { max-width: 42rem; }
+.report-page-actions { justify-content: flex-end; }
+.report-year-nav {
+  display: inline-flex; min-height: var(--control-height); align-items: center;
+  gap: var(--space-1); font-size: .85rem; white-space: nowrap;
+}
+.report-year-nav a, .report-year-nav .report-year-next {
+  display: inline-flex; min-height: var(--control-height); align-items: center;
+  padding: 0 var(--space-2); border: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  border-radius: var(--radius-sm); color: var(--control-fg); background: var(--control-fill);
+  text-decoration: none;
+}
+.report-year-nav a:hover { border-color: var(--accent-hover); background: var(--accent-soft); }
+.report-year-nav strong { padding: 0 var(--space-1); color: var(--fg); font-size: 1rem; }
+.report-controls {
+  align-items: end; gap: var(--space-4); margin-bottom: var(--space-6);
+  padding: var(--space-3) var(--space-4); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow);
+}
+.report-controls .report-quarter-field { min-width: 15rem; }
+.report-controls .report-date-range { flex: 1 1 24rem; justify-content: flex-end; }
+.report-controls .report-date-range button { flex: none; }
+.report-controls .report-date-range input { min-width: 9rem; }
+.report-page > .empty {
+  margin: 0; padding: var(--space-5); border: 1px solid var(--border);
+  border-radius: var(--radius-md); background: var(--surface); color: var(--fg-muted);
+}
+.report-page .report-summary {
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: var(--space-3);
+  max-width: none; margin: 0 0 var(--space-4);
+}
+.report-page .report-summary > div {
+  min-width: 0; padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--surface); box-shadow: var(--shadow);
+}
+.report-page .report-summary-label {
+  display: block; color: var(--fg-muted); font-size: .75rem; font-weight: 600;
+  letter-spacing: .04em; text-transform: uppercase;
+}
+.report-page .report-summary strong {
+  display: block; margin-top: var(--space-2); color: var(--fg);
+  font-size: 1.4rem; line-height: 1.1; font-variant-numeric: tabular-nums;
+}
+.report-page .report-summary > .report-summary-business { border-top: 3px solid var(--cat-business); }
+.report-page .report-summary > .report-summary-personal { border-top: 3px solid var(--cat-personal); }
+.report-page .report-summary > .report-summary-nondeductible { border-top: 3px solid var(--cat-nondeductible); }
+.report-page .report-summary > .report-summary-share,
+.report-page .report-summary > .report-summary-deduction { border-top: 3px solid var(--accent-primary); }
+.report-page .report-rate-note {
+  margin: 0 0 var(--space-4); padding: 0 var(--space-1);
+  font-size: .85rem; font-variant-numeric: tabular-nums;
+}
+.report-page .report-caveats {
+  margin: var(--space-4) 0 var(--space-5); padding: var(--space-3) var(--space-4);
+  border-color: color-mix(in srgb, var(--warn) 65%, var(--border));
+  border-left: 3px solid var(--warn); border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--warn) 8%, var(--surface));
+}
+.report-page .report-caveats ul { margin: var(--space-2) 0 0; }
+.report-page .table-wrapper {
+  max-width: 100%; margin: 0 0 var(--space-5); padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--surface); box-shadow: var(--shadow); overscroll-behavior-inline: contain;
+}
+.report-page .report-table { font-size: .88rem; }
+.report-page .report-table th { padding-top: var(--space-2); padding-bottom: var(--space-2); }
+.report-page .report-table td { padding-top: var(--space-3); padding-bottom: var(--space-3); }
+.report-page .report-table tbody tr:hover { background: color-mix(in srgb, var(--accent-primary) 5%, transparent); }
+.report-page .report-table tbody tr:last-child td { border-bottom: 0; }
+.report-page .report-table td:first-child { overflow-wrap: anywhere; }
+.report-page .report-month-table { min-width: 36rem; }
+.report-page .report-vehicle-table { min-width: 42rem; }
+.report-page .report-expense-table { min-width: 64rem; }
+.report-coverage {
+  margin: var(--space-5) 0; padding: var(--space-4);
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--surface); box-shadow: var(--shadow);
+}
+.report-coverage h2 { margin-top: 0; }
+.report-coverage ul { margin: 0; padding-left: 1.25rem; color: var(--fg-muted); }
+.report-expense-comparison {
+  margin-top: var(--space-6); padding-top: var(--space-5);
+  background-image: var(--rule-fade-soft); background-repeat: no-repeat;
+  background-position: top; background-size: 100% 1px;
+}
+.report-expense-comparison h2 { margin-top: 0; }
+.report-expense-comparison > p { max-width: 65ch; }
+
+/* Expenses uses the same page framing as the report while keeping ledger
+   controls, editors, and warnings within their own presentation scope. */
+.expenses-page { max-width: 72rem; margin: 0 auto; min-width: 0; }
+.expenses-page-header { align-items: center; margin-bottom: var(--space-5); }
+.expenses-page-header .page-title-eyebrow { margin-bottom: var(--space-1); }
+.expenses-page-header .page-title-subtitle { max-width: 42rem; }
+.expenses-page-actions { justify-content: flex-end; }
+.expenses-year-nav {
+  display: inline-flex; min-height: var(--control-height); align-items: center;
+  gap: var(--space-1); font-size: .85rem; white-space: nowrap;
+}
+.expenses-year-nav a {
+  display: inline-flex; min-height: var(--control-height); align-items: center;
+  padding: 0 var(--space-2); border: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  border-radius: var(--radius-sm); color: var(--control-fg); background: var(--control-fill);
+  text-decoration: none;
+}
+.expenses-year-nav a:hover { border-color: var(--accent-hover); background: var(--accent-soft); }
+.expenses-year-nav strong { padding: 0 var(--space-1); color: var(--fg); font-size: 1rem; }
+.expenses-page .expenses-controls {
+  align-items: end; gap: var(--space-4); margin-bottom: var(--space-5);
+  padding: var(--space-3) var(--space-4); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow);
+}
+.expenses-page .expenses-controls .field { min-width: min(16rem, 100%); }
+.expenses-page .expenses-controls select { min-width: 14rem; max-width: 100%; }
+.expenses-page details.add-manual {
+  margin: 0 0 var(--space-5); padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--surface); box-shadow: var(--shadow);
+}
+.expenses-page details.add-manual > summary {
+  display: list-item; list-style-position: inside; width: fit-content; min-height: var(--control-height);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--control-border); border-radius: var(--radius-sm);
+  background: var(--control-bg); color: var(--control-fg); box-shadow: var(--control-shadow);
+}
+.expenses-page details.add-manual > summary:hover { border-color: var(--accent-hover); background: var(--accent-soft); }
+.expenses-page details.add-manual form {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3);
+  margin-top: var(--space-3); padding: var(--space-4) 0 0;
+  border: 0; border-top: 1px solid var(--border); border-radius: 0;
+  background: var(--surface);
+}
+.expenses-page .expense-form > label { min-width: 0; }
+.expenses-page .expense-form > label input,
+.expenses-page .expense-form > label select { width: 100%; min-width: 0; }
+.expenses-page .expense-add > .expense-live-warning {
+  grid-column: 1 / -1; margin: calc(-1 * var(--space-2)) 0 0;
+}
+.expenses-page .expenses-summary {
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: var(--space-3);
+  max-width: none; margin: 0 0 var(--space-5);
+}
+.expenses-page .expenses-summary > div {
+  min-width: 0; padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--surface); box-shadow: var(--shadow);
+}
+.expenses-page .expenses-summary > .expenses-summary-total { border-top: 3px solid var(--accent-primary); }
+.expenses-page .expenses-summary span {
+  color: var(--fg-muted); font-size: .75rem; font-weight: 600;
+  letter-spacing: .04em; text-transform: uppercase;
+}
+.expenses-page .expenses-summary strong {
+  display: block; margin-top: var(--space-2); color: var(--fg);
+  font-size: 1.4rem; line-height: 1.1; font-variant-numeric: tabular-nums;
+}
+.expenses-page .expenses-table-wrapper {
+  max-width: 100%; margin: 0 0 var(--space-5); padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--surface); box-shadow: var(--shadow); overscroll-behavior-inline: contain;
+}
+.expenses-page .expense-ledger { font-size: .88rem; }
+.expenses-page .expense-ledger th { padding-top: var(--space-2); padding-bottom: var(--space-2); }
+.expenses-page .expense-ledger td { padding-top: var(--space-3); padding-bottom: var(--space-3); }
+.expenses-page .expense-ledger tbody tr:not(.expense-editor-row):hover {
+  background: color-mix(in srgb, var(--accent-primary) 5%, transparent);
+}
+.expenses-page .expense-editor-row > td { border-bottom: 0; }
+.expenses-page .expense-editor > summary {
+  display: list-item; list-style-position: inside; min-height: var(--control-height);
+  padding: 0 var(--space-2); border-color: var(--control-border);
+  background: var(--control-fill); color: var(--control-fg); white-space: nowrap;
+}
+.expenses-page .expense-editor > summary:hover { border-color: var(--accent-hover); background: var(--accent-soft); }
+.expenses-page .expense-editor-panel {
+  margin: var(--space-3); padding: var(--space-4);
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--surface-raised); box-shadow: var(--shadow);
+}
+.expenses-page .expense-editor-actions { flex-wrap: wrap; }
+.expenses-page .expense-warning-details { min-width: 0; }
+.expenses-page .expense-warning-details > summary {
+  min-height: var(--control-height); width: fit-content; padding: 0 var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
+  border-radius: var(--radius-sm); background: color-mix(in srgb, var(--danger) 7%, var(--surface));
+}
+
+@media (max-width: 760px) {
+  .report-page-header { align-items: flex-start; }
+  .report-page-header .page-title-subtitle { display: none; }
+  .report-page-actions { width: 100%; justify-content: flex-start; }
+  .report-year-nav { flex: 1 1 100%; }
+  .report-controls { gap: var(--space-3); padding: var(--space-3); }
+  .report-controls .report-quarter-field,
+  .report-controls .report-date-range { width: 100%; min-width: 0; }
+  .report-controls .report-quarter-field .pills { width: 100%; }
+  .report-controls .report-quarter-field .pills a { flex: 1 1 0; justify-content: center; }
+  .report-controls .report-date-range {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: end; gap: var(--space-2); flex: initial;
+  }
+  .report-controls .report-date-range label { min-width: 0; }
+  .report-controls .report-date-range input { width: 100%; min-width: 0; }
+  .report-controls .report-date-range button { grid-column: 1 / -1; width: 100%; }
+  .report-page .report-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+  .report-page .report-summary > div { padding: var(--space-3); }
+  .report-page .report-summary strong { font-size: 1.2rem; }
+  .report-page .table-wrapper { padding: var(--space-1) var(--space-2); }
+  .report-coverage { padding: var(--space-3); }
+  .report-expense-comparison { margin-top: var(--space-5); padding-top: var(--space-4); }
+}
+
 .stats-summary { display: grid; grid-template-columns: repeat(4, minmax(9rem, 1fr)); gap: .75rem; margin: 1rem 0; }
 .stats-summary div { background: var(--bg-alt); border: 1px solid var(--border); border-radius: 6px; padding: .6rem .75rem; display: flex; flex-direction: column; gap: .15rem; }
 .stats-summary span, .stats-summary small { font-size: .8rem; color: var(--fg-muted); }
@@ -682,7 +2026,8 @@ a { color: inherit; }
 .stats-legend span::before { content: ""; display: inline-block; width: .65rem; height: .65rem; border-radius: 2px; margin-right: .25rem; }
 .stats-legend .business::before { background: var(--cat-business); }
 .stats-legend .personal::before { background: var(--cat-personal); }
-.stats-legend .unclassified::before { background: var(--warn); }
+.stats-legend .unclassified::before { background: var(--cat-unclassified); }
+.stats-legend .nondeductible::before { background: var(--cat-nondeductible); }
 .stats-legend .year-1::before { background: var(--year-1); }
 .stats-legend .year-2::before { background: var(--year-2); }
 .stats-legend .year-3::before { background: var(--year-3); }
@@ -705,16 +2050,124 @@ a { color: inherit; }
 .table-scroll { max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
 .table-scroll table { min-width: 40rem; }
 
-/* Weekly dashboard metric cards. Reuses the trip-card surface/shadow/radius
-   tokens rather than stats-summary's plainer background so the metric cards
-   read as the same visual family as the trip cards underneath them on the
-   same page. */
-.dashboard-heading { margin-bottom: var(--space-2); }
+/* Stats uses a calm stack of contained surfaces so the charts and rankings
+   keep their own reading areas on wide screens and narrow screens alike. */
+.stats-page { max-width: 72rem; margin: 0 auto; min-width: 0; }
+.stats-page-header { align-items: center; margin-bottom: var(--space-5); }
+.stats-page-header .page-title-eyebrow { margin-bottom: var(--space-1); }
+.stats-page-header .page-title-subtitle { max-width: 42rem; }
+.stats-page-actions { justify-content: flex-end; }
+.stats-year-nav {
+  display: inline-flex; min-height: var(--control-height); align-items: center;
+  gap: var(--space-1); font-size: .85rem; white-space: nowrap;
+}
+.stats-year-nav a, .stats-year-nav .report-year-next {
+  display: inline-flex; min-height: var(--control-height); align-items: center;
+  padding: 0 var(--space-2); border: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  border-radius: var(--radius-sm); color: var(--control-fg); background: var(--control-fill);
+  text-decoration: none;
+}
+.stats-year-nav a:hover { border-color: var(--accent-hover); background: var(--accent-soft); }
+.stats-year-nav strong { padding: 0 var(--space-1); color: var(--fg); font-size: 1rem; }
+.stats-page .trip-page-disclosures {
+  margin-bottom: var(--space-5); padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface); box-shadow: var(--shadow);
+}
+.stats-page .trip-page-disclosure > summary {
+  position: static; width: fit-content; margin: 0; padding: var(--space-2) var(--space-3);
+}
+.stats-page .trip-page-disclosure > .filter-bar { margin: var(--space-3) 0 0; }
+.stats-page .filter-bar label { min-width: 0; }
+.stats-page .filter-bar select { max-width: 100%; min-width: 0; }
+.stats-page > h2 { margin: 0 0 var(--space-4); font-size: 1.15rem; }
+.stats-page > .empty {
+  margin: 0; padding: var(--space-5); border: 1px solid var(--border);
+  border-radius: var(--radius-md); background: var(--surface); color: var(--fg-muted);
+}
+.stats-page .stats-summary {
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: var(--space-3);
+  max-width: none; margin: 0 0 var(--space-5);
+}
+.stats-page .stats-summary > div {
+  min-width: 0; padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface); box-shadow: var(--shadow);
+}
+.stats-page .stats-summary span {
+  color: var(--fg-muted); font-size: .75rem; font-weight: 600;
+  letter-spacing: .04em; text-transform: uppercase;
+}
+.stats-page .stats-summary small { color: var(--fg-muted); font-size: .8rem; overflow-wrap: anywhere; }
+.stats-page .stats-summary strong {
+  display: block; margin-top: var(--space-2); color: var(--fg);
+  font-size: 1.4rem; line-height: 1.1; font-variant-numeric: tabular-nums;
+}
+.stats-page .stats-summary > .stats-summary-total { border-top: 3px solid var(--accent-primary); }
+.stats-page .stats-summary > .stats-summary-business { border-top: 3px solid var(--cat-business); }
+.stats-page .stats-summary > .stats-summary-personal { border-top: 3px solid var(--cat-personal); }
+.stats-page .stats-summary > .stats-summary-nondeductible { border-top: 3px solid var(--cat-nondeductible); }
+.stats-page .stats-summary > .stats-summary-unclassified { border-top: 3px solid var(--cat-unclassified); }
+.stats-page .stats-section {
+  min-width: 0; margin: 0 0 var(--space-5); padding: clamp(var(--space-4), 3vw, var(--space-6));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface); box-shadow: var(--shadow);
+}
+.stats-page .stats-section h2 { margin-top: 0; }
+.stats-page .chart-scroll {
+  max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain;
+}
+.stats-page .stats-chart { display: block; }
+.stats-page .stats-legend { flex-wrap: wrap; margin: var(--space-3) 0 0; }
+.stats-page .stats-rankings {
+  grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); margin: 0 0 var(--space-5);
+}
+.stats-page .stats-ranking-card {
+  min-width: 0; padding: clamp(var(--space-4), 3vw, var(--space-6));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface); box-shadow: var(--shadow);
+}
+.stats-page .stats-ranking-card h2 { margin-top: 0; }
+.stats-page .stats-ranking-card table { width: 100%; }
+.stats-page .stats-ranking-card td:first-child { overflow-wrap: anywhere; }
+.stats-page .stats-vehicle-section .table-scroll {
+  max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain;
+}
+.stats-page .stats-vehicle-section table { min-width: 40rem; }
+.stats-page .stats-coverage {
+  margin: var(--space-4) 0 0; padding-top: var(--space-3);
+  border-top: 1px solid var(--border); font-size: .8rem;
+}
+
+/* Weekly dashboard hero. The category tokens below are deliberately separate
+   from the interface accent tokens, so a user's accent choice cannot change
+   the meaning of mileage colors. */
+.dashboard-hero {
+  display: grid; gap: var(--space-4); min-width: 0; margin-bottom: var(--space-6);
+}
+.dashboard-hero-header {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(18rem, 24rem);
+  gap: clamp(var(--space-4), 4vw, var(--space-6)); align-items: end; min-width: 0;
+}
+.dashboard-hero-main { min-width: 0; }
+.dashboard-week-row { display: flex; min-width: 0; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.dashboard-heading {
+  min-width: 0; margin: 0; color: var(--fg-muted); font-size: clamp(.9rem, 1.5vw, 1.1rem);
+  font-weight: 600; line-height: 1.25;
+}
+.dashboard-heading a { color: inherit; text-decoration: none; }
+.dashboard-heading a:hover, .dashboard-heading a:focus-visible { color: var(--accent-hover); }
 .week-nav {
-  display: flex; gap: var(--space-3); align-items: center; flex-wrap: wrap;
-  margin-bottom: var(--space-4); font-size: .9rem;
+  display: inline-flex; gap: var(--space-1); align-items: center; flex-wrap: wrap;
+  margin: 0; font-size: .8rem;
 }
 .week-nav-link { min-height: var(--control-height); display: inline-flex; align-items: center; }
+.week-nav-chevron { width: var(--control-height); min-width: var(--control-height); }
+.week-nav-chevron .icon { width: 1rem; height: 1rem; }
 /* Shared by the dashboard's "Next week" control and the annual report's
    "next year" control -- both disable in place (rather than hiding) so the
    row doesn't reflow as the reader pages forward, so both need the same
@@ -725,47 +2178,256 @@ a { color: inherit; }
 .week-nav-next[aria-disabled="true"], .report-year-next[aria-disabled="true"] {
   opacity: .5; cursor: default;
 }
-.dashboard-metrics {
-  display: grid; grid-template-columns: repeat(4, minmax(9rem, 1fr)); gap: var(--space-3);
-  margin-bottom: var(--space-4);
-}
-.metric-card { display: flex; flex-direction: column; gap: var(--space-1); }
-.metric-label { font-size: .8rem; color: var(--fg-muted); }
-.metric-value { font-size: 1.3rem; font-variant-numeric: tabular-nums; }
 .metric-unavailable { font-size: 1rem; color: var(--fg-muted); }
-.metric-detail { font-size: .8rem; color: var(--fg-muted); overflow-wrap: anywhere; }
+.dashboard-total {
+  display: flex; min-width: 0; margin-top: var(--space-4); align-items: baseline;
+}
+.dashboard-total-value {
+  color: var(--fg); font-size: clamp(3.25rem, 8vw, 6rem); font-weight: 700;
+  letter-spacing: -.05em; line-height: .95;
+}
+.dashboard-total-number { font-variant-numeric: tabular-nums; }
+.dashboard-total-unit {
+  color: var(--fg-muted); font-size: clamp(1rem, 2vw, 1.5rem); font-weight: 600;
+  letter-spacing: 0; line-height: 1; margin-left: .15em;
+}
+.dashboard-breakdown-list, .dashboard-secondary {
+  display: grid; margin: var(--space-3) 0 0; padding: 0; list-style: none;
+}
+/* auto-fit rather than a fixed 4-up plus a hand-placed narrow-width
+   override: with only four items, it naturally renders exactly four
+   columns wherever there's room for four at the minimum below, and folds
+   to three, two, or one as the container narrows -- content-driven instead
+   of guessing a breakpoint. */
+.dashboard-breakdown-list {
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: var(--space-4);
+  max-width: 100%;
+}
+.dashboard-breakdown-item {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--space-2);
+  min-width: 0; align-items: center; color: var(--fg-muted); font-size: .85rem;
+}
+/* The label is a grid item in its own auto/1fr/auto row, and a grid item's
+   min-width defaults to its content's min-content size regardless of the
+   track's own minmax(0, ...) -- without this, a long label like
+   "Unclassified" refused to shrink and painted across the value beside it
+   instead of wrapping. */
+.dashboard-breakdown-label { min-width: 0; }
+.dashboard-breakdown-item strong { color: var(--fg); white-space: nowrap; }
+.dashboard-breakdown-swatch {
+  display: block; width: .65rem; height: .65rem; flex: none; border-radius: 50%;
+}
+.dashboard-state-business .dashboard-breakdown-swatch { background: var(--cat-business); }
+.dashboard-state-personal .dashboard-breakdown-swatch { background: var(--cat-personal); }
+.dashboard-state-unclassified .dashboard-breakdown-swatch { background: var(--cat-unclassified); }
+.dashboard-state-nondeductible .dashboard-breakdown-swatch { background: var(--cat-nondeductible); }
+.dashboard-daily {
+  min-width: 0; padding: 0 0 var(--space-1);
+}
+.dashboard-chart {
+  display: grid; grid-template-columns: repeat(7, minmax(2rem, 1fr)); gap: var(--space-2);
+  width: 100%; max-width: 24rem; min-width: 0; margin: 0 0 0 auto;
+}
+.dashboard-day {
+  display: grid; grid-template-rows: 7.5rem auto; gap: var(--space-1);
+  min-width: 0; align-items: end; text-align: center;
+}
+.dashboard-day-name { color: var(--fg-muted); font-size: .75rem; font-weight: 700; }
+.dashboard-bar-track {
+  display: flex; width: .8rem; height: 7.5rem; min-height: 0; align-items: end;
+  justify-content: center; margin: 0 auto; overflow: hidden; border-radius: var(--radius-sm);
+  background: transparent;
+}
+.dashboard-bar-fill {
+  display: flex; width: 100%; min-height: .2rem; flex-direction: column-reverse;
+  overflow: hidden; border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+.dashboard-bar-segment { display: block; width: 100%; flex-grow: 0; flex-shrink: 0; }
+.dashboard-bar-business { background: var(--cat-business); }
+.dashboard-bar-personal { background: var(--cat-personal); }
+.dashboard-bar-unclassified { background: var(--cat-unclassified); }
+.dashboard-bar-nondeductible { background: var(--cat-nondeductible); }
+.dashboard-bar-empty {
+  display: block; width: 100%; height: .4rem; border-radius: var(--radius-sm);
+  background: var(--fg-disabled);
+}
+.dashboard-secondary {
+  grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; margin-top: var(--space-2);
+  border-top: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+}
+.dashboard-secondary li {
+  display: flex; min-width: 0; flex-direction: column; gap: var(--space-1);
+  padding: var(--space-3) var(--space-4); border-left: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+}
+.dashboard-secondary li:first-child { border-left: 0; padding-left: 0; }
+.dashboard-secondary li:last-child { padding-right: 0; }
+.dashboard-secondary-label { color: var(--fg-muted); font-size: .8rem; }
+.dashboard-secondary strong { font-size: 1.25rem; font-variant-numeric: tabular-nums; }
+.dashboard-secondary small { color: var(--fg-muted); font-size: .75rem; overflow-wrap: anywhere; }
+/* Accent-tinted like the mockup's nudge strip, not the warn palette: this
+   is a nudge toward a routine task (classify, log a missing trip), not a
+   data problem, so it should read as calm accent rather than an alert. */
 .attention-strip {
   display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: center;
-  margin-bottom: var(--space-4); padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--warn); border-left-width: .3rem; border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--warn) 6%, var(--surface-elevated));
+  margin: 0; padding: var(--space-3) var(--space-4); border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 28%, transparent);
+  background: var(--accent-soft-raised);
 }
+.attention-strip .icon { flex: none; color: var(--accent-primary); }
+.attention-heading { color: var(--accent-primary); }
 .attention-item a { font-weight: 600; }
 .dashboard-links { display: flex; gap: var(--space-3); align-items: center; margin-bottom: var(--space-4); }
-.dashboard-day-heading { margin: var(--space-4) 0 var(--space-2); }
-.dashboard-day-heading:first-of-type { margin-top: 0; }
 
 @media (max-width: 700px) {
   .stats-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stats-rankings { grid-template-columns: 1fr; }
-  .dashboard-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 900px) {
   .trip-filter-bar { justify-content: flex-start; }
+  .dashboard-hero-header { grid-template-columns: 1fr; align-items: start; gap: var(--space-4); }
 }
 
 @media (max-width: 760px) {
-  body { padding: var(--space-3); }
+  /* Controls inherit their size from labels and table cells that are
+     deliberately smaller for compact metadata and form labels. Set text
+     controls to the body size here so their size stays independent of that
+     surrounding typography. The selector mirrors the shared control rule's
+     own selector so it has enough specificity to override its font: inherit
+     declaration for text inputs as well as selects and textareas. */
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+    font-size: 1rem;
+  }
+  .dashboard-chart { max-width: none; gap: var(--space-1); }
+  .dashboard-secondary li { padding-inline: var(--space-3); }
+  .dashboard-secondary li:first-child { padding-left: 0; }
+  .dashboard-secondary li:last-child { padding-right: 0; }
+  .dashboard-trip-row-list { gap: var(--space-3); }
+  /* The mockup's mobile card is a raised surface told apart by tone, not
+     an outline -- no border here or on the card list's first row. */
+  .dashboard-trip-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "time distance" "content content" "category actions";
+    gap: var(--space-2) var(--space-3); padding: var(--space-3); margin: 0;
+    border-radius: var(--radius-md);
+    background: var(--surface-raised); box-shadow: var(--shadow);
+  }
+  .dashboard-row-time { display: flex; min-width: 0; gap: var(--space-1); align-items: center; }
+  .dashboard-row-time span { font-size: .7rem; }
+  .dashboard-row-content { min-width: 0; }
+  .dashboard-row-meta { align-items: flex-start; }
+  .dashboard-row-statuses { align-items: flex-start; }
+  .dashboard-row-category { align-items: center; }
+  .dashboard-row-classify-label { flex: none; }
+  /* No ring or internal divider at this width either -- a recessed fill on
+     each half still reads as tappable without an outline, matching the
+     borderless card above rather than leaving bare text. */
+  .trip-quick-actions { flex: 1; width: auto; min-width: 0; box-shadow: none; gap: var(--space-1); }
+  .trip-quick-form { flex: 1; }
+  .trip-quick-form:last-child { box-shadow: none; }
+  .trip-quick-button { width: 100%; background: var(--control-fill-raised); border-radius: var(--radius-sm); }
+  .dashboard-row-distance { align-self: start; }
+  /* Touch has no persistent hover to reveal a faded control, so the cluster
+     stays fully visible once rows become cards. */
+  .dashboard-row-actions { align-self: end; opacity: 1; }
+  .dashboard-row-icon-button, .dashboard-row-more-trigger { width: var(--control-height); }
+  .dashboard-row-more-panel { max-width: calc(100vw - 2 * var(--space-3)); }
+  body {
+    padding: var(--space-3);
+    padding-bottom: calc(var(--control-height) + var(--space-6) + env(safe-area-inset-bottom));
+  }
   header { grid-template-columns: 1fr auto; align-items: start; }
-  header nav { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; }
-  .header-account .who { display: none; }
-  .filter-bar, .filter-bar .date-range, details.add-manual form {
+  header h1 { display: flex; min-height: var(--control-height); align-items: center; }
+  header nav, .header-account { display: none; }
+  .mobile-account-menu { position: relative; display: block; min-width: 0; }
+  .mobile-account-trigger {
+    display: flex; min-height: var(--control-height); align-items: center; justify-content: center;
+    padding: 0 var(--space-1); color: var(--accent-primary); list-style: none;
+  }
+  .mobile-account-trigger::marker { content: ""; }
+  .mobile-account-menu:not([open]) > .mobile-account-panel { display: none; }
+  .mobile-account-panel {
+    position: absolute; top: calc(100% + var(--space-2)); right: 0; z-index: 1002;
+    display: flex; width: max-content; min-width: 12rem; max-width: calc(100vw - var(--space-4));
+    flex-direction: column; gap: var(--space-1); padding: var(--space-2);
+    overflow-wrap: anywhere; border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+    background: var(--surface-elevated); color: var(--fg); box-shadow: var(--shadow);
+  }
+  .mobile-account-menu.is-active > .mobile-account-trigger,
+  .mobile-account-menu[open] > .mobile-account-trigger { color: var(--accent-primary); font-weight: 600; }
+  .mobile-bottom-nav {
+    position: fixed; right: 0; bottom: 0; left: 0; z-index: 1001;
+    display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); align-items: stretch;
+    min-height: calc(var(--control-height) + var(--space-1) + var(--space-1) + env(safe-area-inset-bottom));
+    padding: var(--space-1) var(--space-2) calc(var(--space-1) + env(safe-area-inset-bottom));
+    border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+    background: color-mix(in srgb, var(--surface-elevated) 96%, transparent);
+    box-shadow: 0 -.35rem 1rem rgb(17 20 34 / 12%);
+  }
+  .mobile-nav-item {
+    position: relative; display: flex; min-width: 0; min-height: var(--control-height);
+    flex-direction: column; align-items: center; justify-content: center; gap: var(--space-1); padding: var(--space-1) 0;
+    color: var(--fg-muted); font-size: .68rem; line-height: 1; text-decoration: none;
+  }
+  .mobile-nav-item.is-active, .mobile-more.is-active > .mobile-more-trigger,
+  .mobile-more[open] > .mobile-more-trigger { color: var(--accent-primary); font-weight: 600; }
+  .mobile-nav-icon { width: 1.25rem; height: 1.25rem; }
+  .mobile-nav-badge {
+    position: absolute; top: .1rem; left: calc(50% + .35rem); display: grid; min-width: 1rem; height: 1rem;
+    align-items: center; justify-content: center; padding: 0 .2rem; border-radius: 999px;
+    color: var(--accent-on-primary); background: var(--accent-primary); font-size: .6rem; line-height: 1;
+  }
+  .mobile-more { position: relative; min-width: 0; }
+  .mobile-more > summary { display: flex; list-style: none; }
+  .mobile-more > summary::marker { content: ""; }
+  .mobile-more:not([open]) > .mobile-more-panel { display: none; }
+  .mobile-more-panel {
+    position: absolute; right: 0; bottom: calc(100% + var(--space-2)); z-index: 11;
+    display: flex; width: max-content; min-width: 12rem; max-width: calc(100vw - var(--space-4));
+    flex-direction: column; gap: var(--space-1); padding: var(--space-2);
+    overflow-wrap: anywhere; border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+    background: var(--surface-elevated); color: var(--fg); box-shadow: var(--shadow);
+  }
+  .mobile-account-item, .mobile-more-item {
+    display: flex; width: 100%; min-width: 0; min-height: var(--control-height); align-items: center;
+    gap: var(--space-2); padding: 0 var(--space-2); border: 1px solid transparent; border-radius: var(--radius-sm);
+    color: var(--fg); background: transparent; font: inherit; text-decoration: none; white-space: nowrap; box-shadow: none;
+  }
+  .mobile-account-item:hover, .mobile-account-item:focus-visible,
+  .mobile-more-item:hover, .mobile-more-item:focus-visible { border-color: var(--accent-hover); background: var(--accent-soft); }
+  .mobile-account-item.is-active, .mobile-more-item.is-active { color: var(--accent-primary); font-weight: 600; }
+  .mobile-account-icon, .mobile-more-icon { width: 1rem; height: 1rem; }
+  .mobile-account-logout { display: block; margin: 0; }
+  .mobile-account-logout-button { cursor: pointer; text-align: left; }
+  .filter-bar, .filter-bar .date-range, details.add-manual form, .manual-trip-form {
     align-items: stretch; flex-direction: column;
   }
   .filter-bar .field, .filter-bar .date-range, .filter-bar .date-range label,
-  details.add-manual label { width: 100%; }
+  details.add-manual label, .manual-trip-form label { width: 100%; }
+  /* 1.75rem is a 28px target, well under the 44px this app uses for every
+     other control. A pointer can hit it; a fingertip cannot. Widen the
+     control, push the input's text clear of it, and recentre the chevron
+     inside its new width. */
+  .purpose-recent { width: 2.75rem; }
+  .purpose-field input { padding-right: 3.25rem; }
+  .purpose-field::after { right: 1.175rem; }
   .trip-filter-bar { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
+  .trip-filter-surface.is-js-enhanced .trip-filter-toggle {
+    display: flex; width: 100%; align-items: center; justify-content: space-between;
+  }
+  .trip-filter-surface.is-js-enhanced .trip-filter-toggle[hidden] { display: none; }
+  .trip-filter-surface.is-js-enhanced .trip-filter-controls[hidden] { display: none; }
   .trip-filter-bar .trip-filter-form { display: grid; width: 100%; gap: var(--space-2); }
+  .trip-filter-primary { grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
+  .trip-filter-secondary {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2);
+  }
+  .trip-filter-secondary > label { min-width: 0; }
+  .trip-filter-secondary .trip-filter-custom-dates {
+    grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .trip-filter-secondary .trip-filter-custom-dates[hidden] { display: none; }
+  .trip-filter-secondary .filter-clear { justify-self: start; }
   .trip-filter-bar .filter-search-row input { width: 100%; min-width: 0; }
   .trip-filter-bar .filter-date-row {
     display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-1);
@@ -775,24 +2437,68 @@ a { color: inherit; }
     display: grid; grid-template-columns: minmax(0, 1fr) auto auto;
     gap: var(--space-2); align-items: end;
   }
-  .trip-filter-bar .filter-apply-row select { width: 100%; min-width: 0; }
-  .trip-filter-bar .filter-link-groups {
-    display: grid; grid-template-columns: auto minmax(0, 1fr);
-    gap: var(--space-3); align-items: end;
+  .trip-filter-bar .trip-filter-secondary.filter-apply-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .trip-filter-bar .filter-link-groups .field { width: auto; min-width: 0; }
+  .trip-filter-bar .filter-apply-row select { width: 100%; min-width: 0; }
   .filter-bar .pills a { min-height: var(--control-height); }
-  .trip-edit-grid, .trip-card-detail-content dl { grid-template-columns: 1fr; }
-  .trip-card-heading { align-items: start; }
-  .trip-card-time { display: block; margin: var(--space-1) 0 0; }
-  .trip-card-controls { flex-direction: column; align-items: stretch; }
-  .trip-card-control { flex: 1 1 auto; }
-  .trip-card-control > select { max-width: none; }
-  .trip-card-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; }
-  .trip-card-details { display: block; flex: 1 0 100%; }
-  .trip-card-route-action, .trip-card-edit-action { position: static; }
-  .trip-card-actions > .control { flex: 1 1 auto; }
-  .trip-card-details > summary { width: 100%; }
+  /* The archive header's own actions wrap and stack the same way the
+     filter-bar groups above it do, rather than staying pinned to one edge
+     at phone widths. */
+  .trip-archive-header { flex-direction: column; align-items: stretch; }
+  .trip-archive-header-actions { justify-content: flex-start; }
+  .trip-edit-grid, .expense-editor-grid { grid-template-columns: 1fr; }
+  .expense-editor-notes { grid-column: auto; }
+  .trip-archive-row-list { gap: var(--space-3); }
+  .trip-archive-row-header { display: none; }
+  /* The mockup's mobile card is a raised surface told apart by tone, not an
+     outline -- no border here, matching the dashboard row's own card mode. */
+  .trip-archive-row {
+    grid-template-columns: 2.75rem minmax(0, 1fr) auto;
+    grid-template-areas: "select time distance" "select content content" "select category actions";
+    gap: var(--space-2) var(--space-3); padding: var(--space-3); margin: 0;
+    border-radius: var(--radius-md);
+    background: var(--surface-raised); box-shadow: var(--shadow);
+  }
+  /* The base rule already anchors the selector zone to the card's own left
+     edge and stretches it top: 0; bottom: 0 (the card has no negative-margin
+     bleed to escape here, unlike the desktop row, so left: 0 already lands
+     on the card's true left edge); only the width needs its own value here,
+     reaching across the card's own left padding, the 2.75rem select column,
+     and one grid gap -- the same "left padding plus select track plus one
+     gap" reach the desktop rule uses, just with this breakpoint's own
+     padding, track, and gap sizes. */
+  .trip-archive-row-selector { width: calc(var(--space-3) + 2.75rem + var(--space-3)); }
+  .trip-archive-row-content { min-width: 0; }
+  .trip-archive-row-meta { align-items: flex-start; }
+  .trip-archive-row-statuses { align-items: flex-start; }
+  .trip-archive-row-category { align-items: center; }
+  .trip-archive-row-distance { align-self: start; }
+  /* Touch has no persistent hover to reveal a faded control, so the cluster
+     stays fully visible once rows become cards. */
+  .trip-archive-row-actions { align-self: end; opacity: 1; }
+  .trip-archive-row-icon-button, .trip-archive-row-more-trigger { width: var(--control-height); }
+  .trip-archive-row-more-panel { max-width: calc(100vw - 2 * var(--space-3)); }
+  .trip-detail-page-header { align-items: flex-start; }
+  .trip-detail-page-header .page-title-subtitle { display: none; }
+  .trip-detail-overview {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "summary" "map" "route";
+    gap: var(--space-3); padding: var(--space-4);
+  }
+  .trip-detail-overview-no-map { grid-template-areas: "summary" "route"; }
+  .trip-detail-overview .trip-detail-map { height: 10rem; }
+  .trip-detail-route { border: 0; padding: 0; background: none; }
+  .trip-detail-endpoint + .trip-detail-endpoint { margin-top: var(--space-1); }
+  .trip-detail-distance strong { font-size: 2.25rem; }
+  .trip-detail-fields { gap: var(--space-2); }
+  .trip-detail-row { flex-direction: column; align-items: stretch; gap: var(--space-2); }
+  .trip-detail-row .trip-detail-field { flex-basis: auto; }
+  .trip-detail-label-editor { padding: var(--space-3); }
+  .trip-detail-actions { flex-direction: column; align-items: stretch; }
+  .trip-detail-delete { width: 100%; margin-left: 0; }
+  .trip-detail-delete .trip-delete-trigger { width: 100%; }
+  .trip-detail-actions > .advanced-tools > summary { width: 100%; }
   /* Flex-wrap here used to ragged-wrap unpredictably (count/Category/
      Purpose/Vehicle on one row, More/Clear/Done scattered on the next) at
      phone widths. Grid gives it a predictable shape instead: the count
@@ -803,20 +2509,64 @@ a { color: inherit; }
     display: grid; grid-template-columns: repeat(auto-fill, minmax(7rem, 1fr));
     gap: var(--space-2);
     width: calc(100vw - 1.5rem); max-height: calc(100vh - 1.5rem); overflow-y: auto;
+    bottom: calc(var(--control-height) + var(--space-3) + env(safe-area-inset-bottom));
   }
   .selection-action-bar #selection-count { grid-column: 1 / -1; }
   .selection-more-menu { max-width: calc(100vw - 3rem); }
 }
 
+@media (max-width: 760px) {
+  .stats-page-header { align-items: flex-start; }
+  .stats-page-header .page-title-subtitle { display: none; }
+  .stats-page-actions { width: 100%; justify-content: flex-start; }
+  .stats-year-nav { width: 100%; justify-content: space-between; }
+  .stats-page .trip-page-disclosures { padding: var(--space-3); }
+  .stats-page .trip-page-disclosure > summary { width: 100%; }
+  .stats-page .trip-page-disclosure > .filter-bar { margin-top: var(--space-3); }
+  .stats-page .stats-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+  .stats-page .stats-summary > div { padding: var(--space-3); }
+  .stats-page .stats-summary strong { font-size: 1.2rem; }
+  .stats-page .stats-section { padding: var(--space-3); }
+  .stats-page .stats-rankings { grid-template-columns: 1fr; gap: var(--space-3); }
+  .stats-page .stats-ranking-card { padding: var(--space-3); }
+}
+
+@media (max-width: 760px) {
+  .expenses-page-header { align-items: flex-start; }
+  .expenses-page-actions { width: 100%; justify-content: flex-start; }
+  .expenses-year-nav { width: 100%; justify-content: space-between; }
+  .expenses-page .expenses-controls {
+    align-items: stretch; gap: var(--space-3); padding: var(--space-3);
+  }
+  .expenses-page .expenses-controls .field,
+  .expenses-page .expenses-controls select { width: 100%; min-width: 0; }
+  .expenses-page .expenses-controls button { width: 100%; }
+  .expenses-page details.add-manual { padding: var(--space-3); }
+  .expenses-page details.add-manual form {
+    grid-template-columns: minmax(0, 1fr); gap: var(--space-2); padding-top: var(--space-3);
+  }
+  .expenses-page .expenses-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+  .expenses-page .expenses-summary > div { padding: var(--space-3); }
+  .expenses-page .expenses-summary strong { font-size: 1.2rem; }
+  .expenses-page .expenses-table-wrapper { padding: var(--space-1) var(--space-2); }
+  .expenses-page .expense-editor-panel { margin: var(--space-2); padding: var(--space-3); }
+  .expenses-page .expense-editor-grid { grid-template-columns: minmax(0, 1fr); }
+  .expenses-page .expense-editor-notes { grid-column: auto; }
+  .expenses-page .expense-editor-actions { gap: var(--space-2); }
+  .expenses-page .expense-editor-actions > * { flex: 1 1 10rem; }
+}
+
 @media (max-width: 420px) {
-  header { grid-template-columns: 1fr; }
+  header { grid-template-columns: 1fr auto; }
   header nav, .header-account { grid-column: 1; }
   .header-account { flex-wrap: wrap; }
+  .dashboard-chart { gap: .2rem; }
+  .dashboard-day { grid-template-rows: 7rem auto; }
+  .dashboard-bar-track { height: 7rem; }
   .trip-card { padding: var(--space-3); }
-  .trip-card-heading { flex-direction: column; gap: var(--space-1); }
   .auth-card { padding: var(--space-3); }
+  .account-security-identity { grid-template-columns: minmax(0, 1fr); }
   .route-picker-map { height: 220px; }
-  .tags button { padding-inline: .2rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -833,3 +2583,198 @@ a { color: inherit; }
 }
 :root[data-theme="dark"] .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.95) contrast(.9); }
 :root[data-theme="light"] .leaflet-tile-pane { filter: none; }
+
+/* Review keeps the task surface visually focused while leaving the shared
+   shell, controls, and category colors in charge of their normal semantics. */
+.review-page { max-width: 68rem; margin: 0 auto; min-width: 0; }
+.review-page-header { align-items: center; margin-bottom: var(--space-5); }
+.review-page-header .page-title-eyebrow { margin-bottom: var(--space-1); }
+.review-page-header .page-title-subtitle { max-width: 42rem; }
+.review-close { flex: none; }
+.review-card {
+  min-width: 0; padding: clamp(var(--space-4), 3vw, var(--space-6));
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--surface); box-shadow: var(--shadow);
+}
+.review-remaining {
+  display: flex; align-items: baseline; gap: var(--space-2);
+  margin: 0 0 var(--space-5); color: var(--fg-muted); font-size: .95rem;
+}
+.review-remaining strong {
+  color: var(--fg); font-size: 1.35rem; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.review-trip-overview {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(18rem, 1fr);
+  grid-template-areas: "summary map" "endpoints map";
+  gap: var(--space-4) clamp(var(--space-4), 4vw, var(--space-6));
+  min-width: 0; padding-bottom: var(--space-5);
+  border-bottom: 1px solid var(--border);
+}
+.review-trip-overview-no-map {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "summary" "endpoints";
+}
+.review-trip-summary { grid-area: summary; min-width: 0; }
+.review-trip-date {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2);
+  margin: 0 0 var(--space-3); color: var(--accent-primary);
+  font-size: .8rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+}
+.review-trip-distance {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2);
+  margin: 0; line-height: 1;
+}
+.review-trip-distance strong {
+  color: var(--fg); font-size: clamp(3rem, 8vw, 5rem); font-weight: 700;
+  letter-spacing: -.06em;
+}
+.review-trip-distance-unit { color: var(--fg-muted); font-size: 1.1rem; font-weight: 600; }
+.review-trip-distance-secondary { font-size: .95rem; }
+.review-trip-time { margin: var(--space-2) 0 0; color: var(--fg-muted); font-size: .95rem; }
+.review-route-endpoints {
+  grid-area: endpoints; min-width: 0; padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-radius: var(--radius-md); background: var(--surface-raised);
+}
+.review-endpoint {
+  display: flex; min-width: 0; align-items: flex-start; gap: var(--space-3);
+  margin: 0; overflow-wrap: anywhere; line-height: 1.4;
+}
+.review-endpoint + .review-endpoint { margin-top: var(--space-3); }
+.review-endpoint-marker {
+  width: .55rem; height: .55rem; flex: none; margin-top: .35rem;
+  border: 2px solid var(--accent-primary); border-radius: 50%;
+}
+.review-endpoint-marker-end { background: var(--accent-primary); }
+.review-page .review-map {
+  grid-area: map; width: 100%; height: clamp(16rem, 30vw, 22rem); min-width: 0;
+  margin: 0; overflow: hidden; border: 1px solid var(--border);
+  border-radius: var(--radius-md); background: var(--surface-raised);
+}
+.review-detail-fields {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-areas: "purpose vehicle exclusion" "notes notes notes";
+  gap: var(--space-3); margin: var(--space-5) 0 0;
+}
+.review-detail-fields .review-purpose-field { grid-area: purpose; }
+.review-detail-fields .review-vehicle-field { grid-area: vehicle; }
+.review-detail-fields .review-exclusion-field { grid-area: exclusion; }
+.review-detail-fields .review-notes-field { grid-area: notes; }
+/* Category shares one in-card region with the actions it drives at every
+   width, keeping the controls and their form values unique. */
+.review-action-region {
+  display: grid; gap: var(--space-4); min-width: 0;
+  margin-top: var(--space-5); padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+.review-action-region .review-category-field .category-segmented { max-width: 34rem; margin: 0 auto; }
+.review-actions {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-3);
+  align-items: center; margin: 0;
+}
+.review-primary-action { grid-column: 2; grid-row: 1; min-width: 10rem; }
+.review-secondary-actions {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2);
+  grid-column: 1; grid-row: 1;
+}
+.review-card-actions {
+  display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap;
+  margin-top: var(--space-4); padding-top: var(--space-4);
+  background-image: var(--rule-fade); background-repeat: no-repeat;
+  background-position: top; background-size: 100% 1px;
+}
+.review-detail-link { color: var(--fg-muted); }
+.review-state {
+  min-height: 14rem; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; text-align: center;
+}
+.review-state-message { margin: 0 0 var(--space-4); font-size: 1rem; }
+.review-state-actions { display: flex; align-items: center; justify-content: center; gap: var(--space-2); flex-wrap: wrap; }
+
+@media (max-width: 760px) {
+  .settings-page-header { align-items: flex-start; }
+  /* Settings keeps its explanatory copy visible at phone widths because the
+     descriptions carry safety and data-retention context for each control. */
+  .settings-page .settings-account-section,
+  .settings-page .settings-section,
+  .settings-page > .section-disclosure {
+    margin-bottom: var(--space-3); padding: var(--space-3);
+  }
+  .settings-page details.add-manual { margin-top: var(--space-3); }
+  .settings-page details.add-manual form {
+    gap: var(--space-2); padding: var(--space-3);
+  }
+  .settings-page details.add-manual fieldset { width: 100%; }
+  .settings-page details.add-manual > summary,
+  .settings-page .section-disclosure > summary {
+    width: 100%; white-space: normal; text-align: left;
+  }
+  .settings-page .settings-appearance .theme-picker {
+    align-items: stretch; flex-direction: column; gap: var(--space-1);
+    width: 100%; max-width: none;
+  }
+  .settings-page .settings-appearance .theme-picker label { width: 100%; }
+  .settings-page .settings-import-form {
+    align-items: stretch; flex-direction: column; gap: var(--space-3);
+    padding-top: var(--space-3);
+  }
+  .settings-page .settings-import-form > label,
+  .settings-page .settings-import-form .settings-file-field,
+  .settings-page .settings-import-form input[type="file"] {
+    width: 100%; max-width: 760px; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .settings-page .settings-import-form .settings-file-field { flex: none; }
+  .settings-page .settings-import-form .settings-checkbox-field {
+    align-items: center; flex-direction: row; width: 100%;
+  }
+  .settings-page .settings-import-form button { width: 100%; }
+}
+
+@media (max-width: 760px) {
+  .review-page-header { align-items: flex-start; }
+  /* Orienting copy that repeat visitors no longer read. Vertical space is
+     the scarce resource here, so it drops rather than merely shrinking. */
+  .review-page-header .page-title-subtitle { display: none; }
+  .review-card { padding: var(--space-4); }
+  .review-trip-overview,
+  .review-trip-overview-no-map {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "summary" "map" "endpoints";
+    gap: var(--space-3);
+  }
+  .review-trip-overview-no-map { grid-template-areas: "summary" "endpoints"; }
+  .review-trip-distance strong { font-size: 2.25rem; }
+  .review-page .review-map { height: 10rem; }
+  /* Plain lines under the map rather than a boxed callout: the border,
+     background, and inset all drop, and the gap between the two lines
+     tightens with them. */
+  .review-route-endpoints { border: 0; padding: 0; background: none; }
+  .review-endpoint + .review-endpoint { margin-top: var(--space-1); }
+  .review-detail-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas: "purpose purpose" "vehicle exclusion" "notes notes";
+    gap: var(--space-2);
+  }
+  /* Tighter than the base gap to match the rest of this breakpoint's
+     narrower spacing (card padding, overview gap, detail-fields gap). */
+  .review-action-region { gap: var(--space-2); }
+  .review-actions { grid-template-columns: 2fr 1fr; gap: var(--space-2); }
+  /* The wrapper stays a real grid item here instead of dissolving its own
+     box into the parent grid, which would take the flex row below with it,
+     so Skip and Undo Last can sit side by side in the left column, level
+     with Next in the right column. */
+  .review-secondary-actions {
+    grid-column: 1; grid-row: 1;
+    flex-direction: row; flex-wrap: nowrap;
+  }
+  .review-secondary-actions > * { flex: 1 1 0; min-width: 0; }
+  .review-primary-action { grid-column: 2; grid-row: 1; width: auto; min-width: 0; }
+  .review-state { min-height: 10rem; }
+}
+
+@media (max-width: 420px) {
+  .review-state-actions { align-items: stretch; flex-direction: column; width: 100%; }
+  .review-state-actions > * { width: 100%; }
+}

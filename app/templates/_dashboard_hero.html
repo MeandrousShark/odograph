@@ -1,0 +1,109 @@
+{% from "_icons.html" import icon with context %}
+<section id="dashboard-hero" class="dashboard-hero" aria-labelledby="dashboard-hero-title"{% if dashboard_oob | default(false, true) %} hx-swap-oob="outerHTML"{% endif %}>
+  <div class="dashboard-hero-header">
+    <div class="dashboard-hero-main">
+      <div class="dashboard-week-row">
+        <h2 id="dashboard-hero-title" class="dashboard-heading"><a href="/" title="Go to current week">{{ format_week_range(dashboard.nav.week_start, dashboard.nav.week_end) }}</a></h2>
+        <nav class="week-nav" aria-label="Week navigation">
+          <a class="week-nav-link week-nav-chevron icon-button" href="/?week={{ dashboard.nav.prev_week_start.isoformat() }}"
+             aria-label="Previous week" title="Previous week">{{ icon("caret-left") }}</a>
+          {% if dashboard.nav.is_current_week %}
+          <span class="week-nav-link week-nav-chevron week-nav-next icon-button" aria-disabled="true"
+                aria-label="Next week unavailable" title="Next week unavailable">{{ icon("caret-right") }}</span>
+          {% else %}
+          <a class="week-nav-link week-nav-chevron week-nav-next icon-button" href="/?week={{ dashboard.nav.next_week_start.isoformat() }}"
+             aria-label="Next week" title="Next week">{{ icon("caret-right") }}</a>
+          {% endif %}
+        </nav>
+      </div>
+
+      <div class="dashboard-total" aria-label="Total mileage for this week: {{ dashboard.distance.total_m | mi }} miles">
+        <strong class="dashboard-total-value"><span class="dashboard-total-number">{{ dashboard.distance.total_m | mi }}</span> <span class="dashboard-total-unit">mi</span></strong>
+      </div>
+
+      <ul class="dashboard-breakdown-list" aria-label="Mileage by category">
+        <li class="dashboard-breakdown-item dashboard-state-business">
+          <span class="dashboard-breakdown-swatch" aria-hidden="true"></span>
+          <span class="dashboard-breakdown-label">Business</span>
+          <strong>{{ dashboard.distance.business_m | mi }} mi</strong>
+        </li>
+        <li class="dashboard-breakdown-item dashboard-state-personal">
+          <span class="dashboard-breakdown-swatch" aria-hidden="true"></span>
+          <span class="dashboard-breakdown-label">Personal</span>
+          <strong>{{ dashboard.distance.personal_m | mi }} mi</strong>
+        </li>
+        <li class="dashboard-breakdown-item dashboard-state-unclassified">
+          <span class="dashboard-breakdown-swatch" aria-hidden="true"></span>
+          <span class="dashboard-breakdown-label">Unclassified</span>
+          <strong>{{ dashboard.distance.unclassified_m | mi }} mi</strong>
+        </li>
+        <li class="dashboard-breakdown-item dashboard-state-nondeductible">
+          <span class="dashboard-breakdown-swatch" aria-hidden="true"></span>
+          <span class="dashboard-breakdown-label">Non-deductible</span>
+          <strong>{{ dashboard.distance.nondeductible_m | mi }} mi</strong>
+        </li>
+      </ul>
+    </div>
+
+  {% set chart_max_m = dashboard.daily_series | map(attribute="total_m") | max %}
+  {% set chart_max_m = chart_max_m if chart_max_m else 1 %}
+  <section class="dashboard-daily" aria-label="Daily mileage">
+    <div class="dashboard-chart" role="list" aria-label="Daily mileage for {{ format_week_range(dashboard.nav.week_start, dashboard.nav.week_end) }}">
+      {% for day in dashboard.daily_series %}
+        {% set day_total_m = day.total_m %}
+        <div class="dashboard-day" role="listitem"
+             aria-label="{{ day.day.strftime('%A, %B %-d') }}: {{ day_total_m | mi }} miles total. Business {{ day.business_m | mi }} miles; Personal {{ day.personal_m | mi }} miles; Unclassified {{ day.unclassified_m | mi }} miles; Non-deductible {{ day.nondeductible_m | mi }} miles.">
+          <div class="dashboard-bar-track" aria-hidden="true">
+            {% if day_total_m %}
+            <div class="dashboard-bar-fill" style="height: {{ (day_total_m / chart_max_m * 100) | round(2) }}%;">
+              <span class="dashboard-bar-segment dashboard-bar-business" style="flex-basis: {{ (day.business_m / day_total_m * 100) | round(2) }}%;"></span>
+              <span class="dashboard-bar-segment dashboard-bar-personal" style="flex-basis: {{ (day.personal_m / day_total_m * 100) | round(2) }}%;"></span>
+              <span class="dashboard-bar-segment dashboard-bar-unclassified" style="flex-basis: {{ (day.unclassified_m / day_total_m * 100) | round(2) }}%;"></span>
+              <span class="dashboard-bar-segment dashboard-bar-nondeductible" style="flex-basis: {{ (day.nondeductible_m / day_total_m * 100) | round(2) }}%;"></span>
+            </div>
+            {% else %}
+            <span class="dashboard-bar-empty"></span>
+            {% endif %}
+          </div>
+          <span class="dashboard-day-name">{{ day.day.strftime('%a') }}</span>
+        </div>
+      {% endfor %}
+    </div>
+  </section>
+  </div>
+
+  <ul class="dashboard-secondary" aria-label="Weekly totals">
+    <li>
+      <span class="dashboard-secondary-label">Trips</span>
+      <strong>{{ dashboard.trip_count }}</strong>
+    </li>
+    <li>
+      <span class="dashboard-secondary-label">Estimated deduction</span>
+      {% if dashboard.deduction.available %}
+      <strong>{{ dashboard.deduction.amount | usd }}</strong>
+      {% else %}
+      <strong class="metric-unavailable">Unavailable</strong>
+      <small>No mileage rate on file for part of this week;
+        <a href="/settings">add one</a>.</small>
+      {% endif %}
+    </li>
+    <li>
+      <span class="dashboard-secondary-label">Expenses recorded</span>
+      <strong>{{ dashboard.expense_total | usd }}</strong>
+      <small><a href="/expenses">View expenses</a></small>
+    </li>
+  </ul>
+
+  {% if dashboard.attention %}
+  <div class="attention-strip" role="status" aria-label="Dashboard attention">
+    {{ icon('lightning') }}
+    <strong class="attention-heading">Needs attention</strong>
+    {% if dashboard.attention.unclassified_count %}
+    <span class="attention-item"><a href="{{ dashboard.attention.review_url }}">{{ dashboard.attention.unclassified_count }} unclassified trip{{ 's' if dashboard.attention.unclassified_count != 1 }} to review</a></span>
+    {% endif %}
+    {% if dashboard.attention.missing_trip_count %}
+    <span class="attention-item"><a href="{{ dashboard.attention.missing_trip_url }}">{{ dashboard.attention.missing_trip_count }} possible missing trip{{ 's' if dashboard.attention.missing_trip_count != 1 }}</a></span>
+    {% endif %}
+  </div>
+  {% endif %}
+</section>

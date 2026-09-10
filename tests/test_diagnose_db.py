@@ -1,9 +1,9 @@
 """DB-backed integration test for the diagnostics report wired into the
-Settings page and its on-demand connectivity route (app/ui.py + app/diagnose.py):
-a real, migrated database plus a real worker's `WorkerStatus` history,
-exercised through the actual HTTP routes. Report-content logic itself (and
-the no-secrets property) is covered without a database in
-tests/test_diagnose.py; this only proves the wiring.
+Settings page and its on-demand connectivity route (app/ui/settings.py +
+app/diagnose.py): a real, migrated database plus a real worker's
+`WorkerStatus` history, exercised through the actual HTTP routes.
+Report-content logic itself (and the no-secrets property) is covered
+without a database in tests/test_diagnose.py; this only proves the wiring.
 """
 from __future__ import annotations
 
@@ -21,10 +21,11 @@ import pytest
 from fastapi import FastAPI
 from starlette.middleware.sessions import SessionMiddleware
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.main import make_templates
 from app.retention import RetentionWorker
 from app.ui import make_router
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -34,12 +35,6 @@ pytestmark = pytest.mark.skipif(
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 CSRF_RE = re.compile(r'X-CSRF-Token": "([^"]+)"')
-
-
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
 
 
 def _bare_app(pool, retention_worker=None) -> FastAPI:
@@ -68,7 +63,7 @@ async def _scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
 
         retention_worker = RetentionWorker(pool, retention_days=365)
         # Runs the same guarded path the real background loop uses

@@ -9,10 +9,11 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.auth import make_router
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.ingest import FailedAuthLimiter
 from app.local_auth import hash_password
 from app.main import make_templates
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -27,12 +28,6 @@ def _endpoint(path: str, method: str):
         if getattr(route, "path", None) == path and method in route.methods:
             return route.endpoint
     raise AssertionError(f"{method} {path} route missing")
-
-
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
 
 
 async def _seed_admin(pool, *, email=ADMIN_EMAIL, password=ADMIN_PASSWORD, enabled=True):
@@ -70,7 +65,7 @@ async def _success_and_fixation_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         await _seed_admin(pool)
 
         request = _request(pool)
@@ -97,7 +92,7 @@ async def _wrong_password_and_wrong_email_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         await _seed_admin(pool)
 
         wrong_password_request = _request(pool)
@@ -123,7 +118,7 @@ async def _bad_csrf_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         await _seed_admin(pool)
         request = _request(pool)
         from fastapi import HTTPException
@@ -142,7 +137,7 @@ async def _limiter_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         await _seed_admin(pool)
         limiter = FailedAuthLimiter(2, 900.0)
 
@@ -173,7 +168,7 @@ async def _non_ascii_email_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         await _seed_admin(pool)
         limiter = FailedAuthLimiter(1, 900.0)
 
@@ -197,7 +192,7 @@ async def _disabled_account_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         await _seed_admin(pool, enabled=False)
         request = _request(pool)
         response = await _login_local(request)

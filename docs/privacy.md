@@ -1,5 +1,10 @@
 # Privacy and data flow
 
+Odograph stores your location history on your server. When you view a map,
+your browser requests map tiles from OpenStreetMap by default. Optional
+integrations can send additional data to other services. This guide explains
+each connection and what it shares.
+
 See [security.md](security.md) for the trust model and entry-point security
 of the application itself. This document is about what data leaves your
 instance and to whom, not about who can reach it.

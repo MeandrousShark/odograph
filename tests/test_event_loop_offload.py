@@ -17,20 +17,21 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.db import make_pool
 import app.portable as portable_module
-from app.db import make_pool, run_migrations
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
-pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
+# Genuinely DB-backed despite the filename not ending in "_db": override the
+# tier tests/conftest.py's pytest_collection_modifyitems would otherwise
+# infer from that suffix.
+pytestmark = [
+    pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests"),
+    pytest.mark.db,
+]
 
 BLOCK_S = 0.4
 CANARY_INTERVAL_S = 0.02
-
-
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
 
 
 def _endpoint(path: str, method: str):
@@ -62,13 +63,13 @@ def test_export_data_serialize_offload_keeps_event_loop_responsive(monkeypatch):
         time.sleep(BLOCK_S)
         return real_dumps(*args, **kwargs)
 
-    monkeypatch.setattr(portable_module.json, "dumps", blocking_dumps)
+    monkeypatch.setattr(portable_module.routes.json, "dumps", blocking_dumps)
 
     async def scenario():
         pool = make_pool(TEST_DB)
         await pool.open(wait=True)
         try:
-            await _reset_schema(pool)
+            await reset_db(pool)
             tick_times: list[float] = []
             canary_task = asyncio.create_task(_canary(tick_times))
             block_start = time.monotonic()

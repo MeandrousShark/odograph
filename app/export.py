@@ -28,8 +28,8 @@ from app.report import MONTH_ABBR, AnnualReport, RangeReport, caveat_lines, form
 
 HEADERS = (
     "Date", "Start", "End", "Duration", "Start location", "End location",
-    "Distance (mi)", "Distance (km)", "Category", "Vehicle", "Purpose", "Notes", "Gap", "Source",
-    "Deduction ($)",
+    "Distance (mi)", "Distance (km)", "Category", "Exclusion", "Vehicle", "Purpose", "Notes",
+    "Gap", "Source", "Deduction ($)",
 )
 
 def _trip_distance_and_deduction(t: dict, rates: dict[int, YearRate], tz: ZoneInfo):
@@ -44,7 +44,7 @@ def _trip_distance_and_deduction(t: dict, rates: dict[int, YearRate], tz: ZoneIn
     """
     local_start = t["started_at"].astimezone(tz)
     distance_m = t["display_distance_m"]
-    is_business = t["category"] == "business"
+    is_business = t["category"] == "business" and not t.get("exclusion")
     ded = (
         deduction(distance_m, local_start.year, rates, local_start.month)
         if is_business else None
@@ -80,6 +80,7 @@ def build_export_rows(trips: list[dict], rates: dict[int, YearRate], tz: ZoneInf
             round(distance_m / METERS_PER_MILE, 1),
             round(distance_m / 1000.0, 1),
             t["category"],
+            t.get("exclusion") or "",
             t.get("vehicle_name") or "",
             t.get("purpose") or "",
             t.get("notes") or "",
@@ -118,13 +119,16 @@ def _populate_trips_sheet(ws, trips: list[dict], rates: dict[int, YearRate], tz:
     # different deduction totals for the same trips. Mi/km totals are rounded
     # the same way, once, for internal consistency, even though they cover
     # every category (not just business) and so aren't expected to match the
-    # Summary's business+personal-only "Total miles".
-    mi_col, km_col, ded_col = 7, 8, 15
+    # Summary's classified "Total miles". Ledger rows remain visible for
+    # both exclusion states, but not_my_vehicle is omitted from the totals
+    # because those miles belong to no tracked vehicle.
+    mi_col, km_col, ded_col = 7, 8, 16
     total_m = 0.0
     total_ded = 0.0
     for t in trips:
         distance_m, ded = _trip_distance_and_deduction(t, rates, tz)
-        total_m += distance_m
+        if t.get("exclusion") != "not_my_vehicle":
+            total_m += distance_m
         if ded is not None:
             total_ded += ded
     totals = [""] * len(HEADERS)
@@ -173,6 +177,8 @@ def _write_summary_sheet(
     ws.append([])
     ws.append(["Business miles", round(report.business_m / METERS_PER_MILE, 1)])
     ws.append(["Personal miles", round(report.personal_m / METERS_PER_MILE, 1)])
+    if report.nondeductible_m:
+        ws.append(["Non-deductible miles", round(report.nondeductible_m / METERS_PER_MILE, 1)])
     ws.append(["Total miles", round(report.total_m / METERS_PER_MILE, 1)])
     ws.append([
         "Business share",
@@ -212,7 +218,10 @@ def _write_summary_sheet(
     # a year has.
     if report.by_vehicle:
         ws.append([])
-        ws.append(["By vehicle", "Business (mi)", "Total (mi)", "Deduction ($)"])
+        ws.append([
+            "By vehicle", "Business (mi)", "Non-deductible (mi)", "Total (mi)",
+            "Deduction ($)",
+        ])
         header_row = ws.max_row
         for cell in ws[header_row]:
             cell.font = Font(bold=True)
@@ -220,6 +229,7 @@ def _write_summary_sheet(
             ws.append([
                 v.vehicle_name,
                 round(v.business_m / METERS_PER_MILE, 1),
+                round(v.nondeductible_m / METERS_PER_MILE, 1),
                 round(v.total_m / METERS_PER_MILE, 1),
                 round(v.deduction, 2) if v.deduction is not None else "--",
             ])
@@ -347,12 +357,12 @@ def to_range_report_xlsx(
     can't drift on layout, with no `odometer_coverage`/`expense_report`
     arguments to pass through (the range report deliberately carries no
     odometer-coverage or standard-vs-actual section, so there's nothing
-    app/ui.py's range routes need to fetch for those sheets).
+    app/ui/reports.py's range routes need to fetch for those sheets).
     `trips` is filtered here to those whose local start date falls in
     `[report.start, report.end]` -- the same rule `build_range_report` used to
     fold the summary numbers above -- so every Trips-sheet row backs a row
     already counted in the summary, even though the caller's DB query only
-    coarsely pre-filters (see `app/ui.py`'s `_fetch_range_trips`).
+    coarsely pre-filters (see `app/ui/reports.py`'s `_fetch_range_trips`).
     """
     from openpyxl import Workbook
 

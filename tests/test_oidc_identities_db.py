@@ -8,7 +8,7 @@ from psycopg import errors
 from psycopg.rows import dict_row
 
 from app.accounts import create_admin
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.oidc_identities import (
     IdentityLinkRejectedError,
     create_identity_link,
@@ -19,17 +19,12 @@ from app.oidc_identities import (
     touch_identity_last_used,
     unlink_identity,
 )
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
     not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests"
 )
-
-
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
 
 
 async def _identity_count(conn) -> int:
@@ -41,7 +36,7 @@ async def _schema_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             account = await create_admin(conn, "admin@example.com", "hash")
             await conn.execute(
@@ -82,7 +77,7 @@ async def _resolution_and_metadata_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             account = await create_admin(conn, "local@example.com", "hash")
             identity = await create_identity_link(
@@ -153,7 +148,7 @@ async def _duplicate_and_owner_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             owner = await create_admin(conn, "owner@example.com", "hash")
             await create_identity_link(
@@ -188,7 +183,7 @@ async def _stale_link_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             account = await create_admin(conn, "admin@example.com", "hash")
             assert (
@@ -221,7 +216,7 @@ async def _unlink_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             account = await create_admin(conn, "admin@example.com", "hash")
             await create_identity_link(
@@ -275,7 +270,7 @@ async def _legacy_establishment_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             await conn.execute("DROP INDEX accounts_singleton_idx")
             owner = await create_admin(conn, "owner@example.com", "hash")

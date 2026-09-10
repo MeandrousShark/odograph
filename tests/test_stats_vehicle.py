@@ -24,6 +24,24 @@ def test_mixed_categories_produce_correct_per_vehicle_totals():
     assert by_id[2].total_m == 2000.0
 
 
+def test_nondeductible_miles_remain_in_vehicle_total_without_deduction():
+    mileage_rows = [
+        (1, "Truck", 1, "business", 1, 1000.0),
+        (1, "Truck", 1, "nondeductible", 1, 3000.0),
+    ]
+    breakdown = build_vehicle_breakdown(
+        mileage_rows, [], 2026, {2026: YearRate(rate_per_mi=0.70)}
+    )
+    truck = breakdown.vehicles[0]
+
+    assert truck.business_m == 1000.0
+    assert truck.nondeductible_m == 3000.0
+    assert truck.total_m == 4000.0
+    assert truck.deduction == sum_month_deductions([(1, 1000.0)], 2026, {
+        2026: YearRate(rate_per_mi=0.70)
+    })
+
+
 def test_deduction_matches_sum_month_deductions_directly():
     rates = {2026: YearRate(rate_per_mi=0.70)}
     mileage_rows = [

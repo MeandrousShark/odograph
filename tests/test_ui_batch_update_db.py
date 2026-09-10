@@ -8,8 +8,9 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.ui import make_router
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -49,13 +50,19 @@ async def _rows(conn, trip_ids):
     return await cur.fetchall()
 
 
+async def _exclusions(conn, trip_ids):
+    cur = await conn.execute(
+        "SELECT id, exclusion::text FROM trips WHERE id = ANY(%s) ORDER BY id",
+        (trip_ids,),
+    )
+    return await cur.fetchall()
+
+
 async def _update_contract_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        async with pool.connection() as conn:
-            await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-        await run_migrations(pool)
+        await reset_db(pool)
 
         async with pool.connection() as conn:
             second_vehicle = await conn.execute(
@@ -74,6 +81,12 @@ async def _update_contract_scenario():
                 conn, "C", "detected", "2026-05-06T09:00:00Z", "unclassified",
                 "Third purpose", None, 1,
             )
+            await conn.execute(
+                "UPDATE trips SET exclusion = 'not_my_vehicle' WHERE id = %s", (first_id,)
+            )
+            await conn.execute(
+                "UPDATE trips SET exclusion = 'not_deductible' WHERE id = %s", (manual_id,)
+            )
 
         handler = _endpoint()
         request = _request(pool)
@@ -85,10 +98,14 @@ async def _update_contract_scenario():
         assert json.loads(response.body) == {"updated": 2}
         async with pool.connection() as conn:
             rows = await _rows(conn, [first_id, manual_id])
+            exclusions = await _exclusions(conn, [first_id, manual_id])
         assert rows == [
             (first_id, "business", "First purpose", "rule", second_vehicle_id),
             (manual_id, "personal", "Manual purpose", None, second_vehicle_id),
         ], "vehicle-only updates must preserve category, purpose, and tag ownership"
+        assert exclusions == [
+            (first_id, "not_my_vehicle"), (manual_id, "not_deductible")
+        ], "vehicle-only updates must preserve exclusion"
 
         await handler(request, [first_id, manual_id], "keep", "", "", False, USER)
         async with pool.connection() as conn:
@@ -102,10 +119,29 @@ async def _update_contract_scenario():
         await handler(request, [first_id, manual_id], "unclassified", "keep", "", False, USER)
         async with pool.connection() as conn:
             rows = await _rows(conn, [first_id, manual_id])
+            assert await _exclusions(conn, [first_id, manual_id]) == exclusions
         assert [row[1:4] for row in rows] == [
             ("unclassified", "First purpose", "human"),
             ("unclassified", "Manual purpose", "human"),
         ]
+
+        await handler(
+            request, [first_id, manual_id], "keep", "keep", "", False, USER,
+            exclusion="",
+        )
+        async with pool.connection() as conn:
+            assert await _exclusions(conn, [first_id, manual_id]) == [
+                (first_id, None), (manual_id, None)
+            ]
+
+        await handler(
+            request, [first_id, manual_id], "keep", "keep", "", False, USER,
+            exclusion="not_deductible",
+        )
+        async with pool.connection() as conn:
+            assert await _exclusions(conn, [first_id, manual_id]) == [
+                (first_id, "not_deductible"), (manual_id, "not_deductible")
+            ]
 
         await handler(
             request, [manual_id, third_id], "keep", "keep", "  Client visits  ", True, USER,
@@ -134,9 +170,7 @@ async def _validation_and_rollback_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        async with pool.connection() as conn:
-            await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-        await run_migrations(pool)
+        await reset_db(pool)
 
         async with pool.connection() as conn:
             first_id = await _insert_trip(
@@ -161,6 +195,13 @@ async def _validation_and_rollback_scenario():
             with pytest.raises(HTTPException, match=message) as exc:
                 await handler(request, *args)
             assert exc.value.status_code == 400
+
+        with pytest.raises(HTTPException, match="Unknown exclusion") as exc:
+            await handler(
+                request, [first_id, second_id], "keep", "keep", "", False, USER,
+                exclusion="bogus",
+            )
+        assert exc.value.status_code == 400
 
         with pytest.raises(HTTPException, match="no longer exist") as exc:
             await handler(
@@ -189,9 +230,7 @@ async def _single_trip_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        async with pool.connection() as conn:
-            await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-        await run_migrations(pool)
+        await reset_db(pool)
 
         async with pool.connection() as conn:
             trip_id = await _insert_trip(

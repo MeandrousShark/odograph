@@ -4,40 +4,192 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Odograph{% endblock %}</title>
+  {# Import with context so icon URLs retain the app's static cache key. #}
+  {% from "_icons.html" import icon with context %}
   <script src="/static/vendor/htmx/htmx.min.js"></script>
-  <link rel="stylesheet" href="/static/style.css?v={{ static_version }}">
   <script nonce="{{ csp_nonce }}">
-    // Applied before first paint so an explicit theme choice never flashes
-    // the other one; absent, style.css falls through to system preference.
+    // Apply both preferences before the stylesheet is parsed. Invalid values
+    // and blocked browser storage fall through to System and Purple defaults.
     (function () {
-      var stored = localStorage.getItem("theme");
+      var stored = null;
+      var storedAccent = null;
+      try {
+        stored = localStorage.getItem("theme");
+        storedAccent = localStorage.getItem("accent");
+      } catch (error) {
+        // Private browsing and a blocked storage policy must not break paint.
+      }
       if (stored === "light" || stored === "dark") {
         document.documentElement.setAttribute("data-theme", stored);
+      } else {
+        document.documentElement.removeAttribute("data-theme");
+      }
+      if (storedAccent === "purple" || storedAccent === "blue" ||
+          storedAccent === "green" || storedAccent === "red") {
+        document.documentElement.setAttribute("data-accent", storedAccent);
+      } else {
+        document.documentElement.setAttribute("data-accent", "purple");
       }
     })();
   </script>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v={{ static_version }}">
+  <link rel="stylesheet" href="/static/style.css?v={{ static_version }}">
   {% block head %}{% endblock %}
 </head>
 <body hx-headers='{"X-CSRF-Token": "{{ csrf }}"}'>
   <header>
-    <h1><a href="/">Odograph</a></h1>
+    <h1><a href="/" class="brand-link"><span class="brand-mark" aria-hidden="true"></span><span>Odograph</span></a></h1>
     {% if user %}
+    {% set current_path = "" %}
+    {% if request is defined and request is not none %}
+      {% set request_url = request.url|default(none, true) %}
+      {% if request_url is not none %}
+        {% set current_path = request_url.path|default("", true) %}
+      {% endif %}
+    {% endif %}
+    {% set active_page = "" %}
+    {% if current_path == "/" %}
+      {% set active_page = "dashboard" %}
+    {% elif current_path == "/trips" or current_path.startswith("/trips/") %}
+      {% set active_page = "trips" %}
+    {% elif current_path == "/review" or current_path.startswith("/review/") %}
+      {% set active_page = "review" %}
+    {% elif current_path == "/report" or current_path.startswith("/report/") %}
+      {% set active_page = "report" %}
+    {% elif current_path == "/expenses" or current_path.startswith("/expenses/") %}
+      {% set active_page = "expenses" %}
+    {% elif current_path == "/stats" or current_path.startswith("/stats/") %}
+      {% set active_page = "stats" %}
+    {% endif %}
+    {% set more_active = active_page in ("expenses", "stats") %}
+    {% set settings_active = current_path == "/settings" %}
+    {% set account_settings_active = current_path == "/settings/account" %}
+    {% set account_menu_active = current_path == "/settings" or current_path.startswith("/settings/") %}
+    {% set display_name = user.name or user.email or user.sub or "User" %}
+    {% set avatar_seed = display_name.split("@", 1)[0] %}
+    {% set name_parts = avatar_seed.split() %}
+    {% set initials = ((name_parts[0][0] ~ (name_parts[-1][0] if name_parts|length > 1 else "")) if name_parts else "U")|upper %}
+    {% set review_badge_count = review_count|default(0, true) %}
+    {# Both the desktop identity and the mobile trigger show the same
+       avatar: the uploaded image when present, the initials span
+       otherwise. alt="" keeps the image decorative, matching the
+       aria-hidden initials span it replaces, since the surrounding link
+       or summary already carries the accessible name via aria-label. #}
+    {% macro account_avatar() -%}
+    {% if user.has_avatar %}<img src="/account/avatar?v={{ user.avatar_version }}" alt="" class="account-avatar">{% else %}<span class="account-avatar" aria-hidden="true">{{ initials }}</span>{% endif %}
+    {%- endmacro %}
     <nav aria-label="Primary navigation">
-      <a href="/">Dashboard</a>
-      <a href="/trips">Trips</a>
-      <a href="/review">Review</a>
-      <a href="/report">Report</a>
-      <a href="/expenses">Expenses</a>
-      <a href="/stats">Stats</a>
+      <a href="/"{% if active_page == "dashboard" %} aria-current="page"{% endif %}>Dashboard</a>
+      <a href="/trips"{% if active_page == "trips" %} aria-current="page"{% endif %}>Trips</a>
+      <a href="/review"{% if active_page == "review" %} aria-current="page"{% endif %}>Review</a>
+      <a href="/report"{% if active_page == "report" %} aria-current="page"{% endif %}>Report</a>
+      <a href="/expenses"{% if active_page == "expenses" %} aria-current="page"{% endif %}>Expenses</a>
+      <a href="/stats"{% if active_page == "stats" %} aria-current="page"{% endif %}>Stats</a>
     </nav>
     <div class="header-account">
-      <span class="who">{{ user.name or user.email or user.sub }}</span>
-      {% if user.is_admin and user.id %}<a href="/settings/account">Account Security</a>{% endif %}
-      <a href="/settings">Settings</a>
-      <form class="logout-form" hx-post="/logout" hx-swap="none"><button type="submit" class="link-button">Log out</button></form>
+      {% if user.is_admin and user.id %}
+      <a href="/settings/account" class="account-identity account-identity-link header-control" aria-label="Account Settings, {{ display_name }}"{% if account_settings_active %} aria-current="page"{% endif %}>
+        {{ account_avatar() }}
+        <span class="who account-name">{{ display_name }}</span>
+      </a>
+      {% else %}
+      <span class="account-identity header-control">
+        {{ account_avatar() }}
+        <span class="who account-name">{{ display_name }}</span>
+      </span>
+      {% endif %}
+      <a href="/settings" class="header-action settings-link header-control" aria-label="Settings" title="Settings"{% if settings_active %} aria-current="page"{% endif %}>{{ icon("gear", extra_class="header-action-icon") }}Settings</a>
+      <form class="logout-form" hx-post="/logout" hx-swap="none"><button type="submit" class="link-button header-action header-control" aria-label="Log out" title="Log out">{{ icon("sign-out", extra_class="header-action-icon") }}Log out</button></form>
     </div>
+    <details class="mobile-account-menu{% if account_menu_active %} is-active{% endif %}" data-header-disclosure="account">
+      <summary class="mobile-account-trigger{% if account_menu_active %} is-active{% endif %}" aria-label="Account settings">
+        {{ account_avatar() }}
+      </summary>
+      <div class="mobile-account-panel">
+        <a href="/settings" class="mobile-account-item{% if settings_active %} is-active{% endif %}"{% if settings_active %} aria-current="page"{% endif %}>
+          {{ icon("gear", extra_class="mobile-account-icon") }}<span>Settings</span>
+        </a>
+        {% if user.is_admin and user.id %}
+        <a href="/settings/account" class="mobile-account-item{% if account_settings_active %} is-active{% endif %}"{% if account_settings_active %} aria-current="page"{% endif %}>
+          {{ icon("gear", extra_class="mobile-account-icon") }}<span>Account Settings</span>
+        </a>
+        {% endif %}
+        <form class="logout-form mobile-account-logout" hx-post="/logout" hx-swap="none">
+          <button type="submit" class="mobile-account-item mobile-account-logout-button">{{ icon("sign-out", extra_class="mobile-account-icon") }}<span>Log out</span></button>
+        </form>
+      </div>
+    </details>
     {% endif %}
   </header>
+  {% if user %}
+  <nav class="mobile-bottom-nav" aria-label="Mobile primary navigation">
+    <a href="/" class="mobile-nav-item{% if active_page == 'dashboard' %} is-active{% endif %}"{% if active_page == 'dashboard' %} aria-current="page"{% endif %}>
+      {{ icon("gauge", extra_class="mobile-nav-icon") }}<span>Week</span>
+    </a>
+    <a href="/trips" class="mobile-nav-item{% if active_page == 'trips' %} is-active{% endif %}"{% if active_page == 'trips' %} aria-current="page"{% endif %}>
+      {{ icon("list-dashes", extra_class="mobile-nav-icon") }}<span>Trips</span>
+    </a>
+    <a href="/review" class="mobile-nav-item{% if active_page == 'review' %} is-active{% endif %}"{% if active_page == 'review' %} aria-current="page"{% endif %}{% if review_badge_count > 0 %} aria-label="Review, {{ review_badge_count }} remaining"{% endif %}>
+      {{ icon("check-circle", extra_class="mobile-nav-icon") }}
+      {% if review_badge_count > 0 %}<span class="mobile-nav-badge" aria-hidden="true">{{ review_badge_count }}</span>{% endif %}
+      <span>Review</span>
+    </a>
+    <a href="/report" class="mobile-nav-item{% if active_page == 'report' %} is-active{% endif %}"{% if active_page == 'report' %} aria-current="page"{% endif %}>
+      {{ icon("chart-line", extra_class="mobile-nav-icon") }}<span>Report</span>
+    </a>
+    <details class="mobile-more{% if more_active %} is-active{% endif %}" data-header-disclosure="more">
+      <summary class="mobile-nav-item mobile-more-trigger">
+        {{ icon("dots-three-circle", extra_class="mobile-nav-icon") }}<span>More</span>
+      </summary>
+      <div class="mobile-more-panel">
+        <a href="/expenses" class="mobile-more-item{% if active_page == 'expenses' %} is-active{% endif %}"{% if active_page == 'expenses' %} aria-current="page"{% endif %}>
+          {{ icon("list-dashes", extra_class="mobile-more-icon") }}<span>Expenses</span>
+        </a>
+        <a href="/stats" class="mobile-more-item{% if active_page == 'stats' %} is-active{% endif %}"{% if active_page == 'stats' %} aria-current="page"{% endif %}>
+          {{ icon("chart-line", extra_class="mobile-more-icon") }}<span>Stats</span>
+        </a>
+      </div>
+    </details>
+  </nav>
+  {% endif %}
+  <script nonce="{{ csp_nonce }}">
+    // Keep the account and More disclosures mutually exclusive while retaining
+    // native summary toggling and restoring focus when Escape closes one.
+    (function () {
+      var selector = "[data-header-disclosure]";
+      function summaryFor(disclosure) {
+        return disclosure.querySelector("summary");
+      }
+      function close(disclosure, restoreFocus) {
+        if (!disclosure.open) return;
+        disclosure.open = false;
+        if (restoreFocus) {
+          var summary = summaryFor(disclosure);
+          if (summary) summary.focus();
+        }
+      }
+      document.addEventListener("toggle", function (event) {
+        var disclosure = event.target;
+        if (!disclosure.matches(selector) || !disclosure.open) return;
+        document.querySelectorAll(selector).forEach(function (other) {
+          if (other !== disclosure) close(other, false);
+        });
+      }, true);
+      document.addEventListener("click", function (event) {
+        if (event.target.closest(selector)) return;
+        document.querySelectorAll(selector).forEach(function (disclosure) {
+          close(disclosure, false);
+        });
+      });
+      document.addEventListener("keydown", function (event) {
+        if (event.key !== "Escape") return;
+        var openDisclosure = document.querySelector(selector + "[open]");
+        if (!openDisclosure) return;
+        event.preventDefault();
+        close(openDisclosure, true);
+      });
+    })();
+  </script>
   <script nonce="{{ csp_nonce }}">
     // Browser datalists are rendered inconsistently and can be hidden behind
     // password-manager/autofill UI. The explicit recent-purpose selector is
@@ -54,15 +206,19 @@
     });
   </script>
   <script nonce="{{ csp_nonce }}">
-    // Trip deletion uses an in-page native dialog instead of the browser's
+    // Destructive actions use in-page native dialogs instead of the browser's
     // confirm prompt. Delegation keeps the same behavior for trip cards and
-    // review cards inserted later by htmx. Native dialog handles Escape;
-    // the one-shot close listener restores focus to the triggering control
-    // for both Escape and the explicit Cancel button.
+    // review cards inserted later by htmx, as well as the account avatar
+    // control. Native dialog handles Escape; the one-shot close listener
+    // restores focus to the triggering control for both Escape and explicit
+    // Cancel buttons.
     document.addEventListener("click", function (event) {
-      var trigger = event.target.closest("[data-trip-delete-open]");
+      var trigger = event.target.closest(
+        "[data-trip-delete-open], [data-avatar-remove-open]"
+      );
       if (trigger) {
-        var dialog = document.getElementById(trigger.dataset.tripDeleteOpen);
+        var dialogId = trigger.dataset.tripDeleteOpen || trigger.dataset.avatarRemoveOpen;
+        var dialog = document.getElementById(dialogId);
         if (!dialog || typeof dialog.showModal !== "function") return;
         dialog.addEventListener("close", function () {
           if (trigger.isConnected) trigger.focus();
@@ -71,7 +227,9 @@
         return;
       }
 
-      var cancel = event.target.closest("[data-trip-delete-cancel]");
+      var cancel = event.target.closest(
+        "[data-trip-delete-cancel], [data-avatar-remove-cancel]"
+      );
       if (cancel) cancel.closest("dialog")?.close("cancel");
     });
   </script>

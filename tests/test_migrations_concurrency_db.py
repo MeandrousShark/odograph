@@ -12,6 +12,7 @@ import os
 import pytest
 
 from app.db import MIGRATIONS_DIR, make_pool, run_migrations
+from conftest import drop_and_recreate_schema
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -23,8 +24,7 @@ async def _scenario() -> None:
     setup_pool = make_pool(TEST_DB)
     await setup_pool.open(wait=True)
     try:
-        async with setup_pool.connection() as conn:
-            await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+        await drop_and_recreate_schema(setup_pool)
     finally:
         await setup_pool.close()
 

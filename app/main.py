@@ -27,7 +27,7 @@ from app.dashboard import format_week_range
 from app.db import make_pool, run_migrations
 from app.detector.runner import DetectorRunner, DetectorScheduler
 from app.email_digest import EmailDigestWorker
-from app.expenses import comparison_caveat_lines, comparison_status
+from app.expenses import EXPENSE_CONFLICT_LABELS, comparison_caveat_lines, comparison_status
 from app.formatting import format_duration, format_miles, format_usd
 from app.geocode import GeocodeWorker
 from app.ingest import FailedAuthLimiter
@@ -40,6 +40,7 @@ from app.places_desc import describe_compact_endpoint, describe_endpoint
 from app.report import caveat_lines, format_rate_periods, quarter_bounds, range_label
 from app.retention import RetentionWorker
 from app.snap import SnapWorker
+from app.ui import EXCLUSION_LABELS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
@@ -201,6 +202,11 @@ def make_templates(config: Config) -> Jinja2Templates:
     templates.env.globals["coverage_line"] = coverage_line
     templates.env.globals["comparison_status"] = comparison_status
     templates.env.globals["comparison_caveat_lines"] = comparison_caveat_lines
+    # One definition of the two exclusion labels, shared with the trip filter
+    # and every write path via app.ui._common.EXCLUSION_LABELS, so every
+    # template renders identical wording for the same state.
+    templates.env.globals["exclusion_labels"] = EXCLUSION_LABELS
+    templates.env.globals["expense_conflict_labels_default"] = EXPENSE_CONFLICT_LABELS
     templates.env.globals["month_abbr"] = list(calendar.month_abbr)  # ['', 'Jan', ..., 'Dec']
     # Same bare-SimpleNamespace-config fallback reasoning as missing_trip_gap_m
     # below -- the map templates are exercised by template-only tests too.
@@ -340,7 +346,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             app.state.detector_scheduler = scheduler
             app.state.snap_worker = snap_worker
             # Reused directly (not just by SnapWorker) for the missing-trip
-            # OSRM `/route` suggestion (app/ui.py) -- same pattern as
+            # OSRM `/route` suggestion (app/ui/manual.py) -- same pattern as
             # geocode_http_client below, which /places/search already calls
             # on-demand outside its worker.
             app.state.osrm_http_client = http_client

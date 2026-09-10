@@ -13,7 +13,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -29,12 +30,6 @@ CLEANUP_SQL = [
     "DELETE FROM points WHERE device = 'test';",
     "DELETE FROM raw_messages WHERE payload->>'tid' = 'test';",
 ]
-
-
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
 
 
 async def _seed_device(conn, device: str) -> None:
@@ -76,7 +71,7 @@ async def _scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             await _seed_device(conn, "test")
             await _seed_device(conn, "phone")

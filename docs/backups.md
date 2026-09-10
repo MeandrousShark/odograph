@@ -14,11 +14,13 @@ checkout.
 ## What the archive covers, and what it doesn't
 
 `scripts/backup_database.sh` produces a PostgreSQL custom-format `pg_dump`
-archive of the complete `mileage` database: schema, PostGIS objects, trips,
-GPS points and raw ingest messages, account credential hashes, linked identity
-metadata, places and tagging rules, vehicles, expenses, odometer readings,
-overrides, caches, and worker delivery ledgers. There's no table-level
-allowlist, so a future schema change can't silently ship an unprotected table.
+archive of the complete `mileage` database. It includes the schema, PostGIS
+objects, trips, GPS points, raw ingest messages, account credential hashes,
+linked identity metadata, places, tagging rules, vehicles, expenses, odometer
+readings, overrides, caches, and worker delivery ledgers.
+
+The dump has no table-level allowlist. That means a future schema change cannot
+silently add an application table that the backup leaves out.
 
 Three things are deliberately **not** in the archive:
 
@@ -98,18 +100,20 @@ the Compose mode. `scripts/restore_database.sh` remains Compose-only.
 
 ## Verifying an archive
 
-`--verify-only` checks the checksum sidecar and the archive's internal table
-of contents (`pg_restore --list`) without connecting to or changing any
-database. It needs the `db` service running, since that's where the pinned
-`pg_restore` binary comes from, but nothing else:
+`--verify-only` checks that the archive still matches its checksum sidecar and
+that its internal table of contents (`pg_restore --list`) is readable. It does
+not restore data or prove that a fresh database can accept the archive. It
+needs the `db` service running, since that's where the pinned `pg_restore`
+binary comes from, but it makes no changes to that database:
 
 ```sh
 docker compose up -d db   # or: podman-compose up -d db
 scripts/restore_database.sh --verify-only backups/mileage-20260719T030000Z.dump
 ```
 
-Run this after every backup you intend to rely on, and again right before
-any restore.
+Run this after every backup you intend to rely on, and again right before any
+restore. A restore drill below is the check that proves the archive can be
+opened by a fresh application database.
 
 ## Restoring
 
@@ -155,15 +159,12 @@ and the database archive above never contains it.
 What losing a given value actually costs, if you don't have a copy:
 
 - **`POSTGRES_PASSWORD`** only matters if you still have the *original*
-  `dbdata` volume around. The Postgres image applies this variable only when
-  initializing an empty data directory, so an existing volume's role
-  password was fixed back when that volume was first created, a value that
-  no longer matches in `.env` just means the app can't authenticate, and
-  fixing it means resetting the role's password directly inside the
-  container rather than editing `.env`. Restoring into a fresh volume (the
-  supported path throughout this guide) sidesteps the problem entirely: put
-  any new value in the fresh `.env` and the database role is initialized
-  from it.
+  `dbdata` volume. The Postgres image reads it when it initializes an empty
+  data directory; changing `.env` later does not change the existing role
+  password. If the values no longer match, reset the role password inside the
+  container instead of editing `.env`. Restoring into a fresh volume avoids
+  this problem: put the new value in the fresh `.env`, and the database role
+  is initialized from it.
 - **`SESSION_SECRET`** is safely regenerable. Put a new high-entropy value
   in `.env` and recreate the app. This signs every existing browser session
   out at once; it doesn't touch stored data.
@@ -316,30 +317,139 @@ with its own lifetime.
 
 ## Restore drills
 
-Periodically prove a backup restores, not just that the file exists. The
-cheapest way is a disposable Compose project on the same host, using a
-distinct project name so it gets its own volumes:
+Periodically prove a backup restores, not just that the file exists. Run this
+from the installation checkout, with the archive and its .sha256 sidecar
+available. The drill uses a generated project name, a temporary full Compose
+file in the checkout, and a separate loopback port. It checks that the project
+resources do not already exist before it starts, so cleanup can target only
+resources created by this drill.
 
-```sh
-export COMPOSE_PROJECT_NAME=mileage-drill
-docker compose up -d db
-scripts/restore_database.sh --skip-checksum backups/mileage-20260719T030000Z.dump
-# (omit --skip-checksum if the archive's .sha256 sidecar is right next to it)
-docker compose up -d app
-curl -fsS http://127.0.0.1:8077/healthz
+Copy the whole bash block. Set ARCHIVE to the dump you want to test and set
+DRILL_PORT to a free loopback port before running it. Choose one Compose
+frontend in COMPOSE_CMD. The value is exported inside a subshell, so it does
+not change the frontend selected by the rest of your shell:
+
+```bash
+(
+set -euo pipefail
+COMPOSE_CMD="docker compose"  # change to "podman-compose" when needed
+case "$COMPOSE_CMD" in
+  "docker compose") compose=(docker compose); runtime=(docker) ;;
+  podman-compose) compose=(podman-compose); runtime=(podman) ;;
+  *) echo "choose docker compose or podman-compose in COMPOSE_CMD" >&2; exit 1 ;;
+esac
+export COMPOSE_CMD
+run_compose() { "${compose[@]}" "$@"; }
+resource_exists() {
+  "${runtime[@]}" "$1" inspect "$2" >/dev/null 2>&1
+}
+ARCHIVE=backups/mileage-20260719T030000Z.dump
+DRILL_PORT=18077
+DRILL_PROJECT="odograph-drill-$(date -u +%Y%m%d%H%M%S)-$$"
+if [ ! -r "$ARCHIVE" ] || [ ! -r "${ARCHIVE}.sha256" ]; then
+  echo "error: ARCHIVE and its .sha256 sidecar must both be readable." >&2
+  exit 1
+fi
+drill_compose="$(mktemp "$PWD/.compose.drill.XXXXXX")"
+started=0
+cleanup() {
+  status=$?
+  trap - EXIT
+  if [ "$started" -eq 1 ]; then
+    if ! run_compose down -v; then
+      echo "error: drill cleanup failed for project $DRILL_PROJECT" >&2
+      status=1
+    fi
+  fi
+  rm -f -- "$drill_compose"
+  exit "$status"
+}
+trap cleanup EXIT
+
+if ! command -v ss >/dev/null 2>&1; then
+  echo "error: ss is required to check the drill port before starting." >&2
+  exit 1
+fi
+if ss -ltn | grep -Eq "[.:]${DRILL_PORT}[[:space:]]"; then
+  echo "error: 127.0.0.1:${DRILL_PORT} is already in use; choose a free loopback port and update DRILL_PORT." >&2
+  exit 1
+fi
+
+for volume in "${DRILL_PROJECT}_dbdata" "${DRILL_PROJECT}_osrmdata"; do
+  if resource_exists volume "$volume"; then
+    echo "error: refusing to use existing volume $volume" >&2
+    exit 1
+  fi
+done
+for network in "${DRILL_PROJECT}_default" "${DRILL_PROJECT}-default"; do
+  if resource_exists network "$network"; then
+    echo "error: refusing to use existing network $network" >&2
+    exit 1
+  fi
+done
+for container in \
+  "${DRILL_PROJECT}_db_1" "${DRILL_PROJECT}_app_1" \
+  "${DRILL_PROJECT}-db-1" "${DRILL_PROJECT}-app-1"; do
+  if resource_exists container "$container"; then
+    echo "error: refusing to use existing container $container" >&2
+    exit 1
+  fi
+done
+
+binding_count="$(grep -Fc '127.0.0.1:8077:8000' compose.yaml || true)"
+if [ "$binding_count" -ne 1 ]; then
+  echo "error: expected exactly one canonical 127.0.0.1:8077:8000 binding." >&2
+  exit 1
+fi
+sed "s/127.0.0.1:8077:8000/127.0.0.1:${DRILL_PORT}:8000/" \
+  compose.yaml > "$drill_compose"
+export COMPOSE_FILE="$drill_compose"
+export COMPOSE_PROJECT_NAME="$DRILL_PROJECT"
+run_compose config >/dev/null
+wait_for_healthy() {
+  local service="$1" output=""
+  for ((attempt = 1; attempt <= 60; attempt++)); do
+    output="$(run_compose ps 2>&1 || true)"
+    if printf '%s\n' "$output" | grep -qiE "$service.*\\(healthy\\)"; then
+      return 0
+    fi
+    sleep 2
+  done
+  echo "error: $service did not report healthy." >&2
+  printf '%s\n' "$output" >&2
+  return 1
+}
+started=1
+run_compose up -d db
+wait_for_healthy db
+scripts/restore_database.sh "$ARCHIVE"
+run_compose up -d app
+wait_for_healthy db
+wait_for_healthy app
+curl -fsS "http://127.0.0.1:${DRILL_PORT}/healthz"
+run_compose exec -T db psql -U mileage -d mileage -c \
+  "SELECT max(version) AS schema_version FROM schema_migrations;
+   SELECT count(*) AS trips FROM trips;"
+)
 ```
 
-Sign in, confirm a representative trip or two, then tear the drill down and
-remove its volumes once you're satisfied:
+The restore command keeps its default checksum verification. It checks the
+archive's .sha256 sidecar and its internal table of contents before loading
+the fresh database. Compare the schema version and trip count with the
+expected backup data.
 
-```sh
-docker compose down -v
-unset COMPOSE_PROJECT_NAME
-```
+Wait for both services to report healthy before the health request. The
+loopback HTTP URL is suitable for health and database checks only. Browser
+login cannot be verified there because the application's Secure cookies
+require HTTPS. This drill verifies the restored database and application
+health, not HTTPS browser login. Do not publish the drill port beyond loopback.
 
-Because `COMPOSE_PROJECT_NAME` is unset again afterward, that `down -v`
-targets only the disposable `mileage-drill` project's volumes. Your real
-installation, running under its own project name, is untouched throughout.
+The subshell keeps COMPOSE_FILE, COMPOSE_PROJECT_NAME, and the selected
+frontend scoped to the drill. Its cleanup uses that generated project name and
+temporary Compose file, and runs only after the preflight checks found no
+matching containers, volumes, or networks. It removes the temporary file and
+the drill project's resources; it does not unset or run down -v against your
+normal project.
 
 ## Disaster recovery
 

@@ -64,6 +64,7 @@ def _year_series_for(
             row_map.get((year, month, "business"), 0.0),
             row_map.get((year, month, "personal"), 0.0),
             row_map.get((year, month, "unclassified"), 0.0),
+            row_map.get((year, month, "nondeductible"), 0.0),
         )
         for month in range(1, last_month + 1)
     ]

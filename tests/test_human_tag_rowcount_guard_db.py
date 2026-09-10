@@ -22,9 +22,10 @@ import pytest
 import psycopg
 from fastapi import HTTPException
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.main import make_templates
 from app.ui import _apply_human_tag, make_router
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -51,13 +52,8 @@ def _request(pool):
             pool=pool, templates=make_templates(config), config=config,
         )),
         session={"csrf": "test"},
+        headers={},
     )
-
-
-async def _reset_schema(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
 
 
 async def _insert_trip(conn, started_at: datetime) -> int:
@@ -77,7 +73,7 @@ async def _apply_human_tag_guard_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             trip_id = await _insert_trip(conn, BASE)
             await conn.execute("DELETE FROM trips WHERE id = %s", (trip_id,))
@@ -126,7 +122,7 @@ async def _review_tag_race_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             trip_id = await _insert_trip(conn, BASE)
 
@@ -157,7 +153,7 @@ async def _tag_trip_race_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             trip_id = await _insert_trip(conn, BASE)
 
@@ -182,7 +178,7 @@ async def _happy_path_scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        await reset_db(pool)
         async with pool.connection() as conn:
             tag_trip_id = await _insert_trip(conn, BASE)
             review_trip_id = await _insert_trip(conn, BASE + timedelta(hours=1))

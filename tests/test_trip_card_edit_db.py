@@ -10,16 +10,20 @@ from zoneinfo import ZoneInfo
 import pytest
 from fastapi import HTTPException
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.main import make_templates
 from app.rates import METERS_PER_MILE
 from app.ui import make_router
+from conftest import reset_db
 
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
 TZ = ZoneInfo("America/Los_Angeles")
 USER = {"sub": "test"}
+# A dashboard_week value that would be visible verbatim in the response body
+# if a route ever forgot to normalize it before handing it to a template.
+MALFORMED_WEEK = '2026-07-13"><script>alert(1)</script>'
 
 
 def _endpoint(path: str, method: str):
@@ -36,6 +40,7 @@ TAG = _endpoint("/trips/{trip_id}/tag", "POST")
 NOTES = _endpoint("/trips/{trip_id}/notes", "POST")
 PURPOSE = _endpoint("/trips/{trip_id}/purpose", "POST")
 VEHICLE = _endpoint("/trips/{trip_id}/vehicle", "POST")
+EXCLUSION = _endpoint("/trips/{trip_id}/exclusion", "POST")
 
 
 def _request(pool):
@@ -45,13 +50,15 @@ def _request(pool):
             pool=pool, templates=make_templates(config), config=config,
         )),
         session={"csrf": "test"},
+        headers={},
     )
 
 
 async def _save(request, trip_id, **overrides):
     values = {
         "category": "unclassified", "purpose": "", "notes": "", "vehicle_id": "",
-        "date": "", "start_time": "", "end_time": "", "distance": "",
+        "date": "", "start_time": "", "end_time": "", "distance": "", "exclusion": "",
+        "dashboard_week": "",
     }
     values.update(overrides)
     return await SAVE(request, trip_id, user=USER, **values)
@@ -81,9 +88,7 @@ async def _scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        async with pool.connection() as conn:
-            await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-        await run_migrations(pool)
+        await reset_db(pool)
         request = _request(pool)
 
         async with pool.connection() as conn:
@@ -107,14 +112,42 @@ async def _scenario():
             )).fetchone())[0]
 
         card = await CARD(request, detected_id, USER)
-        assert f'<article id="trip-{detected_id}"' in card.body.decode()
-        assert "View route" in card.body.decode()
+        card_body = card.body.decode()
+        assert f'<article id="trip-{detected_id}"' in card_body
+        # The archive row's overflow menu no longer carries its own "View
+        # details" item; the whole row is a stretched link to the same
+        # destination instead (covered directly in test_trip_row_template.py).
+        assert "View details" not in card_body
+        assert f'<a class="trip-archive-row-link" href="/trips/{detected_id}">' in card_body
+        assert "View route" not in card_body
+        dashboard_card = await CARD(request, detected_id, USER, "2026-07-13")
+        dashboard_card_body = dashboard_card.body.decode()
+        assert 'class="dashboard-trip-row' in dashboard_card_body
+        assert 'class="card trip-card' not in dashboard_card_body
+        assert 'hx-get="/trips/%s/edit?dashboard_week=2026-07-13"' % detected_id in dashboard_card_body
+        malformed_card_body = (
+            await CARD(request, detected_id, USER, MALFORMED_WEEK)
+        ).body.decode()
+        today_iso = datetime.now(TZ).date().isoformat()
+        assert MALFORMED_WEEK not in malformed_card_body
+        assert 'hx-get="/trips/%s/edit?dashboard_week=%s"' % (detected_id, today_iso) \
+            in malformed_card_body
         manual_edit = await EDIT(request, manual_id, USER)
         manual_body = manual_edit.body.decode()
         assert 'name="date"' in manual_body
         assert "Retired car (inactive)" in manual_body
         detected_edit = await EDIT(request, detected_id, USER)
         assert 'name="date"' not in detected_edit.body.decode()
+        dashboard_edit = await EDIT(request, detected_id, USER, "2026-07-13")
+        dashboard_edit_body = dashboard_edit.body.decode()
+        assert 'name="dashboard_week" value="2026-07-13"' in dashboard_edit_body
+        assert 'hx-get="/trips/%s/card?dashboard_week=2026-07-13"' % detected_id in dashboard_edit_body
+        malformed_edit_body = (
+            await EDIT(request, detected_id, USER, MALFORMED_WEEK)
+        ).body.decode()
+        today_iso = datetime.now(TZ).date().isoformat()
+        assert MALFORMED_WEEK not in malformed_edit_body
+        assert 'name="dashboard_week" value="%s"' % today_iso in malformed_edit_body
         for endpoint in (CARD, EDIT):
             with pytest.raises(HTTPException) as exc:
                 await endpoint(request, 999999, USER)
@@ -130,9 +163,9 @@ async def _scenario():
         response = await _save(
             request, detected_id, category="personal", purpose="  New purpose  ",
             notes="  New notes  ", vehicle_id=str(active_id), date="bad",
-            start_time="bad", end_time="bad", distance="nan",
+            start_time="bad", end_time="bad", distance="nan", exclusion="not_deductible",
         )
-        assert response.status_code == 200 and "trip-card" in response.body.decode()
+        assert response.status_code == 200 and "trip-archive-row" in response.body.decode()
         async with pool.connection() as conn:
             after = await (await conn.execute(
                 "SELECT device, source::text, started_at, ended_at, distance_m, point_count, "
@@ -141,11 +174,46 @@ async def _scenario():
                 (detected_id,),
             )).fetchone()
             human = await (await conn.execute(
-                "SELECT category::text, purpose, notes, vehicle_id, tag_source::text "
+                "SELECT category::text, exclusion::text, purpose, notes, vehicle_id, tag_source::text "
                 "FROM trips WHERE id = %s", (detected_id,),
             )).fetchone()
         assert after == before
-        assert human == ("personal", "New purpose", "New notes", active_id, "human")
+        assert human == (
+            "personal", "not_deductible", "New purpose", "New notes", active_id, "human"
+        )
+
+        dashboard_response = await _save(
+            request, detected_id, category="business", purpose="Dashboard edit",
+            notes="Dashboard notes", vehicle_id=str(active_id), exclusion="",
+            dashboard_week="2026-07-13",
+        )
+        assert dashboard_response.status_code == 200
+        assert dashboard_response.headers["hx-refresh"] == "true"
+        dashboard_body = dashboard_response.body.decode()
+        assert 'class="dashboard-trip-row' in dashboard_body
+        assert 'class="card trip-card' not in dashboard_body
+
+        malformed_save_response = await _save(
+            request, detected_id, category="business", purpose="Dashboard edit",
+            notes="Dashboard notes", vehicle_id=str(active_id), exclusion="",
+            dashboard_week=MALFORMED_WEEK,
+        )
+        malformed_save_body = malformed_save_response.body.decode()
+        today_iso = datetime.now(TZ).date().isoformat()
+        assert MALFORMED_WEEK not in malformed_save_body
+        assert 'hx-get="/trips/%s/edit?dashboard_week=%s"' % (detected_id, today_iso) \
+            in malformed_save_body
+
+        response = await EXCLUSION(request, detected_id, "not_my_vehicle", USER)
+        assert "Not one of my vehicles" in response.body.decode()
+        await EXCLUSION(request, detected_id, "", USER)
+        async with pool.connection() as conn:
+            assert await (await conn.execute(
+                "SELECT exclusion FROM trips WHERE id = %s", (detected_id,)
+            )).fetchone() == (None,)
+        with pytest.raises(HTTPException) as exc:
+            await EXCLUSION(request, detected_id, "bogus", USER)
+        assert exc.value.status_code == 400
 
         async with pool.connection() as conn:
             await conn.execute(
@@ -247,6 +315,31 @@ async def _scenario():
                 )).fetchone()
             assert current == snapshot
 
+        dashboard_invalid = await _save(
+            request, manual_id, **{
+                **valid_manual, "date": "bad", "dashboard_week": "2026-07-13",
+            }
+        )
+        dashboard_invalid_body = dashboard_invalid.body.decode()
+        assert dashboard_invalid.status_code == 200
+        assert 'role="alert"' in dashboard_invalid_body
+        assert 'name="dashboard_week" value="2026-07-13"' in dashboard_invalid_body
+        assert 'hx-get="/trips/%s/card?dashboard_week=2026-07-13"' % manual_id in dashboard_invalid_body
+
+        malformed_invalid = await _save(
+            request, manual_id, **{
+                **valid_manual, "date": "bad", "dashboard_week": MALFORMED_WEEK,
+            }
+        )
+        malformed_invalid_body = malformed_invalid.body.decode()
+        today_iso = datetime.now(TZ).date().isoformat()
+        assert malformed_invalid.status_code == 200
+        assert 'role="alert"' in malformed_invalid_body
+        assert MALFORMED_WEEK not in malformed_invalid_body
+        assert 'name="dashboard_week" value="%s"' % today_iso in malformed_invalid_body
+        assert 'hx-get="/trips/%s/card?dashboard_week=%s"' % (manual_id, today_iso) \
+            in malformed_invalid_body
+
         async with pool.connection() as conn:
             await conn.execute(
                 "CREATE FUNCTION remove_edit_vehicle() RETURNS trigger LANGUAGE plpgsql AS $$ "
@@ -259,18 +352,27 @@ async def _scenario():
             race_vehicle = (await (await conn.execute(
                 "INSERT INTO vehicles (name) VALUES ('Race car') RETURNING id"
             )).fetchone())[0]
-        response = await _save(request, manual_id, **{**valid_manual, "vehicle_id": str(race_vehicle)})
-        assert 'role="alert"' in response.body.decode()
-        async with pool.connection() as conn:
-            current = await (await conn.execute(
-                "SELECT started_at, ended_at, distance_m, category::text, purpose, notes, vehicle_id, "
-                "tag_source::text FROM trips WHERE id = %s", (manual_id,)
-            )).fetchone()
-            race_still_exists = await (await conn.execute(
-                "SELECT 1 FROM vehicles WHERE id = %s", (race_vehicle,)
-            )).fetchone()
-        assert current == snapshot
-        assert race_still_exists == (1,)
+        try:
+            response = await _save(request, manual_id, **{**valid_manual, "vehicle_id": str(race_vehicle)})
+            assert 'role="alert"' in response.body.decode()
+            async with pool.connection() as conn:
+                current = await (await conn.execute(
+                    "SELECT started_at, ended_at, distance_m, category::text, purpose, notes, vehicle_id, "
+                    "tag_source::text FROM trips WHERE id = %s", (manual_id,)
+                )).fetchone()
+                race_still_exists = await (await conn.execute(
+                    "SELECT 1 FROM vehicles WHERE id = %s", (race_vehicle,)
+                )).fetchone()
+            assert current == snapshot
+            assert race_still_exists == (1,)
+        finally:
+            # The reset between tests truncates data but leaves schema
+            # objects alone (see tests/conftest.py), so a trigger/function
+            # created here to simulate the race must be dropped here too,
+            # not left for a later test's reset to clean up.
+            async with pool.connection() as conn:
+                await conn.execute("DROP TRIGGER remove_edit_vehicle ON trips")
+                await conn.execute("DROP FUNCTION remove_edit_vehicle()")
     finally:
         await pool.close()
 

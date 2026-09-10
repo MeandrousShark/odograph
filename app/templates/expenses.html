@@ -2,19 +2,26 @@
 {% block title %}Expenses: Odograph{% endblock %}
 {% block content %}
 
-<p>
-  <a href="/expenses?year={{ selected_year - 1 }}">← {{ selected_year - 1 }}</a>
-  <strong style="margin: 0 .5rem">{{ selected_year }}</strong>
-  <a href="/expenses?year={{ selected_year + 1 }}">{{ selected_year + 1 }} →</a>
-  · <a href="/report/{{ selected_year }}">View annual comparison</a>
-</p>
+<div class="expenses-page">
+  <div class="expenses-page-header page-title">
+    <div>
+      <p class="page-title-eyebrow">Expenses</p>
+      <h2 id="expenses-page-title" class="page-title-heading">{{ selected_year }} vehicle expense ledger</h2>
+      <p class="page-title-subtitle">Enter allowable annual depreciation supplied by you or your tax preparer.
+        Odograph does not calculate MACRS, Section 179, bonus depreciation, basis,
+        limits, or recapture.</p>
+    </div>
+    <div class="page-title-actions expenses-page-actions">
+      <nav class="expenses-year-nav" aria-label="Expenses year">
+        <a href="/expenses?year={{ selected_year - 1 }}">← {{ selected_year - 1 }}</a>
+        <strong>{{ selected_year }}</strong>
+        <a href="/expenses?year={{ selected_year + 1 }}">{{ selected_year + 1 }} →</a>
+      </nav>
+      <a class="control control-secondary" href="/report/{{ selected_year }}">View annual comparison</a>
+    </div>
+  </div>
 
-<h2>{{ selected_year }} vehicle expense ledger</h2>
-<p class="muted">Enter allowable annual depreciation supplied by you or your tax preparer.
-  Odograph does not calculate MACRS, Section 179, bonus depreciation, basis,
-  limits, or recapture.</p>
-
-<form class="filter-bar" method="get">
+<form class="filter-bar expenses-controls" method="get">
   <input type="hidden" name="year" value="{{ selected_year }}">
   <label class="field"><span class="field-label">Vehicle</span>
     <select name="vehicle">
@@ -31,7 +38,11 @@
 
 <details class="add-manual" open>
   <summary>Add expense</summary>
-  <form hx-post="/expenses">
+  <form class="expense-form expense-add" data-expense-form
+        data-expense-warning-vehicle="{{ (expense_conflict_labels | default(expense_conflict_labels_default))['vehicle'] }}"
+        data-expense-warning-date="{{ (expense_conflict_labels | default(expense_conflict_labels_default))['date'] }}"
+        data-expense-warning-not-my-vehicle="{{ (expense_conflict_labels | default(expense_conflict_labels_default))['not_my_vehicle'] }}"
+        hx-post="/expenses">
     <label>Vehicle
       <select name="vehicle_id" required>
         {% for vehicle in vehicles %}
@@ -41,7 +52,9 @@
         {% endfor %}
       </select>
     </label>
+    <p class="expense-live-warning" data-expense-warning="vehicle" role="status" hidden></p>
     <label>Date <input type="date" name="incurred_on" value="{{ selected_year }}-01-01" required></label>
+    <p class="expense-live-warning" data-expense-warning="date" role="status" hidden></p>
     <label>Category
       <select name="category" required data-expense-treatment-select>
         {% for category in expense_categories %}
@@ -59,21 +72,44 @@
       </select>
     </label>
     <label>Notes <input type="text" name="notes"></label>
+    <label>Trip
+      <select name="trip_id">
+        <option value="">Unlinked</option>
+        {% for trip in trips | default([], true) %}
+        <option value="{{ trip.id }}"
+                data-trip-vehicle-id="{{ trip.vehicle_id or '' }}"
+                data-trip-date="{{ trip.started_at | local_dt('%Y-%m-%d') }}"
+                data-trip-exclusion="{{ trip.exclusion or '' }}">{{ trip.started_at | local_dt }} - {{ trip.vehicle_name or 'No vehicle' }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <p class="expense-live-warning" data-expense-warning="not-my-vehicle" role="status" hidden></p>
     <button type="submit">Add</button>
   </form>
 </details>
 
 {% if expenses %}
-<div class="report-summary">
-  <div><span class="muted">Ledger total</span><strong>{{ ledger_total | usd }}</strong></div>
+<div class="report-summary expenses-summary">
+  <div class="expenses-summary-total"><span class="muted">Ledger total</span><strong>{{ ledger_total | usd }}</strong></div>
   {% for category, total in category_totals|dictsort %}
   <div><span class="muted">{{ category_labels[category] }}</span><strong>{{ total | usd }}</strong></div>
   {% endfor %}
 </div>
 
-<div class="table-wrapper">
-<table>
-  <thead><tr><th>Date</th><th>Vehicle</th><th>Category</th><th>Amount</th><th>Treatment</th><th>Notes</th><th></th></tr></thead>
+<div class="table-wrapper expenses-table-wrapper">
+<table class="expense-ledger">
+  <colgroup>
+    <col class="expense-ledger-date">
+    <col class="expense-ledger-vehicle">
+    <col class="expense-ledger-category">
+    <col class="expense-ledger-amount">
+    <col class="expense-ledger-treatment">
+    <col class="expense-ledger-trip">
+    <col class="expense-ledger-notes">
+    <col class="expense-ledger-warnings">
+    <col class="expense-ledger-actions">
+  </colgroup>
+  <thead><tr><th>Date</th><th>Vehicle</th><th>Category</th><th>Amount</th><th>Treatment</th><th>Trip</th><th>Notes</th><th>Warnings</th><th></th></tr></thead>
   <tbody>
     {% for expense in expenses %}
     <tr>
@@ -82,43 +118,92 @@
       <td>{{ category_labels[expense.category] }}</td>
       <td class="num">{{ expense.amount | usd }}</td>
       <td>{{ treatment_labels[expense.treatment] }}</td>
+      <td>
+        {% if expense.trip_id %}
+        <a href="/trips/{{ expense.trip_id }}">Trip {{ expense.trip_id }}</a>
+        {% else %}Unlinked{% endif %}
+      </td>
       <td>{{ expense.notes or '' }}</td>
       <td>
-        <details>
-          <summary>Edit</summary>
-          <form class="expense-edit" hx-post="/expenses/{{ expense.id }}/update">
-            <label>Vehicle
-              <select name="vehicle_id" required>
-                {% for vehicle in vehicles %}
-                <option value="{{ vehicle.id }}" {{ 'selected' if vehicle.id == expense.vehicle_id }}>
-                  {{ vehicle.name }}{{ ' (inactive)' if not vehicle.active }}
-                </option>
-                {% endfor %}
-              </select>
-            </label>
-            <label>Date <input type="date" name="incurred_on" value="{{ expense.incurred_on }}" required></label>
-            <label>Category
-              <select name="category" required data-expense-treatment-select>
-                {% for category in expense_categories %}
-                <option value="{{ category }}" {{ 'selected' if category == expense.category }}>{{ category_labels[category] }}</option>
-                {% endfor %}
-              </select>
-            </label>
-            <label>Amount ($) <input type="number" name="amount" min="0.01" step="0.01" value="{{ expense.amount }}" required></label>
-            <label>Tax treatment
-              <select name="treatment" required>
-                <option value="" disabled>Choose treatment…</option>
-                {% for treatment in expense_treatments %}
-                <option value="{{ treatment }}" {{ 'selected' if treatment == expense.treatment }}>{{ treatment_labels[treatment] }}</option>
-                {% endfor %}
-              </select>
-            </label>
-            <label>Notes <input type="text" name="notes" value="{{ expense.notes or '' }}"></label>
-            <button type="submit">Save</button>
-            <button type="button" class="danger" hx-post="/expenses/{{ expense.id }}/delete"
-                    hx-confirm="Delete this expense?">Delete</button>
-          </form>
+        {% if expense.conflicts | default([], true) %}
+        <details class="expense-warning-details">
+          <summary>{{ expense.conflicts | length }} warning{{ '' if expense.conflicts | length == 1 else 's' }}</summary>
+          {% for conflict in expense.conflicts %}
+          <p class="trip-warning-callout expense-conflict">{{ conflict }}</p>
+          {% endfor %}
         </details>
+        {% endif %}
+      </td>
+      <td>
+        <details class="expense-editor" data-expense-editor-toggle="expense-editor-{{ expense.id }}">
+          <summary aria-controls="expense-editor-{{ expense.id }}">Edit expense</summary>
+        </details>
+      </td>
+    </tr>
+    <tr id="expense-editor-{{ expense.id }}" class="expense-editor-row" hidden>
+      <td colspan="9">
+        <div class="expense-editor-panel">
+          <form class="expense-form expense-edit" data-expense-form
+                data-expense-warning-vehicle="{{ (expense_conflict_labels | default(expense_conflict_labels_default))['vehicle'] }}"
+                data-expense-warning-date="{{ (expense_conflict_labels | default(expense_conflict_labels_default))['date'] }}"
+                data-expense-warning-not-my-vehicle="{{ (expense_conflict_labels | default(expense_conflict_labels_default))['not_my_vehicle'] }}"
+                hx-post="/expenses/{{ expense.id }}/update">
+            <div class="expense-editor-grid">
+              <label class="expense-editor-field">Vehicle
+                <select name="vehicle_id" required>
+                  {% for vehicle in vehicles %}
+                  <option value="{{ vehicle.id }}" {{ 'selected' if vehicle.id == expense.vehicle_id }}>
+                    {{ vehicle.name }}{{ ' (inactive)' if not vehicle.active }}
+                  </option>
+                  {% endfor %}
+                </select>
+                <span class="expense-live-warning" data-expense-warning="vehicle" role="status" hidden></span>
+              </label>
+              <label class="expense-editor-field">Date
+                <input type="date" name="incurred_on" value="{{ expense.incurred_on }}" required>
+                <span class="expense-live-warning" data-expense-warning="date" role="status" hidden></span>
+              </label>
+              <label class="expense-editor-field">Category
+                <select name="category" required data-expense-treatment-select>
+                  {% for category in expense_categories %}
+                  <option value="{{ category }}" {{ 'selected' if category == expense.category }}>{{ category_labels[category] }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label class="expense-editor-field">Amount ($)
+                <input type="number" name="amount" min="0.01" step="0.01" value="{{ expense.amount }}" required>
+              </label>
+              <label class="expense-editor-field">Tax treatment
+                <select name="treatment" required>
+                  <option value="" disabled>Choose treatment…</option>
+                  {% for treatment in expense_treatments %}
+                  <option value="{{ treatment }}" {{ 'selected' if treatment == expense.treatment }}>{{ treatment_labels[treatment] }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label class="expense-editor-field">Trip
+                <select name="trip_id">
+                  <option value="">Unlinked</option>
+                  {% for trip in trips | default([], true) %}
+                  <option value="{{ trip.id }}" {{ 'selected' if trip.id == expense.trip_id }}
+                          data-trip-vehicle-id="{{ trip.vehicle_id or '' }}"
+                          data-trip-date="{{ trip.started_at | local_dt('%Y-%m-%d') }}"
+                          data-trip-exclusion="{{ trip.exclusion or '' }}">{{ trip.started_at | local_dt }} - {{ trip.vehicle_name or 'No vehicle' }}</option>
+                  {% endfor %}
+                </select>
+                <span class="expense-live-warning" data-expense-warning="not-my-vehicle" role="status" hidden></span>
+              </label>
+              <label class="expense-editor-field expense-editor-notes">Notes
+                <input type="text" name="notes" value="{{ expense.notes or '' }}">
+              </label>
+            </div>
+            <div class="expense-editor-actions">
+              <button type="submit">Save</button>
+              <button type="button" class="danger" hx-post="/expenses/{{ expense.id }}/delete"
+                      hx-confirm="Delete this expense?">Delete</button>
+            </div>
+          </form>
+        </div>
       </td>
     </tr>
     {% endfor %}
@@ -130,19 +215,55 @@
 {% endif %}
 
 <script nonce="{{ csp_nonce }}">
-// Delegated on document so both the add and edit forms' category selects
-// (each a separate element, present or swapped in independently) are covered
-// by one listener instead of two identical inline handlers.
+function updateExpenseWarnings(form) {
+  const tripSelect = form.querySelector('[name="trip_id"]');
+  const vehicleSelect = form.querySelector('[name="vehicle_id"]');
+  const dateInput = form.querySelector('[name="incurred_on"]');
+  const option = tripSelect && tripSelect.options[tripSelect.selectedIndex];
+  const linkedTrip = option && option.value !== '';
+  const vehicleMismatch = linkedTrip && option.dataset.tripVehicleId !== vehicleSelect.value;
+  const dateMismatch = linkedTrip && option.dataset.tripDate !== dateInput.value;
+  const notMyVehicle = linkedTrip && option.dataset.tripExclusion === 'not_my_vehicle';
+  const activeWarnings = {
+    vehicle: vehicleMismatch,
+    date: dateMismatch,
+    'not-my-vehicle': notMyVehicle,
+  };
+  form.querySelectorAll('[data-expense-warning]').forEach(function (warning) {
+    const code = warning.dataset.expenseWarning;
+    warning.hidden = !activeWarnings[code];
+    if (activeWarnings[code]) {
+      const labelKey = code === 'not-my-vehicle' ? 'notMyVehicle' : code;
+      warning.textContent = form.dataset['expenseWarning' + labelKey[0].toUpperCase() + labelKey.slice(1)];
+    }
+  });
+}
+
 document.addEventListener('change', function (event) {
-  if (!event.target.matches('[data-expense-treatment-select]')) return;
-  const categorySelect = event.target;
-  const treatment = categorySelect.closest('form').querySelector('[name="treatment"]');
-  if (categorySelect.value === 'other') {
-    treatment.value = '';
-  } else {
-    treatment.value = (categorySelect.value === 'parking' || categorySelect.value === 'tolls')
-      ? 'fully_business' : 'business_use_allocated';
+  if (event.target.matches('[data-expense-treatment-select]')) {
+    const categorySelect = event.target;
+    const treatment = categorySelect.closest('form').querySelector('[name="treatment"]');
+    if (categorySelect.value === 'other') {
+      treatment.value = '';
+    } else {
+      treatment.value = (categorySelect.value === 'parking' || categorySelect.value === 'tolls')
+        ? 'fully_business' : 'business_use_allocated';
+    }
+  }
+  if (event.target.matches('[data-expense-form] [name="trip_id"], [data-expense-form] [name="vehicle_id"], [data-expense-form] [name="incurred_on"]')) {
+    updateExpenseWarnings(event.target.closest('[data-expense-form]'));
   }
 });
+document.querySelectorAll('[data-expense-editor-toggle]').forEach(function (disclosure) {
+  const panel = document.getElementById(disclosure.dataset.expenseEditorToggle);
+  if (!panel) return;
+  const syncPanel = function () {
+    panel.hidden = !disclosure.open;
+  };
+  disclosure.addEventListener('toggle', syncPanel);
+  syncPanel();
+});
+document.querySelectorAll('[data-expense-form]').forEach(updateExpenseWarnings);
 </script>
+</div>
 {% endblock %}

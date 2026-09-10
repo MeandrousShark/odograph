@@ -11,6 +11,7 @@ import pytest
 from app.rates import YearRate
 from app.report import (
     NO_VEHICLE_LABEL,
+    ReportCaveats,
     build_annual_report,
     build_range_report,
     default_report_year,
@@ -214,6 +215,97 @@ def test_by_vehicle_duplicate_names_stay_isolated_by_database_id():
     assert [(line.vehicle_id, line.business_m) for line in report.by_vehicle] == [
         (1, 1609.344), (2, 1609.344 * 2),
     ]
+
+
+def test_not_my_vehicle_trip_contributes_nothing_to_report_or_caveats():
+    trip = _at(
+        6, exclusion="not_my_vehicle", vehicle_name="Truck",
+        has_gap=True, snap_status="low_confidence", source="manual",
+        purpose="", category="business",
+    )
+    report = build_annual_report([trip], {2026: YearRate(0.70)}, TZ, 2026)
+
+    assert report.trip_count == 0
+    assert report.total_m == 0
+    assert report.total_deduction is None
+    assert report.by_vehicle == []
+    assert report.caveats == ReportCaveats()
+
+
+def test_not_deductible_wins_before_business_category():
+    trip = _at(
+        6, category="business", exclusion="not_deductible", purpose="",
+        display_distance_m=10 * 1609.344,
+    )
+    report = build_annual_report([trip], {2026: YearRate(0.70)}, TZ, 2026)
+
+    assert report.trip_count == 1
+    assert report.business_m == 0
+    assert report.nondeductible_m == pytest.approx(10 * 1609.344)
+    assert report.total_deduction is None
+    assert report.caveats.business_missing_purpose == 0
+    assert report.caveats.unclassified_trips == 0
+
+
+def test_excluded_unclassified_trips_still_appear_in_classification_caveat():
+    trips = [
+        _at(
+            6, category="unclassified", exclusion="not_my_vehicle",
+            display_distance_m=2 * 1609.344,
+        ),
+        _at(
+            6, category="unclassified", exclusion="not_deductible",
+            display_distance_m=3 * 1609.344,
+        ),
+    ]
+    report = build_annual_report(trips, {2026: YearRate(0.70)}, TZ, 2026)
+
+    assert report.caveats.unclassified_trips == 2
+    assert report.trip_count == 1
+    assert report.total_m == pytest.approx(3 * 1609.344)
+    assert report.business_m == 0
+    assert report.nondeductible_m == pytest.approx(3 * 1609.344)
+    assert report.total_deduction is None
+
+
+def test_report_and_vehicle_total_identities_include_nondeductible():
+    trips = [
+        _at(6, vehicle_id=1, vehicle_name="Truck", category="business",
+            display_distance_m=3 * 1609.344),
+        _at(6, vehicle_id=1, vehicle_name="Truck", category="personal",
+            display_distance_m=2 * 1609.344),
+        _at(6, vehicle_id=1, vehicle_name="Truck", category="business",
+            exclusion="not_deductible", display_distance_m=5 * 1609.344),
+    ]
+    report = build_annual_report(trips, {2026: YearRate(0.70)}, TZ, 2026)
+    truck = report.by_vehicle[0]
+
+    assert report.total_m == pytest.approx(
+        report.business_m + report.personal_m + report.nondeductible_m
+    )
+    assert truck.total_m == pytest.approx(
+        truck.business_m + truck.personal_m + truck.nondeductible_m
+    )
+    assert report.business_pct == pytest.approx(30.0)
+    assert truck.nondeductible_m == pytest.approx(5 * 1609.344)
+
+
+def test_range_report_applies_both_exclusion_states():
+    trips = [
+        _at(6, category="business", display_distance_m=2 * 1609.344),
+        _at(6, category="business", exclusion="not_deductible",
+            display_distance_m=6 * 1609.344),
+        _at(6, category="business", exclusion="not_my_vehicle",
+            display_distance_m=9 * 1609.344),
+    ]
+    report = build_range_report(
+        trips, {2026: YearRate(0.70)}, TZ, date(2026, 1, 1), date(2026, 12, 31)
+    )
+
+    assert report.trip_count == 2
+    assert report.business_m == pytest.approx(2 * 1609.344)
+    assert report.nondeductible_m == pytest.approx(6 * 1609.344)
+    assert report.total_m == pytest.approx(8 * 1609.344)
 
 
 def test_default_report_year_jan_through_april_uses_prior_year():

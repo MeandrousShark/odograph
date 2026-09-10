@@ -1,5 +1,5 @@
-<section class="stats-section">
-  <h2>Per-vehicle breakdown</h2>
+<section class="stats-section stats-vehicle-section" aria-labelledby="stats-vehicle-heading">
+  <h2 id="stats-vehicle-heading">Per-vehicle breakdown</h2>
   {% if vehicle_breakdown.vehicles %}
   <div class="table-scroll">
   <table>
@@ -8,6 +8,7 @@
         <th>Vehicle</th>
         <th>Business</th>
         <th>Personal</th>
+        <th>Non-deductible</th>
         <th>Total</th>
         <th>Expenses</th>
         <th>Deduction</th>
@@ -19,6 +20,7 @@
         <td>{{ v.vehicle_name }}</td>
         <td class="num">{{ v.business_m | mi }}</td>
         <td class="num">{{ v.personal_m | mi }}</td>
+        <td class="num">{{ v.nondeductible_m | mi }}</td>
         <td class="num">{{ v.total_m | mi }}</td>
         <td class="num">{{ v.expense_total | usd }}</td>
         <td class="num">{{ v.deduction | usd }}</td>

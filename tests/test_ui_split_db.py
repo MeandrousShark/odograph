@@ -13,10 +13,11 @@ import psycopg
 import pytest
 from fastapi import HTTPException
 
-from app.db import DETECTOR_ADVISORY_LOCK_KEY, make_pool, run_migrations
+from app.db import DETECTOR_ADVISORY_LOCK_KEY, make_pool
 from app.detector.core import Params
 from app.detector.runner import DetectorRunner, load_trip_points
 from app.ui import make_router
+from conftest import reset_db
 from tests.synth import Drive, Stationary, build_track
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -34,12 +35,6 @@ def _endpoint(path: str):
     raise AssertionError(f"route missing: {path}")
 
 
-async def _reset(pool) -> None:
-    async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await run_migrations(pool)
-
-
 def _request(pool, runner):
     return SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
@@ -54,7 +49,7 @@ async def _split_holds_lock_scenario() -> None:
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset(pool)
+        await reset_db(pool)
         pts = build_track([Stationary(1200), Drive(km=5, speed_kmh=50), Stationary(1800)])
         async with pool.connection() as conn:
             for p in pts:
@@ -140,7 +135,7 @@ async def _split_reads_trip_fresh_under_lock_scenario() -> None:
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await _reset(pool)
+        await reset_db(pool)
         pts = build_track([Stationary(1200), Drive(km=5, speed_kmh=50), Stationary(1800)])
         async with pool.connection() as conn:
             for p in pts:

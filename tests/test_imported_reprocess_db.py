@@ -15,11 +15,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.db import make_pool, run_migrations
+from app.db import make_pool
 from app.detector.core import Params
 from app.detector.runner import DetectorRunner
 from app.main import make_templates
 from app.ui import make_router
+from conftest import reset_db
 from tests.synth import Drive, Stationary, build_track
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -63,9 +64,7 @@ async def _scenario():
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        async with pool.connection() as conn:
-            await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-        await run_migrations(pool)
+        await reset_db(pool)
 
         track = build_track([
             Stationary(900), Drive(km=2), Stationary(1200), Drive(km=2), Stationary(900),
@@ -83,9 +82,9 @@ async def _scenario():
             )
             trip_a, trip_b = await cur.fetchall()
 
-            # A portable-imported trip (app/portable.py) sitting right before
-            # trip_a: no backing points in this instance, so it must never
-            # count as a real "adjacent trip" for the merge button, even
+            # A portable-imported trip (app/portable/importer.py) sitting right
+            # before trip_a: no backing points in this instance, so it must
+            # never count as a real "adjacent trip" for the merge button, even
             # though it's the nearest trip to trip_a in started_at order.
             await conn.execute(
                 "INSERT INTO trips (device, source, started_at, ended_at, distance_m, imported) "
@@ -113,7 +112,7 @@ async def _scenario():
 
 
 def test_trip_detail_merge_probe_ignores_imported_neighbor():
-    """app/ui.py's trip-detail merge-button EXISTS probes filtered only on
+    """app/ui/trips.py's trip-detail merge-button EXISTS probes filtered only on
     source = 'detected', unlike the actual neighbor lookup
     (_merge_with_neighbor) which also requires NOT imported. After an
     import, the first live-tracked trip showed a "merge with previous"

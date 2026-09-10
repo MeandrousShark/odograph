@@ -1,0 +1,4 @@
+<div id="trip-archive-export-links" class="trip-archive-export-panel"{% if export_oob | default(false, true) %} hx-swap-oob="outerHTML"{% endif %}>
+  <a class="trip-archive-export-action" href="{{ export_url('csv') }}">CSV</a>
+  <a class="trip-archive-export-action" href="{{ export_url('xlsx') }}">XLSX</a>
+</div>

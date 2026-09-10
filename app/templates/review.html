@@ -1,70 +1,261 @@
 {% extends "base.html" %}
+{% from "_icons.html" import icon with context %}
 {% block title %}Review: Odograph{% endblock %}
 {% block head %}
   <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
   <script src="/static/vendor/leaflet/leaflet.js"></script>
-  <style>#review-map { height: 320px; border-radius: 6px; margin: .75rem 0; }</style>
+  <script src="/static/review_state.js"></script>
 {% endblock %}
 {% block content %}
 
-<p><a href="/trips">All trips</a></p>
-<h2>Review unclassified trips</h2>
+<section class="review-page" aria-labelledby="review-page-title">
+  <div class="review-page-header page-title">
+    <div>
+      <p class="page-title-eyebrow">Review</p>
+      <h2 id="review-page-title" class="page-title-heading">Unclassified trips</h2>
+      <p class="page-title-subtitle">Classify each trip and keep its details up to date.</p>
+    </div>
+    <a class="icon-button review-close" href="/trips" aria-label="Close review" title="Close review">
+      {{ icon("x") }}
+    </a>
+  </div>
 
-{% include "_review_card.html" %}
+  {% include "_review_card.html" %}
+</section>
 
 <script nonce="{{ csp_nonce }}">
-  // Page-level (on `document`, not the card) so the handler survives every
-  // htmx outerHTML swap of #review-card -- a listener bound to the card
-  // itself would be torn down along with it on every Business/Personal/
-  // Skip action. Suppressed while an input/textarea/select has focus so
-  // the vehicle picker and notes field (and any future form control) can
-  // never be hijacked by an accidental keystroke while typing.
-  document.addEventListener('keydown', function (e) {
-    if (document.querySelector('dialog[open]')) return;
-    var tag = (e.target.tagName || '').toLowerCase();
-    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
-    if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'z' || e.key === 'Z')) {
-      triggerReviewUndo();
-      return;
-    }
-    var selector = null;
-    if (e.key === 'b' || e.key === 'B') selector = '#review-business';
-    else if (e.key === 'p' || e.key === 'P') selector = '#review-personal';
-    else if (e.key === 's' || e.key === 'S') selector = '#review-skip';
-    if (!selector) return;
-    var button = document.querySelector(selector);
-    if (button) button.click();
-  });
-
   // One step, client-remembered, lost on reload -- not the override/audit
   // machinery that backs merge/split/delete undo in Settings. That's for
-  // structural changes to trips; this is taking back a keystroke. Held here
-  // rather than on the card for the same reason the handler above is bound
-  // to `document`: an outerHTML swap of #review-card destroys anything
-  // bound to the card, including the very action that caused the swap.
+  // structural changes to trips; this is taking back the last advance. Held
+  // here rather than on the card because an outerHTML swap of #review-card
+  // destroys anything bound to the card, including the action that caused
+  // the swap.
   var lastReviewAction = null;
   var pendingReviewAction = null;
   var undoRequestInFlight = null;
+
+  // The category pair's selection rules live in a same-origin script so they
+  // can be exercised without a browser; CSP's 'self' covers it without a
+  // nonce.
+  var reviewState = window.ReviewState;
+
+  // htmx builds request parameters before firing htmx:beforeRequest. A
+  // request that waits behind another write must therefore be replayed from
+  // its source after the earlier request settles, so an advancing request
+  // collects the values currently visible in the form.
+  var reviewWriteCoordinator = reviewState.createWriteCoordinator();
+  var reviewWriteReplay = null;
+
+  function reviewRequestPath(detail) {
+    return (detail.pathInfo && detail.pathInfo.requestPath) ||
+      (detail.requestConfig && detail.requestConfig.path) ||
+      (detail.elt && detail.elt.getAttribute && detail.elt.getAttribute('hx-post')) || '';
+  }
+
+  function reviewWriteEntry(detail) {
+    var path = reviewRequestPath(detail);
+    var kind = null;
+    if (/^(?:\/review\/\d+\/exclusion|\/trips\/\d+\/(?:purpose|vehicle|notes))$/.test(path)) {
+      kind = 'field';
+    } else if (/^\/review\/\d+\/(?:tag|skip|delete)$/.test(path)) {
+      kind = 'advance';
+    } else if (/^\/review\/\d+\/undo$/.test(path)) {
+      kind = 'undo';
+    }
+    if (!kind) return null;
+
+    var entry = {
+      elt: detail.elt,
+      path: path,
+      kind: kind,
+      target: detail.target,
+      swap: detail.requestConfig && detail.requestConfig.swapOverride,
+      xhr: null,
+    };
+    // Undo is issued against document.body with explicit values, so it has
+    // no live form to read when it is replayed.
+    if (kind === 'undo') {
+      entry.values = detail.requestConfig && detail.requestConfig.parameters;
+    }
+    return entry;
+  }
+
+  function sameReviewWrite(left, right) {
+    return left && right && left.elt === right.elt && left.path === right.path;
+  }
+
+  function reviewWriteSourceIsLive(entry) {
+    return entry.elt && (
+      entry.elt.isConnected ||
+      (document.documentElement && document.documentElement.contains(entry.elt))
+    );
+  }
+
+  function setReviewWriteLock(locked) {
+    var form = document.getElementById('review-form');
+    if (!form) return;
+    if (locked) {
+      form.setAttribute('aria-busy', 'true');
+      form.querySelectorAll('input, select, textarea, button').forEach(function (control) {
+        if (!control.hasAttribute('data-review-disabled-before-write')) {
+          control.setAttribute('data-review-disabled-before-write', control.disabled ? 'true' : 'false');
+        }
+        control.disabled = true;
+      });
+      return;
+    }
+    form.removeAttribute('aria-busy');
+    form.querySelectorAll('[data-review-disabled-before-write]').forEach(function (control) {
+      control.disabled = control.getAttribute('data-review-disabled-before-write') === 'true';
+      control.removeAttribute('data-review-disabled-before-write');
+    });
+    updateReviewNextButton();
+  }
+
+  function releaseReviewWrite(entry) {
+    if (reviewWriteCoordinator.active() !== entry) return;
+    if (entry.kind === 'advance' || entry.kind === 'undo') setReviewWriteLock(false);
+    var following = reviewWriteCoordinator.settle(entry);
+    if (following) deferReviewWrite(following);
+  }
+
+  function replayReviewWrite(entry) {
+    var next = entry;
+    while (next) {
+      // A successful card swap removes sources queued behind it. Their
+      // values were already included by the advancing request, so discard
+      // those detached requests instead of leaving the coordinator busy.
+      if (!reviewWriteSourceIsLive(next)) {
+        next = reviewWriteCoordinator.skip();
+        continue;
+      }
+      reviewWriteReplay = next;
+      var options = { source: next.elt };
+      if (next.target) {
+        // htmx resolves selectors when the replay starts. The original
+        // resolved card may have been detached by the preceding swap.
+        options.target = next.kind === 'undo' && next.target.id === 'review-card'
+          ? '#review-card' : next.target;
+      }
+      if (next.swap) options.swap = next.swap;
+      if (next.values) options.values = next.values;
+      var request = htmx.ajax('POST', next.path, options);
+      // A validation halt can resolve htmx.ajax without emitting
+      // htmx:beforeRequest or htmx:afterRequest. Do not leave the lane held
+      // if that happens before a request has an XHR.
+      if (request && typeof request.then === 'function') {
+        request.then(function () {
+          if (reviewWriteCoordinator.active() !== next || next.xhr !== null) return;
+          releaseReviewWrite(next);
+        });
+      }
+      return;
+    }
+  }
+
+  function deferReviewWrite(entry) {
+    if (!entry) return;
+    var run = function () { replayReviewWrite(entry); };
+    if (typeof queueMicrotask === 'function') queueMicrotask(run);
+    else Promise.resolve().then(run);
+  }
+
+  document.addEventListener('htmx:beforeRequest', function (e) {
+    var detail = e.detail;
+    var entry = reviewWriteEntry(detail);
+    if (!entry) return;
+    if (sameReviewWrite(reviewWriteReplay, entry)) {
+      reviewWriteReplay = null;
+      var active = reviewWriteCoordinator.active();
+      if (sameReviewWrite(active, entry)) {
+        active.xhr = detail.xhr;
+        if (reviewWriteCoordinator.isInputLocked()) setReviewWriteLock(true);
+      }
+      Promise.resolve().then(function () {
+        if (!e.defaultPrevented || reviewWriteCoordinator.active() !== active) return;
+        releaseReviewWrite(active);
+      });
+      return;
+    }
+    if (!reviewWriteCoordinator.offer(entry)) {
+      e.preventDefault();
+      return;
+    }
+    entry.xhr = detail.xhr;
+    if (reviewWriteCoordinator.isInputLocked()) setReviewWriteLock(true);
+    Promise.resolve().then(function () {
+      if (!e.defaultPrevented || reviewWriteCoordinator.active() !== entry) return;
+      releaseReviewWrite(entry);
+    });
+  });
+
+  // afterRequest fires for both successful and failed XHRs. Always release
+  // the lane, including validation or transport failures, so the queued
+  // request can retry with the latest visible values.
+  document.addEventListener('htmx:afterRequest', function (e) {
+    var active = reviewWriteCoordinator.active && reviewWriteCoordinator.active();
+    if (!active || active.xhr !== e.detail.xhr) return;
+    releaseReviewWrite(active);
+  });
+
+  // The value the user has actually committed, remembered from before the
+  // browser touches the radio. A re-activated radio has to clear, and the
+  // post-activation DOM cannot tell a repeat activation from a fresh choice.
+  var committedReviewCategory = null;
+
+  function syncReviewCategorySelection() {
+    var form = document.getElementById('review-form');
+    var selected = form && form.querySelector('input[name="category"]:checked');
+    committedReviewCategory = selected ? selected.value : null;
+  }
 
   function updateReviewUndoButton() {
     var button = document.getElementById('review-undo');
     if (button) button.disabled = !lastReviewAction || !!undoRequestInFlight;
   }
 
-  document.addEventListener('click', function (e) {
-    if (e.target && e.target.id === 'review-undo') triggerReviewUndo();
+  function updateReviewNextButton() {
+    var form = document.getElementById('review-form');
+    var button = document.getElementById('review-next');
+    if (!form || !button) return;
+    var selected = form.querySelector('input[name="category"]:checked');
+    button.disabled = !reviewState.canAdvance(selected ? selected.value : null);
+  }
+
+  document.addEventListener('change', function (e) {
+    if (e.target && e.target.matches('#review-form input[name="category"]')) {
+      // Read back from the DOM rather than trusting the event target: the
+      // click handler below may have just unchecked it.
+      syncReviewCategorySelection();
+      updateReviewNextButton();
+    }
   });
 
-  // Tag and skip aren't symmetric -- a tag leaves the unclassified set and
-  // needs its category cleared server-side to undo, a skip doesn't -- so
+  document.addEventListener('click', function (e) {
+    if (e.target && e.target.id === 'review-undo') triggerReviewUndo();
+    if (!e.target || !e.target.matches ||
+        !e.target.matches('#review-form input[name="category"]')) return;
+    // Order is the whole trick here. The browser checks the radio during
+    // pre-click activation, dispatches this click, and only then fires
+    // change, and only if the value actually changed. So a repeat activation
+    // arrives as a click with no change to follow it, and is recognizable
+    // only by comparing against the value committed before the activation.
+    // A different value is left alone for the change handler to record.
+    if (reviewState.categoryAfterActivation(committedReviewCategory, e.target.value) !== null) return;
+    e.target.checked = false;
+    committedReviewCategory = null;
+    updateReviewNextButton();
+  });
+
+  // Tag and skip aren't symmetric, so
   // `kind` is captured here and sent to /review/{id}/undo, which decides
-  // what to reverse. Business/Personal/Skip are the only buttons this
-  // matches; every other htmx request on this page (vehicle, notes,
-  // purpose, delete, undo itself) is ignored.
+  // what to reverse. Every other htmx request on this page (exclusion,
+  // vehicle, notes, purpose, delete, undo itself) is ignored.
   document.addEventListener('htmx:beforeRequest', function (e) {
+    if (e.defaultPrevented) return;
     var elt = e.detail.elt;
     var kind = elt && elt.id === 'review-skip' ? 'skip'
-      : (elt && (elt.id === 'review-business' || elt.id === 'review-personal')) ? 'tag'
+      : elt && elt.id === 'review-next' ? 'tag'
       : null;
     if (!kind || pendingReviewAction) return;
     var match = /^\/review\/(\d+)\//.exec(elt.getAttribute('hx-post') || '');
@@ -193,7 +384,12 @@
     var path = mapEl.dataset.path ? JSON.parse(mapEl.dataset.path) : null;
     var pathSnapped = mapEl.dataset.pathSnapped ? JSON.parse(mapEl.dataset.pathSnapped) : null;
 
-    var map = L.map(mapEl);
+    // A vertical swipe that starts on the card's map is meant to scroll the
+    // page, not pan the map, since the map is only one part of a card the
+    // reader has to scroll past. Dragging is the handler that would otherwise
+    // capture that swipe, so it's the only one turned off, and only where
+    // there's no pointer to drag with; a mouse still pans normally.
+    var map = L.map(mapEl, { dragging: !L.Browser.mobile });
     reviewMap = map;
     var theme = getComputedStyle(document.documentElement);
     var routeColor = theme.getPropertyValue('--route').trim() || '#2d6a4f';
@@ -249,8 +445,14 @@
   }
 
   initReviewMap();
+  // A swapped-in card brings its own radios, so the committed value is
+  // re-derived from it rather than carried across the swap.
+  syncReviewCategorySelection();
+  updateReviewNextButton();
   document.body.addEventListener('htmx:afterSettle', initReviewMap);
   document.body.addEventListener('htmx:afterSettle', updateReviewUndoButton);
+  document.body.addEventListener('htmx:afterSettle', syncReviewCategorySelection);
+  document.body.addEventListener('htmx:afterSettle', updateReviewNextButton);
 </script>
 
 {% endblock %}

@@ -1,0 +1,12 @@
+{# One source for a month's rollup line, rendered both by the full archive
+   build (trips.html) and by the inline-classify tag response, which swaps
+   this fragment out of band under the stable per-month id below so the
+   figures stay correct after a reclassification without a full reload. #}
+<div id="month-summary-{{ month.year }}-{{ month.month_num }}" class="month-summary"{% if month_oob | default(false, true) %} hx-swap-oob="outerHTML"{% endif %}>
+  {{ month.trip_count }} trips ·
+  {{ month.total_m | mi }} mi total ·
+  {{ month.business_m | mi }} mi business
+  {% if month.business_deduction is not none %}
+  · {{ month.business_deduction | usd }} deduction
+  {% endif %}
+</div>

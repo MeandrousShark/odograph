@@ -1,11 +1,12 @@
 """One diagnostics report, two surfaces: the authenticated Settings page
-(app/ui.py) and `python -m app.diagnose`, run from inside the container for
-exactly the case the page can't help with -- the app (or its database) is
-down. Both call `build_report()`; the CLI additionally prints the on-demand
-connectivity checks immediately, since invoking this command at all is
-already the explicit, operator-initiated action D6 requires before any
-outbound probe of OSRM/the geocoder/ntfy/SMTP -- there is no passive polling
-here, only ever a direct response to something a human just did.
+(app/ui/settings.py) and `python -m app.diagnose`, run from inside the
+container for exactly the case the page can't help with -- the app (or its
+database) is down. Both call `build_report()`; the CLI additionally prints
+the on-demand connectivity checks immediately, since invoking this command
+at all is already the explicit, operator-initiated action D6 requires
+before any outbound probe of OSRM/the geocoder/ntfy/SMTP -- there is no
+passive polling here, only ever a direct response to something a human
+just did.
 
 Nothing built here may carry a coordinate, address, secret, or raw payload
 (see `test_diagnose.py`'s no-secrets property test). `WorkerStatus.record_failure`

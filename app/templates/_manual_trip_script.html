@@ -1,0 +1,365 @@
+<script nonce="{{ csp_nonce }}">
+  // The manual-trip "now" buttons fill a time input with the current clock
+  // reading in the app's display timezone, not the browser's, so the value
+  // agrees with how /trips/manual interprets the submitted naive time (it
+  // stamps display_tz onto it). formatToParts avoids the "24:00-at-midnight"
+  // quirk some engines emit for hour12:false hour formatting.
+  const CSRF_TOKEN = "{{ csrf }}";
+  const DISPLAY_TZ = "{{ display_tz }}";
+  function setTimeNow(fieldName) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: DISPLAY_TZ, hour: "2-digit", minute: "2-digit", hour12: false,
+    }).formatToParts(new Date());
+    const part = (t) => parts.find((p) => p.type === t).value;
+    const hour = part("hour") === "24" ? "00" : part("hour");
+    const field = document.querySelector(`[name="${fieldName}"]`);
+    if (field) field.value = `${hour}:${part("minute")}`;
+  }
+  document.addEventListener('click', function (event) {
+    const btn = event.target.closest('[data-time-now-field]');
+    if (btn) setTimeNow(btn.dataset.timeNowField);
+  });
+
+  // Manual-trip route picker. Every lookup below re-queries the DOM by
+  // name/attribute rather than caching element references at script-parse
+  // time, the same delegated-handler approach the "now" buttons above use --
+  // it costs nothing here and keeps this working if the form is ever
+  // reinserted by htmx instead of only ever appearing once per full page load.
+  const ROUTE_COORD_FIELDS = ['start_lat', 'start_lon', 'end_lat', 'end_lon'];
+  // Start/end location name only ever applies to route_mode "none", but
+  // unlike the routing fields above, a typed label must survive switching to
+  // another mode and back (see updateRoutePanels/clearRouteEndpoints below).
+  // Disabling (not clearing) it while another mode is active is what keeps a
+  // disabled value from riding along under that mode's own submission.
+  const LABEL_FIELDS = ['start_label', 'end_label'];
+
+  function manualTripForm() {
+    return document.getElementById('manual-trip-form');
+  }
+  function routeField(name) {
+    return manualTripForm()?.querySelector(`[name="${name}"]`);
+  }
+  function routePanel(mode) {
+    return manualTripForm()?.querySelector(`[data-route-panel="${mode}"]`);
+  }
+  function currentRouteMode() {
+    return manualTripForm()?.querySelector('input[name="route_mode"]:checked')?.value || 'none';
+  }
+  function setRouteFieldValue(name, value) {
+    const field = routeField(name);
+    if (field) field.value = value;
+  }
+  function setRouteStatus(message) {
+    const status = manualTripForm()?.querySelector('.route-picker-status');
+    if (status) status.textContent = message;
+  }
+  function setDistanceRequired(required) {
+    const distance = routeField('distance');
+    if (distance) distance.required = required;
+  }
+
+  let routeMap = null;
+  let routeStartMarker = null;
+  let routeEndMarker = null;
+  let routeLine = null;
+  // A preview writes the distance input, but a user input event takes
+  // ownership back even when the replacement text is numerically identical.
+  // Comparing values alone cannot distinguish that explicit edit.
+  let routePreviewOwnsDistance = false;
+  let routeDistanceUserOwned = false;
+  // Bumped whenever in-flight preview state is invalidated (mode change,
+  // reset, or a newer preview starting), so a stale response that resolves
+  // after a newer one can recognize itself as stale and no-op instead of
+  // overwriting the field with an outdated distance.
+  let routePreviewSeq = 0;
+
+  function ensureRouteMap() {
+    if (routeMap) return routeMap;
+    const mapEl = document.getElementById('route-picker-map');
+    if (!mapEl) return null;
+    routeMap = L.map(mapEl);
+    // Same hazard trip.html's detail map guards against: a vector layer
+    // added before the map has a view leaves its pixel bounds undefined and
+    // throws on the next redraw, so a plausible view is set before anything
+    // else touches this map.
+    routeMap.setView([0, 0], 2);
+    L.tileLayer({{ map_tile_url | tojson }}, {
+      maxZoom: 19,
+      attribution: {{ map_tile_attribution | tojson }}
+    }).addTo(routeMap);
+    routeMap.on('click', onRoutePickerMapClick);
+    return routeMap;
+  }
+
+  function showRouteMap() {
+    const mapEl = document.getElementById('route-picker-map');
+    if (!mapEl) return;
+    mapEl.hidden = false;
+    const map = ensureRouteMap();
+    // The container starts hidden, so Leaflet measured a zero-size viewport
+    // at construction time; invalidateSize() re-measures now that it is
+    // actually visible, or the tiles render into that zero-size box.
+    requestAnimationFrame(() => map.invalidateSize());
+  }
+
+  function hideRouteMap() {
+    const mapEl = document.getElementById('route-picker-map');
+    if (mapEl) mapEl.hidden = true;
+  }
+
+  function clearRouteMapLayers() {
+    if (!routeMap) return;
+    if (routeStartMarker) { routeMap.removeLayer(routeStartMarker); routeStartMarker = null; }
+    if (routeEndMarker) { routeMap.removeLayer(routeEndMarker); routeEndMarker = null; }
+    if (routeLine) { routeMap.removeLayer(routeLine); routeLine = null; }
+  }
+
+  // A failed preview always leaves the drawn line stale, since it belongs to
+  // a route the server just rejected. Markers are different by mode: in
+  // named-places mode the markers came from the previous preview response's
+  // start/end coordinates, so they are part of the same invalidated
+  // selection and must go with the line. In map-picked mode the markers are
+  // the points the user themselves clicked -- still their current selection
+  // even though no route connects them -- so removing them would silently
+  // discard input the user has to redo.
+  function clearStaleRouteLine() {
+    if (!routeMap) return;
+    if (routeLine) { routeMap.removeLayer(routeLine); routeLine = null; }
+    if (currentRouteMode() === 'places') {
+      if (routeStartMarker) { routeMap.removeLayer(routeStartMarker); routeStartMarker = null; }
+      if (routeEndMarker) { routeMap.removeLayer(routeEndMarker); routeEndMarker = null; }
+    }
+  }
+
+  function clearRoutePlaceSelection() {
+    const startSelect = routeField('start_place');
+    const endSelect = routeField('end_place');
+    if (startSelect) startSelect.value = '';
+    if (endSelect) endSelect.value = '';
+  }
+
+  function invalidateRoutePreview() {
+    routePreviewSeq++;
+    clearStaleRouteLine();
+    clearDistanceIfPreviewOwned();
+    setRouteFieldValue('routed_distance', '');
+    setRouteStatus('');
+    setDistanceRequired(true);
+  }
+
+  // `distance` and `routed_distance` must always move together. The server
+  // (app/ui/manual.py, add_manual_trip) treats a submitted `distance` that
+  // differs from `routed_distance` as a deliberate user override and stores
+  // it exactly as entered, geometry and all. If a route selection is
+  // invalidated without also clearing `distance`, a leftover preview value
+  // sitting in `distance` becomes indistinguishable from something the user
+  // actually typed -- so every place that blanks `routed_distance` because
+  // the current selection/preview is no longer trustworthy must also blank
+  // `distance`, but only when `distance` still holds exactly the value the
+  // last preview put there. A value the user retyped themselves, even to the
+  // same number, must survive. `routed_distance` has to be read here, before
+  // the caller clears it, or there is nothing left to compare against.
+  function clearDistanceIfPreviewOwned() {
+    const distance = routeField('distance');
+    const routedDistance = routeField('routed_distance');
+    if (!routePreviewOwnsDistance || !distance || !routedDistance) return;
+    const current = parseFloat(distance.value);
+    const hint = parseFloat(routedDistance.value);
+    if (!Number.isNaN(current) && !Number.isNaN(hint) && current === hint) {
+      distance.value = '';
+    }
+    routePreviewOwnsDistance = false;
+  }
+
+  function clearRouteEndpoints() {
+    invalidateRoutePreview();
+    clearRoutePlaceSelection();
+    clearRouteMapLayers();
+    ROUTE_COORD_FIELDS.forEach((name) => setRouteFieldValue(name, ''));
+  }
+
+  // Hidden and disabled together for "places"/"map": `hidden` alone would
+  // still let a disabled-less input's value ride along in the submission of
+  // a route mode it doesn't apply to, which is exactly what a label must
+  // never do (see LABEL_FIELDS above). The value itself is left untouched
+  // either way, so switching back to "none" restores whatever was typed.
+  function setLabelFieldsEnabled(enabled) {
+    LABEL_FIELDS.forEach((name) => {
+      const field = routeField(name);
+      if (field) field.disabled = !enabled;
+    });
+  }
+
+  function updateRoutePanels(mode) {
+    const nonePanel = routePanel('none');
+    const placesPanel = routePanel('places');
+    const mapPanel = routePanel('map');
+    if (nonePanel) nonePanel.hidden = mode !== 'none';
+    if (placesPanel) placesPanel.hidden = mode !== 'places';
+    if (mapPanel) mapPanel.hidden = mode !== 'map';
+    setLabelFieldsEnabled(mode === 'none');
+    const hint = manualTripForm()?.querySelector('.route-distance-hint');
+    if (hint) hint.hidden = mode === 'none';
+    if (mode === 'none') {
+      hideRouteMap();
+    } else {
+      showRouteMap();
+    }
+  }
+
+  // Changing mode must never let a stale hidden coordinate or place id from
+  // the mode just left silently ride along into a submit under the new mode.
+  // Required always goes back on here, even switching into a routing mode:
+  // it only comes back off once that mode's own preview actually succeeds.
+  document.addEventListener('change', (event) => {
+    if (event.target.name !== 'route_mode') return;
+    const mode = event.target.value;
+    clearRouteEndpoints();
+    setDistanceRequired(true);
+    updateRoutePanels(mode);
+  });
+
+  // A typed distance is an explicit user choice, including a re-entry of the
+  // same text the preview inserted. Programmatic assignments above do not
+  // dispatch these events, so only actual field interaction changes ownership.
+  document.addEventListener('input', (event) => {
+    if (!event.target.matches('input[name="distance"]')) return;
+    routePreviewOwnsDistance = false;
+    routeDistanceUserOwned = true;
+  });
+  document.addEventListener('change', (event) => {
+    if (!event.target.matches('input[name="distance"]')) return;
+    routePreviewOwnsDistance = false;
+    routeDistanceUserOwned = true;
+  });
+
+  document.addEventListener('click', (event) => {
+    if (!event.target.closest('[data-route-map-reset]')) return;
+    invalidateRoutePreview();
+    clearRouteMapLayers();
+    ROUTE_COORD_FIELDS.forEach((name) => setRouteFieldValue(name, ''));
+  });
+
+  document.addEventListener('change', (event) => {
+    if (!event.target.matches('select[name="start_place"], select[name="end_place"]')) return;
+    invalidateRoutePreview();
+    maybePreviewRoute();
+  });
+
+  function onRoutePickerMapClick(event) {
+    if (currentRouteMode() !== 'map') return;
+    if (routeStartMarker && routeEndMarker) return; // both set; Reset first.
+    // The map opens on a world view, where Leaflet renders repeated copies of
+    // the world side by side. A click on a repeated copy reports the raw
+    // projected longitude, which lands outside [-180, 180], and the server
+    // correctly rejects it. wrap() gives back the equivalent LatLng with the
+    // longitude normalized into range, matching where the point actually is.
+    const latlng = event.latlng.wrap();
+    const lat = latlng.lat.toFixed(6);
+    const lon = latlng.lng.toFixed(6);
+    if (!routeStartMarker) {
+      routeStartMarker = L.marker(latlng, { title: 'Start' }).addTo(routeMap);
+      setRouteFieldValue('start_lat', lat);
+      setRouteFieldValue('start_lon', lon);
+    } else {
+      routeEndMarker = L.marker(latlng, { title: 'End' }).addTo(routeMap);
+      setRouteFieldValue('end_lat', lat);
+      setRouteFieldValue('end_lon', lon);
+    }
+    maybePreviewRoute();
+  }
+
+  function drawRoutePreview(data) {
+    const map = ensureRouteMap();
+    if (!map) return;
+    if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+    const theme = getComputedStyle(document.documentElement);
+    const routeColor = theme.getPropertyValue('--route').trim() || '#2d6a4f';
+    if (data.geometry) {
+      routeLine = L.geoJSON(data.geometry, { style: { color: routeColor, weight: 4 } }).addTo(map);
+      map.fitBounds(routeLine.getBounds().pad(0.15));
+    }
+    // Named-places mode has no click flow to place markers, so the preview
+    // response's own start/end coordinates are what places them.
+    if (currentRouteMode() === 'places') {
+      if (routeStartMarker) map.removeLayer(routeStartMarker);
+      if (routeEndMarker) map.removeLayer(routeEndMarker);
+      if (data.start) routeStartMarker = L.marker(data.start, { title: 'Start' }).addTo(map);
+      if (data.end) routeEndMarker = L.marker(data.end, { title: 'End' }).addTo(map);
+    }
+  }
+
+  async function maybePreviewRoute() {
+    const mode = currentRouteMode();
+    if (mode === 'none') return;
+    let body;
+    if (mode === 'places') {
+      const startId = routeField('start_place')?.value;
+      const endId = routeField('end_place')?.value;
+      if (!startId || !endId) return;
+      body = new URLSearchParams({ route_mode: 'places', start_place: startId, end_place: endId });
+    } else {
+      const startLat = routeField('start_lat')?.value;
+      const startLon = routeField('start_lon')?.value;
+      const endLat = routeField('end_lat')?.value;
+      const endLon = routeField('end_lon')?.value;
+      if (!startLat || !startLon || !endLat || !endLon) return;
+      body = new URLSearchParams({
+        route_mode: 'map', start_lat: startLat, start_lon: startLon, end_lat: endLat, end_lon: endLon,
+      });
+    }
+    // A newer call to maybePreviewRoute (a further endpoint change) also
+    // supersedes this one, the same as an explicit mode change or reset.
+    const seq = ++routePreviewSeq;
+    // Required goes back on for the duration of the request: a preview that
+    // never resolves (or resolves to unavailable) must not have left the
+    // browser thinking a blank distance is fine to submit.
+    setDistanceRequired(true);
+    setRouteStatus('Looking up the route…');
+    let resp;
+    try {
+      resp = await fetch('/trips/manual/route-preview', {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': CSRF_TOKEN },
+        body,
+      });
+    } catch (err) {
+      if (seq !== routePreviewSeq) return; // superseded; ignore this response
+      clearStaleRouteLine();
+      setRouteStatus('Could not check the route. Enter the distance.');
+      clearDistanceIfPreviewOwned();
+      setRouteFieldValue('routed_distance', '');
+      return;
+    }
+    if (seq !== routePreviewSeq) return; // superseded; ignore this response
+    if (!resp.ok) {
+      // Never render the response body: a 400 here is a short developer-ish
+      // message about the selection, not something meant for this status region.
+      clearStaleRouteLine();
+      setRouteStatus('Could not check the route. Enter the distance.');
+      clearDistanceIfPreviewOwned();
+      setRouteFieldValue('routed_distance', '');
+      return;
+    }
+    const data = await resp.json().catch(() => ({ ok: false }));
+    if (seq !== routePreviewSeq) return; // superseded; ignore this response
+    if (!data.ok) {
+      clearStaleRouteLine();
+      setRouteStatus('Automatic routing is unavailable. Enter the distance.');
+      clearDistanceIfPreviewOwned();
+      setRouteFieldValue('routed_distance', '');
+      return;
+    }
+    const distanceInput = routeField('distance');
+    if (distanceInput && !routeDistanceUserOwned) {
+      distanceInput.value = data.distance_miles;
+      routePreviewOwnsDistance = true;
+    } else {
+      routePreviewOwnsDistance = false;
+    }
+    setRouteFieldValue('routed_distance', data.distance_miles);
+    setDistanceRequired(false);
+    setRouteStatus(`Route found: ${data.distance_miles} mi.`);
+    drawRoutePreview(data);
+  }
+</script>

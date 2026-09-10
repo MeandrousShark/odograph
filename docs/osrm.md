@@ -102,7 +102,8 @@ docker compose --profile osrm up -d osrm      # or: podman-compose --profile osr
 `OSRM_MIN_CONFIDENCE`, `OSRM_MAX_COORDS`, `SNAP_DEBOUNCE_S`, and
 `SNAP_SWEEP_S` tune snapping behavior once it's running; none of them need
 changing to get started. See the
-[configuration reference](configuration.md#road-snapping) for their defaults.
+[configuration reference](configuration.md#road-snapping-and-manual-trip-routing)
+for their defaults.
 
 ## Disk and RAM sizing
 
