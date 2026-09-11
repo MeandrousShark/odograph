@@ -292,9 +292,10 @@ than switching the image.
 
 ## Contributing
 
-Want to run the test suite or work on the code? See
-[CONTRIBUTING.md](CONTRIBUTING.md) for development setup and local
-instructions.
+Development happens in this repository through pull requests. Its `main`
+branch may contain unreleased work, so use an immutable release tag for
+installations. Want to run the test suite or work on the code? See
+[CONTRIBUTING.md](CONTRIBUTING.md) for development setup and local instructions.
 
 ## Support
 

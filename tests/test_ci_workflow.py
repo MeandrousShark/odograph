@@ -1,4 +1,3 @@
-import subprocess
 from pathlib import Path
 
 import yaml
@@ -6,37 +5,10 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "test.yml"
-SNAPSHOT_SCRIPT = ROOT / "scripts" / "make_public_snapshot.sh"
 
 
 def load_workflow() -> dict:
     return yaml.load(WORKFLOW.read_text(), Loader=yaml.BaseLoader)
-
-
-# The snapshot script builds its tree from `git archive HEAD`, so it only
-# ever contains committed content. Comparing it against the working tree
-# fails on any uncommitted edit even when the snapshot is correct; these
-# helpers compare against HEAD instead so the test stays sensitive only to
-# real snapshot defects.
-def committed_tracked_files(relative_dir: str) -> set[str]:
-    result = subprocess.run(
-        ["git", "ls-tree", "-r", "--name-only", "HEAD", "--", relative_dir],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return {line for line in result.stdout.splitlines() if line}
-
-
-def committed_bytes(relative_path: str) -> bytes:
-    result = subprocess.run(
-        ["git", "show", f"HEAD:{relative_path}"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-    )
-    return result.stdout
 
 
 def test_ci_runs_full_suite_on_push_and_pull_requests_with_postgis():
@@ -95,58 +67,21 @@ def test_ci_installs_pinned_gitleaks_before_pytest():
     assert job_steps.index(install) < job_steps.index(steps["Run full test suite"])
 
 
-def test_public_snapshot_includes_ci_and_release_files(tmp_path):
-    snapshot = tmp_path / "snapshot"
-    subprocess.run(
-        [SNAPSHOT_SCRIPT, snapshot],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-
-    source_workflows = committed_tracked_files(".github/workflows")
-    snapshot_workflows = {
-        path.relative_to(snapshot).as_posix()
-        for path in (snapshot / ".github" / "workflows").iterdir()
-        if path.is_file()
-    }
-    assert ".github/workflows/test.yml" in snapshot_workflows
-    assert snapshot_workflows == source_workflows
-    assert (snapshot / ".github" / "workflows" / "test.yml").read_bytes() == (
-        committed_bytes(".github/workflows/test.yml")
-    )
-    assert (snapshot / "compose.build.override.yml").read_bytes() == (
-        committed_bytes("compose.build.override.yml")
-    )
-    assert (snapshot / "CHANGELOG.md").read_bytes() == (
-        committed_bytes("CHANGELOG.md")
-    )
-    assert (snapshot / "requirements-dev.lock").read_bytes() == (
-        committed_bytes("requirements-dev.lock")
-    )
-    assert (snapshot / "docs" / "releasing.md").read_bytes() == (
-        committed_bytes("docs/releasing.md")
-    )
-    assert not (snapshot / "tests" / "test_handoff_contract.py").exists()
-
-    snapshot_docs = {
-        path.relative_to(snapshot).as_posix()
-        for path in (snapshot / "docs").rglob("*")
-        if path.is_file()
-    }
-    assert snapshot_docs == {
-        "docs/backups.md",
-        "docs/configuration.md",
-        "docs/images/usage-dashboard.png",
-        "docs/images/usage-review.png",
-        "docs/install-compose.md",
-        "docs/osrm.md",
-        "docs/owntracks.md",
-        "docs/privacy.md",
-        "docs/releasing.md",
-        "docs/reverse-proxy.md",
-        "docs/security.md",
-        "docs/upgrading.md",
-        "docs/usage.md",
-    }
+def test_ci_public_tree_is_an_explicit_unprivileged_gate():
+    workflow = load_workflow()
+    assert set(workflow["jobs"]) == {"test", "public-tree"}
+    job = workflow["jobs"]["public-tree"]
+    assert job["runs-on"] == "ubuntu-latest"
+    steps = {step.get("name"): step for step in job["steps"]}
+    assert steps["Check public tree"]["run"] == "python scripts/check_public_tree.py"
+    install = steps["Install Gitleaks"]
+    test_steps = {step.get("name"): step for step in workflow["jobs"]["test"]["steps"]}
+    assert install == test_steps["Install Gitleaks"]
+    assert job["steps"].index(install) < job["steps"].index(steps["Check public tree"])
+    for candidate in workflow["jobs"].values():
+        assert candidate["runs-on"] == "ubuntu-latest"
+        for step in candidate["steps"]:
+            if step.get("uses") == "actions/checkout@v6":
+                assert step["with"]["persist-credentials"] == "false"
+    assert "pull_request_target" not in workflow["on"]
+    assert "secrets." not in WORKFLOW.read_text()

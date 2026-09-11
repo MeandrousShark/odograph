@@ -1,9 +1,4 @@
-"""Checks for the Markdown and assets that enter the public snapshot.
-
-The private repository contains many useful planning documents. They are
-intentionally absent from this inventory, so a link check must only inspect
-the files that the snapshot is allowed to ship.
-"""
+"""Checks for the public contributor documentation, links and assets."""
 
 from __future__ import annotations
 
@@ -18,6 +13,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 PUBLIC_MARKDOWN = (
+    "AGENTS.md",
+    "CLAUDE.md",
     "README.md",
     "SECURITY.md",
     "CONTRIBUTING.md",

@@ -67,7 +67,7 @@ Prerelease versions use a semantic prerelease suffix, such as
 
 ## Prepare the release commit
 
-Start from a clean, current `main`:
+Start from a clean, current `main`, then create a release branch:
 
 ```sh
 git fetch origin --tags
@@ -75,6 +75,7 @@ git switch main
 git pull --ff-only origin main
 git status --short
 test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+git switch -c release/$VERSION
 ```
 
 Stop if `git status --short` prints anything or the revision check fails.
@@ -122,14 +123,37 @@ git commit -m "Prepare $VERSION release"
 GIT_REVISION=$(git rev-parse HEAD)
 ```
 
-The resulting commit is the only commit that may receive this release tag.
-Push `main`, wait for its required checks to pass, and verify the remote still
-identifies the reviewed commit:
+Push the release branch and open a pull request. The resulting merge commit on
+`main` is the only commit that may receive this release tag. Wait for all
+required checks and review to pass, merge the pull request, then fetch the
+exact reviewed `main` commit and run the full suite against it:
 
 ```sh
-git push origin main
-test "$(git rev-parse origin/main)" = "$GIT_REVISION"
+set -e
+git push --set-upstream origin release/$VERSION
+# Open the pull request, record its number in RELEASE_PR, and merge it only
+# after review and all required checks pass.
+RELEASE_PR=123
+MERGE_SHA=$(gh pr view "$RELEASE_PR" --json mergeCommit --jq '.mergeCommit.oid')
+test -n "$MERGE_SHA" -a "$MERGE_SHA" != "null"
+git fetch origin main --tags
+git switch main
+git pull --ff-only origin main
+test "$(git rev-parse HEAD)" = "$MERGE_SHA"
+test "$(git rev-parse origin/main)" = "$MERGE_SHA"
+GIT_REVISION="$MERGE_SHA"
+TASK_ID="release-${VERSION#v}"
+DB_EXPORT=$(scripts/test_db.sh start "$TASK_ID")
+eval "$DB_EXPORT"
+: "${TEST_DATABASE_URL:?disposable database URL required}"
+trap 'scripts/test_db.sh cleanup "$TASK_ID"' EXIT
+.venv/bin/python -m pytest
+scripts/test_db.sh cleanup "$TASK_ID"
+trap - EXIT
 ```
+
+Do not tag a release branch or a pre-merge commit. Do not force-update or
+reuse an existing release tag.
 
 ## Supply-chain gates: scanning, SBOM, and signing
 
