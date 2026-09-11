@@ -5,6 +5,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SHIPPING_DIRECTORIES = (".github/", "app/", "tests/", "static/", "migrations/", "scripts/")
 SHIPPING_TOP_LEVEL_FILES = {
+    "AGENTS.md",
+    "CLAUDE.md",
     ".dockerignore",
     ".env.example",
     ".gitignore",
@@ -28,7 +30,7 @@ FORBIDDEN_DASHES = ("\u2013", "\u2014")
 
 def _shipping_files() -> list[Path]:
     tracked = subprocess.run(
-        ["git", "ls-files", "-z"],
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
         cwd=ROOT,
         check=True,
         capture_output=True,
@@ -36,7 +38,8 @@ def _shipping_files() -> list[Path]:
     return [
         ROOT / relative
         for relative in tracked
-        if relative in SHIPPING_TOP_LEVEL_FILES or relative.startswith(SHIPPING_DIRECTORIES)
+        if (relative in SHIPPING_TOP_LEVEL_FILES or relative.startswith(SHIPPING_DIRECTORIES))
+        and (ROOT / relative).is_file()
     ]
 
 
