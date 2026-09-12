@@ -335,3 +335,22 @@ def test_vehicle_default_uses_neutral_control_scale_indicator():
     assert ".vehicle-default-indicator {" in css
     assert "display: inline-flex; min-height: var(--control-height); align-items: center;" in css
     assert "background: var(--surface0); color: var(--fg);" in css
+
+
+def test_rates_help_remains_outside_scroll_area_in_full_and_partial_renders():
+    templates = _templates()
+    context = dict(
+        boundary_overrides=[], rates=[], vehicles=[], odometer=[], places=[],
+        rules=[], geocode_enabled=False, user={"name": "Tester"}, csrf_token="test",
+    )
+    partial = templates.env.get_template("_rates_table.html").render(**context)
+    full = templates.env.get_template("settings.html").render(**context)
+    assert partial in full
+    assert '</table>\n</div>\n\n<p class="muted">Tick <em>split from</em>' in partial
+    assert 'hx-target="#rates-table" hx-swap="outerHTML"' in partial
+    css = (Path(__file__).parents[1] / "static/style.css").read_text()
+    assert (
+        ".settings-page .settings-section > .muted,\n"
+        ".settings-page #rates-table > .muted { max-width: 72ch; }"
+    ) in css
+    assert ".settings-table-scroll { max-width: 100%; overflow-x: auto;" in css
