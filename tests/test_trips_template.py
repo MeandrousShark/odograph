@@ -121,6 +121,7 @@ def test_selection_action_bar_renders_bar_and_no_combined_form():
     assert 'id="vehicle-dialog-open"' in body and ">Vehicle</button>" in body
     assert 'class="selection-more"' in body and "<summary>More</summary>" in body
     assert 'id="merge-dialog-open"' in body and ">Merge selected…</button>" in body
+    assert 'id="delete-selected-open"' in body and ">Delete selected</button>" in body
     assert 'id="selection-clear"' in body and ">Clear selection</button>" in body
 
     # Selection lost its mode: there is no longer a "Done" button that exits
@@ -179,6 +180,14 @@ def test_five_bulk_action_dialogs_render_expected_fields():
     assert '>Merge <span data-selection-count>0 trips</span></button>' in merge_dialog
     assert 'role="alert"' in merge_dialog
 
+    delete_dialog = body.split('id="delete-selected-dialog"')[1].split("</dialog>")[0]
+    assert 'aria-describedby="delete-selected-dialog-description"' in delete_dialog
+    assert "Stored location data is kept, so detected trips can be restored from Settings" in delete_dialog
+    assert "permanently deleted and cannot be restored" in delete_dialog
+    assert 'class="control control-destructive"' in delete_dialog
+    assert 'data-selection-dialog-cancel' in delete_dialog
+    assert 'id="delete-selected-confirm"' in delete_dialog
+
 
 def test_dialog_submitters_each_send_only_their_own_field():
     body = _render_index()
@@ -218,6 +227,10 @@ def test_dialog_submitters_each_send_only_their_own_field():
 
     assert "submitBatchUpdate(categoryDialog, body)" in body
     assert "submitBatchUpdate(vehicleDialog, body)" in body
+    delete_handler = body.split("deleteSelectedConfirm.addEventListener('click'")[1]
+    assert "fetch('/trips/batch_delete'" in delete_handler
+    assert "deletedIds.forEach((id) => selection.delete(id));" in delete_handler
+    assert "showDialogError(deleteSelectedDialog" in delete_handler
     assert "submitBatchUpdate(purposeDialog, body)" in body
 
     # A batch write refreshes the archive in place instead of reloading the
@@ -228,6 +241,7 @@ def test_dialog_submitters_each_send_only_their_own_field():
     )[0]
     assert "window.location.reload()" not in batch
     assert "window.archiveController.finishWrite(true)" in batch
+    assert "document.getElementById('trip-archive-header')?.focus();" in body
 
 
 def test_dialog_error_paths_write_into_their_own_dialog_and_keep_selection():
@@ -250,6 +264,7 @@ def test_dialog_forms_guard_against_implicit_enter_submission():
         ('data-selection-dialog-confirm="purpose-dialog-confirm"', "purpose-dialog-confirm"),
         ('data-selection-dialog-confirm="vehicle-dialog-confirm"', "vehicle-dialog-confirm"),
         ('data-selection-dialog-confirm="merge-dialog-confirm"', "merge-dialog-confirm"),
+        ('data-selection-dialog-confirm="delete-selected-confirm"', "delete-selected-confirm"),
     ):
         assert form_marker in body
         assert f'id="{confirm_id}"' in body

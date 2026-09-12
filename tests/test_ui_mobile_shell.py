@@ -213,3 +213,32 @@ def test_mobile_render_does_not_duplicate_ids():
     body = _render()
     ids = re.findall(r'\bid="([^"]+)"', body)
     assert len(ids) == len(set(ids))
+
+
+def test_safe_area_viewport_contract_covers_content_and_navigation_edges():
+    body = _render()
+    assert 'content="width=device-width, initial-scale=1, viewport-fit=cover"' in body
+    # Cover exposes all edges, including landscape cutouts, not just the bottom.
+    desktop_body = CSS.split("body {", 1)[1].split("}", 1)[0]
+    mobile_body = CSS.split("  body {", 1)[1].split("}", 1)[0]
+    for rule in (desktop_body, mobile_body):
+        for edge in ("top", "right", "bottom", "left"):
+            assert f"env(safe-area-inset-{edge})" in rule
+    nav_rule = CSS.split("  .mobile-bottom-nav {", 1)[1].split("}", 1)[0]
+    assert "calc(var(--space-1) + env(safe-area-inset-bottom))" in nav_rule
+    for edge in ("left", "right"):
+        assert f"max(var(--space-2), env(safe-area-inset-{edge}))" in nav_rule
+    assert "bottom: max(1rem, env(safe-area-inset-bottom));" in CSS
+
+
+def test_mobile_account_current_page_has_visible_indicator_even_with_avatar():
+    for path in ("/settings", "/settings/account"):
+        body = _render(path, {**ADMIN, "has_avatar": True})
+        assert '<details class="mobile-account-menu is-active"' in body
+        assert 'class="account-avatar"' in body
+    rule = CSS.split(
+        ".mobile-account-menu.is-active > .mobile-account-trigger::after {", 1
+    )[1].split("}", 1)[0]
+    assert "height: 3px;" in rule
+    assert "background: var(--accent-primary);" in rule
+    assert "position: absolute;" in rule

@@ -1509,6 +1509,34 @@ def register_batch_and_points(router: APIRouter) -> None:
                     )
             return JSONResponse({"updated": cur.rowcount})
 
+        @router.post("/trips/batch_delete", dependencies=[Depends(require_csrf)])
+        async def batch_delete_trips(
+            request: Request,
+            trip_ids: list[int] = Form(...),
+            user: dict = Depends(require_user),
+        ):
+            """Delete exactly the explicitly selected trips atomically."""
+            trip_ids = sorted(set(trip_ids))
+            if not trip_ids:
+                raise HTTPException(status_code=400, detail="Select at least one trip")
+
+            async with request.app.state.pool.connection() as conn:
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
+                )
+                cur = await conn.execute(
+                    "SELECT id FROM trips WHERE id = ANY(%s) FOR UPDATE", (trip_ids,)
+                )
+                existing = {row[0] for row in await cur.fetchall()}
+                if len(existing) != len(trip_ids):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="One or more selected trips no longer exist",
+                    )
+                for trip_id in trip_ids:
+                    await _delete_trip_in(conn, trip_id)
+            return JSONResponse({"deleted": len(trip_ids)})
+
         @router.get("/trips/{trip_id}/points")
         async def trip_points(request: Request, trip_id: int, user: dict = Depends(require_user)):
             trip = await _fetch_trip(request.app.state.pool, trip_id)

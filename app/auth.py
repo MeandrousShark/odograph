@@ -136,29 +136,24 @@ def _human_size(num_bytes: int) -> str:
     return f"{num_bytes} bytes"
 
 
-def _reject_oversized_avatar_upload(request: Request) -> None:
-    """A route dependency for POST /settings/account/avatar -- mirrors
-    app/portable/routes.py's _reject_oversized_import_upload; see that
-    function's docstring for the full reasoning, all of which applies here
-    unchanged (the confirmed Starlette/FastAPI behavior this depends on, and
-    why the route below must declare no File()/Form() parameters of its
-    own). Falls through to read_capped_upload (app/uploads.py) for the case
-    this can't see: a missing Content-Length under chunked
-    transfer-encoding.
+def _avatar_upload_exceeds_limit(request: Request) -> bool:
+    """Return whether a declared upload is over the configured cap.
+
+    This must run before request.form() so Starlette cannot spool a declared
+    oversized multipart body before the account page renders its error. The
+    route calls it after require_admin has run, preserving authentication while
+    still allowing the route to use _render_account for the response. A
+    missing Content-Length falls through to read_capped_upload below.
     """
     content_length = request.headers.get("content-length")
     if content_length is None:
-        return
+        return False
     try:
         declared_bytes = int(content_length)
     except ValueError:
-        return
+        return False
     cfg = request.app.state.config
-    if declared_bytes > cfg.account_avatar_max_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Upload exceeds the {cfg.account_avatar_max_bytes}-byte limit",
-        )
+    return declared_bytes > cfg.account_avatar_max_bytes
 
 
 def _if_none_match_matches(header_value: str, etag: str) -> bool:
@@ -1061,14 +1056,26 @@ def make_router() -> APIRouter:
             },
         )
 
-    @router.post(
-        "/settings/account/avatar",
-        dependencies=[Depends(_reject_oversized_avatar_upload)],
-    )
+    @router.post("/settings/account/avatar")
     async def upload_avatar(request: Request, user: dict = Depends(require_admin)):
+        cfg = request.app.state.config
+        if _avatar_upload_exceeds_limit(request):
+            async with request.app.state.pool.connection() as conn:
+                account = await get_account(conn, user["id"])
+            if account is None:
+                request.session.clear()
+                raise AuthRedirect()
+            return await _render_account(
+                request,
+                account,
+                user,
+                error=f"Avatar exceeds the {_human_size(cfg.account_avatar_max_bytes)} limit.",
+                status_code=413,
+            )
+
         # file/csrf_token are read from the parsed form by hand, not
         # declared as File()/Form() parameters on this function -- see
-        # _reject_oversized_avatar_upload's docstring for why that's load-
+        # _avatar_upload_exceeds_limit's docstring for why that's load-
         # bearing rather than a style choice.
         form = await request.form()
         raw_csrf_token = form.get("csrf_token", "")
@@ -1088,7 +1095,6 @@ def make_router() -> APIRouter:
                 error="Choose an image file to upload.", status_code=422,
             )
 
-        cfg = request.app.state.config
         raw = await read_capped_upload(file, cfg.account_avatar_max_bytes)
         if raw is None:
             return await _render_account(

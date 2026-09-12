@@ -11,9 +11,21 @@ reproduced here.
 
 ### Added
 
+- Delete selected trips from the Trips bulk action bar, with confirmation and
+  all-or-nothing deletion that preserves linked expenses and location data.
+
 ### Changed
 
 ### Fixed
+
+- Oversized avatar uploads show an error within Account Settings and keep the
+  upload form usable.
+- Settings and Account Settings show the desktop navigation accent bar when
+  they are the current page, with a matching mobile account indicator.
+- The mileage rate explanation follows the Settings help-text width while
+  keeping the rate table independently scrollable.
+- Enable safe-area viewport sizing so mobile navigation can reserve space for
+  the home indicator, with content padding for screen cutouts.
 
 ### Security
 

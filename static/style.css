@@ -344,7 +344,9 @@
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   font-variant-numeric: tabular-nums;
-  max-width: 1100px; margin: 0 auto; padding: var(--space-4) var(--space-6);
+  max-width: 1100px; margin: 0 auto;
+  padding: max(var(--space-4), env(safe-area-inset-top)) max(var(--space-6), env(safe-area-inset-right))
+    max(var(--space-4), env(safe-area-inset-bottom)) max(var(--space-6), env(safe-area-inset-left));
   background: var(--bg); color: var(--fg);
 }
 button, input, select, summary { min-height: var(--control-height); }
@@ -419,12 +421,14 @@ header nav a {
   position: relative; display: inline-flex; min-height: var(--control-height); align-items: center;
   padding: 0 var(--space-1); color: var(--fg-muted); text-decoration: none;
 }
-header nav a::after {
+header nav a::after,
+.header-control[aria-current="page"]::after {
   content: ""; position: absolute; right: var(--space-1); bottom: calc(-1 * var(--space-3)); left: var(--space-1);
   height: 3px; border-radius: 999px; background: transparent;
 }
 header nav a[aria-current="page"] { color: var(--accent-primary); font-weight: 600; }
-header nav a[aria-current="page"]::after { background: var(--accent-primary); }
+header nav a[aria-current="page"]::after,
+.header-control[aria-current="page"]::after { background: var(--accent-primary); }
 .header-account { display: flex; min-width: 0; gap: var(--space-2); align-items: center; font-size: .85rem; }
 .account-identity { display: inline-flex; min-width: 0; min-height: var(--control-height); align-items: center; gap: var(--space-1); }
 .account-avatar {
@@ -454,7 +458,7 @@ footer p { margin: 0; font-size: .8rem; }
 .link-button { background: none; border: none; min-height: var(--control-height); padding: 0 var(--space-2); margin: 0; font: inherit;
                color: inherit; text-decoration: underline; cursor: pointer; box-shadow: none; }
 .header-control {
-  display: inline-flex; min-width: 0; min-height: var(--control-height); align-items: center;
+  position: relative; display: inline-flex; min-width: 0; min-height: var(--control-height); align-items: center;
   gap: var(--space-1); padding: 0 var(--space-2); border: 1px solid transparent;
   border-radius: var(--radius-sm); color: var(--fg-muted); background: transparent;
   font: inherit; text-decoration: none; box-shadow: none; cursor: pointer;
@@ -1411,7 +1415,7 @@ details.add-manual .route-mode-option { flex-direction: row; align-items: center
 }
 .trip-detail-delete { flex: 0 0 auto; margin-left: auto; }
 .selection-action-bar {
-  position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%);
+  position: fixed; bottom: max(1rem, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%);
   display: flex; gap: .75rem; align-items: center; flex-wrap: wrap;
   background: var(--surface-elevated); color: var(--fg); border: 1px solid var(--border-strong);
   border-radius: 8px; padding: .6rem .9rem; z-index: 2;
@@ -1497,7 +1501,8 @@ details.add-manual .route-mode-option { flex-direction: row; align-items: center
 .settings-page .settings-account-section > h2,
 .settings-page .settings-section > h2 { margin-top: 0; }
 .settings-page .settings-account-section p:last-child { margin-bottom: 0; }
-.settings-page .settings-section > .muted { max-width: 72ch; }
+.settings-page .settings-section > .muted,
+.settings-page #rates-table > .muted { max-width: 72ch; }
 .settings-page .settings-table-scroll { margin-top: var(--space-4); }
 .settings-page .settings-table tbody tr:last-child td { border-bottom: 0; }
 .settings-page .settings-table td { vertical-align: middle; }
@@ -2333,7 +2338,8 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
   .dashboard-row-icon-button, .dashboard-row-more-trigger { width: var(--control-height); }
   .dashboard-row-more-panel { max-width: calc(100vw - 2 * var(--space-3)); }
   body {
-    padding: var(--space-3);
+    padding: max(var(--space-3), env(safe-area-inset-top)) max(var(--space-3), env(safe-area-inset-right))
+      var(--space-3) max(var(--space-3), env(safe-area-inset-left));
     padding-bottom: calc(var(--control-height) + var(--space-6) + env(safe-area-inset-bottom));
   }
   header { grid-template-columns: 1fr auto; align-items: start; }
@@ -2343,6 +2349,11 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
   .mobile-account-trigger {
     display: flex; min-height: var(--control-height); align-items: center; justify-content: center;
     padding: 0 var(--space-1); color: var(--accent-primary); list-style: none;
+  }
+  .mobile-account-trigger { position: relative; }
+  .mobile-account-menu.is-active > .mobile-account-trigger::after {
+    content: ""; position: absolute; right: var(--space-1); bottom: 0; left: var(--space-1);
+    height: 3px; border-radius: 999px; background: var(--accent-primary);
   }
   .mobile-account-trigger::marker { content: ""; }
   .mobile-account-menu:not([open]) > .mobile-account-panel { display: none; }
@@ -2359,7 +2370,8 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
     position: fixed; right: 0; bottom: 0; left: 0; z-index: 1001;
     display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); align-items: stretch;
     min-height: calc(var(--control-height) + var(--space-1) + var(--space-1) + env(safe-area-inset-bottom));
-    padding: var(--space-1) var(--space-2) calc(var(--space-1) + env(safe-area-inset-bottom));
+    padding: var(--space-1) max(var(--space-2), env(safe-area-inset-right))
+      calc(var(--space-1) + env(safe-area-inset-bottom)) max(var(--space-2), env(safe-area-inset-left));
     border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
     background: color-mix(in srgb, var(--surface-elevated) 96%, transparent);
     box-shadow: 0 -.35rem 1rem rgb(17 20 34 / 12%);
@@ -2508,7 +2520,8 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
   .selection-action-bar {
     display: grid; grid-template-columns: repeat(auto-fill, minmax(7rem, 1fr));
     gap: var(--space-2);
-    width: calc(100vw - 1.5rem); max-height: calc(100vh - 1.5rem); overflow-y: auto;
+    width: calc(100% - 2 * max(var(--space-3), env(safe-area-inset-left), env(safe-area-inset-right)));
+    max-height: calc(100vh - 1.5rem); overflow-y: auto;
     bottom: calc(var(--control-height) + var(--space-3) + env(safe-area-inset-bottom));
   }
   .selection-action-bar #selection-count { grid-column: 1 / -1; }
