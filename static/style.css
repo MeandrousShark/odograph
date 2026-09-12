@@ -419,12 +419,14 @@ header nav a {
   position: relative; display: inline-flex; min-height: var(--control-height); align-items: center;
   padding: 0 var(--space-1); color: var(--fg-muted); text-decoration: none;
 }
-header nav a::after {
+header nav a::after,
+.header-control[aria-current="page"]::after {
   content: ""; position: absolute; right: var(--space-1); bottom: calc(-1 * var(--space-3)); left: var(--space-1);
   height: 3px; border-radius: 999px; background: transparent;
 }
 header nav a[aria-current="page"] { color: var(--accent-primary); font-weight: 600; }
-header nav a[aria-current="page"]::after { background: var(--accent-primary); }
+header nav a[aria-current="page"]::after,
+.header-control[aria-current="page"]::after { background: var(--accent-primary); }
 .header-account { display: flex; min-width: 0; gap: var(--space-2); align-items: center; font-size: .85rem; }
 .account-identity { display: inline-flex; min-width: 0; min-height: var(--control-height); align-items: center; gap: var(--space-1); }
 .account-avatar {
@@ -454,7 +456,7 @@ footer p { margin: 0; font-size: .8rem; }
 .link-button { background: none; border: none; min-height: var(--control-height); padding: 0 var(--space-2); margin: 0; font: inherit;
                color: inherit; text-decoration: underline; cursor: pointer; box-shadow: none; }
 .header-control {
-  display: inline-flex; min-width: 0; min-height: var(--control-height); align-items: center;
+  position: relative; display: inline-flex; min-width: 0; min-height: var(--control-height); align-items: center;
   gap: var(--space-1); padding: 0 var(--space-2); border: 1px solid transparent;
   border-radius: var(--radius-sm); color: var(--fg-muted); background: transparent;
   font: inherit; text-decoration: none; box-shadow: none; cursor: pointer;

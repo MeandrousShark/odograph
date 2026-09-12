@@ -83,15 +83,26 @@ function makeElement(name, options = {}) {
       handlers.set(type, callbacks);
     },
     dispatch(type, event) {
-      for (const callback of handlers.get(type) || []) callback(event);
+      return (handlers.get(type) || []).map((callback) => callback(event));
     },
     setAttribute(key, value) { this.attributes[key] = String(value); },
     removeAttribute(key) { delete this.attributes[key]; },
     appendChild(child) { this.child = child; return child; },
     remove() { this.removed = true; },
-    focus() {},
+    focus() {
+      this.focusCount = (this.focusCount || 0) + 1;
+      options.onFocus?.(this);
+    },
     showModal() { this.open = true; },
-    close() { this.closed = (this.closed || 0) + 1; this.open = false; },
+    close(reason) {
+      this.closed = (this.closed || 0) + 1;
+      this.open = false;
+      const fireClose = () => {
+        for (const callback of handlers.get("close") || []) callback({ target: this, reason });
+      };
+      if (options.deferClose) queueMicrotask(fireClose);
+      else fireClose();
+    },
     contains(target) { return target === this || target.form === this || true; },
     matches(selector) {
       if (options.matches) return options.matches.call(this, selector);
@@ -180,13 +191,18 @@ const mutation = makeElement("mutation", {
   },
 });
 
-const selectionCard = makeElement("card", { id: "trip-1" });
-const selectionCheckbox = makeElement("checkbox", {
-  value: "1",
-  matches(selector) { return selector === ".merge-select"; },
+const selectionCards = [1, 2, 3].map((id) => makeElement("card", { id: `trip-${id}` }));
+const selectionCheckboxes = selectionCards.map((card) => {
+  const checkbox = makeElement("checkbox", {
+    value: card.id.slice("trip-".length),
+    matches(selector) { return selector === ".merge-select"; },
+  });
+  card.querySelector = (selector) => selector === ".merge-select" ? checkbox : null;
+  card.classList = { add() {}, remove() {}, toggle() {} };
+  return checkbox;
 });
-selectionCard.querySelector = (selector) => selector === ".merge-select" ? selectionCheckbox : null;
-selectionCard.classList = { add() {}, remove() {}, toggle() {} };
+const selectionCard = selectionCards[0];
+const selectionCheckbox = selectionCheckboxes[0];
 const selectionBar = makeElement("selection-bar");
 const selectionCount = makeElement("selection-count");
 const selectionClear = makeElement("selection-clear");
@@ -197,6 +213,28 @@ const vehicleOpen = makeElement("vehicle-open");
 const exclusionOpen = makeElement("exclusion-open");
 const mergeOpen = makeElement("merge-open");
 const mergeMinimum = makeElement("merge-minimum");
+const focusLog = [];
+const archiveHeader = makeElement("archive-header", {
+  id: "trip-archive-header",
+  onFocus() { focusLog.push("header"); },
+});
+const deleteSelectedOpen = makeElement("delete-selected-open", {
+  onFocus() { focusLog.push("trigger"); },
+});
+const deleteSelectedConfirm = makeElement("delete-selected-confirm");
+const deleteDialogError = makeElement("delete-dialog-error", { hidden: true });
+const deleteDialogForm = makeElement("delete-dialog-form", {
+  dataset: { selectionDialogConfirm: "delete-selected-confirm" },
+});
+const deleteSelectedDialog = makeElement("delete-selected-dialog", { id: "delete-selected-dialog", deferClose: true });
+deleteSelectedDialog.querySelector = (selector) => {
+  if (selector === ".selection-dialog-error") return deleteDialogError;
+  if (selector === "[data-selection-dialog-confirm]") return deleteDialogForm;
+  return null;
+};
+deleteSelectedDialog.querySelectorAll = (selector) => (
+  selector === "button, input, select, textarea" ? [deleteSelectedConfirm] : []
+);
 const controls = {
   "selection-action-bar": selectionBar,
   "selection-count": selectionCount,
@@ -208,6 +246,10 @@ const controls = {
   "exclusion-dialog-open": exclusionOpen,
   "merge-dialog-open": mergeOpen,
   "merge-minimum": mergeMinimum,
+  "delete-selected-open": deleteSelectedOpen,
+  "delete-selected-dialog": deleteSelectedDialog,
+  "delete-selected-confirm": deleteSelectedConfirm,
+  "trip-archive-header": archiveHeader,
 };
 for (const id of ["category-dialog", "exclusion-dialog", "purpose-dialog", "vehicle-dialog", "merge-dialog"]) {
   controls[id] = makeElement(id, {
@@ -247,7 +289,7 @@ const document = {
     return null;
   },
   querySelectorAll(selector) {
-    if (selector === ".trip-archive-item") return scenario.selection ? [selectionCard] : [];
+    if (selector === ".trip-archive-item") return scenario.selection ? selectionCards : [];
     if (selector === '#trip-archive-results [data-archive-month]') return [];
     if (selector === '[data-selection-count]') return [];
     if (selector === '#trip-archive-export-links .trip-archive-export-action') return [];
@@ -299,6 +341,56 @@ var window = {
 const htmx = {
   ajax(method, url, options) { requests.push({ method, url, options }); },
 };
+const bulkFetchCalls = [];
+let resolveBulkFetch = null;
+const writeBegins = [];
+const writeFinishes = [];
+const announcements = [];
+let writeBusy = false;
+const bulkArchiveController = {
+  beginWrite() {
+    if (writeBusy) {
+      writeBegins.push(false);
+      return false;
+    }
+    writeBusy = true;
+    writeBegins.push(true);
+    return true;
+  },
+  finishWrite(refresh) {
+    writeBusy = false;
+    writeFinishes.push(refresh);
+  },
+  announce(message) { announcements.push(message); },
+  isWriteBusy() { return writeBusy; },
+  isWriteUnavailable() { return false; },
+};
+if ((scenario.action || "").startsWith("bulk-delete")) {
+  window.archiveController = bulkArchiveController;
+}
+window.invalidateArchiveHistoryCache = () => {
+  localStorage.removed.push("archive-history");
+};
+
+function fetch(url, options) {
+  bulkFetchCalls.push({ url, options });
+  if (scenario.action === "bulk-delete-network-failure") {
+    return Promise.reject(new Error("network down"));
+  }
+  if (scenario.action === "bulk-delete-http-failure") {
+    return Promise.resolve({
+      ok: false,
+      json: async () => ({ detail: "Server rejected deletion" }),
+    });
+  }
+  if (scenario.action === "bulk-delete-duplicate") {
+    return new Promise((resolve) => { resolveBulkFetch = resolve; });
+  }
+  return Promise.resolve({
+    ok: true,
+    json: async () => ({ deleted: scenario.deletedCount ?? 3 }),
+  });
+}
 const context = {
   console,
   window,
@@ -309,16 +401,36 @@ const context = {
   queueMicrotask,
   setTimeout: window.setTimeout,
   clearTimeout: window.clearTimeout,
-  fetch: async () => ({ ok: true, json: async () => ({}) }),
+  fetch,
 };
 window.window = window;
 vm.createContext(context);
 vm.runInContext(process.argv[2], context, { filename: "trips-archive-inline.js" });
+if ((scenario.action || "").startsWith("bulk-delete")) {
+  window.archiveController = bulkArchiveController;
+  window.invalidateArchiveHistoryCache = () => {
+    localStorage.removed.push("archive-history");
+  };
+}
 if (process.argv[3]) vm.runInContext(process.argv[3], context, { filename: "trips-selection-inline.js" });
+if (process.argv[3]) vm.runInContext("window.__selection = selection;", context);
 
 async function settle() {
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let index = 0; index < 8; index += 1) await Promise.resolve();
+}
+
+async function click(element) {
+  const callbacks = element.dispatch("click", { target: element }) || [];
+  await Promise.all(callbacks);
+}
+
+async function selectBulkTrips() {
+  for (const checkbox of selectionCheckboxes) {
+    checkbox.checked = true;
+    emit("change", { target: checkbox });
+  }
+  await settle();
+  await click(deleteSelectedOpen);
 }
 
 function beginMutation(path) {
@@ -362,7 +474,25 @@ function completeRefresh(call, nextState = state, successful = true) {
 }
 
 (async () => {
-  const result = { requests, localStorage, location, status, retry, results, selectionBar, dialog };
+  const result = {
+    requests,
+    localStorage,
+    location,
+    status,
+    retry,
+    results,
+    selectionBar,
+    dialog,
+    deleteSelectedDialog,
+    deleteDialogError,
+    deleteSelectedConfirm,
+    archiveHeader,
+    focusLog,
+    bulkFetchCalls,
+    writeBegins,
+    writeFinishes,
+    announcements,
+  };
   if (scenario.action === "success") {
     const item = beginMutation("/trips/1/tag");
     const outcome = await finishMutation(item);
@@ -439,6 +569,38 @@ function completeRefresh(call, nextState = state, successful = true) {
     result.selectionHidden = selectionBar.hidden;
     result.dialogClosed = dialog.closed || 0;
     result.requestCount = requests.length;
+  } else if ((scenario.action || "").startsWith("bulk-delete")) {
+    await selectBulkTrips();
+    const first = click(deleteSelectedConfirm);
+    await settle();
+    result.submittedIds = Array.from(
+      bulkFetchCalls[0].options.body.getAll("trip_ids"),
+      (id) => Number(id),
+    );
+    if (scenario.action === "bulk-delete-duplicate") {
+      await click(deleteSelectedConfirm);
+      result.afterDuplicate = {
+        fetchCount: bulkFetchCalls.length,
+        selection: Array.from(window.__selection),
+        dialogOpen: deleteSelectedDialog.open,
+        writeBegins: writeBegins.slice(),
+        writeFinishes: writeFinishes.slice(),
+      };
+      resolveBulkFetch({
+        ok: true,
+        json: async () => ({ deleted: 3 }),
+      });
+    }
+    await first;
+    await settle();
+    result.selection = Array.from(window.__selection);
+    result.selectionHidden = selectionBar.hidden;
+    result.dialogOpen = deleteSelectedDialog.open;
+    result.dialogClosed = deleteSelectedDialog.closed || 0;
+    result.errorText = deleteDialogError.textContent;
+    result.errorHidden = deleteDialogError.hidden;
+    result.confirmDisabled = deleteSelectedConfirm.disabled;
+    result.writeBusy = writeBusy;
   }
   process.stdout.write(JSON.stringify(result));
 })().catch((error) => {
@@ -459,7 +621,7 @@ def _run(action, **extra):
         HARNESS,
         json.dumps({"action": action, **extra}),
         archive,
-        selection if action == "selected-delete" else "",
+        selection if action == "selected-delete" or action.startswith("bulk-delete") else "",
     ]
     try:
         result = subprocess.run(
@@ -530,3 +692,60 @@ def test_selected_delete_prunes_selection_and_closes_dialog_before_refresh():
     assert result["selectionHidden"] is True
     assert result["dialogClosed"] == 1
     assert result["requestCount"] == 1
+
+
+def test_selected_delete_posts_explicit_ids_and_focuses_archive_header_after_success():
+    result = _run("bulk-delete-success")
+    assert result["submittedIds"] == [1, 2, 3]
+    assert result["selection"] == []
+    assert result["selectionHidden"] is True
+    assert result["dialogOpen"] is False
+    assert result["dialogClosed"] == 1
+    assert result["localStorage"]["removed"] == ["archive-history"]
+    assert result["writeBegins"] == [True]
+    assert result["writeFinishes"] == [True]
+    assert result["writeBusy"] is False
+    assert result["focusLog"]
+    assert all(target == "header" for target in result["focusLog"])
+    assert result["deleteSelectedConfirm"]["disabled"] is False
+
+
+def test_selected_delete_http_failure_keeps_selection_and_dialog_open():
+    result = _run("bulk-delete-http-failure")
+    assert result["submittedIds"] == [1, 2, 3]
+    assert result["selection"] == [1, 2, 3]
+    assert result["dialogOpen"] is True
+    assert result["dialogClosed"] == 0
+    assert result["errorText"] == "Server rejected deletion"
+    assert result["errorHidden"] is False
+    assert result["localStorage"]["removed"] == []
+    assert result["writeBegins"] == [True]
+    assert result["writeFinishes"] == [False]
+    assert result["writeBusy"] is False
+
+
+def test_selected_delete_network_failure_keeps_selection_and_dialog_open():
+    result = _run("bulk-delete-network-failure")
+    assert result["submittedIds"] == [1, 2, 3]
+    assert result["selection"] == [1, 2, 3]
+    assert result["dialogOpen"] is True
+    assert result["dialogClosed"] == 0
+    assert result["errorText"] == "Deletion failed."
+    assert result["errorHidden"] is False
+    assert result["localStorage"]["removed"] == []
+    assert result["writeBegins"] == [True]
+    assert result["writeFinishes"] == [False]
+    assert result["writeBusy"] is False
+
+
+def test_selected_delete_duplicate_submit_is_blocked_while_request_is_in_flight():
+    result = _run("bulk-delete-duplicate")
+    assert result["submittedIds"] == [1, 2, 3]
+    assert result["afterDuplicate"]["fetchCount"] == 1
+    assert result["afterDuplicate"]["selection"] == [1, 2, 3]
+    assert result["afterDuplicate"]["dialogOpen"] is True
+    assert result["afterDuplicate"]["writeBegins"] == [True, False]
+    assert result["afterDuplicate"]["writeFinishes"] == []
+    assert result["selection"] == []
+    assert result["dialogOpen"] is False
+    assert result["writeFinishes"] == [True]

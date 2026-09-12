@@ -90,6 +90,15 @@ def test_existing_literal_trip_routes_are_not_swallowed_by_trip_detail():
     assert _first_matching_route("POST", "/trips/batch_update").path == "/trips/batch_update"
 
 
+def test_batch_delete_resolves_and_requires_authentication_and_csrf():
+    route = _first_matching_route("POST", "/trips/batch_delete")
+    assert route is not None
+    assert route.path == "/trips/batch_delete"
+    assert {
+        dependency.call.__name__ for dependency in route.dependant.dependencies
+    } == {"require_user", "require_csrf"}
+
+
 def test_trips_archive_route_is_not_swallowed_by_trip_detail():
     # `/trips` (the archive, moved off `/`) and
     # `/trips/month/{year}/{month}` must resolve to their own handlers, not

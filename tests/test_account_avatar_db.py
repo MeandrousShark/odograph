@@ -500,10 +500,91 @@ def test_oversized_upload_rejected_with_an_honest_content_length():
                 client, csrf, PNG_UPLOAD_BYTES, filename="avatar.png", content_type="image/png",
             )
             assert response.status_code == 413
+            assert response.headers["content-type"].startswith("text/html")
+            assert "Avatar exceeds the 16 bytes limit." in response.text
+            assert 'action="/settings/account/avatar"' in response.text
+            assert 'name="csrf_token"' in response.text
+            assert 'name="file"' in response.text
 
             async with pool.connection() as conn:
                 account = await get_account(conn, 1)
             assert account["avatar_mime"] is None
+
+    _scenario(run)
+
+
+def test_declared_oversized_upload_renders_without_reading_the_request_body():
+    async def run(pool):
+        async with pool.connection() as conn:
+            await _insert_account(conn)
+            await _set_avatar(conn, 1)
+
+        app = _bare_app(pool, account_avatar_max_bytes=16)
+        async with await _client_for(app) as client:
+            await _login_and_get_csrf(client)
+            consumed = False
+
+            async def body_gen():
+                nonlocal consumed
+                consumed = True
+                raise AssertionError("declared oversized body was read")
+                yield b""
+
+            boundary = "----avataroutercapboundary"
+            request = client.build_request(
+                "POST",
+                "/settings/account/avatar",
+                content=body_gen(),
+                headers={
+                    "content-type": f"multipart/form-data; boundary={boundary}",
+                    "content-length": "10000",
+                },
+            )
+            response = await client.send(request)
+
+            assert response.status_code == 413
+            assert response.headers["content-type"].startswith("text/html")
+            assert "Avatar exceeds the 16 bytes limit." in response.text
+            assert 'action="/settings/account/avatar"' in response.text
+            assert 'name="csrf_token"' in response.text
+            assert 'name="file"' in response.text
+            assert consumed is False
+
+        async with pool.connection() as conn:
+            account = await get_account_avatar(conn, 1)
+        assert account["avatar_bytes"] == AVATAR_BYTES
+        assert account["avatar_mime"] == "image/png"
+
+    _scenario(run)
+
+
+def test_unauthenticated_declared_oversized_upload_is_redirected_before_body_read():
+    async def run(pool):
+        app = _bare_app(pool, account_avatar_max_bytes=16)
+        async with await _client_for(app) as client:
+            consumed = False
+
+            async def body_gen():
+                nonlocal consumed
+                consumed = True
+                raise AssertionError("unauthenticated body was read")
+                yield b""
+
+            boundary = "----avatarauthcapboundary"
+            request = client.build_request(
+                "POST",
+                "/settings/account/avatar",
+                content=body_gen(),
+                headers={
+                    "content-type": f"multipart/form-data; boundary={boundary}",
+                    "content-length": "10000",
+                },
+            )
+            response = await client.send(request)
+
+            assert response.status_code == 303
+            assert response.headers["location"] == "/login"
+            assert consumed is False
 
     _scenario(run)
 

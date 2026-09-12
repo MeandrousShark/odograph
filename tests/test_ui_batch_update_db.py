@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from psycopg.errors import RaiseException
 
 from app.db import make_pool
 from app.ui import make_router
@@ -22,6 +23,13 @@ def _endpoint():
         if getattr(route, "path", None) == "/trips/batch_update":
             return route.endpoint
     raise AssertionError("batch_update route missing")
+
+
+def _delete_endpoint():
+    for route in make_router().routes:
+        if getattr(route, "path", None) == "/trips/batch_delete":
+            return route.endpoint
+    raise AssertionError("batch_delete route missing")
 
 
 def _request(pool):
@@ -254,3 +262,125 @@ async def _single_trip_scenario():
 
 def test_batch_update_accepts_a_single_selected_trip():
     asyncio.run(_single_trip_scenario())
+
+
+async def _batch_delete_scenario():
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        await reset_db(pool)
+        async with pool.connection() as conn:
+            detected_id = await _insert_trip(
+                conn, "A", "detected", "2026-01-02T09:00:00Z", "business",
+                "Detected", None, 1,
+            )
+            manual_id = await _insert_trip(
+                conn, "B", "manual", "2026-03-04T09:00:00Z", "personal",
+                "Manual", None, 1,
+            )
+            survivor_id = await _insert_trip(
+                conn, "C", "manual", "2026-04-04T09:00:00Z", "personal",
+                "Survivor", None, 1,
+            )
+            await conn.execute(
+                "INSERT INTO points (device, recorded_at, geom, trip_id) "
+                "VALUES ('A', '2026-01-02T09:30:00Z', "
+                "ST_SetSRID(ST_MakePoint(-122.3, 47.6), 4326)::geography, %s)",
+                (detected_id,),
+            )
+            await conn.execute(
+                "INSERT INTO expenses "
+                "(vehicle_id, incurred_on, category, amount, treatment, trip_id) "
+                "VALUES (1, '2026-05-04', 'fuel', 17.23, "
+                "'business_use_allocated', %s)", (manual_id,),
+            )
+
+        handler = _delete_endpoint()
+        request = _request(pool)
+        response = await handler(request, [manual_id, detected_id, manual_id], USER)
+        assert json.loads(response.body) == {"deleted": 2}
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT count(*) FROM trips WHERE id = ANY(%s)",
+                ([manual_id, detected_id],),
+            )
+            assert (await cur.fetchone())[0] == 0
+            cur = await conn.execute(
+                "SELECT kind::text, range_start, range_end "
+                "FROM trip_boundary_overrides WHERE kind::text = 'discard'"
+            )
+            assert len(await cur.fetchall()) == 1
+            cur = await conn.execute("SELECT trip_id FROM expenses")
+            assert (await cur.fetchone())[0] is None
+            cur = await conn.execute("SELECT trip_id FROM points WHERE device = 'A'")
+            assert await cur.fetchall() == [(None,)]
+
+            rollback_detected = await _insert_trip(
+                conn, "D", "detected", "2026-06-04T09:00:00Z", "business",
+                "Rollback detected", None, 1,
+            )
+            rollback_manual = await _insert_trip(
+                conn, "E", "manual", "2026-07-04T09:00:00Z", "personal",
+                "Rollback manual", None, 1,
+            )
+            await conn.execute(
+                "INSERT INTO points (device, recorded_at, geom, trip_id) "
+                "VALUES ('D', '2026-06-04T09:30:00Z', "
+                "ST_SetSRID(ST_MakePoint(-122.3, 47.6), 4326)::geography, %s)",
+                (rollback_detected,),
+            )
+            await conn.execute(
+                "INSERT INTO expenses "
+                "(vehicle_id, incurred_on, category, amount, treatment, trip_id) "
+                "VALUES (1, '2026-06-04', 'fuel', 19.99, "
+                "'business_use_allocated', %s)", (rollback_detected,),
+            )
+            await conn.execute(
+                "CREATE FUNCTION reject_one_batch_delete() RETURNS trigger "
+                "LANGUAGE plpgsql AS $$ BEGIN "
+                f"IF OLD.id = {rollback_manual} THEN RAISE EXCEPTION 'forced bulk delete failure'; END IF; "
+                "RETURN OLD; END $$"
+            )
+            await conn.execute(
+                "CREATE TRIGGER reject_one_batch_delete BEFORE DELETE ON trips "
+                "FOR EACH ROW EXECUTE FUNCTION reject_one_batch_delete()"
+            )
+        try:
+            with pytest.raises(RaiseException, match="forced bulk delete failure"):
+                await handler(request, [rollback_detected, rollback_manual], USER)
+        finally:
+            async with pool.connection() as conn:
+                await conn.execute("DROP TRIGGER reject_one_batch_delete ON trips")
+                await conn.execute("DROP FUNCTION reject_one_batch_delete()")
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT count(*) FROM trips WHERE id = ANY(%s)",
+                ([rollback_detected, rollback_manual],),
+            )
+            assert (await cur.fetchone())[0] == 2
+            cur = await conn.execute(
+                "SELECT count(*) FROM trip_boundary_overrides "
+                "WHERE kind::text = 'discard'"
+            )
+            assert (await cur.fetchone())[0] == 1
+            cur = await conn.execute(
+                "SELECT trip_id FROM points WHERE trip_id = %s", (rollback_detected,)
+            )
+            assert (await cur.fetchone())[0] == rollback_detected
+            cur = await conn.execute(
+                "SELECT trip_id FROM expenses WHERE trip_id = %s", (rollback_detected,)
+            )
+            assert (await cur.fetchone())[0] == rollback_detected
+
+        with pytest.raises(HTTPException, match="no longer exist") as exc:
+            await handler(request, [999999, survivor_id], USER)
+        assert exc.value.status_code == 400
+        async with pool.connection() as conn:
+            cur = await conn.execute("SELECT purpose FROM trips WHERE id = %s", (survivor_id,))
+            assert (await cur.fetchone())[0] == "Survivor"
+    finally:
+        await pool.close()
+
+
+def test_batch_delete_is_source_aware_atomic_and_detaches_related_data():
+    asyncio.run(_batch_delete_scenario())

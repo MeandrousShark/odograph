@@ -3,10 +3,10 @@
    caller passes a template literal; confirm_label must stay
    template-controlled markup and must never carry user input, since | safe
    skips autoescaping entirely. #}
-{% macro selection_dialog_footer(confirm_id, confirm_label, confirm_disabled=true) -%}
+{% macro selection_dialog_footer(confirm_id, confirm_label, confirm_disabled=true, confirm_class='') -%}
 <p class="selection-dialog-error" role="alert" hidden></p>
 <div class="app-dialog-actions selection-dialog-actions">
   <button type="button" data-selection-dialog-cancel autofocus>Cancel</button>
-  <button type="button" id="{{ confirm_id }}"{% if confirm_disabled %} disabled{% endif %}>{{ confirm_label | safe }}</button>
+  <button type="button" id="{{ confirm_id }}"{% if confirm_class %} class="{{ confirm_class }}"{% endif %}{% if confirm_disabled %} disabled{% endif %}>{{ confirm_label | safe }}</button>
 </div>
 {%- endmacro %}

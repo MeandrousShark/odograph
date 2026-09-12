@@ -18,7 +18,7 @@
    actions (export, manual trip) that used to be split between a loose
    paragraph above the disclosures and a link cluster nested inside the
    "Filters & tools" disclosure. #}
-<div class="trip-archive-header">
+<div id="trip-archive-header" class="trip-archive-header" tabindex="-1">
   <div class="trip-archive-header-summary">
     {% include "_trip_archive_ytd.html" %}
   </div>
@@ -1099,6 +1099,8 @@
       <span id="merge-minimum" class="selection-minimum">Merging needs at least two selected trips. All of them must be shown in this view.</span>
     </div>
   </details>
+  <button type="button" id="delete-selected-open" class="control control-destructive" disabled
+          aria-haspopup="dialog" aria-controls="delete-selected-dialog">Delete selected</button>
   <button type="button" id="selection-clear" class="control control-secondary">Clear selection</button>
 </div>
 
@@ -1194,6 +1196,17 @@
   </form>
 </dialog>
 
+<dialog id="delete-selected-dialog" class="app-dialog selection-dialog" aria-labelledby="delete-selected-dialog-title" aria-describedby="delete-selected-dialog-description">
+  <form class="selection-dialog-content" data-selection-dialog-confirm="delete-selected-confirm">
+    <h2 id="delete-selected-dialog-title">Delete <span data-selection-count>0 trips</span>?</h2>
+    <p id="delete-selected-dialog-description" class="selection-dialog-explain">
+      Stored location data is kept, so detected trips can be restored from Settings.
+      Manual trips will be permanently deleted and cannot be restored.
+    </p>
+    {{ selection_dialog_footer('delete-selected-confirm', 'Delete selected', confirm_disabled=false, confirm_class='control control-destructive') }}
+  </form>
+</dialog>
+
 <script nonce="{{ csp_nonce }}">
   // Checkbox multi-select actions use plain fetch rather than htmx because
   // the selection spans independent monthly card lists and isn't naturally
@@ -1211,6 +1224,7 @@
   const exclusionOpen = document.getElementById('exclusion-dialog-open');
   const mergeOpen = document.getElementById('merge-dialog-open');
   const mergeMinimum = document.getElementById('merge-minimum');
+  const deleteSelectedOpen = document.getElementById('delete-selected-open');
 
   const selectionHelpers = window.ArchiveState;
 
@@ -1252,6 +1266,7 @@
     purposeOpen.disabled = !hasSelection || writeBusy || archiveUnavailable;
     vehicleOpen.disabled = !hasSelection || writeBusy || archiveUnavailable;
     exclusionOpen.disabled = !hasSelection || writeBusy || archiveUnavailable;
+    deleteSelectedOpen.disabled = !hasSelection || writeBusy || archiveUnavailable;
 
     const counts = { total: view.selected.length, rendered: view.rendered.length };
     const canMerge = selectionHelpers.canMergeSelection(counts);
@@ -1363,7 +1378,7 @@
   // highlight stick after an Edit/Cancel swap.
   document.addEventListener('htmx:afterSettle', reconcileSelection);
 
-  // The four bulk-action dialogs are native <dialog> elements, the same
+  // The bulk-action dialogs are native <dialog> elements, the same
   // pattern _trip_delete_dialog.html/base.html use for delete confirmation:
   // showModal() opens them, Escape and Cancel both fire the dialog's native
   // "close" event, and that event (not the click that triggered it) is what
@@ -1371,6 +1386,10 @@
   // Cancel behave identically.
   function openDialog(dialog, trigger) {
     dialog.addEventListener('close', () => {
+      if (dialog.id === 'delete-selected-dialog' && selectionBar.hidden) {
+        document.getElementById('trip-archive-header')?.focus();
+        return;
+      }
       if (trigger.isConnected) trigger.focus();
     }, { once: true });
     dialog.showModal();
@@ -1497,6 +1516,61 @@
     showDialogError(dialog, err.detail || 'Batch update failed.');
     window.archiveController.announce('The update could not be saved.');
   }
+
+  const deleteSelectedDialog = document.getElementById('delete-selected-dialog');
+  const deleteSelectedConfirm = document.getElementById('delete-selected-confirm');
+
+  deleteSelectedOpen.addEventListener('click', () => {
+    if (deleteSelectedOpen.disabled || window.archiveController.isWriteBusy()) return;
+    clearDialogError(deleteSelectedDialog);
+    openDialog(deleteSelectedDialog, deleteSelectedOpen);
+  });
+
+  deleteSelectedConfirm.addEventListener('click', async () => {
+    if (!selection.size || !window.archiveController.beginWrite()) return;
+    clearDialogError(deleteSelectedDialog);
+    setDialogBusy(deleteSelectedDialog, true);
+    const deletedIds = Array.from(selection);
+    const body = new URLSearchParams();
+    deletedIds.forEach((id) => body.append('trip_ids', id));
+    let resp;
+    try {
+      resp = await fetch('/trips/batch_delete', {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': CSRF_TOKEN },
+        body,
+      });
+    } catch (error) {
+      setDialogBusy(deleteSelectedDialog, false);
+      window.archiveController.finishWrite(false);
+      showDialogError(deleteSelectedDialog, 'Deletion failed.');
+      window.archiveController.announce('The selected trips could not be deleted.');
+      return;
+    }
+    if (resp.ok) {
+      const data = await resp.json().catch(() => null);
+      if (!data || data.deleted !== deletedIds.length) {
+        setDialogBusy(deleteSelectedDialog, false);
+        window.archiveController.finishWrite(false);
+        showDialogError(deleteSelectedDialog, 'Deletion failed.');
+        window.archiveController.announce('The selected trips could not be deleted.');
+        return;
+      }
+      deletedIds.forEach((id) => selection.delete(id));
+      window.invalidateArchiveHistoryCache?.();
+      setDialogBusy(deleteSelectedDialog, false);
+      deleteSelectedDialog.close();
+      updateSelectionShell();
+      document.getElementById('trip-archive-header')?.focus();
+      window.archiveController.finishWrite(true);
+      return;
+    }
+    setDialogBusy(deleteSelectedDialog, false);
+    window.archiveController.finishWrite(false);
+    const err = await resp.json().catch(() => ({}));
+    showDialogError(deleteSelectedDialog, err.detail || 'Deletion failed.');
+    window.archiveController.announce('The selected trips could not be deleted.');
+  });
 
   const categoryDialog = document.getElementById('category-dialog');
   const categoryConfirm = document.getElementById('category-dialog-confirm');
