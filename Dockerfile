@@ -2,7 +2,7 @@
 # manifest, so the same immutable reference resolves correctly for both
 # linux/amd64 and linux/arm64. requirements.lock was verified against this
 # exact base on both target architectures.
-# Digest confirmed 2026-08-26 from Docker Hub for python:3.13-slim.
+# Digest confirmed 2026-09-12 from Docker Hub for python:3.13-slim.
 # A digest pin is reproducible but frozen, so it stops receiving the base
 # distribution's rebuilt packages and eventually fails the release image scan
 # on findings that are fixed upstream. Re-resolve it as part of preparing a
@@ -15,17 +15,14 @@
 # it prints silently produces a single-architecture base. The correct value has
 # mediaType application/vnd.oci.image.index.v1+json and lists both linux/amd64
 # and linux/arm64.
-FROM docker.io/library/python:3.13-slim@sha256:7e3a6aca9d74f93cca21a91d86a8dad8c34749afd5b4a98ee481c9c47b9f5ed4
+FROM docker.io/library/python:3.13-slim@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285
 
-# The pinned base still carries an openssl older than the one that fixes
-# CVE-2026-14456, which the release scan blocks on. Upgrading just those three
-# packages keeps the rest of the image exactly as the pinned digest built it,
-# rather than letting an unscoped upgrade move packages the lock was verified
-# against. Drop this layer once the base image itself ships the fix; leaving it
-# in place is harmless but hides that the pin has caught up.
+# The pinned base predates available Debian fixes in these four packages.
+# Upgrade only the affected packages; remove this layer when the base includes
+# their fixes. The refreshed base already includes the previous OpenSSL fix.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends --only-upgrade \
-        openssl libssl3t64 openssl-provider-legacy \
+        gzip libpcre2-8-0 libsqlite3-0 perl-base \
     && rm -rf /var/lib/apt/lists/*
 
 # VERSION/GIT_REVISION default to dev values so unlabeled local builds still
