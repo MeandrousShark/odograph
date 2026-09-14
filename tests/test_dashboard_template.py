@@ -228,6 +228,9 @@ def test_next_week_enabled_on_a_past_week():
     )))
     assert 'href="/?week=2026-07-06"' in body
     assert 'aria-disabled="true"' not in body
+    navigation = body.split('<nav class="week-nav"', 1)[1].split('</nav>', 1)[0]
+    assert 'href="/">Current week</a>' in navigation
+    assert 'href="/?week=2026-06-22"' in navigation
 
 
 def test_previous_week_and_current_week_links_always_present():

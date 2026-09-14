@@ -191,22 +191,38 @@ const mutation = makeElement("mutation", {
   },
 });
 
-const selectionCards = [1, 2, 3].map((id) => makeElement("card", { id: `trip-${id}` }));
-const selectionCheckboxes = selectionCards.map((card) => {
+function makeSelectionCard(id) {
+  const card = makeElement("card", { id: `trip-${id}` });
   const checkbox = makeElement("checkbox", {
-    value: card.id.slice("trip-".length),
+    value: String(id),
     matches(selector) { return selector === ".merge-select"; },
   });
   card.querySelector = (selector) => selector === ".merge-select" ? checkbox : null;
   card.classList = { add() {}, remove() {}, toggle() {} };
-  return checkbox;
-});
+  return { card, checkbox };
+}
+const initialSelectionRows = [1, 2, 3].map(makeSelectionCard);
+const selectionCards = initialSelectionRows.map((row) => row.card);
+const selectionCheckboxes = initialSelectionRows.map((row) => row.checkbox);
+const paginationSelectionRow = makeSelectionCard(99);
+const arrivingSelectionRow = makeSelectionCard(100);
 const selectionCard = selectionCards[0];
 const selectionCheckbox = selectionCheckboxes[0];
 const selectionBar = makeElement("selection-bar");
 const selectionCount = makeElement("selection-count");
 const selectionClear = makeElement("selection-clear");
 const selectionSelectAll = makeElement("selection-select-all");
+const selectionActionsOpen = makeElement("selection-actions-open", {
+  onFocus() { focusLog.push("actions"); },
+});
+const selectionMore = makeElement("selection-more");
+const selectionActionControls = makeElement("selection-action-controls", {
+  querySelector(selector) { return selector === ".selection-more" ? selectionMore : null; },
+});
+const selectionActionsMount = makeElement("selection-actions-mount");
+const selectionActionsDialog = makeElement("selection-actions-dialog", {
+  id: "selection-actions-dialog", deferClose: true,
+});
 const categoryOpen = makeElement("category-open");
 const purposeOpen = makeElement("purpose-open");
 const vehicleOpen = makeElement("vehicle-open");
@@ -240,6 +256,10 @@ const controls = {
   "selection-count": selectionCount,
   "selection-clear": selectionClear,
   "selection-select-all": selectionSelectAll,
+  "selection-actions-open": selectionActionsOpen,
+  "selection-actions-dialog": selectionActionsDialog,
+  "selection-action-controls": selectionActionControls,
+  "selection-actions-mount": selectionActionsMount,
   "category-dialog-open": categoryOpen,
   "purpose-dialog-open": purposeOpen,
   "vehicle-dialog-open": vehicleOpen,
@@ -253,6 +273,7 @@ const controls = {
 };
 for (const id of ["category-dialog", "exclusion-dialog", "purpose-dialog", "vehicle-dialog", "merge-dialog"]) {
   controls[id] = makeElement(id, {
+    id,
     querySelector() { return makeElement("dialog-child"); },
     querySelectorAll() { return []; },
   });
@@ -266,6 +287,7 @@ for (const id of [
 
 const document = {
   title: "Trips",
+  body: makeElement("body"),
   addEventListener(type, callback) {
     const callbacks = listeners.get(type) || [];
     callbacks.push(callback);
@@ -343,6 +365,8 @@ const htmx = {
 };
 const bulkFetchCalls = [];
 let resolveBulkFetch = null;
+let resolveSelectionFetch = null;
+let selectionFetchCount = 0;
 const writeBegins = [];
 const writeFinishes = [];
 const announcements = [];
@@ -364,6 +388,8 @@ const bulkArchiveController = {
   announce(message) { announcements.push(message); },
   isWriteBusy() { return writeBusy; },
   isWriteUnavailable() { return false; },
+  isReadBusy() { return false; },
+  selectionQuery() { return scenario.selectionQuery || ""; },
 };
 if ((scenario.action || "").startsWith("bulk-delete")) {
   window.archiveController = bulkArchiveController;
@@ -374,6 +400,22 @@ window.invalidateArchiveHistoryCache = () => {
 
 function fetch(url, options) {
   bulkFetchCalls.push({ url, options });
+  if (url.startsWith("/trips/selection")) {
+    selectionFetchCount += 1;
+    if ((scenario.action.startsWith("selection-stale")
+        && !(scenario.action === "selection-stale-newer" && selectionFetchCount > 1))
+        || scenario.action === "selection-loading") {
+      return new Promise((resolve) => { resolveSelectionFetch = resolve; });
+    }
+    if (scenario.action === "selection-retry" && selectionFetchCount === 1) {
+      return Promise.resolve({ ok: false, json: async () => ({ detail: "temporary" }) });
+    }
+    if (scenario.action === "selection-error") {
+      return Promise.resolve({ ok: false, json: async () => ({ detail: "failed" }) });
+    }
+    const payload = scenario.selectionPayload || { trip_ids: [1, 2, 99], count: 3 };
+    return Promise.resolve({ ok: true, json: async () => payload });
+  }
   if (scenario.action === "bulk-delete-network-failure") {
     return Promise.reject(new Error("network down"));
   }
@@ -601,6 +643,128 @@ function completeRefresh(call, nextState = state, successful = true) {
     result.errorHidden = deleteDialogError.hidden;
     result.confirmDisabled = deleteSelectedConfirm.disabled;
     result.writeBusy = writeBusy;
+  } else if (scenario.action === "selection-read-queued") {
+    values.vehicle = "7";
+    fields.vehicle.value = "7";
+    emit("change", { target: fields.vehicle });
+    result.selectDisabled = selectionSelectAll.disabled;
+    await click(selectionSelectAll);
+    result.selectionFetchCount = bulkFetchCalls.length;
+  } else if (scenario.action === "selection-loading") {
+    const pending = selectionSelectAll.dispatch("click", { target: selectionSelectAll })[0];
+    await settle();
+    selectionCheckbox.checked = true;
+    const attemptedChange = emit("change", { target: selectionCheckbox });
+    const inlineWrite = xhr();
+    const inlineWriteAttempt = emit("htmx:beforeRequest", {
+      requestConfig: { verb: "POST", path: "/trips/1/tag", headers: {} },
+      xhr: inlineWrite,
+      elt: mutation,
+    });
+    result.loading = {
+      selectDisabled: selectionSelectAll.disabled,
+      checkboxDisabled: selectionCheckbox.disabled,
+      checkboxChecked: selectionCheckbox.checked,
+      changePrevented: attemptedChange.defaultPrevented,
+      categoryDisabled: categoryOpen.disabled,
+      deleteDisabled: deleteSelectedOpen.disabled,
+      inlineWritePrevented: inlineWriteAttempt.defaultPrevented,
+    };
+    window.archiveClearSelection();
+    resolveSelectionFetch({ ok: true, json: async () => ({ trip_ids: [1], count: 1 }) });
+    await pending;
+    result.selection = Array.from(window.__selection);
+  } else if ((scenario.action || "").startsWith("selection-stale")) {
+    selectionCheckbox.checked = true;
+    emit("change", { target: selectionCheckbox });
+    const pending = selectionSelectAll.dispatch("click", { target: selectionSelectAll })[0];
+    await settle();
+    if (scenario.action === "selection-stale-filter") {
+      values.vehicle = "7";
+      fields.vehicle.value = "7";
+      emit("change", { target: fields.vehicle });
+    } else if (scenario.action === "selection-stale-history") {
+      emit("htmx:historyRestore", { path: "/trips?q=other", cacheMiss: false });
+    } else if (scenario.action === "selection-stale-newer") {
+      window.archiveClearSelection();
+      await click(selectionSelectAll);
+    } else {
+      window.archiveClearSelection();
+    }
+    resolveSelectionFetch({ ok: true, json: async () => ({ trip_ids: [2, 99], count: 2 }) });
+    await pending;
+    await settle();
+    result.selection = Array.from(window.__selection);
+    result.selectionHidden = selectionBar.hidden;
+  } else if ((scenario.action || "").startsWith("selection-")) {
+    if (scenario.priorSelection) {
+      selectionCheckbox.checked = true;
+      emit("change", { target: selectionCheckbox });
+    }
+    await click(selectionSelectAll);
+    await settle();
+    if (scenario.action === "selection-retry") {
+      result.firstAnnouncement = status.textContent;
+      await click(selectionSelectAll);
+      await settle();
+    }
+    if (scenario.action === "selection-deselect") {
+      selectionCheckbox.checked = false;
+      emit("change", { target: selectionCheckbox });
+    }
+    if (scenario.action === "selection-pagination") {
+      selectionCards.push(paginationSelectionRow.card, arrivingSelectionRow.card);
+      emit("htmx:afterSettle", {});
+      result.paginationChecks = {
+        snapshotChecked: paginationSelectionRow.checkbox.checked,
+        arrivingChecked: arrivingSelectionRow.checkbox.checked,
+      };
+    }
+    if (scenario.action === "selection-delete") {
+      await click(deleteSelectedOpen);
+      await click(deleteSelectedConfirm);
+      await settle();
+      result.submittedIds = Array.from(
+        bulkFetchCalls[1].options.body.getAll("trip_ids"), (id) => Number(id),
+      );
+    }
+    result.selection = Array.from(window.__selection);
+    result.selectionHidden = selectionBar.hidden;
+    result.selectionCount = selectionCount.textContent;
+    result.checkboxStates = selectionCheckboxes.map((checkbox) => ({
+      checked: checkbox.checked, disabled: checkbox.disabled,
+    }));
+    result.statusText = status.textContent;
+    result.selectDisabled = selectionSelectAll.disabled;
+    result.fetches = bulkFetchCalls.map((call) => ({
+      url: call.url,
+      method: call.options.method,
+      cache: call.options.cache,
+    }));
+  } else if ((scenario.action || "").startsWith("sheet-")) {
+    selectionCheckbox.checked = true;
+    emit("change", { target: selectionCheckbox });
+    await click(selectionActionsOpen);
+    result.sheetOpened = selectionActionsDialog.open;
+    result.controlsMounted = selectionActionsMount.child === selectionActionControls;
+    if (scenario.action === "sheet-transition") {
+      await click(categoryOpen);
+      await settle();
+      result.sheetOpenAfterAction = selectionActionsDialog.open;
+      result.actionDialogOpen = controls["category-dialog"].open;
+      controls["category-dialog"].close();
+    } else if (scenario.action === "sheet-stale-transition") {
+      categoryOpen.dispatch("click", { target: categoryOpen });
+      window.archiveSelectionNavigationStarted();
+      await settle();
+      result.sheetOpenAfterAction = selectionActionsDialog.open;
+      result.actionDialogOpen = Boolean(controls["category-dialog"].open);
+    } else {
+      selectionActionsDialog.close('escape');
+    }
+    await settle();
+    result.controlsRestored = selectionBar.child === selectionActionControls;
+    result.focusLog = focusLog.slice();
   }
   process.stdout.write(JSON.stringify(result));
 })().catch((error) => {
@@ -615,13 +779,17 @@ def _run(action, **extra):
     if node is None:
         pytest.skip("node is not installed; install Node to run the archive controller harness")
     archive, selection = _inline_scripts()
+    needs_selection = (
+        action == "selected-delete" or action.startswith("bulk-delete")
+        or action.startswith("selection-") or action.startswith("sheet-")
+    )
     args = [
         node,
         "-e",
         HARNESS,
         json.dumps({"action": action, **extra}),
         archive,
-        selection if action == "selected-delete" or action.startswith("bulk-delete") else "",
+        selection if needs_selection else "",
     ]
     try:
         result = subprocess.run(
@@ -749,3 +917,163 @@ def test_selected_delete_duplicate_submit_is_blocked_while_request_is_in_flight(
     assert result["selection"] == []
     assert result["dialogOpen"] is False
     assert result["writeFinishes"] == [True]
+
+
+def test_select_all_matching_fetches_the_canonical_applied_snapshot_without_cache():
+    result = _run(
+        "selection-success",
+        selection=True,
+        values={
+            "q": "airport",
+            "category": "business",
+            "date_preset": "this_month",
+            "from": "2026-09-01",
+            "to": "2026-09-30",
+            "vehicle": "7",
+        },
+    )
+
+    assert result["fetches"] == [{
+        "url": (
+            "/trips/selection?q=airport&category=business&from=2026-09-01"
+            "&to=2026-09-30&vehicle=7"
+        ),
+        "method": "GET",
+        "cache": "no-store",
+    }]
+    assert result["selection"] == [1, 2, 99]
+    assert result["selectionCount"] == "3 trips selected (1 outside this view)"
+    assert result["selectionHidden"] is False
+    assert [item["checked"] for item in result["checkboxStates"]] == [True, True, False]
+    assert result["selectDisabled"] is False
+
+
+def test_empty_matching_snapshot_clears_the_previous_selection_cleanly():
+    result = _run(
+        "selection-empty", selection=True, priorSelection=True,
+        selectionPayload={"trip_ids": [], "count": 0},
+    )
+
+    assert result["selection"] == []
+    assert result["selectionHidden"] is True
+    assert result["statusText"] == "No matching trips to select"
+
+
+@pytest.mark.parametrize(
+    ("action", "payload"),
+    [
+        ("selection-error", None),
+        ("selection-malformed", {"trip_ids": [2, 99], "count": 1}),
+    ],
+)
+def test_failed_or_malformed_matching_snapshot_preserves_the_previous_selection(action, payload):
+    kwargs = {"selection": True, "priorSelection": True}
+    if payload is not None:
+        kwargs["selectionPayload"] = payload
+    result = _run(action, **kwargs)
+
+    assert result["selection"] == [1]
+    assert result["selectionCount"] == "1 trip selected"
+    assert result["statusText"] == "Matching trips could not be selected. Try again."
+    assert result["selectDisabled"] is False
+
+
+def test_matching_snapshot_can_retry_after_a_transport_failure():
+    result = _run("selection-retry", selection=True, priorSelection=True)
+
+    assert result["firstAnnouncement"] == "Matching trips could not be selected. Try again."
+    assert result["selection"] == [1, 2, 99]
+    assert len(result["fetches"]) == 2
+    assert result["statusText"] == "3 trips selected"
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        "selection-stale-filter", "selection-stale-history",
+        "selection-stale-clear", "selection-stale-newer",
+    ],
+)
+def test_late_matching_snapshot_cannot_restore_selection_after_navigation_or_clear(action):
+    result = _run(action, selection=True)
+
+    expected = [1, 2, 99] if action == "selection-stale-newer" else []
+    assert result["selection"] == expected
+    assert result["selectionHidden"] is (not expected)
+
+
+def test_loading_snapshot_blocks_row_changes_and_write_entry_points_until_cancelled():
+    result = _run("selection-loading", selection=True)
+
+    assert result["loading"] == {
+        "selectDisabled": True,
+        "checkboxDisabled": True,
+        "checkboxChecked": False,
+        "changePrevented": True,
+        "categoryDisabled": True,
+        "deleteDisabled": True,
+        "inlineWritePrevented": True,
+    }
+    assert result["selection"] == []
+
+
+def test_queued_filter_request_blocks_snapshotting_the_previous_applied_query():
+    result = _run("selection-read-queued", selection=True)
+
+    assert result["selectDisabled"] is True
+    assert result["selectionFetchCount"] == 0
+
+
+def test_visible_deselection_updates_total_while_unloaded_ids_remain_selected():
+    result = _run("selection-deselect", selection=True)
+
+    assert result["selection"] == [2, 99]
+    assert result["selectionCount"] == "2 trips selected (1 outside this view)"
+    assert [item["checked"] for item in result["checkboxStates"]] == [False, True, False]
+
+
+def test_pagination_reconciles_snapshot_ids_without_selecting_new_arrivals():
+    result = _run("selection-pagination", selection=True)
+
+    assert result["paginationChecks"] == {
+        "snapshotChecked": True,
+        "arrivingChecked": False,
+    }
+    assert result["selection"] == [1, 2, 99]
+    assert result["selectionCount"] == "3 trips selected"
+
+
+def test_snapshot_selection_posts_every_explicit_id_and_clears_only_after_delete_success():
+    result = _run("selection-delete", selection=True)
+
+    assert result["submittedIds"] == [1, 2, 99]
+    assert result["selection"] == []
+    assert result["selectionHidden"] is True
+
+
+def test_mobile_action_sheet_restores_focus_and_reuses_the_existing_action_dialog():
+    result = _run("sheet-transition", selection=True)
+
+    assert result["sheetOpened"] is True
+    assert result["controlsMounted"] is True
+    assert result["sheetOpenAfterAction"] is False
+    assert result["actionDialogOpen"] is True
+    assert result["controlsRestored"] is True
+    assert result["focusLog"][-1] == "actions"
+
+
+def test_mobile_action_sheet_escape_close_restores_controls_and_trigger_focus():
+    result = _run("sheet-close", selection=True)
+
+    assert result["sheetOpened"] is True
+    assert result["controlsRestored"] is True
+    assert result["focusLog"][-1] == "actions"
+
+
+def test_navigation_cancels_a_queued_sheet_to_action_dialog_transition():
+    result = _run("sheet-stale-transition", selection=True)
+
+    assert result["sheetOpenAfterAction"] is False
+    assert result["actionDialogOpen"] is False
+    assert result["controlsRestored"] is True
+    assert result["focusLog"][-1] == "header"

@@ -11,7 +11,21 @@ reproduced here.
 
 ### Added
 
+- **Archive matching selection.** **Select all matching** selects every trip
+  matching the current filters across unloaded pages and months as a
+  request-time snapshot. Explicit selections persist through pagination and
+  successful bulk-update refreshes, while filter or history navigation clears
+  them.
+
 ### Changed
+
+- **Dashboard week navigation.** A **Current week** link appears beside the
+  week arrows when viewing another week, and the week heading remains a
+  shortcut to the current week.
+- **Trips selection actions.** Failed requests and actions preserve the
+  selection, and successful **Delete selected** clears it. Desktop keeps the
+  bulk controls together; on phones, a compact selected-count strip has an
+  **Actions** button that opens a panel with the same controls.
 
 ### Fixed
 

@@ -22,11 +22,15 @@ reordering fails loudly here.
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import httpx
 from fastapi import FastAPI
+from starlette.middleware.sessions import SessionMiddleware
+from starlette.responses import RedirectResponse
 from starlette.routing import Match
 
+from app.auth import AuthRedirect
 from app.ui import make_router
 
 
@@ -115,6 +119,37 @@ def test_trips_archive_list_requires_ui_authentication():
     assert {
         dependency.call.__name__ for dependency in route.dependant.dependencies
     } == {"require_user"}
+
+
+def test_trip_selection_route_is_not_swallowed_by_trip_detail():
+    route = _first_matching_route("GET", "/trips/selection")
+    assert route is not None
+    assert route.path == "/trips/selection"
+    assert {
+        dependency.call.__name__ for dependency in route.dependant.dependencies
+    } == {"require_user"}
+
+
+def test_trip_selection_rejects_anonymous_http_request_before_database_access():
+    app = FastAPI()
+    app.add_middleware(SessionMiddleware, secret_key="test-secret")
+    app.state.config = SimpleNamespace(dev_no_auth=False)
+    app.include_router(make_router())
+
+    @app.exception_handler(AuthRedirect)
+    async def redirect_to_login(request, exc):
+        return RedirectResponse("/login", status_code=303)
+
+    async def get_selection():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver",
+        ) as client:
+            return await client.get("/trips/selection?q=private")
+
+    response = asyncio.run(get_selection())
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+    assert "trip_ids" not in response.text
 
 
 def test_trip_card_routes_keep_ui_auth_and_edit_csrf_dependencies():

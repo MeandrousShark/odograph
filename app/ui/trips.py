@@ -757,6 +757,45 @@ def register_archive(router: APIRouter) -> None:
             response.headers[header] = url
             return response
 
+        @router.get("/trips/selection")
+        async def trips_selection(
+            request: Request,
+            user: dict = Depends(require_user),
+            category: str = Query(""),
+            from_: str = Query("", alias="from"),
+            to: str = Query(""),
+            vehicle: str = Query(""),
+            q: str = Query(""),
+            exclusion: str = Query(""),
+            date_preset: str = Query(""),
+        ):
+            """Return the complete matching trip-ID snapshot for selection.
+
+            Selection intentionally ignores archive pagination. The returned
+            IDs are the mutation contract, so later writes can target this
+            exact snapshot even if the rows no longer match these filters.
+            """
+            exclusion = exclusion if isinstance(exclusion, str) else ""
+            tz = request.app.state.config.display_tz
+            from_, to, _ = _resolve_archive_date_filter(
+                from_, to, date_preset, tz,
+            )
+            from_dt, to_dt = parse_date_range(from_, to, tz)
+            where, params = _trip_filter_sql(
+                category, from_dt, to_dt, _parse_vehicle_id(vehicle),
+                q=q, exclusion=exclusion,
+            )
+            async with request.app.state.pool.connection() as conn:
+                cur = await conn.execute(
+                    f"SELECT id FROM trips {where} ORDER BY started_at DESC, id DESC",
+                    params,
+                )
+                trip_ids = [row[0] for row in await cur.fetchall()]
+            return JSONResponse(
+                {"trip_ids": trip_ids, "count": len(trip_ids)},
+                headers={"Cache-Control": "no-store"},
+            )
+
 
 def register_month_page(router: APIRouter) -> None:
         @router.get("/trips/month/{year}/{month}")
