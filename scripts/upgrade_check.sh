@@ -11,6 +11,7 @@
 # Usage:
 #   scripts/upgrade_check.sh --base REF --candidate REF [--keep]
 #   scripts/upgrade_check.sh --base REF --candidate REF --candidate-image IMAGE [--keep]
+#   scripts/upgrade_check.sh --base REF --candidate REF --database-image-migration [--keep]
 #
 # REF is any git commit-ish resolvable in this checkout (tag, branch, SHA).
 # --keep skips container/volume/scratch teardown at exit, for inspecting a
@@ -31,7 +32,7 @@ OIDC_EMAIL="drill-oidc@example.test"
 
 usage() {
     cat >&2 <<'EOF'
-usage: scripts/upgrade_check.sh --base REF --candidate REF [--candidate-image IMAGE] [--keep]
+usage: scripts/upgrade_check.sh --base REF --candidate REF [--candidate-image IMAGE] [--database-image-migration] [--keep]
 
 Runs a disposable Compose backup/restore/upgrade/rollback rehearsal from a
 base git ref to a candidate git ref. When --candidate-image is given, the
@@ -43,11 +44,14 @@ any existing container/volume, or the repository working tree.
   --candidate REF         git commit-ish to build as the candidate
   --candidate-image IMAGE published candidate image with an explicit non-latest
                           tag or digest; omitted to build candidate source
+  --database-image-migration
+                          allow exactly the rendered db image change and exercise
+                          fresh-volume candidate restore plus old-image rollback
   --keep                  skip container/volume/scratch cleanup for debugging
 
 Base and candidate trees may differ in their app service, but the rendered db
-service must be identical. A release that changes db service operations needs
-a release-specific drill rather than this script.
+service must be identical by default. Migration mode allows only the rendered
+db image to change; any other db-service drift needs a release-specific drill.
 EOF
     exit "${1:-1}"
 }
@@ -55,6 +59,7 @@ EOF
 BASE_REF=""
 CANDIDATE_REF=""
 CANDIDATE_IMAGE=""
+DATABASE_IMAGE_MIGRATION=0
 KEEP=0
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -67,6 +72,8 @@ while [ "$#" -gt 0 ]; do
         --candidate-image)
             [ "$#" -ge 2 ] || { echo "error: --candidate-image requires a value" >&2; usage; }
             CANDIDATE_IMAGE="$2"; shift 2 ;;
+        --database-image-migration)
+            DATABASE_IMAGE_MIGRATION=1; shift ;;
         --keep) KEEP=1; shift ;;
         -h|--help) usage 0 ;;
         *) echo "error: unrecognized argument: $1" >&2; usage ;;
@@ -173,6 +180,7 @@ PROJECT="mtdrill${STAMP}"
 SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/upgrade_check.XXXXXX")"
 BASE_DIR="$SCRATCH/base/$PROJECT"
 CAND_DIR="$SCRATCH/cand/$PROJECT"
+MIGRATION_BACKUP_ARCHIVE="$SCRATCH/backup/mileage-after-ingest.dump"
 mkdir -p "$SCRATCH/http" "$SCRATCH/backup" "$BASE_DIR" "$CAND_DIR"
 
 # $compose_cmd is a two-word string for "docker compose"; deliberately
@@ -220,7 +228,8 @@ remove_stamp_volumes() {
     # run's unique project stamp.
     local runtime matches vol
     runtime="$(runtime_cmd)"
-    matches="$($runtime volume ls --format '{{.Name}}' 2>/dev/null | grep -E "^${PROJECT}" || true)"
+    matches="$($runtime volume ls --format '{{.Name}}')" || return 1
+    matches="$(printf '%s\n' "$matches" | grep -E "^${PROJECT}_" || true)"
     [ -n "$matches" ] || return 0
     while IFS= read -r vol; do
         [ -z "$vol" ] && continue
@@ -232,7 +241,10 @@ remove_stamp_volumes() {
                 ;;
         esac
         echo "Removing disposable volume: $vol"
-        "$runtime" volume rm "$vol" >/dev/null 2>&1 || true
+        if ! "$runtime" volume rm "$vol" >/dev/null; then
+            echo "error: could not remove disposable volume $vol; refusing to reuse it" >&2
+            return 1
+        fi
     done <<< "$matches"
 }
 
@@ -686,15 +698,84 @@ PYEOF
 }
 
 assert_stable_db_service() {
+    local base_image candidate_image base_without_image candidate_without_image
     capture_db_service_config "$BASE_DIR" "$SCRATCH/base-db-service.yml"
     capture_db_service_config "$CAND_DIR" "$SCRATCH/candidate-db-service.yml"
-    if ! diff -u "$SCRATCH/base-db-service.yml" "$SCRATCH/candidate-db-service.yml" \
+    if diff -u "$SCRATCH/base-db-service.yml" "$SCRATCH/candidate-db-service.yml" \
         > "$SCRATCH/db-service-diff.txt"; then
+        if [ "$DATABASE_IMAGE_MIGRATION" -eq 1 ]; then
+            echo "error: --database-image-migration requires a changed db image" >&2
+            return 1
+        fi
+        step_pass "step 1: base/candidate rendered db service definitions match"
+        return 0
+    fi
+
+    if [ "$DATABASE_IMAGE_MIGRATION" -ne 1 ]; then
         echo "error: base and candidate rendered db service definitions differ:" >&2
         cat "$SCRATCH/db-service-diff.txt" >&2
         echo "error: this generic drill requires a stable db service; use a release-specific operations migration plan." >&2
         return 1
     fi
+
+    if ! base_image="$(sed -nE 's/^[[:space:]]+image:[[:space:]]*//p' "$SCRATCH/base-db-service.yml")" \
+        || ! candidate_image="$(sed -nE 's/^[[:space:]]+image:[[:space:]]*//p' "$SCRATCH/candidate-db-service.yml")" \
+        || [ -z "$base_image" ] || [ -z "$candidate_image" ] \
+        || [ "$(printf '%s\n' "$base_image" | wc -l | tr -d '[:space:]')" -ne 1 ] \
+        || [ "$(printf '%s\n' "$candidate_image" | wc -l | tr -d '[:space:]')" -ne 1 ]; then
+        echo "error: --database-image-migration requires one rendered db image in each service" >&2
+        return 1
+    fi
+    base_without_image="$SCRATCH/base-db-service-without-image.yml"
+    candidate_without_image="$SCRATCH/candidate-db-service-without-image.yml"
+    sed -E '/^[[:space:]]+image:[[:space:]]*/d' "$SCRATCH/base-db-service.yml" > "$base_without_image"
+    sed -E '/^[[:space:]]+image:[[:space:]]*/d' "$SCRATCH/candidate-db-service.yml" > "$candidate_without_image"
+    if ! diff -u "$base_without_image" "$candidate_without_image" \
+        > "$SCRATCH/db-service-diff.txt"; then
+        echo "error: --database-image-migration permits only the rendered db image change; other db service definitions differ:" >&2
+        cat "$SCRATCH/db-service-diff.txt" >&2
+        return 1
+    fi
+    if [ "$base_image" = "$candidate_image" ]; then
+        echo "error: --database-image-migration was requested but the rendered db image did not change" >&2
+        return 1
+    fi
+    step_pass "step 1: rendered db service differs only by image ($base_image -> $candidate_image)"
+}
+
+capture_db_image_identity() {
+    local outfile="$2" container_id image_id
+    # Both Compose frontends label services; podman-compose ps has no service filter.
+    container_id="$($runtime ps -q --filter "label=com.docker.compose.project=$PROJECT" \
+        --filter label=com.docker.compose.service=db)" || return 1
+    if [ -z "$container_id" ] || [ "$(printf '%s\n' "$container_id" | wc -l | tr -d '[:space:]')" -ne 1 ]; then
+        echo "error: expected exactly one running db container for project '$PROJECT'" >&2
+        return 1
+    fi
+    image_id="$($runtime inspect --format '{{.Image}}' "$container_id" | tr -d '[:space:]')" || return 1
+    [ -n "$image_id" ] || {
+        echo "error: no db image identity was returned for container '$container_id'" >&2
+        return 1
+    }
+    {
+        printf 'container_id=%s\n' "$container_id"
+        printf 'image_id=%s\n' "$image_id"
+    } > "$outfile"
+}
+
+db_image_identity_value() {
+    sed -n 's/^image_id=//p' "$1"
+}
+
+assert_db_image_identity_equal() {
+    local expected_file="$1" actual_file="$2" description="$3"
+    local expected actual
+    expected="$(db_image_identity_value "$expected_file")"
+    actual="$(db_image_identity_value "$actual_file")"
+    [ -n "$expected" ] || step_fail "$description: expected db image identity is empty"
+    [ -n "$actual" ] || step_fail "$description: actual db image identity is empty"
+    [ "$expected" = "$actual" ] || step_fail "$description: expected image '$expected', got '$actual'"
+    step_pass "$description: image identity $actual"
 }
 
 # --- drill steps -------------------------------------------------------
@@ -737,6 +818,11 @@ step1_base_up() {
 
     compose_base up -d --build db app
     wait_for_healthz 240 || step_fail "step 1: base install did not become healthy at ${BASE_URL}/healthz"
+    if [ "$DATABASE_IMAGE_MIGRATION" -eq 1 ]; then
+        capture_db_image_identity "$BASE_DIR" "$SCRATCH/base-db-before-migration.txt" \
+            || step_fail "step 1: could not capture the original base db image identity"
+        step_pass "step 1: captured original base db container/image identity"
+    fi
     oidc_env_loaded "$BASE_DIR" \
         || step_fail "step 1: base app did not receive the complete synthetic OIDC configuration"
     step_pass "step 1: base ($BASE_REF) up and healthy with complete synthetic OIDC configuration at ${BASE_URL}"
@@ -863,9 +949,46 @@ step6_post_restore_check() {
     step_pass "step 6: restored app healthy, admin sign-in succeeded, ingest accepted a new point ($before -> $after)"
 }
 
+step7_database_image_migration() {
+    local base_image candidate_image
+    compose_base stop app
+    (cd "$BASE_DIR" && "$CAND_DIR/scripts/backup_database.sh" --output "$MIGRATION_BACKUP_ARCHIVE") \
+        || step_fail "step 7: post-ingest backup_database.sh failed before database-image migration"
+    (cd "$BASE_DIR" && "$CAND_DIR/scripts/restore_database.sh" --verify-only "$MIGRATION_BACKUP_ARCHIVE") \
+        || step_fail "step 7: post-ingest restore_database.sh --verify-only rejected the migration archive"
+    step_pass "step 7: post-ingest backup produced and verified before replacing the task-owned db volume"
+
+    compose_base down
+    remove_stamp_volumes
+    compose_cand up -d db \
+        || step_fail "step 7: candidate-image db failed to start on the fresh volume"
+    wait_for_pg_ready "$CAND_DIR" 180 || step_fail "step 7: candidate-image db did not become ready on a fresh volume"
+    capture_db_image_identity "$CAND_DIR" "$SCRATCH/candidate-db-after-migration.txt" \
+        || step_fail "step 7: could not capture candidate db image identity"
+    base_image="$(db_image_identity_value "$SCRATCH/base-db-before-migration.txt")"
+    candidate_image="$(db_image_identity_value "$SCRATCH/candidate-db-after-migration.txt")"
+    [ -n "$base_image" ] || step_fail "step 7: original base db image identity is empty"
+    [ -n "$candidate_image" ] || step_fail "step 7: candidate db image identity is empty"
+    [ "$base_image" != "$candidate_image" ] \
+        || step_fail "step 7: candidate db container is still using the original image identity"
+    step_pass "step 7: candidate db image identity differs from the original base image ($base_image -> $candidate_image)"
+
+    (cd "$CAND_DIR" && "$CAND_DIR/scripts/restore_database.sh" "$MIGRATION_BACKUP_ARCHIVE") \
+        || step_fail "step 7: candidate restore_database.sh failed on the fresh candidate-image volume"
+    capture_manifest "$CAND_DIR" "$SCRATCH/manifest-after-database-image-restore.txt"
+    assert_data_manifests_equal "$SCRATCH/manifest-after-ingest.txt" \
+        "$SCRATCH/manifest-after-database-image-restore.txt" \
+        "step 7a: candidate image fresh-volume restore preserved the post-ingest data"
+
+}
+
 step7_upgrade() {
     local v mig account_count identity_count
-    compose_base stop app
+    if [ "$DATABASE_IMAGE_MIGRATION" -eq 1 ]; then
+        step7_database_image_migration
+    else
+        compose_base stop app
+    fi
     if [ -n "$CANDIDATE_IMAGE" ]; then
         compose_cand up -d --no-build app
     else
@@ -921,11 +1044,23 @@ step7_upgrade() {
 
 step8_rollback() {
     local v mig has_accounts oidc_relation local_admin_relation local_admin_count
+    local base_image candidate_image
     compose_base down
     remove_stamp_volumes
     compose_base up -d db
     # Same fresh-volume PostGIS init time as step 5's wait_for_pg_ready call.
     wait_for_pg_ready "$BASE_DIR" 180 || step_fail "step 8: fresh db did not become ready"
+    if [ "$DATABASE_IMAGE_MIGRATION" -eq 1 ]; then
+        capture_db_image_identity "$BASE_DIR" "$SCRATCH/base-db-after-rollback.txt" \
+            || step_fail "step 8: could not capture the restored base db image identity"
+        assert_db_image_identity_equal "$SCRATCH/base-db-before-migration.txt" \
+            "$SCRATCH/base-db-after-rollback.txt" \
+            "step 8: fresh rollback db uses the original base image"
+        base_image="$(db_image_identity_value "$SCRATCH/base-db-after-rollback.txt")"
+        candidate_image="$(db_image_identity_value "$SCRATCH/candidate-db-after-migration.txt")"
+        [ "$base_image" != "$candidate_image" ] \
+            || step_fail "step 8: rollback db image identity unexpectedly matches the candidate image"
+    fi
     (cd "$BASE_DIR" && "$CAND_DIR/scripts/restore_database.sh" "$BACKUP_ARCHIVE") \
         || step_fail "step 8: restore_database.sh failed restoring the pre-upgrade archive"
 

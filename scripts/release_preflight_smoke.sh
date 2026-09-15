@@ -13,6 +13,7 @@ VERSION="$2"
 REVISION="$3"
 EVIDENCE="$4"
 DB_PLATFORM="${5:-linux/amd64}"
+DB_IMAGE="${POSTGIS_IMAGE:-docker.io/postgis/postgis:16-3.4}"
 
 stamp="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}-${RUNNER_ARCH:-unknown}-$$"
 stamp="$(printf '%s' "$stamp" | tr '[:upper:]' '[:lower:]')"
@@ -57,7 +58,7 @@ docker run -d --name "$db" --network "$network" --platform "$DB_PLATFORM" \
     -e POSTGRES_DB=mileage \
     -e POSTGRES_USER=mileage \
     -e POSTGRES_PASSWORD=testpw \
-    docker.io/postgis/postgis:16-3.4 >/dev/null
+    "$DB_IMAGE" >/dev/null
 
 deadline=$(( $(date +%s) + 180 ))
 until docker exec "$db" pg_isready -h 127.0.0.1 -U mileage -d mileage >/dev/null 2>&1; do
@@ -140,6 +141,10 @@ grep -Fq "<dt>Git revision</dt><dd><code>${REVISION}</code>" "$settings_html"
 {
     echo "platform: $(uname -s)/$(uname -m)"
     echo "image: $IMAGE"
+    echo "database image: $DB_IMAGE"
+    echo "database platform: $DB_PLATFORM"
+    docker exec "$db" psql -U mileage -d mileage -Atc \
+        'SELECT version(); SELECT postgis_full_version();'
     echo "version: $VERSION"
     echo "revision: $REVISION"
     echo "healthz over TLS: 200 {\"ok\":true}"

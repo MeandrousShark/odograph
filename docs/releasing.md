@@ -437,9 +437,62 @@ candidate app definitions may differ, but their rendered database service must
 remain identical; a database-service operational change needs a release-specific
 drill documented in that release's notes.
 
+### Database image migration drill
+
+When a candidate changes only the rendered database image, use the explicit
+database-image migration mode. The default stable-database guard remains in
+force; this mode rejects any database-service change other than the image:
+
+```sh
+COMPOSE_CMD="docker compose" scripts/upgrade_check.sh \
+  --base vPREVIOUS \
+  --candidate "$VERSION" \
+  --database-image-migration
+
+COMPOSE_CMD=podman-compose scripts/upgrade_check.sh \
+  --base vPREVIOUS \
+  --candidate "$VERSION" \
+  --database-image-migration
+```
+
+The drill stops the app, verifies a fresh backup after the post-restore ingest
+check, destroys only its task-owned database volume, starts the candidate
+database on a fresh volume, restores and semantically compares that backup,
+then starts the candidate app. It rolls back by starting the original database
+image on a fresh volume and restoring the pre-upgrade backup; writes made after
+that backup must be lost. It never swaps `PGDATA` directories directly.
+
 For the first public release, record "Prior-release artifact upgrade gate: not
 applicable. No prior public release exists." A clean-install verification on
 both architectures is still required.
+
+## Build and publish the PostGIS image
+
+The dedicated `.github/workflows/postgis-image.yml` workflow and
+`docker/postgis/Dockerfile` build infrastructure for a future database-image
+migration. They build native `linux/amd64` and `linux/arm64` images from the
+immutable upstream `nickblah/postgis` PostgreSQL 16 and PostGIS 3.6.4 base,
+refresh Debian packages, and build the pinned gosu 1.19 source with the pinned
+patched Go toolchain. Each native job tests a fresh database, runs the v0.11.0
+application HTTPS smoke, and scans the exact local archive with Trivy. Fixable
+HIGH or CRITICAL findings fail the workflow; this workflow has no scan
+exceptions.
+
+Publication is limited to trusted pushes or manual dispatches on `main` and
+uses the separate GHCR package `ghcr.io/meandrousshark/odograph-postgis`.
+The publish job loads the exact tested AMD64 and ARM64 archives, publishes
+`sha-<full-source-SHA>` tags and their architecture tags, creates the signed
+multi-architecture index, signs both child digests, and attaches an SPDX
+attestation to each child digest.
+
+Before updating the upstream base or gosu source pins, maintainers must review
+the upstream changes and rerun both native architecture builds, fresh database
+checks, blocking Trivy scans, and the v0.11.0 application smoke. Record and
+verify the resulting index and child digests, signatures and SPDX subjects
+before pinning the index in repository references. The current default database
+image remains `postgis/postgis:16-3.4` until a separately reviewed follow-up
+wires the new image into Compose and the release preflight. This infrastructure
+work does not announce an application release or change production.
 
 ## Move the floating minor tag
 

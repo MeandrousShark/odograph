@@ -222,6 +222,18 @@ def test_up_never_overwrites_an_existing_env_file(tmp_path):
     assert env_file.read_text() == sentinel
 
 
+def test_up_refuses_an_orphaned_database_volume(tmp_path):
+    bin_dir, log = _fake_podman(tmp_path)
+    env = _base_env(tmp_path, bin_dir, log, FAKE_PODMAN_VOLUME_EXISTS="0")
+
+    result = _run_devsite(tmp_path, "up", env=env)
+
+    assert result.returncode == 1
+    assert "refusing to attach a new database image" in result.stderr
+    lines = log.read_text().splitlines()
+    assert not any(line.startswith(("run ", "volume create ", "volume rm ")) for line in lines)
+
+
 def test_up_does_not_recreate_an_already_running_database_container(tmp_path):
     bin_dir, log = _fake_podman(tmp_path)
     env = _base_env(

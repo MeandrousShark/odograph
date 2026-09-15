@@ -36,10 +36,10 @@ Three things are deliberately **not** in the archive:
   [Self-hosted OSRM road-snapping](osrm.md#provisioning) rather than backing
   it up.
 - **The PostGIS-managed `tiger`, `tiger_data`, and `topology` schemas.**
-  These are created by the database image itself on every fresh volume, not
-  by this application, so a restore target already has them without needing
-  anything from the archive. All application data lives in the `public`
-  schema, which is fully included above.
+  Older database images create these on every fresh volume. When an archive
+  declares their extensions but omits the schemas, the restore script creates
+  the missing schemas within the restore transaction. All application data
+  lives in the `public` schema, which is fully included above.
 
 Copying the live `dbdata` volume directly (filesystem copy, snapshot, `tar`
 of the volume mount, etc.) is not a supported backup path. PostgreSQL's data
@@ -135,8 +135,12 @@ scripts/restore_database.sh backups/mileage-20260719T030000Z.dump
 docker compose up -d app
 ```
 
-The restore runs `pg_restore --single-transaction --exit-on-error`, so a
-failure mid-restore leaves nothing partially committed. On success it runs
+The restore first renders the complete archive with `pg_restore` into a private
+temporary directory. Allow free local disk space for two uncompressed SQL
+copies of the archive. It then applies the required extension schemas and
+archive SQL using `psql --single-transaction` with `ON_ERROR_STOP=1`, so a
+failure rolls back both schema preparation and restored data. Temporary files
+are removed on exit or interruption. On success it runs
 `ANALYZE`, prints the restored schema version, and compares it against the
 archive's manifest if one is next to it (a mismatch is a warning, not a
 failure, since the restore already committed). It does not start the app for

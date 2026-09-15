@@ -58,7 +58,7 @@ def test_real_scanner_accepts_public_tree_without_git_changes(source):
 @pytest.mark.parametrize("relative", [
     "docs/notes.md", "notes.md", "tests/test_handoff_contract.py", "app/.claude/settings.json",
     "scripts/.codex/settings.json", "tests/.agents/state.json", "app/AGENTS.md", "app/.env",
-    "scripts/.env.local", "scripts/.devsite/state.json",
+    "scripts/.env.local", "scripts/.devsite/state.json", "docker/.env", "docker/postgis/AGENTS.md",
 ])
 def test_untracked_disallowed_paths_are_rejected(source, relative):
     write(source, relative, "fixture")

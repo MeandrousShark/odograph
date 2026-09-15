@@ -9,6 +9,14 @@ reproduced here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Restore legacy PostGIS backups into fresh images that do not pre-create
+  extension schemas. Schema preparation and archive restore now share one
+  transaction.
+- Refuse to attach a newly created QA database container to an orphaned
+  persistent volume; recover it with its original image or a verified backup.
+
 ## [0.11.0] - 2026-09-14
 
 ### Added

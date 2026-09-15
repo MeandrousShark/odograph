@@ -1,0 +1,408 @@
+name: PostGIS image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - docker/postgis/**
+      - .github/workflows/postgis-image.yml
+      - scripts/release_preflight_smoke.sh
+      - tests/test_postgis_image_workflow.py
+  pull_request:
+    paths:
+      - docker/postgis/**
+      - .github/workflows/postgis-image.yml
+      - scripts/release_preflight_smoke.sh
+      - tests/test_postgis_image_workflow.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: postgis-image-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/meandrousshark/odograph-postgis
+
+jobs:
+  build-amd64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    env:
+      LOCAL_IMAGE: odograph-postgis:test-${{ github.sha }}-amd64
+      ARCHIVE: postgis-image-linux-amd64.tar
+      EXPECTED_ARCH: amd64
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v4
+      - name: Verify native amd64 runner
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ARCH" = X64
+          test "$(uname -m)" = x86_64
+      - name: Create evidence directory
+        run: mkdir -p evidence
+      - name: Build amd64 archive
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --file docker/postgis/Dockerfile \
+            --platform linux/amd64 \
+            --pull \
+            --no-cache \
+            --provenance=false \
+            --build-arg GIT_REVISION="$GITHUB_SHA" \
+            --tag "$LOCAL_IMAGE" \
+            --output "type=docker,dest=$RUNNER_TEMP/$ARCHIVE" \
+            .
+      - name: Load and verify amd64 archive
+        run: |
+          set -euo pipefail
+          docker load --input "$RUNNER_TEMP/$ARCHIVE"
+          test "$(docker image inspect "$LOCAL_IMAGE" --format '{{.Architecture}}')" = "$EXPECTED_ARCH"
+          test "$(docker image inspect "$LOCAL_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "https://github.com/MeandrousShark/odograph"
+          test "$(docker image inspect "$LOCAL_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+      - name: Scan amd64 archive
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: odograph-postgis:test-${{ github.sha }}-amd64
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          scanners: vuln
+          output: evidence/trivy-amd64.txt
+      - name: Test fresh amd64 PostgreSQL
+        run: |
+          set -euo pipefail
+          container="odograph-postgis-test-${GITHUB_RUN_ID}-amd64"
+          cleanup() {
+            docker rm -fv "$container" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker run --detach --name "$container" \
+            --env POSTGRES_DB=mileage \
+            --env POSTGRES_USER=mileage \
+            --env POSTGRES_PASSWORD=testpw \
+            "$LOCAL_IMAGE"
+          for attempt in $(seq 1 60); do
+            if docker exec "$container" pg_isready -h 127.0.0.1 -U mileage -d mileage; then
+              break
+            fi
+            if [[ "$attempt" == 60 ]]; then
+              echo "PostgreSQL did not become ready" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          docker exec "$container" psql -v ON_ERROR_STOP=1 \
+            --username=mileage --dbname=mileage \
+            --command='CREATE EXTENSION postgis; CREATE EXTENSION postgis_topology; CREATE EXTENSION fuzzystrmatch; CREATE EXTENSION postgis_tiger_geocoder;'
+          docker exec "$container" psql -v ON_ERROR_STOP=1 -At \
+            --username=mileage --dbname=mileage \
+            --command="SELECT ST_SRID(ST_Transform(ST_SetSRID(ST_Point(-122.4, 37.8), 4326), 3857)) = 3857" |
+            grep -qx t
+      - name: Smoke test v0.11.0 application on amd64 PostGIS
+        run: |
+          set -euo pipefail
+          app_image="ghcr.io/meandrousshark/odograph@sha256:f38cac35d35a91ad18523dab47a409ea0ea560e73bbb9e1c76f874a7c9290608"
+          docker pull --platform linux/amd64 "$app_image"
+          test "$(docker image inspect "$app_image" --format '{{.Architecture}}')" = amd64
+          POSTGIS_IMAGE="$LOCAL_IMAGE" scripts/release_preflight_smoke.sh \
+            "$app_image" v0.11.0 \
+            2dd6f1087d1c6f94d5a9700b122baa46a3f80b8c \
+            evidence/smoke-amd64.txt linux/amd64
+      - name: Upload amd64 scan and smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgis-image-${{ github.run_id }}-${{ github.run_attempt }}-linux-amd64-evidence
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Upload amd64 archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgis-image-${{ github.run_id }}-${{ github.run_attempt }}-linux-amd64
+          path: ${{ runner.temp }}/postgis-image-linux-amd64.tar
+          if-no-files-found: error
+          retention-days: 2
+
+  build-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    env:
+      LOCAL_IMAGE: odograph-postgis:test-${{ github.sha }}-arm64
+      ARCHIVE: postgis-image-linux-arm64.tar
+      EXPECTED_ARCH: arm64
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v4
+      - name: Verify native arm64 runner
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ARCH" = ARM64
+          test "$(uname -m)" = aarch64
+      - name: Create evidence directory
+        run: mkdir -p evidence
+      - name: Build arm64 archive
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --file docker/postgis/Dockerfile \
+            --platform linux/arm64 \
+            --pull \
+            --no-cache \
+            --provenance=false \
+            --build-arg GIT_REVISION="$GITHUB_SHA" \
+            --tag "$LOCAL_IMAGE" \
+            --output "type=docker,dest=$RUNNER_TEMP/$ARCHIVE" \
+            .
+      - name: Load and verify arm64 archive
+        run: |
+          set -euo pipefail
+          docker load --input "$RUNNER_TEMP/$ARCHIVE"
+          test "$(docker image inspect "$LOCAL_IMAGE" --format '{{.Architecture}}')" = "$EXPECTED_ARCH"
+          test "$(docker image inspect "$LOCAL_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "https://github.com/MeandrousShark/odograph"
+          test "$(docker image inspect "$LOCAL_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+      - name: Scan arm64 archive
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: odograph-postgis:test-${{ github.sha }}-arm64
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          scanners: vuln
+          output: evidence/trivy-arm64.txt
+      - name: Test fresh arm64 PostgreSQL
+        run: |
+          set -euo pipefail
+          container="odograph-postgis-test-${GITHUB_RUN_ID}-arm64"
+          cleanup() {
+            docker rm -fv "$container" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker run --detach --name "$container" \
+            --env POSTGRES_DB=mileage \
+            --env POSTGRES_USER=mileage \
+            --env POSTGRES_PASSWORD=testpw \
+            "$LOCAL_IMAGE"
+          for attempt in $(seq 1 60); do
+            if docker exec "$container" pg_isready -h 127.0.0.1 -U mileage -d mileage; then
+              break
+            fi
+            if [[ "$attempt" == 60 ]]; then
+              echo "PostgreSQL did not become ready" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          docker exec "$container" psql -v ON_ERROR_STOP=1 \
+            --username=mileage --dbname=mileage \
+            --command='CREATE EXTENSION postgis; CREATE EXTENSION postgis_topology; CREATE EXTENSION fuzzystrmatch; CREATE EXTENSION postgis_tiger_geocoder;'
+          docker exec "$container" psql -v ON_ERROR_STOP=1 -At \
+            --username=mileage --dbname=mileage \
+            --command="SELECT ST_SRID(ST_Transform(ST_SetSRID(ST_Point(-122.4, 37.8), 4326), 3857)) = 3857" |
+            grep -qx t
+      - name: Smoke test v0.11.0 application on arm64 PostGIS
+        run: |
+          set -euo pipefail
+          app_image="ghcr.io/meandrousshark/odograph@sha256:f38cac35d35a91ad18523dab47a409ea0ea560e73bbb9e1c76f874a7c9290608"
+          docker pull --platform linux/arm64 "$app_image"
+          test "$(docker image inspect "$app_image" --format '{{.Architecture}}')" = arm64
+          POSTGIS_IMAGE="$LOCAL_IMAGE" scripts/release_preflight_smoke.sh \
+            "$app_image" v0.11.0 \
+            2dd6f1087d1c6f94d5a9700b122baa46a3f80b8c \
+            evidence/smoke-arm64.txt linux/arm64
+      - name: Upload arm64 scan and smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgis-image-${{ github.run_id }}-${{ github.run_attempt }}-linux-arm64-evidence
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Upload arm64 archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgis-image-${{ github.run_id }}-${{ github.run_attempt }}-linux-arm64
+          path: ${{ runner.temp }}/postgis-image-linux-arm64.tar
+          if-no-files-found: error
+          retention-days: 2
+
+  publish:
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    needs:
+      - build-amd64
+      - build-arm64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    env:
+      TAG: sha-${{ github.sha }}
+      AMD64_LOCAL_IMAGE: odograph-postgis:test-${{ github.sha }}-amd64
+      ARM64_LOCAL_IMAGE: odograph-postgis:test-${{ github.sha }}-arm64
+    outputs:
+      manifest-digest: ${{ steps.manifest.outputs.digest }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: postgis-image-${{ github.run_id }}-${{ github.run_attempt }}-linux-amd64
+          path: artifacts/amd64
+      - uses: actions/download-artifact@v4
+        with:
+          name: postgis-image-${{ github.run_id }}-${{ github.run_attempt }}-linux-arm64
+          path: artifacts/arm64
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v4
+      - name: Refuse to replace an existing commit tag
+        env:
+          IMAGE: ${{ env.IMAGE }}
+        run: |
+          set -euo pipefail
+          absent_tag() {
+            local reference="$1"
+            local output status
+            set +e
+            output="$(docker buildx imagetools inspect "$reference" 2>&1)"
+            status=$?
+            set -e
+            if [[ "$status" -eq 0 ]]; then
+              echo "Immutable image tag already exists: $reference" >&2
+              return 1
+            fi
+            if [[ "$output" != *"$reference: not found"* ]] && \
+               ! grep -Eiq 'manifest unknown|MANIFEST_UNKNOWN|no such manifest' <<< "$output"; then
+              echo "Could not establish that image tag is absent: $reference" >&2
+              printf '%s\n' "$output" >&2
+              return 1
+            fi
+          }
+          absent_tag "$IMAGE:$TAG"
+          absent_tag "$IMAGE:$TAG-amd64"
+          absent_tag "$IMAGE:$TAG-arm64"
+      - name: Load exact tested archives
+        run: |
+          set -euo pipefail
+          docker load --input artifacts/amd64/postgis-image-linux-amd64.tar
+          docker load --input artifacts/arm64/postgis-image-linux-arm64.tar
+          test "$(docker image inspect "$AMD64_LOCAL_IMAGE" --format '{{.Architecture}}')" = amd64
+          test "$(docker image inspect "$ARM64_LOCAL_IMAGE" --format '{{.Architecture}}')" = arm64
+          test "$(docker image inspect "$AMD64_LOCAL_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+          test "$(docker image inspect "$ARM64_LOCAL_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+      - name: Push tested architecture images
+        id: children
+        env:
+          IMAGE: ${{ env.IMAGE }}
+        run: |
+          set -euo pipefail
+          docker tag "$AMD64_LOCAL_IMAGE" "$IMAGE:$TAG-amd64"
+          docker tag "$ARM64_LOCAL_IMAGE" "$IMAGE:$TAG-arm64"
+          docker push "$IMAGE:$TAG-amd64"
+          docker push "$IMAGE:$TAG-arm64"
+          amd64_digest="$(docker buildx imagetools inspect "$IMAGE:$TAG-amd64" --format '{{json .Manifest}}' | jq -er '.digest')"
+          arm64_digest="$(docker buildx imagetools inspect "$IMAGE:$TAG-arm64" --format '{{json .Manifest}}' | jq -er '.digest')"
+          docker buildx imagetools inspect "$IMAGE:$TAG-amd64" --format '{{json .Image}}' |
+            jq -e '.os == "linux" and .architecture == "amd64"'
+          docker buildx imagetools inspect "$IMAGE:$TAG-arm64" --format '{{json .Image}}' |
+            jq -e '.os == "linux" and .architecture == "arm64"'
+          {
+            echo "amd64_digest=$amd64_digest"
+            echo "arm64_digest=$arm64_digest"
+          } >> "$GITHUB_OUTPUT"
+      - name: Publish two-architecture index
+        id: manifest
+        env:
+          IMAGE: ${{ env.IMAGE }}
+          AMD64_DIGEST: ${{ steps.children.outputs.amd64_digest }}
+          ARM64_DIGEST: ${{ steps.children.outputs.arm64_digest }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "$IMAGE:$TAG" \
+            "$IMAGE@$AMD64_DIGEST" \
+            "$IMAGE@$ARM64_DIGEST"
+          manifest_json="$(docker buildx imagetools inspect "$IMAGE:$TAG" --format '{{json .Manifest}}')"
+          jq -e '([.manifests[].platform | "\(.os)/\(.architecture)"] | sort) == ["linux/amd64", "linux/arm64"]' <<< "$manifest_json"
+          jq -e --arg amd64 "$AMD64_DIGEST" --arg arm64 "$ARM64_DIGEST" \
+            '(.manifests | length) == 2 and
+             any(.manifests[]; .platform.architecture == "amd64" and .digest == $amd64) and
+             any(.manifests[]; .platform.architecture == "arm64" and .digest == $arm64)' <<< "$manifest_json"
+          manifest_digest="$(jq -er '.digest' <<< "$manifest_json")"
+          echo "digest=$manifest_digest" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Published $IMAGE:$TAG"
+            echo
+            echo "- manifest: \`$manifest_digest\`"
+            echo "- linux/amd64: \`$AMD64_DIGEST\`"
+            echo "- linux/arm64: \`$ARM64_DIGEST\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Generate linux/amd64 SPDX SBOM
+        uses: anchore/sbom-action@v0.24.0
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.children.outputs.amd64_digest }}
+          format: spdx-json
+          output-file: sbom-linux-amd64.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Generate linux/arm64 SPDX SBOM
+        uses: anchore/sbom-action@v0.24.0
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.children.outputs.arm64_digest }}
+          format: spdx-json
+          output-file: sbom-linux-arm64.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4.1.2
+      - name: Attest each architecture SPDX SBOM
+        env:
+          IMAGE: ${{ env.IMAGE }}
+          AMD64_DIGEST: ${{ steps.children.outputs.amd64_digest }}
+          ARM64_DIGEST: ${{ steps.children.outputs.arm64_digest }}
+        run: |
+          set -euo pipefail
+          for sbom in sbom-linux-amd64.spdx.json sbom-linux-arm64.spdx.json; do
+            jq -e '.spdxVersion | startswith("SPDX-")' "$sbom" >/dev/null
+            jq -e '.packages | type == "array" and length > 0' "$sbom" >/dev/null
+          done
+          cosign attest --yes --type spdxjson \
+            --predicate sbom-linux-amd64.spdx.json "$IMAGE@$AMD64_DIGEST"
+          cosign attest --yes --type spdxjson \
+            --predicate sbom-linux-arm64.spdx.json "$IMAGE@$ARM64_DIGEST"
+      - name: Sign index and architecture images
+        env:
+          IMAGE: ${{ env.IMAGE }}
+          MANIFEST_DIGEST: ${{ steps.manifest.outputs.digest }}
+          AMD64_DIGEST: ${{ steps.children.outputs.amd64_digest }}
+          ARM64_DIGEST: ${{ steps.children.outputs.arm64_digest }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "$IMAGE@$MANIFEST_DIGEST"
+          cosign sign --yes "$IMAGE@$AMD64_DIGEST"
+          cosign sign --yes "$IMAGE@$ARM64_DIGEST"
