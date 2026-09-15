@@ -1,0 +1,600 @@
+name: Release preflight
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - release/**
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Validate an unused candidate or verify published artifacts
+        required: true
+        default: preflight
+        type: choice
+        options:
+          - preflight
+          - verify-published
+      version:
+        description: Release tag; defaults to the Compose app image tag
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: release-preflight-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      image: ${{ steps.gate.outputs.image }}
+      mode: ${{ steps.gate.outputs.mode }}
+      revision: ${{ steps.gate.outputs.revision }}
+      run-preflight: ${{ steps.gate.outputs.run-preflight }}
+      version: ${{ steps.gate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Select and validate the exact release tree
+        id: gate
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_REF: ${{ github.head_ref }}
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref }}
+          REPOSITORY: ${{ github.repository }}
+          REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/release-preflight-evidence"
+          mkdir -p "$evidence"
+          current_version="$(python scripts/check_release_preflight.py version \
+            --repository "$REPOSITORY")"
+          version="${INPUT_VERSION:-$current_version}"
+          mode="${INPUT_MODE:-preflight}"
+          run_preflight=true
+
+          if [ "$EVENT_NAME" != "workflow_dispatch" ] && \
+             [[ "$REF_NAME" != refs/heads/release/* ]]; then
+            if [ -z "$BASE_SHA" ] || [[ "$BASE_SHA" =~ ^0+$ ]]; then
+              echo "No prior revision is available; running the preflight."
+            else
+              git show "${BASE_SHA}:compose.yaml" > "$RUNNER_TEMP/base-compose.yaml"
+              previous_version="$(python scripts/check_release_preflight.py version \
+                --repository "$REPOSITORY" --compose "$RUNNER_TEMP/base-compose.yaml")"
+              if [ "$current_version" = "$previous_version" ]; then
+                run_preflight=false
+              fi
+            fi
+          fi
+
+          if [ "$run_preflight" = false ]; then
+            revision="$(git rev-parse HEAD)"
+            image="ghcr.io/${REPOSITORY,,}"
+            printf '{"status":"skipped","reason":"Compose app version unchanged"}\n' \
+              > "$evidence/release-preflight.json"
+            {
+              echo "image=$image"
+              echo "mode=$mode"
+              echo "revision=$revision"
+              echo "run-preflight=false"
+              echo "version=$version"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          uniqueness=unused
+          if [ "$mode" = "verify-published" ]; then
+            uniqueness=published
+          fi
+          args=(
+            validate
+            --repository "$REPOSITORY"
+            --expected-revision "$REVISION"
+            --version "$version"
+            --uniqueness "$uniqueness"
+            --require-empty-acceptances
+            --output-dir "$evidence"
+            --github-output "$GITHUB_OUTPUT"
+          )
+          python scripts/check_release_preflight.py "${args[@]}"
+          {
+            echo "mode=$mode"
+            echo "run-preflight=true"
+          } >> "$GITHUB_OUTPUT"
+      - name: Upload release input evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-preflight-inputs
+          path: ${{ runner.temp }}/release-preflight-evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+  quality:
+    needs: prepare
+    if: needs.prepare.outputs.run-preflight == 'true' && needs.prepare.outputs.mode == 'preflight'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      TEST_DATABASE_URL: postgresql://mileage:testpw@127.0.0.1:5432/mileage
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_DB: mileage
+          POSTGRES_USER: mileage
+          POSTGRES_PASSWORD: testpw
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U mileage -d mileage"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+      - name: Install locked test dependencies
+        run: python -m pip install -r requirements-dev.lock
+      - name: Install pinned Gitleaks
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/gitleaks.tar.gz"
+          install_dir="$RUNNER_TEMP/gitleaks-bin"
+          curl -fsSL --retry 3 \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            -o "$archive"
+          echo "${GITLEAKS_SHA256}  ${archive}" | sha256sum --check -
+          mkdir -p "$install_dir"
+          tar -xzf "$archive" -C "$install_dir" gitleaks
+          echo "$install_dir" >> "$GITHUB_PATH"
+          "$install_dir/gitleaks" version
+      - name: Check shell syntax
+        run: git ls-files -z -- '*.sh' | xargs -0 -n1 bash -n
+      - name: Run full locked test suite
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/release-preflight-quality"
+          mkdir -p "$evidence"
+          python -m pytest -q | tee "$evidence/full-suite.txt"
+      - name: Check public tree and secrets
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/release-preflight-quality"
+          python scripts/check_public_tree.py | tee "$evidence/public-tree.txt"
+      - name: Read release dependency policy
+        id: pip-acceptances
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/release-preflight-quality"
+          python scripts/release_notes.py --tag "$VERSION" \
+            --notes-output "$evidence/release-notes.md" \
+            --pip-audit-output "$evidence/pip-audit.ignore" \
+            --trivy-amd64-output "$evidence/trivy-amd64.ignore" \
+            --trivy-arm64-output "$evidence/trivy-arm64.ignore"
+          {
+            echo 'ids<<EOF'
+            cat "$evidence/pip-audit.ignore"
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+      - name: Audit locked Python dependencies
+        uses: pypa/gh-action-pip-audit@v1.1.0
+        with:
+          inputs: requirements.lock
+          no-deps: true
+          ignore-vulns: ${{ steps.pip-acceptances.outputs.ids }}
+      - name: Record dependency audit result
+        run: |
+          echo "pip-audit requirements.lock: passed" \
+            > "$RUNNER_TEMP/release-preflight-quality/pip-audit.txt"
+      - name: Upload quality evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-preflight-quality
+          path: ${{ runner.temp }}/release-preflight-quality/
+          if-no-files-found: error
+          retention-days: 14
+
+  native-images:
+    needs: [prepare, quality]
+    if: needs.prepare.outputs.run-preflight == 'true' && needs.prepare.outputs.mode == 'preflight'
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux/amd64
+            architecture: amd64
+            runner-arch: X64
+            uname-machine: x86_64
+            trivy-ignore: trivy-amd64.ignore
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            architecture: arm64
+            runner-arch: ARM64
+            uname-machine: aarch64
+            trivy-ignore: trivy-arm64.ignore
+    runs-on: ${{ matrix.runner }}
+    env:
+      LOCAL_IMAGE: odograph-preflight:${{ needs.prepare.outputs.revision }}-${{ matrix.architecture }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+          persist-credentials: false
+      - name: Record native runner platform
+        env:
+          EXPECTED_RUNNER_ARCH: ${{ matrix.runner-arch }}
+          EXPECTED_UNAME: ${{ matrix.uname-machine }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          test "$RUNNER_ARCH" = "$EXPECTED_RUNNER_ARCH"
+          test "$(uname -m)" = "$EXPECTED_UNAME"
+          {
+            echo "runner_arch: $RUNNER_ARCH"
+            echo "uname: $(uname -m)"
+            echo "build_platform: ${{ matrix.platform }}"
+          } > "evidence/runner-${{ matrix.architecture }}.txt"
+      - name: Register amd64 emulation for the database only
+        if: matrix.architecture == 'arm64'
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: amd64
+      - uses: docker/setup-buildx-action@v4
+      - name: Read architecture scan policy
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          python scripts/release_notes.py --tag "$VERSION" \
+            --notes-output evidence/release-notes.md \
+            --pip-audit-output evidence/pip-audit.ignore \
+            --trivy-amd64-output evidence/trivy-amd64.ignore \
+            --trivy-arm64-output evidence/trivy-arm64.ignore
+      - name: Build native local image archive
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          pull: true
+          tags: ${{ env.LOCAL_IMAGE }}
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.version }}
+            GIT_REVISION=${{ needs.prepare.outputs.revision }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          outputs: type=docker,dest=${{ runner.temp }}/odograph-${{ matrix.architecture }}.tar
+          provenance: false
+          sbom: false
+      - name: Load and verify native image identity
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          REVISION: ${{ needs.prepare.outputs.revision }}
+          SOURCE: https://github.com/${{ github.repository }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker load --input "$RUNNER_TEMP/odograph-${ARCHITECTURE}.tar"
+          docker image inspect "$LOCAL_IMAGE" > "evidence/image-${ARCHITECTURE}.json"
+          jq -e --arg arch "$ARCHITECTURE" --arg revision "$REVISION" \
+            --arg source "$SOURCE" --arg version "$VERSION" '
+              .[0].Os == "linux" and .[0].Architecture == $arch and
+              .[0].Config.Labels["org.opencontainers.image.source"] == $source and
+              .[0].Config.Labels["org.opencontainers.image.version"] == $version and
+              .[0].Config.Labels["org.opencontainers.image.revision"] == $revision and
+              (. [0].Config.Env | index("APP_VERSION=" + $version)) != null and
+              (. [0].Config.Env | index("APP_GIT_REVISION=" + $revision)) != null
+            ' "evidence/image-${ARCHITECTURE}.json"
+      - name: Scan native image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          input: ${{ runner.temp }}/odograph-${{ matrix.architecture }}.tar
+          format: table
+          output: evidence/trivy-${{ matrix.architecture }}.txt
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          scanners: vuln
+          trivyignores: evidence/${{ matrix.trivy-ignore }}
+      - name: Generate native SPDX SBOM
+        uses: anchore/sbom-action@v0.24.0
+        with:
+          image: ${{ env.LOCAL_IMAGE }}
+          format: spdx-json
+          output-file: evidence/sbom-${{ matrix.architecture }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Validate SPDX SBOM
+        run: |
+          jq -e '.spdxVersion | startswith("SPDX-")' \
+            "evidence/sbom-${{ matrix.architecture }}.spdx.json" >/dev/null
+          jq -e '.packages | type == "array" and length > 0' \
+            "evidence/sbom-${{ matrix.architecture }}.spdx.json" >/dev/null
+      - name: Smoke-test native application image
+        env:
+          REVISION: ${{ needs.prepare.outputs.revision }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          scripts/release_preflight_smoke.sh \
+            "$LOCAL_IMAGE" "$VERSION" "$REVISION" \
+            "evidence/smoke-${{ matrix.architecture }}.txt" linux/amd64
+      - name: Remove local image
+        if: always()
+        run: docker image rm "$LOCAL_IMAGE" >/dev/null 2>&1 || true
+      - name: Upload native image evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-preflight-${{ matrix.architecture }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+  source-upgrade-drill:
+    needs: [prepare, quality]
+    if: needs.prepare.outputs.run-preflight == 'true' && needs.prepare.outputs.mode == 'preflight'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.revision }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+      - name: Install locked upgrade drill dependencies
+        run: python -m pip install -r requirements-dev.lock
+      - name: Verify native amd64 runner
+        run: test "$RUNNER_ARCH" = X64 && test "$(uname -m)" = x86_64
+      - name: Run v0.10.2 source upgrade and rollback drill
+        env:
+          REVISION: ${{ needs.prepare.outputs.revision }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          COMPOSE_CMD="docker compose" scripts/upgrade_check.sh \
+            --base v0.10.2 --candidate "$REVISION" | tee evidence/source-upgrade-drill.txt
+      - name: Upload source upgrade evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-preflight-source-upgrade
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 14
+
+  resolve-published:
+    needs: prepare
+    if: needs.prepare.outputs.run-preflight == 'true' && needs.prepare.outputs.mode == 'verify-published'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      amd64-digest: ${{ steps.resolve.outputs.amd64-digest }}
+      arm64-digest: ${{ steps.resolve.outputs.arm64-digest }}
+      index-digest: ${{ steps.resolve.outputs.index-digest }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v4
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4.1.2
+        with:
+          cosign-release: v3.1.3
+      - name: Resolve the published index and child digests
+        id: resolve
+        env:
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          docker buildx imagetools inspect "$IMAGE:$VERSION" \
+            --format '{{json .Manifest}}' > evidence/published-index.json
+          jq -e '
+            ([.manifests[].platform | "\(.os)/\(.architecture)"] | sort) ==
+            ["linux/amd64", "linux/arm64"]
+          ' evidence/published-index.json >/dev/null
+          index_digest="$(jq -er '.digest' evidence/published-index.json)"
+          amd64_digest="$(jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' evidence/published-index.json)"
+          arm64_digest="$(jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64") | .digest' evidence/published-index.json)"
+          {
+            echo "amd64-digest=$amd64_digest"
+            echo "arm64-digest=$arm64_digest"
+            echo "index-digest=$index_digest"
+          } >> "$GITHUB_OUTPUT"
+      - name: Verify release signatures and SPDX attestations
+        env:
+          AMD64_DIGEST: ${{ steps.resolve.outputs.amd64-digest }}
+          ARM64_DIGEST: ${{ steps.resolve.outputs.arm64-digest }}
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          INDEX_DIGEST: ${{ steps.resolve.outputs.index-digest }}
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          identity="https://github.com/${REPOSITORY}/.github/workflows/release.yml@refs/tags/${VERSION}"
+          issuer="https://token.actions.githubusercontent.com"
+          cosign verify --certificate-identity "$identity" \
+            --certificate-oidc-issuer "$issuer" "$IMAGE@$INDEX_DIGEST" \
+            > evidence/signature-index.json
+          for item in "amd64:$AMD64_DIGEST" "arm64:$ARM64_DIGEST"; do
+            arch="${item%%:*}"
+            digest="${item#*:}"
+            cosign verify --certificate-identity "$identity" \
+              --certificate-oidc-issuer "$issuer" "$IMAGE@$digest" \
+              > "evidence/signature-${arch}.json"
+            cosign verify-attestation --type spdxjson \
+              --certificate-identity "$identity" \
+              --certificate-oidc-issuer "$issuer" "$IMAGE@$digest" \
+              > "evidence/attestation-${arch}.json"
+            payload="$(jq -rs '[.[] | if type == "array" then .[] else . end][0].payload' \
+              "evidence/attestation-${arch}.json")"
+            printf '%s' "$payload" | base64 --decode \
+              > "evidence/attestation-${arch}.statement.json"
+            expected_subject="${digest#sha256:}"
+            jq -e --arg expected_subject "$expected_subject" '
+              .predicateType == "https://spdx.dev/Document" and
+              (.subject | any(.digest.sha256 == $expected_subject)) and
+              (.predicate.spdxVersion | startswith("SPDX-")) and
+              (.predicate.packages | type == "array" and length > 0)
+            ' \
+              "evidence/attestation-${arch}.statement.json" >/dev/null
+          done
+      - name: Upload published signature evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-published-signatures
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+  published-native-smoke:
+    needs: [prepare, resolve-published]
+    if: needs.prepare.outputs.run-preflight == 'true' && needs.prepare.outputs.mode == 'verify-published'
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            architecture: amd64
+            runner-arch: X64
+            uname-machine: x86_64
+            digest-output: amd64-digest
+          - runner: ubuntu-24.04-arm
+            architecture: arm64
+            runner-arch: ARM64
+            uname-machine: aarch64
+            digest-output: arm64-digest
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+          persist-credentials: false
+      - name: Record native runner platform
+        env:
+          EXPECTED_RUNNER_ARCH: ${{ matrix.runner-arch }}
+          EXPECTED_UNAME: ${{ matrix.uname-machine }}
+        run: |
+          test "$RUNNER_ARCH" = "$EXPECTED_RUNNER_ARCH"
+          test "$(uname -m)" = "$EXPECTED_UNAME"
+          mkdir -p evidence
+      - name: Register amd64 emulation for the database only
+        if: matrix.architecture == 'arm64'
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: amd64
+      - name: Pull and verify the native published child
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          DIGEST: ${{ needs.resolve-published.outputs[matrix.digest-output] }}
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          REVISION: ${{ needs.prepare.outputs.revision }}
+          SOURCE: https://github.com/${{ github.repository }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          published_image="$IMAGE@$DIGEST"
+          docker pull "$published_image"
+          docker image inspect "$published_image" > "evidence/published-${ARCHITECTURE}.json"
+          jq -e --arg arch "$ARCHITECTURE" --arg revision "$REVISION" \
+            --arg source "$SOURCE" --arg version "$VERSION" '
+              .[0].Os == "linux" and .[0].Architecture == $arch and
+              .[0].Config.Labels["org.opencontainers.image.source"] == $source and
+              .[0].Config.Labels["org.opencontainers.image.version"] == $version and
+              .[0].Config.Labels["org.opencontainers.image.revision"] == $revision and
+              (. [0].Config.Env | index("APP_VERSION=" + $version)) != null and
+              (. [0].Config.Env | index("APP_GIT_REVISION=" + $revision)) != null
+            ' "evidence/published-${ARCHITECTURE}.json"
+          scripts/release_preflight_smoke.sh \
+            "$published_image" "$VERSION" "$REVISION" \
+            "evidence/published-smoke-${ARCHITECTURE}.txt" linux/amd64
+      - name: Upload published native evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-published-${{ matrix.architecture }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+  published-upgrade-drill:
+    needs: [prepare, resolve-published]
+    if: needs.prepare.outputs.run-preflight == 'true' && needs.prepare.outputs.mode == 'verify-published'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.revision }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+      - name: Install locked upgrade drill dependencies
+        run: python -m pip install -r requirements-dev.lock
+      - name: Run immutable-index upgrade and rollback drill
+        env:
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          INDEX_DIGEST: ${{ needs.resolve-published.outputs.index-digest }}
+          REVISION: ${{ needs.prepare.outputs.revision }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          test "$RUNNER_ARCH" = X64
+          test "$(uname -m)" = x86_64
+          COMPOSE_CMD="docker compose" scripts/upgrade_check.sh \
+            --base v0.10.2 --candidate "$REVISION" \
+            --candidate-image "$IMAGE@$INDEX_DIGEST" | \
+            tee evidence/published-upgrade-drill.txt
+      - name: Upload published upgrade evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-published-upgrade
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 30

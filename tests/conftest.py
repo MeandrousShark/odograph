@@ -257,6 +257,7 @@ _OPS_MODULE_STEMS = {
     "test_public_tree",
     "test_release_contract",
     "test_release_notes",
+    "test_release_preflight",
     "test_release_workflow",
     "test_security_workflow",
     "test_stale_module_references",
