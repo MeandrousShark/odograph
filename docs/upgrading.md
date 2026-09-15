@@ -27,6 +27,82 @@ occasion an additive migration might happen to tolerate it. Treat "the
 migration succeeded" as a one-way door. The supported way back is restoring
 the pre-upgrade backup, described in [Rollback](#rollback) below.
 
+## Upgrading the PostGIS database image
+
+When a target release's `compose.yaml` uses the signed native PostgreSQL
+16.15/PostGIS 3.6.4 index
+`ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6`,
+an installation that still uses the older `postgis/postgis:16-3.4` image must
+be treated as a database-image migration. A normal `docker compose up -d`
+against the existing project is not the migration procedure.
+
+Keep the previous exact release tag, the original `.env`, the old database
+image reference, the stopped old project and its volume, and the verified
+pre-upgrade archive until the new project has passed its checks. Do not run
+`docker compose down -v`, reuse the old `dbdata` volume, swap `PGDATA`
+directories, or attempt an in-place downgrade. If the old Compose file uses an
+explicit external volume, configure the target with a new unused volume name;
+project-scoped and external target volumes must both be distinct from the old
+volume. Never attach the target to the old volume.
+
+A fresh project also gets a fresh `osrmdata` volume and network. If OSRM is
+enabled, preserve the old routing volume and reverse-proxy or other Compose
+overrides, provision the target `osrmdata` volume before enabling the profile,
+and do not start the optional service against an empty volume. Keep the
+existing `OSRM_URL` setting only when the target service or its endpoint is
+ready.
+
+1. **Read the release notes and stop writes before the final backup.** Keep the
+   old project name unchanged while making the backup:
+
+   ```sh
+   docker compose stop app
+   scripts/backup_database.sh --output backups/pre-upgrade.dump
+   scripts/restore_database.sh --verify-only backups/pre-upgrade.dump
+   docker compose stop db
+   cp .env .env.pre-upgrade
+   unset COMPOSE_PROJECT_NAME
+   ```
+
+   The app stays stopped during the final logical backup. Keep the archive,
+   checksum, manifest, and `.env.pre-upgrade` protected.
+
+2. **Check out the exact target release and create a fresh project name.** The
+   target Compose file supplies the new immutable database image. Replace the
+   existing `COMPOSE_PROJECT_NAME` line in `.env` with a new unused value. Do
+   not regenerate `.env` and do not add a second project-name line:
+
+   ```sh
+   git fetch --tags
+   git checkout vX.Y.Z
+   # Edit .env: replace the existing COMPOSE_PROJECT_NAME line, or add exactly
+   # one line if it is absent, using a new unused project name.
+   # Keep every secret and application setting unchanged.
+   unset COMPOSE_PROJECT_NAME
+   # Do not use a `-p` override.
+   docker compose config >/dev/null
+   ```
+
+3. **Initialize and restore the fresh target database before starting the app:**
+
+   ```sh
+   docker compose up -d db
+   docker compose ps db
+   scripts/restore_database.sh backups/pre-upgrade.dump
+   docker compose up -d app
+   docker compose ps
+   curl -fsS http://127.0.0.1:8077/healthz
+   ```
+
+   Confirm the target database and app are healthy, then sign in and check a
+   recent trip, a place, a vehicle, and an authenticated `/ingest` request.
+   The restore script from the target release must run against the fresh
+   target database. The old project and volume remain available for recovery.
+
+For a Podman installation, replace each `docker compose` command with
+`podman-compose`. This procedure is also the model used by the release
+preflight database-image migration drill.
+
 ## Upgrade procedure
 
 1. **Confirm your current exact release and read every release note between
@@ -64,7 +140,12 @@ the pre-upgrade backup, described in [Rollback](#rollback) below.
    matching Compose file, operational scripts, and release notes. Its app
    service pins the corresponding immutable image tag.
 
-4. **Pull the pinned image and restart, then verify:**
+4. **If the database image is unchanged, pull the pinned app image and restart,
+   then verify:**
+
+   If the target Compose file changes the `db.image` value, stop here and use
+   [Upgrading the PostGIS database image](#upgrading-the-postgis-database-image)
+   above. Do not run `up -d` against the old project for that transition.
 
    ```sh
    docker compose pull app
@@ -132,8 +213,53 @@ unsupported. The reliable path is the same either way: follow
 ## Rollback
 
 Rollback means restoring the pre-upgrade backup with the previous release's
-code, into a fresh volume, not running old code against the migrated
-database, and not attempting to undo a migration in place.
+code, into a fresh volume, not running old code against the migrated database,
+and not attempting to undo a migration in place. A database-image migration
+also requires a fresh old-image project.
+
+### Rollback after a database-image migration
+
+1. Stop the target app and database, leaving the target volume available for
+   inspection if needed:
+
+   ```sh
+   docker compose stop app db
+   ```
+
+2. Check out the previous exact release. Restore the original environment from
+   `.env.pre-upgrade`, then replace its `COMPOSE_PROJECT_NAME` line with a
+   different new unused rollback project name. Do not point the rollback at the
+   old project or its old volume:
+
+   ```sh
+   git checkout vPREVIOUS
+   cp .env.pre-upgrade .env
+   # Edit .env: replace the existing COMPOSE_PROJECT_NAME line, or add exactly
+   # one line if it is absent, using a fresh rollback project name.
+   # Do not use a shell COMPOSE_PROJECT_NAME value or a `-p` override.
+   unset COMPOSE_PROJECT_NAME
+   docker compose config >/dev/null
+   ```
+
+3. Start only the old-image database, restore the original pre-upgrade archive,
+   then start and verify the old application:
+
+   ```sh
+   docker compose up -d db
+   scripts/restore_database.sh backups/pre-upgrade.dump
+   docker compose up -d app
+   docker compose ps
+   curl -fsS http://127.0.0.1:8077/healthz
+   ```
+
+   Sign in and check representative data before switching traffic. Keep the
+   old volume and the failed target volume until recovery is complete.
+
+Every write after the pre-upgrade backup, including writes made by the target
+release before rollback, is lost. This is the expected result of restoring a
+point-in-time logical backup.
+
+### Rollback after an application-only upgrade
 
 1. Stop the candidate release:
 

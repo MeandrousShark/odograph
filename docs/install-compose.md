@@ -118,6 +118,14 @@ Leave optional integrations unset until you have read the
 Keep the project name unchanged if you move the directory. Compose uses it to
 name the resources that include the persistent `dbdata` volume.
 
+This checkout's `compose.yaml` uses the signed native PostgreSQL 16.15/PostGIS
+3.6.4 image
+`ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6` for
+Linux AMD64 and ARM64. When a target release uses it, an installation that
+still uses `postgis/postgis:16-3.4` must follow
+[Upgrading the PostGIS database image](upgrading.md#upgrading-the-postgis-database-image)
+before starting the target project.
+
 After editing, protect both the directory and the file:
 
 ```sh
@@ -224,12 +232,11 @@ exact release tag, or use the [full release checkout](../README.md#quick-start).
 Use [Backups and disaster recovery](backups.md) to create a verified archive
 and to test a restore into a fresh target.
 
-For an upgrade, read every applicable release note first. Create and verify a
-pre-upgrade backup, and keep a protected copy of `.env`. Preserve the same
-`COMPOSE_PROJECT_NAME` and the existing named volumes. Obtain the target
-release's `compose.yaml` from its exact immutable tag, then replace the current
-file and pull the new app image from the installation directory. Replace
-`/path/to/odograph` below with that directory:
+For an upgrade, read every applicable release note first. Obtain the full
+release checkout or the target release's matching backup and restore scripts,
+then follow [Upgrading](upgrading.md). Create and verify a pre-upgrade logical
+backup and keep a protected copy of `.env`. Replace `/path/to/odograph` below
+with this installation directory to download the target Compose file:
 
 ```sh
 TARGET_VERSION=vX.Y.Z
@@ -244,19 +251,45 @@ TARGET_VERSION=vX.Y.Z
 
     compose_tmp="$(mktemp .compose.yaml.upgrade.XXXXXX)"
     curl -fsSL "https://raw.githubusercontent.com/MeandrousShark/odograph/${TARGET_VERSION}/compose.yaml" -o "$compose_tmp"
-    mv -- "$compose_tmp" compose.yaml
+    mv -- "$compose_tmp" compose.yaml.target
     trap - EXIT HUP INT TERM
 
-    docker compose pull app
-    docker compose up -d
-    docker compose ps
-    curl -fsS http://127.0.0.1:8077/healthz
+    docker compose -f compose.yaml.target config >/dev/null
 )
 ```
 
-The upgrade and rollback contract is the same as the full installation:
-migrations are forward-only, a verified pre-upgrade backup is required, and
-rollback means restoring that backup into a fresh target with the previous
-release. Never run `docker compose down -v` unless you intend to erase the
-database. For the supported procedure, use [Upgrading](upgrading.md) after
-obtaining the target release's matching scripts and guides.
+The download leaves the old `compose.yaml`, `.env`, project, and database volume
+untouched, and saves the target file as `compose.yaml.target`. Do not run
+`docker compose up -d` yet. If the target's `db.image` differs from
+the current installation, including the transition from
+`postgis/postgis:16-3.4` to the signed native image above, use the
+[PostGIS database image migration](upgrading.md#upgrading-the-postgis-database-image)
+procedure first. It stops the app for the final backup, preserves the old
+project and volume, then replaces `compose.yaml` only after the backup and
+stop steps. It creates a fresh project name in the existing `.env`, starts only
+the target database, restores with the target script, and starts the app after
+the restore checks pass. Replace the existing `COMPOSE_PROJECT_NAME` line, or
+add exactly one line if it is absent; do not regenerate `.env`, leave a shell
+`COMPOSE_PROJECT_NAME` set, use `-p`, or reuse the old volume.
+
+After the old app and database are stopped, and the protected pre-upgrade
+backup and `.env` copy are ready, replace the old Compose file:
+
+```sh
+mv compose.yaml.target compose.yaml
+```
+
+Only when the database image is unchanged may you complete an application-only
+upgrade with:
+
+```sh
+docker compose pull app
+docker compose up -d
+docker compose ps
+curl -fsS http://127.0.0.1:8077/healthz
+```
+
+Migrations are forward-only. Rollback always restores the verified backup into
+a fresh target with the previous release, and writes made after that backup are
+lost. Never run `docker compose down -v` unless you intend to erase the
+database.

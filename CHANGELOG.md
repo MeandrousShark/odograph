@@ -9,6 +9,19 @@ reproduced here.
 
 ## [Unreleased]
 
+### Added
+
+- Native signed PostgreSQL 16.15/PostGIS 3.6.4 images for supported Linux
+  AMD64 and ARM64 hosts, published as the immutable
+  `ghcr.io/meandrousshark/odograph-postgis` multi-architecture index.
+
+### Changed
+
+- The canonical Compose file and CI database checks use the pinned native
+  PostGIS image. Existing installations moving from `postgis/postgis:16-3.4`
+  must follow the [fresh-target database image migration procedure](docs/upgrading.md#upgrading-the-postgis-database-image)
+  before starting the target stack.
+
 ### Fixed
 
 - Restore legacy PostGIS backups into fresh images that do not pre-create
