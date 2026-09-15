@@ -58,7 +58,7 @@ jobs:
       TEST_DATABASE_URL: postgresql://mileage:testpw@127.0.0.1:5432/mileage
     services:
       postgres:
-        image: postgis/postgis:16-3.4
+        image: ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6
         env:
           POSTGRES_DB: mileage
           POSTGRES_USER: mileage
@@ -169,6 +169,18 @@ jobs:
           severity: HIGH,CRITICAL
           scanners: vuln
           trivyignores: trivy-amd64.ignore
+      - name: Scan amd64 PostGIS image
+        uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/amd64
+        with:
+          image-ref: ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          scanners: vuln
       - name: Emit amd64 digest
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -227,6 +239,18 @@ jobs:
           severity: HIGH,CRITICAL
           scanners: vuln
           trivyignores: trivy-arm64.ignore
+      - name: Scan arm64 PostGIS image
+        uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/arm64
+        with:
+          image-ref: ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          scanners: vuln
       - name: Emit arm64 digest
         env:
           DIGEST: ${{ steps.build.outputs.digest }}

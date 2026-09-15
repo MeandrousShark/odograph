@@ -23,7 +23,7 @@
 # collect the other's containers.
 #
 # Env vars (all optional, defaults match the rest of this repository):
-#   DEVSITE_DB_IMAGE   postgres/postgis image, default docker.io/postgis/postgis:16-3.4
+#   DEVSITE_DB_IMAGE   PostGIS image, defaults to the pinned Odograph image below
 #   DEVSITE_DB_PORT    fixed loopback database port, default 55432
 #   DEVSITE_APP_PORT   fixed loopback app port, default 8078
 #   DEVSITE_BIND_HOST  app bind address, default 127.0.0.1 (loopback-only).
@@ -39,7 +39,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-DB_IMAGE="${DEVSITE_DB_IMAGE:-docker.io/postgis/postgis:16-3.4}"
+DB_IMAGE="${DEVSITE_DB_IMAGE:-ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6}"
 DB_NAME="mileage_devsite"
 DB_USER="mileage"
 DB_CONTAINER="odograph-devsite-db"

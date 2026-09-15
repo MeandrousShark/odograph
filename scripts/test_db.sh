@@ -7,7 +7,7 @@
 #   scripts/test_db.sh cleanup TASK_ID
 set -euo pipefail
 
-IMAGE="${TEST_DB_IMAGE:-docker.io/postgis/postgis:16-3.4}"
+IMAGE="${TEST_DB_IMAGE:-ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6}"
 OWNER_LABEL="io.odograph.test-db"
 TASK_LABEL="io.odograph.test-db-task"
 

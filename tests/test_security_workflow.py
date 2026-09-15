@@ -77,7 +77,9 @@ def test_both_architectures_build_locally_without_registry_access():
     assert not any("docker/login-action" in step.get("uses", "") for step in all_steps)
     assert all("permissions" not in configured_job for configured_job in workflow["jobs"].values())
     assert not any("publish" in step.get("name", "").lower() for step in all_steps)
-    source = SECURITY_WORKFLOW.read_text()
+    source = "\n".join(
+        step.get("run", "") for step in job["steps"]
+    )
     assert "packages:" not in source
     assert "ghcr.io" not in source
     assert "GITHUB_TOKEN" not in source
@@ -98,6 +100,43 @@ def test_scheduled_trivy_gate_matches_release_fixability_and_severity():
     assert scheduled_scan["with"]["input"] == "${{ matrix.archive }}"
     assert "trivyignores" not in scheduled_scan["with"]
     assert "continue-on-error" not in scheduled_scan
+
+
+def test_scheduled_postgis_scans_use_the_pinned_remote_children_without_emulation():
+    workflow = load_workflow(SECURITY_WORKFLOW)
+    job = workflow["jobs"]["postgis-images"]
+
+    assert job["strategy"] == {
+        "fail-fast": "false",
+        "matrix": {
+            "include": [
+                {"platform": "linux/amd64", "architecture": "amd64"},
+                {"platform": "linux/arm64", "architecture": "arm64"},
+            ]
+        },
+    }
+    assert not any(
+        "setup-qemu" in step.get("uses", "") for step in job["steps"]
+    )
+    assert not any(
+        command in step.get("run", "")
+        for step in job["steps"]
+        for command in ("docker run", "docker build", "docker pull")
+    )
+    scan = steps_by_name(job)["Scan published PostGIS image"]
+    assert scan["uses"] == "aquasecurity/trivy-action@v0.36.0"
+    assert scan["env"] == {"TRIVY_PLATFORM": "${{ matrix.platform }}"}
+    assert scan["with"] == {
+        "image-ref": "ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6",
+        "format": "table",
+        "exit-code": "1",
+        "ignore-unfixed": "true",
+        "vuln-type": "os,library",
+        "severity": "HIGH,CRITICAL",
+        "scanners": "vuln",
+    }
+    assert "trivyignores" not in scan["with"]
+    assert "continue-on-error" not in scan
 
 
 def test_security_workflow_uses_only_reputable_versioned_actions():

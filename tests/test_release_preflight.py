@@ -167,7 +167,9 @@ def test_preflight_runs_full_policy_and_native_local_image_matrix():
     quality = jobs["quality"]
     quality_steps = steps_by_name(quality)
 
-    assert quality["services"]["postgres"]["image"] == "postgis/postgis:16-3.4"
+    assert quality["services"]["postgres"]["image"] == (
+        "ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6"
+    )
     assert quality_steps["Install pinned Gitleaks"]["env"]["GITLEAKS_VERSION"] == "8.30.1"
     assert "python -m pytest -q" in quality_steps["Run full locked test suite"]["run"]
     assert quality_steps["Audit locked Python dependencies"]["uses"] == (
@@ -192,9 +194,30 @@ def test_preflight_runs_full_policy_and_native_local_image_matrix():
     assert scan["with"]["vuln-type"] == "os,library"
     assert steps["Generate native SPDX SBOM"]["uses"] == "anchore/sbom-action@v0.24.0"
     assert "release_preflight_smoke.sh" in steps["Smoke-test native application image"]["run"]
-    qemu = steps["Register amd64 emulation for the database only"]
-    assert qemu["if"] == "matrix.architecture == 'arm64'"
-    assert qemu["with"]["platforms"] == "amd64"
+    assert not any(
+        step.get("uses", "").startswith("docker/setup-qemu")
+        for step in native["steps"]
+    )
+    postgis_scan = steps["Scan ${{ matrix.architecture }} PostGIS image"]
+    assert postgis_scan["uses"] == "aquasecurity/trivy-action@v0.36.0"
+    assert postgis_scan["env"]["TRIVY_PLATFORM"] == "${{ matrix.platform }}"
+    assert postgis_scan["with"] == {
+        "image-ref": "ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6",
+        "format": "table",
+        "output": "evidence/trivy-${{ matrix.architecture }}-postgis.txt",
+        "exit-code": "1",
+        "ignore-unfixed": "true",
+        "vuln-type": "os,library",
+        "severity": "HIGH,CRITICAL",
+        "scanners": "vuln",
+    }
+    assert "trivyignores" not in postgis_scan["with"]
+    smoke = steps["Smoke-test native application image"]
+    assert smoke["env"]["ARCHITECTURE"] == "${{ matrix.architecture }}"
+    assert smoke["env"]["POSTGIS_IMAGE"] == (
+        "ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6"
+    )
+    assert '"linux/${ARCHITECTURE}"' in smoke["run"]
 
 
 def test_preflight_and_published_drills_use_supported_base_and_exact_candidate():
@@ -214,12 +237,14 @@ def test_preflight_and_published_drills_use_supported_base_and_exact_candidate()
         "Run v0.10.2 source upgrade and rollback drill"
     ]["run"]
     assert '--base v0.10.2 --candidate "$REVISION"' in source_drill
+    assert "--database-image-migration" in source_drill
 
     published_drill = steps_by_name(jobs["published-upgrade-drill"])[
         "Run immutable-index upgrade and rollback drill"
     ]["run"]
     assert '--base v0.10.2 --candidate "$REVISION"' in published_drill
     assert '--candidate-image "$IMAGE@$INDEX_DIGEST"' in published_drill
+    assert "--database-image-migration" in published_drill
 
 
 def test_published_mode_verifies_exact_signing_identity_and_native_children():
@@ -239,3 +264,8 @@ def test_published_mode_verifies_exact_signing_identity_and_native_children():
     smoke = steps_by_name(published)["Pull and verify the native published child"]["run"]
     assert 'published_image="$IMAGE@$DIGEST"' in smoke
     assert "release_preflight_smoke.sh" in smoke
+    assert '"linux/${ARCHITECTURE}"' in smoke
+    assert not any(
+        step.get("uses", "").startswith("docker/setup-qemu")
+        for step in published["steps"]
+    )
