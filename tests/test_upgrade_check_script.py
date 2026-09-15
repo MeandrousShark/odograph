@@ -100,6 +100,23 @@ def _install_repo(
     return repo, base_ref, candidate_ref
 
 
+def _install_repo_with_db_service_drift(tmp_path: Path) -> tuple[Path, str, str]:
+    repo, base_ref, candidate_ref = _install_repo(
+        tmp_path, candidate_db_image="db:native"
+    )
+    compose = repo / "compose.yaml"
+    compose.write_text(
+        compose.read_text().replace(
+            "      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}\n",
+            "      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}\n"
+            "      POSTGRES_USER: unexpected\n",
+        )
+    )
+    _git(repo, "add", "compose.yaml")
+    _git(repo, "commit", "-qm", "candidate db service drift")
+    return repo, base_ref, _git(repo, "rev-parse", "HEAD")
+
+
 _COMPOSE_BODY = r"""
 original="$*"
 printf 'compose|%s|%s\n' "$PWD" "$original" >> "$FAKE_LOG"
@@ -117,11 +134,39 @@ case "${1-}" in
         cat compose.yaml
         ;;
     up)
+        printf '%s\n' "${PWD##*/}" > "$FAKE_PROJECT_FILE"
+        case " $original " in
+            *" db "*)
+                if [ -n "${FAKE_DB_EVENTS:-}" ]; then
+                    case "$PWD" in
+                        */cand/*)
+                            printf 'candidate\n' >> "$FAKE_DB_EVENTS"
+                            [ -z "${FAKE_ACTIVE_DB:-}" ] || printf 'candidate\n' > "$FAKE_ACTIVE_DB"
+                            ;;
+                        *)
+                            printf 'base\n' >> "$FAKE_DB_EVENTS"
+                            [ -z "${FAKE_ACTIVE_DB:-}" ] || printf 'base\n' > "$FAKE_ACTIVE_DB"
+                            ;;
+                    esac
+                fi
+                ;;
+        esac
         case " $original " in
             *" app "|*" app")
                 case "$PWD" in
                     */cand/*) printf '%s\n' candidate > "$FAKE_ACTIVE_APP" ;;
                     *) printf '%s\n' base > "$FAKE_ACTIVE_APP" ;;
+                esac
+                ;;
+        esac
+        case "$PWD" in
+            */cand/*)
+                case " $original " in
+                    *" db "*)
+                        if [ -n "${FAKE_DB_UP_EXIT:-}" ]; then
+                            exit "$FAKE_DB_UP_EXIT"
+                        fi
+                        ;;
                 esac
                 ;;
         esac
@@ -206,12 +251,37 @@ case "${1-}" in
         esac
         exit 93
         ;;
+    ps)
+        [ "$#" -eq 2 ] && [ "$2" = -q ] || exit 98
+        case "$PWD" in
+            */cand/*) printf '%s\n' candidate-db-container ;;
+            *) printf '%s\n' base-db-container ;;
+        esac
+        exit 0
+        ;;
     *)
         printf 'unexpected compose invocation: %s\n' "$original" >&2
         exit 91
         ;;
 esac
 """.strip()
+
+
+_RUNTIME_PREFLIGHT = r"""
+if [ "${1-}" = ps ]; then
+    case "$*" in *label=com.docker.compose.service=db*) ;; *) exit 98;; esac
+    printf '%s\n' db-container
+    exit 0
+fi
+if [ "${1-}" = volume ] && [ "${FAKE_VOLUME_FAILURE:-}" = 1 ] && [ -f "$FAKE_DB_EVENTS" ]; then
+    if [ "$(wc -l < "$FAKE_DB_EVENTS")" -ge 2 ]; then
+        case "${2-}" in
+            ls) printf '%s_dbdata\n' "$(cat "$FAKE_PROJECT_FILE")"; exit 0;;
+            rm) exit 73;;
+        esac
+    fi
+fi
+"""
 
 
 def _install_frontend(bin_dir: Path, frontend: str) -> str:
@@ -223,7 +293,8 @@ def _install_frontend(bin_dir: Path, frontend: str) -> str:
             + _COMPOSE_BODY
             + "\nexit $?\nfi\n"
             "printf 'runtime|docker|%s\\n' \"$*\" >> \"$FAKE_LOG\"\n"
-            "case \"${1-}\" in info) exit 0;; volume|image) exit 0;; rmi) exit 0;; esac\n"
+            + _RUNTIME_PREFLIGHT
+            + "case \"${1-}\" in info) exit 0;; inspect) if [ \"$(cat \"${FAKE_ACTIVE_DB:-/dev/null}\" 2>/dev/null || true)\" = candidate ]; then printf '%s\\n' candidate-image-id >> \"${FAKE_INSPECT_EVENTS:-/dev/null}\"; printf '%s\\n' candidate-image-id; else printf '%s\\n' base-image-id >> \"${FAKE_INSPECT_EVENTS:-/dev/null}\"; printf '%s\\n' base-image-id; fi; exit 0;; volume|image) exit 0;; rmi) exit 0;; esac\n"
             "exit 92",
         )
         return "docker compose"
@@ -233,7 +304,8 @@ def _install_frontend(bin_dir: Path, frontend: str) -> str:
         bin_dir / "podman",
         "#!/usr/bin/env bash\nset -u\n"
         "printf 'runtime|podman|%s\\n' \"$*\" >> \"$FAKE_LOG\"\n"
-        "case \"${1-}\" in info) exit 0;; volume|image) exit 0;; rmi) exit 0;; esac\n"
+        + _RUNTIME_PREFLIGHT
+        + "case \"${1-}\" in info) exit 0;; inspect) if [ \"$(cat \"${FAKE_ACTIVE_DB:-/dev/null}\" 2>/dev/null || true)\" = candidate ]; then printf '%s\\n' candidate-image-id >> \"${FAKE_INSPECT_EVENTS:-/dev/null}\"; printf '%s\\n' candidate-image-id; else printf '%s\\n' base-image-id >> \"${FAKE_INSPECT_EVENTS:-/dev/null}\"; printf '%s\\n' base-image-id; fi; exit 0;; volume|image) exit 0;; rmi) exit 0;; esac\n"
         "exit 92",
     )
     return "podman-compose"
@@ -246,6 +318,8 @@ def _run(
     *,
     frontend: str = "podman",
     fail_up: bool = True,
+    db_up_failure: str = "",
+    volume_failure: bool = False,
     auth_fault: str = "",
     modern_auth: bool = False,
 ) -> tuple[subprocess.CompletedProcess, Path, Path, Path]:
@@ -355,6 +429,12 @@ def _run(
         "FAKE_OIDC_SECRET": oidc_secret,
         "FAKE_AUTH_FAULT": auth_fault,
         "FAKE_MODERN_AUTH": "1" if modern_auth else "",
+        "FAKE_DB_EVENTS": str(tmp_path / "db-events"),
+        "FAKE_ACTIVE_DB": str(tmp_path / "active-db"),
+        "FAKE_INSPECT_EVENTS": str(tmp_path / "inspect-events"),
+        "FAKE_DB_UP_EXIT": db_up_failure,
+        "FAKE_PROJECT_FILE": str(tmp_path / "project-name"),
+        "FAKE_VOLUME_FAILURE": "1" if volume_failure else "",
         "FAKE_UP_EXIT": "42" if fail_up else "0",
         "TMPDIR": str(scratch_root),
     }
@@ -741,6 +821,150 @@ def test_source_candidate_refuses_db_service_drift_before_up(tmp_path):
     assert "release-specific operations migration plan" in result.stderr
     assert not any(" up " in f" {line} " for line in log_path.read_text().splitlines())
     assert any(line.endswith(" down") for line in log_path.read_text().splitlines())
+    assert list(scratch_root.glob("upgrade_check.*")) == []
+
+
+def test_database_image_migration_rejects_non_image_db_service_drift(tmp_path):
+    repo, base_ref, candidate_ref = _install_repo_with_db_service_drift(tmp_path)
+
+    result, log_path, _, scratch_root = _run(
+        repo,
+        [
+            "--base",
+            base_ref,
+            "--candidate",
+            candidate_ref,
+            "--database-image-migration",
+        ],
+        tmp_path,
+        fail_up=False,
+    )
+
+    assert result.returncode != 0
+    assert "database-image-migration" in result.stderr
+    assert "db" in result.stderr.lower()
+    assert "image" in result.stderr.lower()
+    log_text = log_path.read_text() if log_path.exists() else ""
+    assert not any(" up " in f" {line} " for line in log_text.splitlines())
+    assert list(scratch_root.glob("upgrade_check.*")) == []
+
+
+@pytest.mark.parametrize("frontend", ["docker", "podman"])
+def test_database_image_migration_rebuilds_db_and_rolls_back_to_original_image(
+    tmp_path, frontend,
+):
+    repo, base_ref, candidate_ref = _install_repo(
+        tmp_path, candidate_db_image="db:native"
+    )
+
+    result, log_path, _, scratch_root = _run(
+        repo,
+        [
+            "--base",
+            base_ref,
+            "--candidate",
+            candidate_ref,
+            "--database-image-migration",
+        ],
+        tmp_path,
+        fail_up=False,
+        frontend=frontend,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "db-events").read_text().splitlines() == [
+        "base",
+        "base",
+        "candidate",
+        "base",
+    ]
+    inspect_events = (tmp_path / "inspect-events").read_text().splitlines()
+    assert "base-image-id" in inspect_events
+    assert "candidate-image-id" in inspect_events
+    assert inspect_events.index("base-image-id") < inspect_events.index("candidate-image-id")
+    assert inspect_events.index("candidate-image-id") < len(inspect_events) - 1
+    assert inspect_events[-1] == "base-image-id"
+
+    compose_lines = log_path.read_text().splitlines()
+    candidate_db_up = [
+        index
+        for index, line in enumerate(compose_lines)
+        if "/cand/" in line and " up " in f" {line} " and " db" in line
+    ]
+    assert len(candidate_db_up) == 1
+    assert any(
+        index < candidate_db_up[0]
+        and "/base/" in line
+        and " down" in f" {line} "
+        for index, line in enumerate(compose_lines)
+    )
+    assert any(
+        index > candidate_db_up[0]
+        and "/base/" in line
+        and " up " in f" {line} "
+        and " db" in line
+        for index, line in enumerate(compose_lines)
+    )
+    assert "step 7" in result.stdout
+    assert "step 8" in result.stdout
+    assert list(scratch_root.glob("upgrade_check.*")) == []
+
+
+def test_database_migration_rejects_unchanged_image_before_startup(tmp_path):
+    repo, base_ref, candidate_ref = _install_repo(tmp_path)
+    result, log, _, _ = _run(
+        repo, ["--base", base_ref, "--candidate", candidate_ref, "--database-image-migration"],
+        tmp_path, fail_up=False,
+    )
+    assert result.returncode != 0
+    assert "requires a changed db image" in result.stderr
+    assert " up " not in log.read_text()
+
+
+def test_database_migration_stops_if_old_volume_cannot_be_removed(tmp_path):
+    repo, base_ref, candidate_ref = _install_repo(tmp_path, candidate_db_image="db:native")
+    result, log, _, _ = _run(
+        repo, ["--base", base_ref, "--candidate", candidate_ref, "--database-image-migration"],
+        tmp_path, fail_up=False, volume_failure=True,
+    )
+    assert result.returncode != 0
+    assert "refusing to reuse" in result.stderr
+    assert not any("/cand/" in line and " up " in line for line in log.read_text().splitlines())
+
+
+def test_database_image_migration_fails_closed_when_candidate_db_cannot_start(
+    tmp_path,
+):
+    repo, base_ref, candidate_ref = _install_repo(
+        tmp_path, candidate_db_image="db:native"
+    )
+
+    result, log_path, _, scratch_root = _run(
+        repo,
+        [
+            "--base",
+            base_ref,
+            "--candidate",
+            candidate_ref,
+            "--database-image-migration",
+        ],
+        tmp_path,
+        fail_up=False,
+        db_up_failure="73",
+    )
+
+    assert result.returncode != 0
+    assert "step 7" in result.stderr
+    assert "candidate" in result.stderr.lower()
+    assert (tmp_path / "db-events").read_text().splitlines() == [
+        "base",
+        "base",
+        "candidate",
+    ]
+    assert not any(
+        "/cand/" in line and " up " in f" {line} " and " app" in line
+        for line in log_path.read_text().splitlines()
+    )
     assert list(scratch_root.glob("upgrade_check.*")) == []
 
 

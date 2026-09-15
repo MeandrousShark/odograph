@@ -51,7 +51,7 @@ PUBLIC_TOP_LEVEL_FILES = (
     "requirements.txt",
 )
 PUBLIC_FILES = frozenset((*PUBLIC_MARKDOWN, *PUBLIC_IMAGES, *PUBLIC_TOP_LEVEL_FILES))
-PUBLIC_DIRECTORIES = (".github", "app", "migrations", "scripts", "static", "tests")
+PUBLIC_DIRECTORIES = (".github", "app", "docker", "migrations", "scripts", "static", "tests")
 
 _LINK_START = re.compile(r"(?P<image>!?)(?:\[[^\]\n]*\])\(")
 _ATX_HEADING = re.compile(r"^ {0,3}(?P<marks>#{1,6})(?:[ \t]+|$)(?P<text>.*?)\s*#*\s*$")

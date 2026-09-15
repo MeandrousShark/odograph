@@ -52,13 +52,14 @@ container_id="$(podman run -d --name "$container_name" \
     -e POSTGRES_DB=mileage -e POSTGRES_USER=mileage -e POSTGRES_PASSWORD=testpw \
     -p 127.0.0.1::5432 "$IMAGE")"
 
+# shellcheck disable=SC2329 # Invoked by the ERR trap.
 cleanup_failed_start() {
     podman rm -f "$container_id" >/dev/null 2>&1 || true
 }
 trap cleanup_failed_start ERR
 
 for ((attempt = 0; attempt < 30; attempt++)); do
-    if podman exec "$container_id" pg_isready -U mileage -d mileage >/dev/null 2>&1; then
+    if podman exec "$container_id" pg_isready -h 127.0.0.1 -U mileage -d mileage >/dev/null 2>&1; then
         host_port="$(podman port "$container_id" 5432/tcp | sed -n 's/^127\.0\.0\.1:\([0-9][0-9]*\)$/\1/p')"
         if [ -n "$host_port" ]; then
             printf "export TEST_DATABASE_URL='postgresql://mileage:testpw@127.0.0.1:%s/mileage'\n" "$host_port"

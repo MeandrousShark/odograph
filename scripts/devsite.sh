@@ -168,7 +168,7 @@ db_container_running() {
 wait_for_db_ready() {
     local attempt
     for ((attempt = 0; attempt < 30; attempt++)); do
-        if podman exec "$DB_CONTAINER" pg_isready -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1; then
+        if podman exec "$DB_CONTAINER" pg_isready -h 127.0.0.1 -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1; then
             return 0
         fi
         sleep 1
@@ -182,7 +182,12 @@ create_db_container() {
         echo "error: port $DB_PORT (QA database) is already in use. Set DEVSITE_DB_PORT to use a different one." >&2
         exit 1
     fi
-    podman volume exists "$DB_VOLUME" || podman volume create "$DB_VOLUME" >/dev/null
+    if podman volume exists "$DB_VOLUME"; then
+        echo "error: QA volume $DB_VOLUME exists without its container; refusing to attach a new database image to existing data." >&2
+        echo "Recover it with the original image or use a verified backup and a fresh volume. See docs/backups.md." >&2
+        exit 1
+    fi
+    podman volume create "$DB_VOLUME" >/dev/null
 
     local db_password
     db_password="$(db_password_from_url "$DATABASE_URL")"

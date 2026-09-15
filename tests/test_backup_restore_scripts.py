@@ -79,9 +79,13 @@ case "$cmd" in
                 ;;
             pg_restore)
                 is_list=0
+                is_render=0
                 for a in "$@"; do
                     if [ "$a" = "--list" ]; then
                         is_list=1
+                    fi
+                    if [ "$a" = "--file=-" ]; then
+                        is_render=1
                     fi
                 done
                 if [ "$is_list" -eq 1 ]; then
@@ -96,6 +100,17 @@ case "$cmd" in
                     fi
                     printf '%s\n' "${FAKE_TOC_CONTENT:-1; 0 0 TABLE public trips mileage}"
                     exit 0
+                elif [ "$is_render" -eq 1 ]; then
+                    if [ -n "${FAKE_STDIN_CAPTURE_RENDER:-}" ]; then
+                        cat > "$FAKE_STDIN_CAPTURE_RENDER"
+                    else
+                        cat > /dev/null
+                    fi
+                    if [ "${FAKE_PG_RESTORE_RENDER_EXIT:-0}" -ne 0 ]; then
+                        exit "${FAKE_PG_RESTORE_RENDER_EXIT}"
+                    fi
+                    printf '%s\n' "${FAKE_RENDER_SQL:--- rendered archive SQL}"
+                    exit 0
                 else
                     if [ -n "${FAKE_STDIN_CAPTURE_RESTORE:-}" ]; then
                         cat > "$FAKE_STDIN_CAPTURE_RESTORE"
@@ -106,10 +121,22 @@ case "$cmd" in
                 fi
                 ;;
             psql)
+                is_file=0
                 sql=""
                 for a in "$@"; do
                     sql="$a"
+                    if [ "$a" = "-f" ]; then
+                        is_file=1
+                    fi
                 done
+                if [ "$is_file" -eq 1 ]; then
+                    if [ -n "${FAKE_STDIN_CAPTURE_PSQL:-}" ]; then
+                        cat > "$FAKE_STDIN_CAPTURE_PSQL"
+                    else
+                        cat > /dev/null
+                    fi
+                    exit "${FAKE_PSQL_EXIT:-0}"
+                fi
                 case "$sql" in
                     *schema_migrations*)
                         code="${FAKE_SCHEMA_QUERY_EXIT:-0}"
@@ -972,7 +999,10 @@ def test_restore_skip_checksum_alone_skips_checksum_but_validates_structure(tmp_
     assert "skip-checksum" in result.stderr
     execs = exec_lines(log_path)
     assert any("pg_restore" in line and "--list" in line for line in execs)
-    assert any("pg_restore" in line and "-d" in line.split() for line in execs)
+    assert any(
+        "psql" in line and "--single-transaction" in line
+        for line in execs
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1058,7 +1088,10 @@ def test_restore_proceeds_when_target_is_empty(tmp_path):
 
     assert result.returncode == 0, result.stderr
     execs = exec_lines(log_path)
-    assert any("pg_restore" in line and "--single-transaction" in line for line in execs)
+    assert any(
+        "psql" in line and "--single-transaction" in line
+        for line in execs
+    )
 
 
 def test_restore_empty_target_sql_exempts_extension_owned_relations():
@@ -1080,31 +1113,44 @@ def test_restore_success_exact_flags_and_manifest_mismatch_warning(tmp_path):
     archive, _ = write_archive_with_sidecar(tmp_path / "d", "mileage-x.dump", FAKE_ARCHIVE_BYTES)
     manifest = archive.with_name(archive.name + ".manifest")
     manifest.write_text("schema_version=8\narchive=mileage-x.dump\n")
-    stdin_capture = tmp_path / "restore_stdin_capture.bin"
+    render_capture = tmp_path / "render_stdin_capture.bin"
+    psql_capture = tmp_path / "psql_stdin_capture.sql"
 
     env = restore_env(
         bin_dir, log_path,
         FAKE_SCHEMA_VERSION="7",
-        FAKE_STDIN_CAPTURE_RESTORE=str(stdin_capture),
+        FAKE_STDIN_CAPTURE_RENDER=str(render_capture),
+        FAKE_STDIN_CAPTURE_PSQL=str(psql_capture),
     )
     result = run_script(restore_script, [str(archive)], tmp_path, env)
 
     assert result.returncode == 0, result.stderr
 
     execs = exec_lines(log_path)
-    restore_calls = [line for line in execs if "pg_restore" in line and "--single-transaction" in line]
-    assert len(restore_calls) == 1
-    assert restore_calls[0] == (
-        "exec -T db pg_restore -U mileage -d mileage "
-        "--single-transaction --exit-on-error --no-owner --no-privileges"
+    render_calls = [line for line in execs if "pg_restore" in line and "--file=-" in line]
+    assert len(render_calls) == 1
+    assert render_calls[0] == (
+        "exec -T db pg_restore --file=- --no-owner --no-privileges"
     )
 
-    assert stdin_capture.read_bytes() == FAKE_ARCHIVE_BYTES
+    assert render_capture.read_bytes() == FAKE_ARCHIVE_BYTES
+    assert psql_capture.read_text() == "-- rendered archive SQL\n"
+
+    transaction_calls = [
+        line for line in execs
+        if "psql" in line and "--single-transaction" in line
+    ]
+    assert transaction_calls == [
+        (
+            "exec -T db psql -X --single-transaction -v ON_ERROR_STOP=1 "
+            "-U mileage -d mileage -f -"
+        )
+    ]
 
     analyze_calls = [line for line in execs if "ANALYZE" in line]
     assert len(analyze_calls) == 1
     assert "-v ON_ERROR_STOP=1" in analyze_calls[0]
-    assert execs.index(analyze_calls[0]) > execs.index(restore_calls[0])
+    assert execs.index(analyze_calls[0]) > execs.index(transaction_calls[0])
 
     assert "Restored schema version: 7" in result.stdout
     assert "manifest schema_version (8) does not match the restored database's schema_version (7)" in result.stderr
@@ -1125,6 +1171,132 @@ def test_restore_missing_schema_migrations_after_restore_is_warning_not_failure(
     assert result.returncode == 0, result.stderr
     assert "WARNING: schema_migrations is missing after restore" in result.stderr
     assert "Restored schema version: 0" in result.stdout
+
+
+def test_restore_render_failure_never_executes_sql(tmp_path):
+    _, restore_script = install_scripts(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "fake.log"
+    archive, _ = write_archive_with_sidecar(tmp_path / "d", "mileage-x.dump", FAKE_ARCHIVE_BYTES)
+    temp_dir = tmp_path / "restore-temp"
+    temp_dir.mkdir()
+
+    env = restore_env(
+        bin_dir,
+        log_path,
+        FAKE_PG_RESTORE_RENDER_EXIT="7",
+        TMPDIR=str(temp_dir),
+    )
+    result = run_script(restore_script, [str(archive)], tmp_path, env)
+
+    assert result.returncode != 0
+    assert "no SQL was sent" in result.stderr
+    execs = exec_lines(log_path)
+    assert any("pg_restore" in line and "--list" in line for line in execs)
+    assert any("pg_restore" in line and "--file=-" in line for line in execs)
+    assert not any("psql" in line and "--single-transaction" in line for line in execs)
+    assert list(temp_dir.iterdir()) == []
+
+
+def test_restore_transaction_failure_reports_rollback(tmp_path):
+    _, restore_script = install_scripts(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "fake.log"
+    archive, _ = write_archive_with_sidecar(tmp_path / "d", "mileage-x.dump", FAKE_ARCHIVE_BYTES)
+
+    env = restore_env(bin_dir, log_path, FAKE_PSQL_EXIT="7")
+    result = run_script(restore_script, [str(archive)], tmp_path, env)
+
+    assert result.returncode != 0
+    assert "rolled back" in result.stderr
+    execs = exec_lines(log_path)
+    assert any("psql" in line and "--single-transaction" in line for line in execs)
+    assert not any("ANALYZE" in line for line in execs)
+    assert not any("schema_migrations" in line for line in execs)
+
+
+def test_restore_bootstraps_only_missing_legacy_extension_schemas(tmp_path):
+    _, restore_script = install_scripts(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "fake.log"
+    archive, _ = write_archive_with_sidecar(tmp_path / "d", "mileage-x.dump", FAKE_ARCHIVE_BYTES)
+    psql_capture = tmp_path / "psql_stdin_capture.sql"
+
+    toc = "\n".join(
+        [
+            "10; 0 0 EXTENSION - postgis_tiger_geocoder postgres",
+            "11; 0 0 EXTENSION - postgis_topology postgres",
+            "12; 2615 0 SCHEMA - tiger postgres",
+        ]
+    )
+    env = restore_env(
+        bin_dir,
+        log_path,
+        FAKE_TOC_CONTENT=toc,
+        FAKE_STDIN_CAPTURE_PSQL=str(psql_capture),
+    )
+    result = run_script(restore_script, [str(archive)], tmp_path, env)
+
+    assert result.returncode == 0, result.stderr
+    sql = psql_capture.read_text()
+    assert "CREATE SCHEMA IF NOT EXISTS tiger;" not in sql
+    assert "CREATE SCHEMA IF NOT EXISTS tiger_data;" in sql
+    assert "CREATE SCHEMA IF NOT EXISTS topology;" in sql
+
+
+def test_restore_does_not_bootstrap_schemas_present_in_archive(tmp_path):
+    _, restore_script = install_scripts(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "fake.log"
+    archive, _ = write_archive_with_sidecar(tmp_path / "d", "mileage-x.dump", FAKE_ARCHIVE_BYTES)
+    psql_capture = tmp_path / "psql_stdin_capture.sql"
+
+    toc = "\n".join(
+        [
+            "10; 0 0 EXTENSION - postgis_tiger_geocoder postgres",
+            "11; 0 0 EXTENSION - postgis_topology postgres",
+            "12; 2615 0 SCHEMA - tiger postgres",
+            "13; 2615 0 SCHEMA - tiger_data postgres",
+            "14; 2615 0 SCHEMA - topology postgres",
+        ]
+    )
+    env = restore_env(
+        bin_dir,
+        log_path,
+        FAKE_TOC_CONTENT=toc,
+        FAKE_STDIN_CAPTURE_PSQL=str(psql_capture),
+    )
+    result = run_script(restore_script, [str(archive)], tmp_path, env)
+
+    assert result.returncode == 0, result.stderr
+    sql = psql_capture.read_text()
+    assert "CREATE SCHEMA IF NOT EXISTS" not in sql
+
+
+def test_restore_native_archive_without_legacy_extensions_has_no_bootstrap(tmp_path):
+    _, restore_script = install_scripts(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "fake.log"
+    archive, _ = write_archive_with_sidecar(tmp_path / "d", "mileage-x.dump", FAKE_ARCHIVE_BYTES)
+    psql_capture = tmp_path / "psql_stdin_capture.sql"
+
+    env = restore_env(
+        bin_dir,
+        log_path,
+        FAKE_TOC_CONTENT="10; 0 0 TABLE public trips mileage",
+        FAKE_STDIN_CAPTURE_PSQL=str(psql_capture),
+    )
+    result = run_script(restore_script, [str(archive)], tmp_path, env)
+
+    assert result.returncode == 0, result.stderr
+    sql = psql_capture.read_text()
+    assert "CREATE SCHEMA IF NOT EXISTS" not in sql
+    assert "-- rendered archive SQL" in sql
 
 
 def test_restore_every_exec_invocation_uses_dash_T(tmp_path):

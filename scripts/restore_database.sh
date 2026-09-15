@@ -184,15 +184,73 @@ else
     echo "Checksum OK: $ARCHIVE matches its .sha256 sidecar."
 fi
 
-$compose_cmd exec -T db pg_restore --list < "$ARCHIVE" > /dev/null || {
+restore_tmp=""
+# Render first, then feed one complete SQL file to psql so legacy schema
+# bootstrap and archive restore share the same transaction.
+cleanup_restore_tmp() {
+    local exit_code=$?
+    trap - EXIT HUP INT TERM
+    if [ -n "$restore_tmp" ]; then
+        rm -R -f -- "$restore_tmp" || true
+    fi
+    exit "$exit_code"
+}
+trap cleanup_restore_tmp EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+umask 077
+restore_tmp="$(mktemp -d "${TMPDIR:-/tmp}/odograph-restore.XXXXXX")"
+chmod 700 "$restore_tmp"
+toc_file="$restore_tmp/archive.toc"
+rendered_sql="$restore_tmp/archive.sql"
+restore_input="$restore_tmp/restore.sql"
+
+if ! $compose_cmd exec -T db pg_restore --list < "$ARCHIVE" > "$toc_file"; then
     echo "error: pg_restore --list failed against $ARCHIVE; archive appears corrupt or is not a compatible custom-format dump." >&2
     exit 1
-}
+fi
 echo "Archive structure OK."
 
-echo "Restoring $ARCHIVE into the mileage database via: $compose_cmd exec -T db pg_restore ..."
-if ! $compose_cmd exec -T db pg_restore -U mileage -d mileage --single-transaction --exit-on-error --no-owner --no-privileges < "$ARCHIVE"; then
-    echo "error: pg_restore failed. --single-transaction means nothing partial was committed; fix the underlying issue and retry." >&2
+toc_has_extension() {
+    local extension="$1"
+    awk -v extension="$extension" '$4 == "EXTENSION" && $6 == extension { found = 1 } END { exit !found }' "$toc_file"
+}
+
+toc_has_schema() {
+    local schema="$1"
+    awk -v schema="$schema" '$4 == "SCHEMA" && $6 == schema { found = 1 } END { exit !found }' "$toc_file"
+}
+
+bootstrap_sql=""
+if toc_has_extension postgis_tiger_geocoder; then
+    toc_has_schema tiger || bootstrap_sql+=$'CREATE SCHEMA IF NOT EXISTS tiger;\n'
+    toc_has_schema tiger_data || bootstrap_sql+=$'CREATE SCHEMA IF NOT EXISTS tiger_data;\n'
+fi
+if toc_has_extension postgis_topology && ! toc_has_schema topology; then
+    bootstrap_sql+=$'CREATE SCHEMA IF NOT EXISTS topology;\n'
+fi
+
+echo "Rendering $ARCHIVE into a temporary SQL file before opening a database transaction."
+if ! $compose_cmd exec -T db pg_restore --file=- --no-owner --no-privileges < "$ARCHIVE" > "$rendered_sql" 2> "$restore_tmp/render.log"; then
+    echo "error: pg_restore could not render $ARCHIVE; no SQL was sent to the database." >&2
+    exit 1
+fi
+chmod 600 "$rendered_sql"
+
+if ! {
+    printf '%s' "$bootstrap_sql"
+    cat -- "$rendered_sql"
+} > "$restore_input"; then
+    echo "error: could not prepare the transactional restore input; no SQL was sent to the database." >&2
+    exit 1
+fi
+chmod 600 "$restore_input"
+
+echo "Restoring $ARCHIVE into the mileage database in one transaction via: $compose_cmd exec -T db psql ..."
+if ! $compose_cmd exec -T db psql -X --single-transaction -v ON_ERROR_STOP=1 -U mileage -d mileage -f - < "$restore_input"; then
+    echo "error: transactional restore failed; schema bootstrap and archive restore were rolled back. Fix the underlying issue and retry." >&2
     exit 1
 fi
 

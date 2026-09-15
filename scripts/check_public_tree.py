@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 
 
-PUBLIC_DIRECTORIES = frozenset({".github", "app", "tests", "static", "migrations", "scripts"})
+PUBLIC_DIRECTORIES = frozenset({".github", "app", "tests", "static", "migrations", "scripts", "docker"})
 PUBLIC_TOP_LEVEL = frozenset({
     "AGENTS.md", "CLAUDE.md", "README.md", "LICENSE", "SECURITY.md",
     "CONTRIBUTING.md", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md", "compose.yaml",
