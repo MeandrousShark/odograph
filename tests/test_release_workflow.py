@@ -38,7 +38,8 @@ def test_release_is_tag_only_repo_scoped_and_serialized_per_tag():
     ]["run"]
 
     source = WORKFLOW.read_text()
-    assert "ghcr.io/meandrousshark" not in source.lower()
+    assert "ghcr.io/meandrousshark/odograph:" not in source.lower()
+    assert source.count("ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6") == 3
     assert ":latest" not in source
 
 
@@ -48,7 +49,9 @@ def test_release_test_gate_runs_full_postgis_suite_and_pip_audit():
     assert test["needs"] == "prepare"
     assert test["env"]["TEST_DATABASE_URL"].startswith("postgresql://")
     postgres = test["services"]["postgres"]
-    assert postgres["image"] == "postgis/postgis:16-3.4"
+    assert postgres["image"] == (
+        "ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6"
+    )
     assert "pg_isready" in postgres["options"]
 
     steps = steps_by_name(test)
@@ -131,6 +134,22 @@ def test_each_architecture_is_built_from_tagged_tree_and_scanned_by_digest():
         assert scan["with"]["severity"] == "HIGH,CRITICAL"
         assert scan["with"]["trivyignores"] == ignore_file
         assert scan["with"]["scanners"] == "vuln"
+
+        postgis_scan = steps[
+            f"Scan {platform.removeprefix('linux/')} PostGIS image"
+        ]
+        assert postgis_scan["uses"] == "aquasecurity/trivy-action@v0.36.0"
+        assert postgis_scan["env"] == {"TRIVY_PLATFORM": platform}
+        assert postgis_scan["with"] == {
+            "image-ref": "ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6",
+            "format": "table",
+            "exit-code": "1",
+            "ignore-unfixed": "true",
+            "vuln-type": "os,library",
+            "severity": "HIGH,CRITICAL",
+            "scanners": "vuln",
+        }
+        assert "trivyignores" not in postgis_scan["with"]
 
         qemu_steps = [step for step in job["steps"] if step.get("uses", "").startswith("docker/setup-qemu")]
         if qemu_platform:

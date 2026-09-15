@@ -36,10 +36,10 @@ Three things are deliberately **not** in the archive:
   [Self-hosted OSRM road-snapping](osrm.md#provisioning) rather than backing
   it up.
 - **The PostGIS-managed `tiger`, `tiger_data`, and `topology` schemas.**
-  Older database images create these on every fresh volume. When an archive
-  declares their extensions but omits the schemas, the restore script creates
-  the missing schemas within the restore transaction. All application data
-  lives in the `public` schema, which is fully included above.
+  Database images may create these on a fresh volume. When an archive declares
+  their extensions but omits the schemas, the restore script creates the
+  missing schemas within the restore transaction. All application data lives
+  in the `public` schema, which is fully included above.
 
 Copying the live `dbdata` volume directly (filesystem copy, snapshot, `tar`
 of the volume mount, etc.) is not a supported backup path. PostgreSQL's data
@@ -125,8 +125,8 @@ into a used database means creating a new, empty one first (see
 [Disaster recovery](#disaster-recovery) below for the case where the old data
 needs to survive alongside it).
 
-For a target you already know is empty (a brand-new install, or a `dbdata`
-volume you just recreated on purpose), stop the app and restore:
+For a target you already know is empty (a brand-new install, or a fresh
+`dbdata` volume in a new Compose project), stop the app and restore:
 
 ```sh
 docker compose stop app
@@ -147,6 +147,14 @@ failure, since the restore already committed). It does not start the app for
 you; start it yourself once you're satisfied, so its own startup migrations
 (if the target release differs from the one that made the backup) run under
 your observation.
+
+When changing the PostGIS database image, keep the old project and volume
+stopped and restore into a fresh project with a new `COMPOSE_PROJECT_NAME`.
+Use the target release's restore script after starting only its database. Do
+not reuse the old `dbdata` volume, swap `PGDATA` directories, or run
+`docker compose down -v` against the old project. The complete migration and
+rollback sequence is in
+[Upgrading the PostGIS database image](upgrading.md#upgrading-the-postgis-database-image).
 
 An operator who has separately verified a relocated archive's integrity can
 skip the checksum check with `--skip-checksum` (archive-structure validation

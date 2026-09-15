@@ -137,7 +137,7 @@ jobs:
       TEST_DATABASE_URL: postgresql://mileage:testpw@127.0.0.1:5432/mileage
     services:
       postgres:
-        image: postgis/postgis:16-3.4
+        image: ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6
         env:
           POSTGRES_DB: mileage
           POSTGRES_USER: mileage
@@ -268,11 +268,6 @@ jobs:
             echo "uname: $(uname -m)"
             echo "build_platform: ${{ matrix.platform }}"
           } > "evidence/runner-${{ matrix.architecture }}.txt"
-      - name: Register amd64 emulation for the database only
-        if: matrix.architecture == 'arm64'
-        uses: docker/setup-qemu-action@v4
-        with:
-          platforms: amd64
       - uses: docker/setup-buildx-action@v4
       - name: Read architecture scan policy
         env:
@@ -328,6 +323,19 @@ jobs:
           severity: HIGH,CRITICAL
           scanners: vuln
           trivyignores: evidence/${{ matrix.trivy-ignore }}
+      - name: Scan ${{ matrix.architecture }} PostGIS image
+        uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_PLATFORM: ${{ matrix.platform }}
+        with:
+          image-ref: ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6
+          format: table
+          output: evidence/trivy-${{ matrix.architecture }}-postgis.txt
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          scanners: vuln
       - name: Generate native SPDX SBOM
         uses: anchore/sbom-action@v0.24.0
         with:
@@ -344,12 +352,14 @@ jobs:
             "evidence/sbom-${{ matrix.architecture }}.spdx.json" >/dev/null
       - name: Smoke-test native application image
         env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          POSTGIS_IMAGE: ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6
           REVISION: ${{ needs.prepare.outputs.revision }}
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           scripts/release_preflight_smoke.sh \
             "$LOCAL_IMAGE" "$VERSION" "$REVISION" \
-            "evidence/smoke-${{ matrix.architecture }}.txt" linux/amd64
+            "evidence/smoke-${ARCHITECTURE}.txt" "linux/${ARCHITECTURE}"
       - name: Remove local image
         if: always()
         run: docker image rm "$LOCAL_IMAGE" >/dev/null 2>&1 || true
@@ -389,7 +399,8 @@ jobs:
           set -euo pipefail
           mkdir -p evidence
           COMPOSE_CMD="docker compose" scripts/upgrade_check.sh \
-            --base v0.10.2 --candidate "$REVISION" | tee evidence/source-upgrade-drill.txt
+            --base v0.10.2 --candidate "$REVISION" \
+            --database-image-migration | tee evidence/source-upgrade-drill.txt
       - name: Upload source upgrade evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -519,16 +530,12 @@ jobs:
           test "$RUNNER_ARCH" = "$EXPECTED_RUNNER_ARCH"
           test "$(uname -m)" = "$EXPECTED_UNAME"
           mkdir -p evidence
-      - name: Register amd64 emulation for the database only
-        if: matrix.architecture == 'arm64'
-        uses: docker/setup-qemu-action@v4
-        with:
-          platforms: amd64
       - name: Pull and verify the native published child
         env:
           ARCHITECTURE: ${{ matrix.architecture }}
           DIGEST: ${{ needs.resolve-published.outputs[matrix.digest-output] }}
           IMAGE: ${{ needs.prepare.outputs.image }}
+          POSTGIS_IMAGE: ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6
           REVISION: ${{ needs.prepare.outputs.revision }}
           SOURCE: https://github.com/${{ github.repository }}
           VERSION: ${{ needs.prepare.outputs.version }}
@@ -548,7 +555,7 @@ jobs:
             ' "evidence/published-${ARCHITECTURE}.json"
           scripts/release_preflight_smoke.sh \
             "$published_image" "$VERSION" "$REVISION" \
-            "evidence/published-smoke-${ARCHITECTURE}.txt" linux/amd64
+            "evidence/published-smoke-${ARCHITECTURE}.txt" "linux/${ARCHITECTURE}"
       - name: Upload published native evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -588,7 +595,8 @@ jobs:
           test "$(uname -m)" = x86_64
           COMPOSE_CMD="docker compose" scripts/upgrade_check.sh \
             --base v0.10.2 --candidate "$REVISION" \
-            --candidate-image "$IMAGE@$INDEX_DIGEST" | \
+            --candidate-image "$IMAGE@$INDEX_DIGEST" \
+            --database-image-migration | \
             tee evidence/published-upgrade-drill.txt
       - name: Upload published upgrade evidence
         if: always()

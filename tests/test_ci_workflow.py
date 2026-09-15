@@ -22,7 +22,8 @@ def test_ci_runs_full_suite_on_push_and_pull_requests_with_postgis():
         "postgresql://mileage:testpw@127.0.0.1:5432/mileage"
     )
     postgres = job["services"]["postgres"]
-    assert postgres["image"] == "postgis/postgis:16-3.4"
+    compose = yaml.safe_load((ROOT / "compose.yaml").read_text())
+    assert postgres["image"] == compose["services"]["db"]["image"]
     assert postgres["env"] == {
         "POSTGRES_DB": "mileage",
         "POSTGRES_USER": "mileage",

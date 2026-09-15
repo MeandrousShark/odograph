@@ -1,6 +1,6 @@
 services:
   db:
-    image: docker.io/postgis/postgis:16-3.4
+    image: ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6
     environment:
       POSTGRES_DB: mileage
       POSTGRES_USER: mileage

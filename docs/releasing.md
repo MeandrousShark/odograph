@@ -195,10 +195,11 @@ secret checks, and the dependency audit. It builds and scans native
 `linux/amd64` and `linux/arm64` application images, writes an SPDX SBOM for
 each, and runs the HTTPS authentication smoke: health, protected settings,
 administrator signup, Secure session cookie, and authenticated version and
-revision checks. On the ARM64 runner, QEMU is registered only for the
-`linux/amd64` PostGIS database used by that smoke; the application image and
-application smoke remain native. The preflight also runs the source upgrade
-and rollback drill with Docker Compose.
+revision checks. The application image, application smoke, and PostGIS
+database remain native on each runner. The preflight also runs the source
+upgrade and rollback drill with Docker Compose, using the database-image
+migration mode because the rendered database image is part of the candidate
+release contract.
 
 After an immutable release has been published, dispatch the verification mode
 from a ref that resolves to the published tag's exact commit. The tag ref is
@@ -218,10 +219,10 @@ that every attested in-toto subject names the child digest and contains a
 nonempty SPDX package list. Native AMD64 and ARM64 jobs pull their child by
 digest, check its platform and release identity, and run the same HTTPS smoke.
 The published upgrade and rollback drill uses Docker Compose with base
-`v0.10.2`, the exact checked-out revision as `--candidate`, and the exact OCI
-index digest as `--candidate-image`. The current v0.11.0 workflow uses
-`v0.10.2`; later releases must cover their supported base release in the
-workflow and the manual drill.
+`v0.10.2`, the exact checked-out revision as `--candidate`, the exact OCI
+index digest as `--candidate-image`, and `--database-image-migration`. The
+workflow retains `v0.10.2` as its supported base; later releases must cover
+their supported base release in the workflow and the manual drill.
 
 The automated preflight and published verification use Docker Compose. Run the
 equivalent Podman Compose drill in the artifact upgrade section below before
@@ -367,7 +368,8 @@ it runs. Confirm, in order, that CI:
    test suite with PostGIS, and runs `pip-audit` against `requirements.lock`;
 2. builds `linux/amd64` and `linux/arm64` images with `VERSION` and
    `GIT_REVISION` set to the tag and tagged commit;
-3. runs blocking Trivy HIGH/CRITICAL scans against each architecture digest;
+3. runs blocking Trivy HIGH/CRITICAL scans against each application and native
+   PostGIS architecture digest;
 4. verifies both child manifests, creates the versioned manifest list, and
    reports the manifest, amd64, and arm64 digests;
 5. generates and attests an SBOM for each architecture digest, then signs the
@@ -409,6 +411,13 @@ out the exact release tag, follow the README's pinned-image install, wait for
 the database and app to become healthy, and sign in. Confirm Settings reports
 the exact version and tagged git revision, plus the expected schema and
 detector versions. Confirm `/healthz` exposes none of those identifiers.
+
+The default PostGIS image is the signed native multi-architecture index
+`ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6`.
+Inspect its index and child digests, verify the index and both child signatures,
+and verify each child SPDX subject before pinning a replacement in repository
+references. This index was published by the trusted `main` workflow at source
+commit `6af7b91b04ee410e40a5e16fd952e2a3ceb54ce8`.
 
 ## Run the artifact upgrade and rollback drill
 
@@ -469,8 +478,8 @@ both architectures is still required.
 ## Build and publish the PostGIS image
 
 The dedicated `.github/workflows/postgis-image.yml` workflow and
-`docker/postgis/Dockerfile` build infrastructure for a future database-image
-migration. They build native `linux/amd64` and `linux/arm64` images from the
+`docker/postgis/Dockerfile` build the supported native database image. They
+build native `linux/amd64` and `linux/arm64` images from the
 immutable upstream `nickblah/postgis` PostgreSQL 16 and PostGIS 3.6.4 base,
 refresh Debian packages, and build the pinned gosu 1.19 source with the pinned
 patched Go toolchain. Each native job tests a fresh database, runs the v0.11.0
@@ -489,10 +498,12 @@ Before updating the upstream base or gosu source pins, maintainers must review
 the upstream changes and rerun both native architecture builds, fresh database
 checks, blocking Trivy scans, and the v0.11.0 application smoke. Record and
 verify the resulting index and child digests, signatures and SPDX subjects
-before pinning the index in repository references. The current default database
-image remains `postgis/postgis:16-3.4` until a separately reviewed follow-up
-wires the new image into Compose and the release preflight. This infrastructure
-work does not announce an application release or change production.
+before pinning the index in repository references. The current default is the
+immutable index recorded above. Updating it is a database-image migration and
+requires the fresh-target backup and rollback procedure in
+[Upgrading](upgrading.md#upgrading-the-postgis-database-image). This image
+change does not announce a new application release or imply a production
+deployment.
 
 ## Move the floating minor tag
 

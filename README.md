@@ -58,6 +58,13 @@ Linux is what Odograph is tested and supported on. Docker Desktop or
 tested, so they are not claimed. If you try one and hit a problem, open an
 issue and I will help track it down.
 
+This checkout's `compose.yaml` uses the signed native PostgreSQL
+16.15/PostGIS 3.6.4 image for Linux AMD64 and ARM64. When a target release
+uses it, an installation that still uses the older `postgis/postgis:16-3.4`
+image must read the
+[PostGIS database image upgrade procedure](docs/upgrading.md#upgrading-the-postgis-database-image)
+before starting the target release.
+
 Your phone posts location updates all day, so Odograph works best on a machine
 that stays awake rather than one that sleeps.
 
