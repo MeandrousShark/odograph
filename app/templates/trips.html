@@ -118,6 +118,8 @@
   <div class="trip-archive-status">
     <p id="archive-status" class="trip-archive-status-message" role="status" aria-live="polite"></p>
     <button type="button" id="archive-status-retry" class="control control-secondary" hidden>Retry</button>
+    <button type="button" id="selection-select-all" class="control control-secondary trip-selection-select-all"
+            aria-describedby="archive-status">Select all matching</button>
   </div>
 </div>
 
@@ -251,6 +253,11 @@
       } else {
         root.removeAttribute('aria-busy');
       }
+      window.archiveSelectionBusyChanged?.();
+    };
+
+    const beginSelectionNavigation = () => {
+      window.archiveSelectionNavigationStarted?.();
     };
 
     const setFieldValue = (form, name, value) => {
@@ -366,6 +373,7 @@
       };
       const token = scope.start();
       queryHandoff.set(token, applied);
+      window.archiveSelectionBusyChanged?.();
       if (settings.afterWrite) writeRefreshTokens.add(token);
       announce('Updating trips');
       showRetry(false);
@@ -382,6 +390,9 @@
     };
 
     const applyFilters = () => {
+      const query = currentDraftQuery();
+      if (!writeInFlight && helpers.sameFilters(query, lastApplied) && scope.pending() === 0) return;
+      beginSelectionNavigation();
       if (writeInFlight) {
         // The controls already hold the new choice, so the change is run
         // once the write and its refresh have settled rather than dropped.
@@ -392,8 +403,6 @@
       }
       // No depth metadata here: a filter change deliberately resets each
       // month's pagination.
-      const query = currentDraftQuery();
-      if (helpers.sameFilters(query, lastApplied) && scope.pending() === 0) return;
       requestArchive(query);
     };
 
@@ -503,6 +512,7 @@
     };
 
     const beginWrite = () => {
+      if (window.archiveSelectionIsBusy?.()) return false;
       if (!writeCoordinator.begin(lastApplied)) return false;
       writeInFlight = true;
       if (historyRetry.pending() && lastAttempt && lastAttempt.kind === 'history') {
@@ -575,6 +585,10 @@
       announce,
       isWriteBusy: () => writeInFlight,
       isWriteUnavailable: () => depthRestorePending || depthRestoreFailed,
+      isReadBusy: () => (
+        queryHandoff.has(scope.currentToken()) || scope.pending() > 0 || historyMisses.size > 0
+      ),
+      selectionQuery: () => lastApplied,
     };
 
     const resetFilters = () => {
@@ -883,6 +897,7 @@
     };
 
     document.addEventListener('htmx:historyCacheMiss', (event) => {
+      beginSelectionNavigation();
       searchDebounce.cancel();
       const path = event.detail.path || '/trips';
       const xhr = event.detail.xhr;
@@ -940,6 +955,7 @@
     });
 
     document.addEventListener('htmx:historyRestore', (event) => {
+      beginSelectionNavigation();
       searchDebounce.cancel();
       const restoredPath = event.detail && event.detail.path;
       if (writeInFlight) {
@@ -1079,30 +1095,44 @@
 
 <div id="selection-action-bar" class="selection-action-bar" hidden>
   <span id="selection-count" aria-live="polite"></span>
-  <button type="button" id="selection-select-all" class="control control-secondary">Select all</button>
-  <button type="button" id="category-dialog-open" class="control control-secondary" disabled
-          aria-haspopup="dialog" aria-controls="category-dialog">Category</button>
-  <button type="button" id="purpose-dialog-open" class="control control-secondary" disabled
-          aria-haspopup="dialog" aria-controls="purpose-dialog">Purpose</button>
-  <button type="button" id="vehicle-dialog-open" class="control control-secondary" disabled
-          aria-haspopup="dialog" aria-controls="vehicle-dialog">Vehicle</button>
-  <button type="button" id="exclusion-dialog-open" class="control control-secondary" disabled
-          aria-haspopup="dialog" aria-controls="exclusion-dialog">Exclusion</button>
-  <details class="selection-more">
-    <summary>More</summary>
-    <div class="selection-more-menu">
-      <button type="button" id="merge-dialog-open" class="control control-secondary" disabled
-              aria-haspopup="dialog" aria-controls="merge-dialog">Merge selected…</button>
-      {# Covers both reasons Merge can be unavailable: too few trips, and a
-         selection reaching trips this view is not showing, whose eligibility
-         the client cannot establish. #}
-      <span id="merge-minimum" class="selection-minimum">Merging needs at least two selected trips. All of them must be shown in this view.</span>
-    </div>
-  </details>
-  <button type="button" id="delete-selected-open" class="control control-destructive" disabled
-          aria-haspopup="dialog" aria-controls="delete-selected-dialog">Delete selected</button>
-  <button type="button" id="selection-clear" class="control control-secondary">Clear selection</button>
+  <button type="button" id="selection-actions-open" class="control control-secondary selection-actions-open"
+          aria-haspopup="dialog" aria-controls="selection-actions-dialog">Actions</button>
+  <div id="selection-action-controls" class="selection-action-controls">
+    <button type="button" id="category-dialog-open" class="control control-secondary" disabled
+            aria-haspopup="dialog" aria-controls="category-dialog">Category</button>
+    <button type="button" id="purpose-dialog-open" class="control control-secondary" disabled
+            aria-haspopup="dialog" aria-controls="purpose-dialog">Purpose</button>
+    <button type="button" id="vehicle-dialog-open" class="control control-secondary" disabled
+            aria-haspopup="dialog" aria-controls="vehicle-dialog">Vehicle</button>
+    <button type="button" id="exclusion-dialog-open" class="control control-secondary" disabled
+            aria-haspopup="dialog" aria-controls="exclusion-dialog">Exclusion</button>
+    <details class="selection-more">
+      <summary>More</summary>
+      <div class="selection-more-menu">
+        <button type="button" id="merge-dialog-open" class="control control-secondary" disabled
+                aria-haspopup="dialog" aria-controls="merge-dialog">Merge selected...</button>
+        {# Covers both reasons Merge can be unavailable: too few trips, and a
+           selection reaching trips this view is not showing, whose eligibility
+           the client cannot establish. #}
+        <span id="merge-minimum" class="selection-minimum">Merging needs at least two selected trips. All of them must be shown in this view.</span>
+      </div>
+    </details>
+    <button type="button" id="delete-selected-open" class="control control-destructive" disabled
+            aria-haspopup="dialog" aria-controls="delete-selected-dialog">Delete selected</button>
+    <button type="button" id="selection-clear" class="control control-secondary">Clear selection</button>
+  </div>
 </div>
+
+<dialog id="selection-actions-dialog" class="app-dialog selection-actions-sheet"
+        aria-labelledby="selection-actions-dialog-title">
+  <div class="selection-actions-sheet-content">
+    <div class="selection-actions-sheet-heading">
+      <h2 id="selection-actions-dialog-title">Actions for <span data-selection-count>0 trips</span></h2>
+      <button type="button" class="control control-secondary" data-selection-actions-close autofocus>Close</button>
+    </div>
+    <div id="selection-actions-mount" class="selection-actions-mount"></div>
+  </div>
+</dialog>
 
 <dialog id="category-dialog" class="app-dialog selection-dialog" aria-labelledby="category-dialog-title">
   <form class="selection-dialog-content" data-selection-dialog-confirm="category-dialog-confirm">
@@ -1218,6 +1248,10 @@
   const selectionCount = document.getElementById('selection-count');
   const selectionClear = document.getElementById('selection-clear');
   const selectionSelectAll = document.getElementById('selection-select-all');
+  const selectionActionsOpen = document.getElementById('selection-actions-open');
+  const selectionActionsDialog = document.getElementById('selection-actions-dialog');
+  const selectionActionControls = document.getElementById('selection-action-controls');
+  const selectionActionsMount = document.getElementById('selection-actions-mount');
   const categoryOpen = document.getElementById('category-dialog-open');
   const purposeOpen = document.getElementById('purpose-dialog-open');
   const vehicleOpen = document.getElementById('vehicle-dialog-open');
@@ -1227,6 +1261,10 @@
   const deleteSelectedOpen = document.getElementById('delete-selected-open');
 
   const selectionHelpers = window.ArchiveState;
+  let selectionLoading = false;
+  let selectionGeneration = 0;
+  let selectionAbortController = null;
+  let actionsSheetTransition = null;
 
   function tripCountLabel(n) {
     return `${n} ${n === 1 ? 'trip' : 'trips'}`;
@@ -1258,19 +1296,25 @@
     // by whether anything is checked, appearing on the first check and
     // leaving once the last one clears.
     selectionBar.hidden = selection.size < 1;
+    document.body.classList.toggle('archive-has-selection', selection.size >= 1);
 
     const hasSelection = selection.size >= 1;
     const writeBusy = Boolean(window.archiveController?.isWriteBusy?.());
     const archiveUnavailable = Boolean(window.archiveController?.isWriteUnavailable?.());
-    categoryOpen.disabled = !hasSelection || writeBusy || archiveUnavailable;
-    purposeOpen.disabled = !hasSelection || writeBusy || archiveUnavailable;
-    vehicleOpen.disabled = !hasSelection || writeBusy || archiveUnavailable;
-    exclusionOpen.disabled = !hasSelection || writeBusy || archiveUnavailable;
-    deleteSelectedOpen.disabled = !hasSelection || writeBusy || archiveUnavailable;
+    const readBusy = Boolean(window.archiveController?.isReadBusy?.());
+    const actionsUnavailable = selectionLoading || writeBusy || archiveUnavailable;
+    selectionSelectAll.disabled = selectionLoading || writeBusy || archiveUnavailable || readBusy;
+    selectionSelectAll.textContent = selectionLoading ? 'Selecting matching trips...' : 'Select all matching';
+    selectionActionsOpen.disabled = !hasSelection || actionsUnavailable;
+    categoryOpen.disabled = !hasSelection || actionsUnavailable;
+    purposeOpen.disabled = !hasSelection || actionsUnavailable;
+    vehicleOpen.disabled = !hasSelection || actionsUnavailable;
+    exclusionOpen.disabled = !hasSelection || actionsUnavailable;
+    deleteSelectedOpen.disabled = !hasSelection || actionsUnavailable;
 
     const counts = { total: view.selected.length, rendered: view.rendered.length };
     const canMerge = selectionHelpers.canMergeSelection(counts);
-    mergeOpen.disabled = !canMerge || writeBusy || archiveUnavailable;
+    mergeOpen.disabled = !canMerge || actionsUnavailable;
     mergeMinimum.hidden = canMerge;
 
     // The dialogs describe the write, which applies to the whole selection,
@@ -1285,32 +1329,83 @@
       const selected = selection.has(id);
       card.classList.toggle('is-selected', selected);
       const checkbox = card.querySelector('.merge-select');
-      if (checkbox) checkbox.checked = selected;
+      if (checkbox) {
+        checkbox.checked = selected;
+        checkbox.disabled = selectionLoading || writeBusy || archiveUnavailable;
+      }
     });
   }
 
-  // Clear selection means all of it, including ids whose rows are no longer
-  // rendered, and a successful filter navigation ends it the same way.
-  function clearSelection() {
-    updateSelectionShell('navigate');
+  function cancelSelectionRequest() {
+    selectionGeneration += 1;
+    selectionAbortController?.abort();
+    selectionAbortController = null;
+    selectionLoading = false;
   }
 
-  // The archive controller clears the transient selection once a filter
-  // navigation or history restore has actually succeeded. It gets this one
-  // explicit entry point rather than its own copy of the selection state.
+  // Clear selection means all of it, including ids whose rows are no longer
+  // rendered. Filter and history navigation call this as soon as they start.
+  function clearSelection() {
+    cancelSelectionRequest();
+    actionsSheetTransition = null;
+    updateSelectionShell('navigate');
+    if (selectionActionsDialog.open) selectionActionsDialog.close('clear');
+  }
+
+  // The archive controller invalidates selection when navigation starts and
+  // also clears after a successful restore. It gets explicit entry points
+  // rather than its own copy of the selection state.
   window.archiveClearSelection = clearSelection;
+  window.archiveSelectionNavigationStarted = clearSelection;
+  window.archiveSelectionIsBusy = () => selectionLoading;
   window.archiveSelectionBusyChanged = updateSelectionShell;
 
   selectionClear.addEventListener('click', clearSelection);
 
-  // Only the cards currently in the DOM -- a trip beyond an unopened "Load
-  // more" page was never fetched, so there's nothing here to select it into.
-  selectionSelectAll.addEventListener('click', () => {
-    document.querySelectorAll('.trip-archive-item').forEach((card) => {
-      const match = card.id.match(/^trip-(\d+)$/);
-      if (match) selection.add(parseInt(match[1], 10));
-    });
+  // The endpoint returns one explicit snapshot across every page. Validate
+  // the complete response before replacing the Set, so a failed or malformed
+  // read cannot partially overwrite a usable selection.
+  selectionSelectAll.addEventListener('click', async () => {
+    if (selectionLoading || selectionSelectAll.disabled) return;
+    const query = window.archiveController?.selectionQuery?.();
+    if (typeof query !== 'string') {
+      window.archiveController?.announce?.('Matching trips could not be selected. Try again.');
+      return;
+    }
+    cancelSelectionRequest();
+    const generation = selectionGeneration;
+    selectionLoading = true;
+    selectionAbortController = typeof AbortController === 'function' ? new AbortController() : null;
     updateSelectionShell();
+    window.archiveController?.announce?.('Selecting matching trips');
+    let response;
+    try {
+      response = await fetch(query ? `/trips/selection?${query}` : '/trips/selection', {
+        method: 'GET',
+        cache: 'no-store',
+        ...(selectionAbortController ? { signal: selectionAbortController.signal } : {}),
+      });
+      if (generation !== selectionGeneration) return;
+      if (!response.ok) throw new Error('request failed');
+      const payload = await response.json();
+      if (generation !== selectionGeneration) return;
+      const ids = selectionHelpers.validateSelectionPayload(payload);
+      if (ids === null) throw new Error('invalid response');
+      selection.clear();
+      ids.forEach((id) => selection.add(id));
+      selectionLoading = false;
+      selectionAbortController = null;
+      updateSelectionShell();
+      window.archiveController?.announce?.(
+        ids.length ? `${tripCountLabel(ids.length)} selected` : 'No matching trips to select',
+      );
+    } catch (error) {
+      if (generation !== selectionGeneration) return;
+      selectionLoading = false;
+      selectionAbortController = null;
+      updateSelectionShell();
+      window.archiveController?.announce?.('Matching trips could not be selected. Try again.');
+    }
   });
 
   // Escape's browser-native effect is closing an open <dialog>; give it a
@@ -1332,6 +1427,11 @@
 
   document.addEventListener('change', (e) => {
     if (!e.target.matches('.merge-select')) return;
+    if (selectionLoading || e.target.disabled) {
+      e.preventDefault();
+      updateSelectionShell();
+      return;
+    }
     const id = parseInt(e.target.value, 10);
     if (e.target.checked) {
       selection.add(id);
@@ -1393,6 +1493,47 @@
       if (trigger.isConnected) trigger.focus();
     }, { once: true });
     dialog.showModal();
+  }
+
+  function restoreActionControls() {
+    selectionBar.appendChild(selectionActionControls);
+    const more = selectionActionControls.querySelector('.selection-more');
+    if (more) more.open = false;
+  }
+
+  selectionActionsDialog.addEventListener('close', () => {
+    restoreActionControls();
+    const transition = actionsSheetTransition;
+    actionsSheetTransition = null;
+    if (transition) {
+      transition();
+      return;
+    }
+    if (selectionBar.hidden) {
+      document.getElementById('trip-archive-header')?.focus();
+    } else if (selectionActionsOpen.isConnected) {
+      selectionActionsOpen.focus();
+    }
+  });
+
+  selectionActionsOpen.addEventListener('click', () => {
+    if (selectionActionsOpen.disabled || selectionActionsDialog.open) return;
+    selectionActionsMount.appendChild(selectionActionControls);
+    selectionActionsDialog.showModal();
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('[data-selection-actions-close]')) return;
+    selectionActionsDialog.close('close');
+  });
+
+  function openActionDialog(dialog, trigger) {
+    if (!selectionActionsDialog.open) {
+      openDialog(dialog, trigger);
+      return;
+    }
+    actionsSheetTransition = () => openDialog(dialog, selectionActionsOpen);
+    selectionActionsDialog.close('action');
   }
 
   document.addEventListener('click', (e) => {
@@ -1523,7 +1664,7 @@
   deleteSelectedOpen.addEventListener('click', () => {
     if (deleteSelectedOpen.disabled || window.archiveController.isWriteBusy()) return;
     clearDialogError(deleteSelectedDialog);
-    openDialog(deleteSelectedDialog, deleteSelectedOpen);
+    openActionDialog(deleteSelectedDialog, deleteSelectedOpen);
   });
 
   deleteSelectedConfirm.addEventListener('click', async () => {
@@ -1585,7 +1726,7 @@
     categoryDialog.querySelectorAll('input[name="category"]').forEach((r) => { r.checked = false; });
     categoryConfirm.disabled = true;
     clearDialogError(categoryDialog);
-    openDialog(categoryDialog, categoryOpen);
+    openActionDialog(categoryDialog, categoryOpen);
   });
 
   categoryConfirm.addEventListener('click', async () => {
@@ -1610,7 +1751,7 @@
     exclusionDialog.querySelectorAll('input[name="exclusion"]').forEach((r) => { r.checked = false; });
     exclusionConfirm.disabled = true;
     clearDialogError(exclusionDialog);
-    openDialog(exclusionDialog, exclusionOpen);
+    openActionDialog(exclusionDialog, exclusionOpen);
   });
 
   exclusionConfirm.addEventListener('click', async () => {
@@ -1637,7 +1778,7 @@
     purposeInput.value = '';
     purposeConfirm.disabled = true;
     clearDialogError(purposeDialog);
-    openDialog(purposeDialog, purposeOpen);
+    openActionDialog(purposeDialog, purposeOpen);
   });
 
   purposeConfirm.addEventListener('click', async () => {
@@ -1664,7 +1805,7 @@
     vehicleSelect.value = '';
     vehicleConfirm.disabled = true;
     clearDialogError(vehicleDialog);
-    openDialog(vehicleDialog, vehicleOpen);
+    openActionDialog(vehicleDialog, vehicleOpen);
   });
 
   vehicleConfirm.addEventListener('click', async () => {
@@ -1689,7 +1830,7 @@
     mergeNotesInput.value = '';
     mergeVehicleSelect.value = 'keep';
     clearDialogError(mergeDialog);
-    openDialog(mergeDialog, mergeOpen);
+    openActionDialog(mergeDialog, mergeOpen);
   });
 
   mergeConfirm.addEventListener('click', async () => {

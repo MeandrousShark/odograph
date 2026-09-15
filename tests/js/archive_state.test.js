@@ -332,6 +332,31 @@ test("archive state queries retain fixed preset dates across a calendar rollover
   );
 });
 
+test("selection payload validation accepts one complete explicit-id snapshot", () => {
+  assert.deepStrictEqual(
+    ArchiveState.validateSelectionPayload({ trip_ids: [7, 11, 19], count: 3 }),
+    [7, 11, 19],
+  );
+  assert.deepStrictEqual(
+    ArchiveState.validateSelectionPayload({ trip_ids: [], count: 0 }),
+    [],
+  );
+});
+
+test("selection payload validation rejects partial, duplicate, and unsafe ids atomically", () => {
+  for (const payload of [
+    null,
+    { trip_ids: [1, 2], count: 1 },
+    { trip_ids: [1, 1], count: 2 },
+    { trip_ids: [1, 0], count: 2 },
+    { trip_ids: [1, 2.5], count: 2 },
+    { trip_ids: [1, Number.MAX_SAFE_INTEGER + 1], count: 2 },
+    { trip_ids: "1,2", count: 2 },
+  ]) {
+    assert.strictEqual(ArchiveState.validateSelectionPayload(payload), null);
+  }
+});
+
 test("write coordinator rejects overlapping writes and locks through refresh", () => {
   const coordinator = ArchiveState.createWriteCoordinator();
 

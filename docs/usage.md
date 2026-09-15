@@ -59,9 +59,11 @@ Expenses and Stats, and Settings is under the avatar or initials menu.
 ### Dashboard
 
 The Dashboard is a weekly view. Use **Previous week** and **Next week** to
-move between weeks. The current week has no active Next week control. The
-headline total, category breakdown, daily bars, trip count, estimated
-deduction, and recorded expenses all refer to the displayed week.
+move between weeks. The current week has no active Next week control. When
+viewing another week, select **Current week** beside the arrows. The week
+heading is also a shortcut to the current week. The headline total, category
+breakdown, daily bars, trip count, estimated deduction, and recorded expenses
+all refer to the displayed week.
 
 The four mileage states are:
 
@@ -138,7 +140,7 @@ and Exclusion (All, Normal trips, or either exclusion). **Clear** removes
 active filters.
 
 Results are grouped by month. Select **Load more** at the end of a month to
-fetch its next page. An archive export uses the filters currently shown.
+browse its next page. An archive export uses the filters currently shown.
 
 Each row links to **Trip detail**. **Edit trip** opens an inline card with
 **Save** and **Cancel**. Inline Business and Personal buttons change a
@@ -146,13 +148,27 @@ category immediately. The row's **More trip actions** menu can clear a
 category, add a manual trip for a possible missing-trip gap, or delete the
 trip.
 
-To update several trips, select their checkboxes. The selection bar provides
-**Select all** for rows currently loaded, **Category** (Business, Personal, or
-Unclassified), **Purpose** (set or clear), **Vehicle** (assign or clear), and
-**Exclusion** (Normal trip or either exclusion). **More**, then **Merge
-selected...**, combines eligible trips. **Clear selection** removes the
-selection. Load more first if later rows need to be included. A successful
-bulk update refreshes the archive and its summaries.
+To update several trips, select their checkboxes. In the filter and status
+area, **Select all matching** selects every trip matching the current filters,
+including trips on unloaded pages and in other months. This is a snapshot taken
+when you select it, so trips arriving later are not included. The selection
+keeps its explicit trip IDs through pagination and successful bulk-update
+refreshes. Changing filters or navigating archive history clears it. You can
+deselect visible rows individually or choose **Clear selection**. Failed
+requests and actions keep the selection for retry.
+
+On desktop, the selection bar provides **Category** (Business, Personal, or
+Unclassified), **Purpose** (set or clear), **Vehicle** (assign or clear),
+**Exclusion** (Normal trip or either exclusion), **More**, then **Merge
+selected...**, **Delete selected**, and **Clear selection**. On phones, a
+compact strip shows the selected count. Tap **Actions** to open a panel with
+the same controls. A successful **Delete selected**
+clears the selection. If any selected trip is missing, the whole bulk action
+fails and the selection remains.
+
+Deleting selected trips keeps linked expenses and stored location points.
+Detected trips can be restored from **Settings**, while manual trips are
+permanently deleted.
 
 ### Trip Detail
 

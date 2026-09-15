@@ -347,6 +347,23 @@
   // metadata must never stand in for a row that is not rendered.
   const canMergeSelection = (counts) => counts.total >= 2 && counts.rendered === counts.total;
 
+  // Selection responses are applied atomically. A duplicate, invalid id, or
+  // count mismatch means the response cannot be trusted as a complete
+  // snapshot, so the caller keeps its previous selection instead.
+  const validateSelectionPayload = (payload) => {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+    if (!Array.isArray(payload.trip_ids) || !Number.isSafeInteger(payload.count)
+        || payload.count < 0 || payload.count !== payload.trip_ids.length) return null;
+    const ids = [];
+    const seen = new Set();
+    for (const id of payload.trip_ids) {
+      if (!Number.isSafeInteger(id) || id < 1 || seen.has(id)) return null;
+      seen.add(id);
+      ids.push(id);
+    }
+    return ids;
+  };
+
   const ArchiveState = {
     createRequestScope,
     createDebouncer,
@@ -366,6 +383,7 @@
     reconcileSelection,
     selectionCountLabel,
     canMergeSelection,
+    validateSelectionPayload,
   };
 
   if (typeof window !== "undefined") window.ArchiveState = ArchiveState;

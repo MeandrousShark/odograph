@@ -88,13 +88,15 @@ def test_filter_bar_exclusion_select_has_all_states():
     assert '<option value="not_deductible">My vehicle, someone else drove</option>' in picker
 
 
-def test_selection_action_bar_has_select_all_before_dialog_buttons():
+def test_select_all_matching_is_discoverable_before_any_row_is_selected():
     body = _render_index()
-    bar = body.split('id="selection-action-bar"')[1].split("</div>", 1)[0]
+    status = body.split('class="trip-archive-status"', 1)[1].split("</div>", 1)[0]
 
-    assert 'id="selection-select-all"' in bar and ">Select all</button>" in bar
-    assert bar.index("selection-select-all") < bar.index("category-dialog-open")
-    assert "selectionSelectAll.addEventListener('click'" in body
+    assert 'id="selection-select-all"' in status
+    assert ">Select all matching</button>" in status
+    handler = body.split("selectionSelectAll.addEventListener('click'", 1)[1]
+    assert "window.archiveController?.selectionQuery?.()" in handler
+    assert "fetch(query ? `/trips/selection?${query}` : '/trips/selection'" in handler
 
 
 def test_merge_dialog_vehicle_picker_defaults_to_keep():
@@ -120,9 +122,14 @@ def test_selection_action_bar_renders_bar_and_no_combined_form():
     assert 'id="purpose-dialog-open"' in body and ">Purpose</button>" in body
     assert 'id="vehicle-dialog-open"' in body and ">Vehicle</button>" in body
     assert 'class="selection-more"' in body and "<summary>More</summary>" in body
-    assert 'id="merge-dialog-open"' in body and ">Merge selected…</button>" in body
+    assert 'id="merge-dialog-open"' in body and ">Merge selected...</button>" in body
     assert 'id="delete-selected-open"' in body and ">Delete selected</button>" in body
     assert 'id="selection-clear"' in body and ">Clear selection</button>" in body
+    assert 'id="selection-actions-open"' in body and ">Actions</button>" in body
+    assert '<dialog id="selection-actions-dialog"' in body
+    assert 'aria-labelledby="selection-actions-dialog-title"' in body
+    assert 'id="selection-actions-mount"' in body
+    assert 'data-selection-actions-close autofocus' in body
 
     # Selection lost its mode: there is no longer a "Done" button that exits
     # it, either in the header or the bar itself.
@@ -134,6 +141,21 @@ def test_selection_action_bar_renders_bar_and_no_combined_form():
     assert '>Apply to selected</button>' not in body
     assert 'id="merge-notes"' not in body
     assert 'id="merge-set-purpose"' not in body
+
+
+def test_mobile_selection_uses_compact_strip_and_native_action_sheet():
+    stylesheet = (ROOT / "static" / "style.css").read_text()
+    narrow = stylesheet.split("  .selection-action-bar {", 1)[1]
+
+    bar_rule = narrow.split("}", 1)[0]
+    assert "grid-template-columns: minmax(0, 1fr) auto;" in bar_rule
+    assert "max-height" not in bar_rule
+    assert ".selection-action-bar > .selection-action-controls { display: none; }" in narrow
+    assert ".selection-actions-open { display: inline-flex;" in narrow
+    assert ".selection-actions-sheet[open]" in narrow
+    assert "env(safe-area-inset-bottom)" in narrow
+    assert "body.archive-has-selection" in narrow
+    assert "display: contents" not in narrow
 
 
 def test_five_bulk_action_dialogs_render_expected_fields():
