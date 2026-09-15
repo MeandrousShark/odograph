@@ -126,7 +126,9 @@ GIT_REVISION=$(git rev-parse HEAD)
 Push the release branch and open a pull request. The resulting merge commit on
 `main` is the only commit that may receive this release tag. Wait for all
 required checks and review to pass, merge the pull request, then fetch the
-exact reviewed `main` commit and run the full suite against it:
+exact reviewed `main` commit and run the full suite against it. The exact
+merge commit's release preflight and all other vulnerability and CI checks
+must pass before creating the immutable tag:
 
 ```sh
 set -e
@@ -154,6 +156,76 @@ trap - EXIT
 
 Do not tag a release branch or a pre-merge commit. Do not force-update or
 reuse an existing release tag.
+
+## Run the nonpublishing release preflight
+
+The `Release preflight` workflow checks release inputs and the exact checked-out
+tree before publication. It runs automatically for every pull request and for
+pushes to `release/**` and `main`; its automatic triggers have no path filter.
+Release branch pushes always run the preflight. Ordinary pull requests compare
+the Compose app image version with their base, and a `main` push compares it
+with the previous revision; an unchanged version is recorded as skipped. For a
+release, wait for the pull request run, the release branch run, and the run on
+the exact merge commit on `main`; the last one must pass before tagging.
+
+The workflow has `contents: read` permission only. It does not push images,
+create releases, create or push tags, or move the floating minor alias. Its
+preflight builds local image archives and uploads evidence only. It requires
+empty security scan acceptances, so this path does not weaken `pip-audit` or
+Trivy gates and does not accept a changelog scan exception.
+
+To dispatch a preflight manually, choose the exact candidate branch or tag. The
+version input is optional and otherwise comes from the checked
+out Compose app image; when supplied, it must match that release contract:
+
+```sh
+VERSION=v0.11.0
+REF=release/$VERSION
+gh workflow run release-preflight.yml --ref "$REF" \
+  --field mode=preflight
+
+# Optional explicit version override for the same exact ref:
+gh workflow run release-preflight.yml --ref "$REF" \
+  --field mode=preflight --field version="$VERSION"
+```
+
+Preflight mode validates that the version is unused in GitHub and GHCR, runs
+the locked full test suite with PostGIS, shell syntax checks, public-tree and
+secret checks, and the dependency audit. It builds and scans native
+`linux/amd64` and `linux/arm64` application images, writes an SPDX SBOM for
+each, and runs the HTTPS authentication smoke: health, protected settings,
+administrator signup, Secure session cookie, and authenticated version and
+revision checks. On the ARM64 runner, QEMU is registered only for the
+`linux/amd64` PostGIS database used by that smoke; the application image and
+application smoke remain native. The preflight also runs the source upgrade
+and rollback drill with Docker Compose.
+
+After an immutable release has been published, dispatch the verification mode
+from a ref that resolves to the published tag's exact commit. The tag ref is
+the recommended target. The helper compares the checked-out revision with the
+published tag's commit, so a branch or `main` also passes only when it points to
+that same commit:
+
+```sh
+gh workflow run release-preflight.yml --ref "$VERSION" \
+  --field mode=verify-published --field version="$VERSION"
+```
+
+This mode requires the tag, GitHub release, and GHCR manifest to exist, then
+resolves the OCI index and both child digests. It verifies the cosign signature
+on the index and each child, verifies each child SPDX attestation, and checks
+that every attested in-toto subject names the child digest and contains a
+nonempty SPDX package list. Native AMD64 and ARM64 jobs pull their child by
+digest, check its platform and release identity, and run the same HTTPS smoke.
+The published upgrade and rollback drill uses Docker Compose with base
+`v0.10.2`, the exact checked-out revision as `--candidate`, and the exact OCI
+index digest as `--candidate-image`. The current v0.11.0 workflow uses
+`v0.10.2`; later releases must cover their supported base release in the
+workflow and the manual drill.
+
+The automated preflight and published verification use Docker Compose. Run the
+equivalent Podman Compose drill in the artifact upgrade section below before
+completing the release; it remains a required release check.
 
 ## Supply-chain gates: scanning, SBOM, and signing
 

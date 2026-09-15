@@ -35,9 +35,11 @@ jobs:
           revision="$(git rev-parse HEAD)"
           image="ghcr.io/${REPOSITORY,,}"
           python scripts/check_release_contract.py --tag "$VERSION" --image "$image"
-          echo "image=$image" >> "$GITHUB_OUTPUT"
-          echo "revision=$revision" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          {
+            echo "image=$image"
+            echo "revision=$revision"
+            echo "version=$VERSION"
+          } >> "$GITHUB_OUTPUT"
       - name: Refuse to replace an existing GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

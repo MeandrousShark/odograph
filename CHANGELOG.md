@@ -9,6 +9,8 @@ reproduced here.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-14
+
 ### Added
 
 - **Archive matching selection.** **Select all matching** selects every trip
@@ -27,19 +29,22 @@ reproduced here.
   bulk controls together; on phones, a compact selected-count strip has an
   **Actions** button that opens a panel with the same controls.
 
-### Fixed
-
 ### Security
+
+- Add release preflight checks for native amd64 and arm64 builds, dependency
+  and image vulnerabilities, release metadata, and SBOM generation before
+  creating an immutable release tag.
 
 ### Supported upgrade path
 
-- Complete before release: state which prior release or releases may upgrade
-  directly, or why a prior-release gate is not applicable.
+- `v0.10.0` and `v0.10.2` may upgrade directly to `v0.11.0`. Earlier releases
+  should first follow the supported upgrade path to `v0.10.0`.
 
 ### Breaking changes
 
-- Complete before release: list every application, database, configuration,
-  and operational break, or state explicitly that there are none.
+- There are no breaking application, database, configuration, or operational
+  changes. Schema version 25, detector version 2, and portable format 2 are
+  unchanged.
 
 ## [0.10.2] - 2026-09-12
 
