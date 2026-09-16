@@ -20,6 +20,8 @@ ODOMETER_REMINDER_ADVISORY_LOCK_KEY = 901406
 EMAIL_DIGEST_ADVISORY_LOCK_KEY = 901407
 RUN_MIGRATIONS_ADVISORY_LOCK_KEY = 901408
 
+ROLE_SETUP_ADVISORY_LOCK_KEY = 901409
+
 
 def make_pool(database_url: str) -> AsyncConnectionPool:
     # max_size 6: up to 3 concurrent borrowers now (detector run, snap
