@@ -45,3 +45,25 @@ def test_missing_database_url_is_rejected():
     result = subprocess.run([str(SCRIPT),'--fixture'],env=env,capture_output=True,text=True)
     assert result.returncode != 0
     assert 'DATABASE_URL is required' in result.stderr
+
+
+def test_wrapper_uses_python_on_path_without_a_local_virtualenv(tmp_path):
+    checkout = tmp_path / "checkout"
+    scripts = checkout / "scripts"
+    scripts.mkdir(parents=True)
+    wrapper = scripts / SCRIPT.name
+    shutil.copyfile(SCRIPT, wrapper)
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    interpreter = binaries / "python3"
+    interpreter.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$ARG_FILE"\n')
+    interpreter.chmod(0o755)
+    output = tmp_path / "args"
+    env = {key: value for key, value in os.environ.items() if key != "PYTHON"}
+    env.update(PATH=f"{binaries}:{os.environ['PATH']}", ARG_FILE=str(output))
+    result = subprocess.run(
+        ["bash", str(wrapper), "--fixture"], env=env,
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert output.read_text().splitlines() == ["-m", "app.role_setup", "--fixture"]
