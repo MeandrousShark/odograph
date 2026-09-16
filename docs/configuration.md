@@ -30,6 +30,80 @@ is a standard Compose variable that namespaces containers, networks, and named
 volumes. It is useful for isolated restore drills, but it is not an Odograph
 application setting.
 
+## Database role mechanism proof
+
+The supported database baseline is PostgreSQL 16 with PostGIS. The account
+context and managed-role helpers are preparatory code, exercised against a
+small disposable schema. Application startup, normal installs, and existing
+business tables still use the current database configuration. Running this
+proof does not enable multi-user operation or protect the live application
+with row-level security.
+
+The proof uses a fixed, versioned contract, not operator-selected table lists.
+It separates privileged setup and backup, identity/control access, scoped
+account access, and narrow account bootstrap. Runtime and control roles cannot
+own protected tables, bypass row security, create schema objects, truncate
+protected tables, or assume a more privileged role. The non-login bootstrap
+function owner receives only the access needed to create a new account and
+its fixed defaults.
+
+Contract `p0-v1` uses `odograph_control` and `odograph_runtime` for restricted
+logins. `odograph_migrate` owns fixture tables; `odograph_bootstrap` owns the
+provisioning functions. Both owner roles are `NOLOGIN` and `NOBYPASSRLS`.
+The proof is confined to `account_context_p0` and `odograph_internal`.
+
+### Managed setup and connection handoff
+
+Setup takes the existing privileged `DATABASE_URL`. It generates restricted
+login credentials and stores them in protected database state included in a
+full backup. Operators do not choose extra passwords or maintain separate
+control/runtime URLs. Restart reuses the stored credentials; interrupted setup
+can be retried. The database state and encrypted instance-configuration backup
+must be protected like the rest of the full-server backup.
+
+The unwired pool factory closes its privileged setup connection before
+returning control/runtime pools. It verifies the actual database, login role,
+installation identity, and effective object permissions. Missing credentials,
+wrong identities, unsafe grants, or incomplete recovery fail without a
+privileged fallback. Credential values are excluded from representations,
+command arguments, and reported connection errors.
+
+An external PostgreSQL service must permit the explicit privileged setup, or
+have a DBA prepare the same contract. Restricted application credentials cannot
+perform this setup. The full application integration and external DBA workflow
+will be documented before activation; no additional production setup is
+required for this proof.
+
+### Account bootstrap boundary
+
+Control can call a narrow function to create the first administrator and exact
+defaults in one transaction. A fixed guard serializes simultaneous attempts.
+Control cannot write the guard, select an existing owner for defaults, or
+create an account by writing identity tables directly. A separate protected
+preauthorization fixture proves the atomic new-account seam for later
+invitations; user-facing invitation flows are not implemented here.
+
+### Archive recovery contract
+
+A PostgreSQL archive contains database rows and policy references, but not
+cluster-wide role definitions or login passwords. Recovery recreates the
+contract's role identities before restoring the archive, reapplies the exact
+versioned permissions and policies, and synchronizes the restored managed
+credentials. Non-secret metadata identifies the security contract and object
+owner. Unexpected permissive policies and grants must be removed or rejected
+before restricted pools become available.
+
+The archive proof uses PostgreSQL 16 `pg_dump` and `pg_restore` from the
+supported container image and a separate fresh cluster. It verifies complete
+data, sequence values, ownership, grants, and account isolation through real
+restricted connections. Full backup uses the configured privileged setup and
+backup identity. A plain table owner cannot bypass forced row security;
+restricted or unsuitable backup identities must fail visibly.
+
+Normal [backup and restore commands](backups.md) retain their current behavior.
+Integrating this contract with the complete application schema and supported
+upgrade/restore paths is required before activation.
+
 ## Authentication and ingest
 
 | Variable | Default | Purpose |
