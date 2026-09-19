@@ -16,9 +16,11 @@ import pytest
 from fastapi import HTTPException
 
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import personal_request
 from app.main import make_templates
 from app.ui import make_router
-from conftest import reset_db
+from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -35,18 +37,21 @@ def _endpoint(path: str):
 
 
 def _request(pool):
-    return SimpleNamespace(
+    return personal_request(SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool,
             config=SimpleNamespace(display_tz=TZ),
             templates=make_templates(SimpleNamespace(display_tz=TZ, app_version="test")),
         )),
         session={"csrf": "token"},
-    )
+    ))
 
 
 async def _create_vehicle(conn, name: str) -> int:
-    cur = await conn.execute("INSERT INTO vehicles (name) VALUES (%s) RETURNING id", (name,))
+    cur = await conn.execute('INSERT INTO vehicles (account_id, name) VALUES (%s, %s) RETURNING id', (
+                                                                                                         account_id(conn),
+                                                                                                         name,
+                                                                                                     ))
     return (await cur.fetchone())[0]
 
 
@@ -55,11 +60,15 @@ async def _insert_trip(
     exclusion: str | None = None,
 ) -> None:
     await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, distance_m, vehicle_id, exclusion) "
-        "VALUES ('manual', 'manual', %s, %s, %s, %s, %s)",
+        "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, "
+        "vehicle_id, exclusion) VALUES (%s, 'manual', 'manual', %s, %s, %s, %s, %s)",
         (
-            started_at, started_at + timedelta(minutes=15), distance_m,
-            vehicle_id, exclusion,
+            account_id(conn),
+            started_at,
+            started_at + timedelta(minutes=15),
+            distance_m,
+            vehicle_id,
+            exclusion,
         ),
     )
 
@@ -74,10 +83,10 @@ async def _reading_rows(conn, vehicle_id: int):
 
 
 async def _add_delete_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             truck_id = await _create_vehicle(conn, "Truck")
             # Detected 60mi in the interval, so a 100mi-delta reading pair
@@ -140,7 +149,7 @@ async def _add_delete_scenario():
         # Fewer than two readings again: no intervals, not a crash.
         assert entry["intervals"] == []
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_add_and_delete_reading_recomputes_reconciliation():
@@ -148,10 +157,10 @@ def test_add_and_delete_reading_recomputes_reconciliation():
 
 
 async def _fk_violation_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         add = _endpoint("/settings/odometer")
         request = _request(pool)
         with pytest.raises(HTTPException) as exc_info:
@@ -161,7 +170,7 @@ async def _fk_violation_scenario():
             )
         assert exc_info.value.status_code == 400
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_add_reading_unknown_vehicle_returns_400():
@@ -169,10 +178,10 @@ def test_add_reading_unknown_vehicle_returns_400():
 
 
 async def _invalid_input_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             truck_id = await _create_vehicle(conn, "Truck")
         add = _endpoint("/settings/odometer")
@@ -192,7 +201,7 @@ async def _invalid_input_scenario():
             )
         assert bad_date.value.status_code == 400
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_add_reading_rejects_invalid_value_and_date():
@@ -200,10 +209,10 @@ def test_add_reading_rejects_invalid_value_and_date():
 
 
 async def _duplicate_reading_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             truck_id = await _create_vehicle(conn, "Truck")
         add = _endpoint("/settings/odometer")
@@ -219,7 +228,7 @@ async def _duplicate_reading_scenario():
             )
         assert exc_info.value.status_code == 400
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_add_duplicate_reading_same_vehicle_and_instant_returns_400():
@@ -227,10 +236,10 @@ def test_add_duplicate_reading_same_vehicle_and_instant_returns_400():
 
 
 async def _report_page_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             truck_id = await _create_vehicle(conn, "Truck")
             await _insert_trip(
@@ -241,11 +250,16 @@ async def _report_page_scenario():
                 40 * 1609.344, "not_my_vehicle",
             )
             await conn.execute(
-                "INSERT INTO odometer_readings (vehicle_id, recorded_at, odometer_m) "
-                "VALUES (%s, %s, %s), (%s, %s, %s)",
+                "INSERT INTO odometer_readings (account_id, vehicle_id, recorded_at, odometer_m) "
+                "VALUES (%s, %s, %s, %s), (41, %s, %s, %s)",
                 (
-                    truck_id, datetime(2026, 3, 1, tzinfo=timezone.utc), 1000 * 1609.344,
-                    truck_id, datetime(2026, 9, 1, tzinfo=timezone.utc), 1100 * 1609.344,
+                    account_id(conn),
+                    truck_id,
+                    datetime(2026, 3, 1, tzinfo=timezone.utc),
+                    1000 * 1609.344,
+                    truck_id,
+                    datetime(2026, 9, 1, tzinfo=timezone.utc),
+                    1100 * 1609.344,
                 ),
             )
 
@@ -269,7 +283,7 @@ async def _report_page_scenario():
         assert "Odometer reconciliation" in summary_text
         assert "60.0%" in summary_text
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_report_page_and_export_include_odometer_coverage_when_readings_exist():
@@ -277,10 +291,10 @@ def test_report_page_and_export_include_odometer_coverage_when_readings_exist():
 
 
 async def _fully_bracketed_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             truck_id = await _create_vehicle(conn, "Truck")
             await _insert_trip(
@@ -290,11 +304,16 @@ async def _fully_bracketed_scenario():
             # following year's local start -- the boundary case the
             # `<= next_year_start` fetch (rather than `<`) exists to include.
             await conn.execute(
-                "INSERT INTO odometer_readings (vehicle_id, recorded_at, odometer_m) "
-                "VALUES (%s, %s, %s), (%s, %s, %s)",
+                "INSERT INTO odometer_readings (account_id, vehicle_id, recorded_at, odometer_m) "
+                "VALUES (%s, %s, %s, %s), (41, %s, %s, %s)",
                 (
-                    truck_id, datetime(2026, 1, 1, tzinfo=TZ), 1000 * 1609.344,
-                    truck_id, datetime(2027, 1, 1, tzinfo=TZ), 1100 * 1609.344,
+                    account_id(conn),
+                    truck_id,
+                    datetime(2026, 1, 1, tzinfo=TZ),
+                    1000 * 1609.344,
+                    truck_id,
+                    datetime(2027, 1, 1, tzinfo=TZ),
+                    1100 * 1609.344,
                 ),
             )
 
@@ -315,7 +334,7 @@ async def _fully_bracketed_scenario():
         assert "GPS captured 60.0% of odometer miles (40.0 mi unaccounted)" in body
         assert "partial-year" not in body
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_odometer_coverage_fully_bracketed_when_readings_land_on_year_boundaries():
@@ -323,10 +342,10 @@ def test_odometer_coverage_fully_bracketed_when_readings_land_on_year_boundaries
 
 
 async def _report_page_no_readings_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             truck_id = await _create_vehicle(conn, "Truck")
             await _insert_trip(
@@ -339,7 +358,7 @@ async def _report_page_no_readings_scenario():
         body = response.body.decode()
         assert "Odometer coverage" not in body
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_report_page_omits_odometer_section_with_no_readings():
@@ -347,25 +366,27 @@ def test_report_page_omits_odometer_section_with_no_readings():
 
 
 async def _all_categories_counted_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             truck_id = await _create_vehicle(conn, "Truck")
             # One of each category plus both exclusions, all inside the
             # [r1, r2) interval. Non-deductible miles remain in reconciliation,
             # while miles from a vehicle the maintainer does not own leave it.
             await conn.execute(
-                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
-                "vehicle_id, category, exclusion) "
-                "VALUES "
-                "('manual', 'manual', %(t)s, %(t)s + interval '15 minutes', %(business)s, %(v)s, 'business', NULL), "
-                "('manual', 'manual', %(t)s, %(t)s + interval '15 minutes', %(personal)s, %(v)s, 'personal', NULL), "
-                "('manual', 'manual', %(t)s, %(t)s + interval '15 minutes', %(unclassified)s, %(v)s, 'unclassified', NULL), "
-                "('manual', 'manual', %(t)s, %(t)s + interval '15 minutes', %(nondeductible)s, %(v)s, 'business', 'not_deductible'), "
-                "('manual', 'manual', %(t)s, %(t)s + interval '15 minutes', %(not_mine)s, %(v)s, 'business', 'not_my_vehicle')",
+                "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, "
+                "vehicle_id, category, exclusion) VALUES (%(owner)s, 'manual', 'manual', %(t)s, "
+                "%(t)s + interval '15 minutes', %(business)s, %(v)s, 'business', NULL), (%(owner)s,"
+                " 'manual', 'manual', %(t)s, %(t)s + interval '15 minutes', %(personal)s, %(v)s, "
+                "'personal', NULL), (%(owner)s, 'manual', 'manual', %(t)s, %(t)s + interval '15 "
+                "minutes', %(unclassified)s, %(v)s, 'unclassified', NULL), (%(owner)s, 'manual', "
+                "'manual', %(t)s, %(t)s + interval '15 minutes', %(nondeductible)s, %(v)s, "
+                "'business', 'not_deductible'), (%(owner)s, 'manual', 'manual', %(t)s, %(t)s + "
+                "interval '15 minutes', %(not_mine)s, %(v)s, 'business', 'not_my_vehicle')",
                 {
+                    "owner": account_id(conn),
                     "t": datetime(2026, 1, 5, 12, tzinfo=timezone.utc),
                     "business": 20 * 1609.344,
                     "personal": 15 * 1609.344,
@@ -376,11 +397,16 @@ async def _all_categories_counted_scenario():
                 },
             )
             await conn.execute(
-                "INSERT INTO odometer_readings (vehicle_id, recorded_at, odometer_m) "
-                "VALUES (%s, %s, %s), (%s, %s, %s)",
+                "INSERT INTO odometer_readings (account_id, vehicle_id, recorded_at, odometer_m) "
+                "VALUES (%s, %s, %s, %s), (41, %s, %s, %s)",
                 (
-                    truck_id, datetime(2026, 1, 1, tzinfo=timezone.utc), 1000 * 1609.344,
-                    truck_id, datetime(2026, 1, 10, tzinfo=timezone.utc), 1100 * 1609.344,
+                    account_id(conn),
+                    truck_id,
+                    datetime(2026, 1, 1, tzinfo=timezone.utc),
+                    1000 * 1609.344,
+                    truck_id,
+                    datetime(2026, 1, 10, tzinfo=timezone.utc),
+                    1100 * 1609.344,
                 ),
             )
 
@@ -392,7 +418,7 @@ async def _all_categories_counted_scenario():
         iv = entry["intervals"][0]
         assert iv.detected_m == pytest.approx((20 + 15 + 10 + 5) * 1609.344)
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_reconciliation_detected_distance_counts_all_trip_categories():

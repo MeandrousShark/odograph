@@ -11,9 +11,11 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import personal_request
 from app.main import make_templates
 from app.ui import make_router
-from conftest import reset_db
+from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -34,12 +36,12 @@ BATCH_UPDATE = _endpoint("/trips/batch_update", "POST")
 
 def _request(pool, page_size=2):
     config = SimpleNamespace(display_tz=TZ, trips_page_size=page_size, app_version="test")
-    return SimpleNamespace(
+    return personal_request(SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, templates=make_templates(config), config=config,
         )),
         session={"csrf": "test-csrf"},
-    )
+    ))
 
 
 async def _insert_trip(
@@ -52,12 +54,17 @@ async def _insert_trip(
     exclusion: str | None = None,
 ) -> int:
     cur = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, distance_m, category, "
-        "vehicle_id, notes, exclusion) VALUES ('SEL', 'manual', %s, %s, 1000, %s, %s, %s, %s) "
+        "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, category,"
+        " vehicle_id, notes, exclusion) VALUES (%s, 'SEL', 'manual', %s, %s, 1000, %s, %s, %s, %s) "
         "RETURNING id",
         (
-            started_at, started_at + timedelta(minutes=10), category, vehicle_id,
-            notes, exclusion,
+            account_id(conn),
+            started_at,
+            started_at + timedelta(minutes=10),
+            category,
+            vehicle_id,
+            notes,
+            exclusion,
         ),
     )
     return (await cur.fetchone())[0]
@@ -82,17 +89,17 @@ async def _selection(pool, **filters):
 
 
 async def _filter_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         jan = datetime(2026, 1, 15, 12, tzinfo=TZ)
         async with pool.connection() as conn:
             vehicle_a = (await (await conn.execute(
-                "INSERT INTO vehicles (name) VALUES ('Selection A') RETURNING id"
+                "INSERT INTO vehicles (account_id, name) VALUES (%s, 'Selection A') RETURNING id", (account_id(conn),)
             )).fetchone())[0]
             vehicle_b = (await (await conn.execute(
-                "INSERT INTO vehicles (name) VALUES ('Selection B') RETURNING id"
+                "INSERT INTO vehicles (account_id, name) VALUES (%s, 'Selection B') RETURNING id", (account_id(conn),)
             )).fetchone())[0]
             literal_id = await _insert_trip(
                 conn, jan, category="business", vehicle_id=vehicle_a,
@@ -164,7 +171,7 @@ async def _filter_scenario():
             pool, from_="not-a-date", to="also-not-a-date", vehicle="not-a-vehicle",
         ))["count"] == 7
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_trip_selection_returns_complete_filtered_snapshot():
@@ -172,10 +179,10 @@ def test_trip_selection_returns_complete_filtered_snapshot():
 
 
 async def _preset_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         now = datetime.now(TZ)
         current_start = datetime(now.year, now.month, 1, 12, tzinfo=TZ)
         if now.month == 1:
@@ -209,7 +216,7 @@ async def _preset_scenario():
         )
         assert custom_result == {"trip_ids": [current_id], "count": 1}
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_trip_selection_resolves_archive_date_presets():
@@ -217,10 +224,10 @@ def test_trip_selection_resolves_archive_date_presets():
 
 
 async def _snapshot_mutation_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         start = datetime(2026, 6, 1, 12, tzinfo=TZ)
         async with pool.connection() as conn:
             first_id = await _insert_trip(conn, start, category="business")
@@ -256,7 +263,7 @@ async def _snapshot_mutation_scenario():
                 (new_id, "business"),
             ]
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_snapshot_ids_remain_explicit_when_filters_and_rows_change():

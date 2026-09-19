@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 import httpx
 import pytest
+from app.account_context import AccountConnection, AccountPrincipal
 
 from app.notifications import (
     count_unclassified_trips,
@@ -37,29 +38,29 @@ class _Connection:
 def test_count_unclassified_trips_uses_category_only_and_half_open_window():
     start = datetime(2026, 7, 5, 18, tzinfo=timezone.utc)
     end = datetime(2026, 7, 12, 18, tzinfo=timezone.utc)
-    conn = _Connection([[(3,)]])
+    conn = AccountConnection(_Connection([[(3,)]]), AccountPrincipal(41, True, 1))
 
     assert asyncio.run(count_unclassified_trips(conn, start, end)) == 3
     assert conn.calls == [(
-        "SELECT count(*) FROM trips WHERE category = 'unclassified' "
+        "SELECT count(*) FROM trips WHERE account_id = %s AND category = 'unclassified' "
         "AND started_at >= %s AND started_at < %s",
-        (start, end),
+        (41, start, end),
     )]
 
 
 def test_odometer_reminder_vehicles_preserves_query_and_name_order():
     quarter_start = datetime(2026, 7, 1, 9, tzinfo=timezone.utc)
-    conn = _Connection([
+    conn = AccountConnection(_Connection([
         [(1, "Sedan"), (2, "Truck")],
         [(2,)],
-    ])
+    ]), AccountPrincipal(41, True, 1))
 
     assert asyncio.run(odometer_reminder_vehicles(conn, quarter_start)) == ["Sedan"]
     assert conn.calls == [
-        ("SELECT id, name FROM vehicles WHERE active ORDER BY name", None),
+        ("SELECT id, name FROM vehicles WHERE account_id = %s AND active ORDER BY name", (41,)),
         (
-            "SELECT DISTINCT vehicle_id FROM odometer_readings WHERE recorded_at >= %s",
-            (quarter_start,),
+            "SELECT DISTINCT vehicle_id FROM odometer_readings WHERE account_id = %s AND recorded_at >= %s",
+            (41, quarter_start),
         ),
     ]
 

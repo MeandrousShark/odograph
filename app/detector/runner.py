@@ -16,7 +16,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 
-from psycopg_pool import AsyncConnectionPool
+from app.account_context import AccountPool, account_id
 
 from app.autotag import AutotagTrip, Rule, plan_autotags
 from app.db import DETECTOR_ADVISORY_LOCK_KEY
@@ -57,7 +57,7 @@ def high_water_rss_bytes() -> int | None:
 class DetectorRunner:
     def __init__(
         self,
-        pool: AsyncConnectionPool,
+        pool: AccountPool,
         params: Params,
         full_reprocess_warn_points: int = 500_000,
     ):
@@ -66,35 +66,65 @@ class DetectorRunner:
         self.full_reprocess_warn_points = full_reprocess_warn_points
 
     async def run_once(self) -> bool:
-        """One detection pass. Returns False if the advisory lock was busy.
+        """Process each owned stream in its own transaction.
 
-        Transaction-scoped `pg_try_advisory_xact_lock`, not the session-
-        scoped `pg_try_advisory_lock` this used to take: a *session* lock
-        needs an explicit unlock, and if `_run()` fails with a SQL error the
-        transaction is left aborted, so that unlock itself raises
-        `InFailedSqlTransaction`, masking the real error in the log, while
-        the lock survives the pool's rollback of the connection and never
-        gets released. Every later background run then skips forever
-        ("advisory lock busy"), and every blocking `pg_advisory_xact_lock`
-        caller (merge/split/places CRUD, all sharing the detector lock)
-        hangs indefinitely. The transaction-scoped lock sidesteps all of
-        that: it releases automatically on commit *or* rollback, so no
-        matching unlock call is needed here at all, for the same reasoning as
-        `reprocess_device_now`'s blocking variant below.
+        A failed stream leaves its checkpoint untouched; other streams still
+        commit. The same global transaction lock continues to exclude imports
+        and structural mutations across each stream's protected reads and writes.
         """
         async with self.pool.connection() as conn:
+            owner = account_id(conn)
+            # Registering an unused device must not manufacture checkpoint
+            # history. Existing output/overrides still require reconciliation.
             cur = await conn.execute(
-                "SELECT pg_try_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
+                "SELECT d.id FROM tracking_devices d JOIN detector_state s "
+                "ON s.account_id = d.account_id AND s.tracking_device_id = d.id "
+                "WHERE d.account_id = %s AND d.enabled AND d.revoked_at IS NULL "
+                "AND (s.detector_version <> %s OR EXISTS (SELECT 1 FROM points p "
+                "WHERE p.account_id = d.account_id AND p.tracking_device_id = d.id "
+                "AND p.received_at > COALESCE(s.last_run_at, '-infinity'::timestamptz))) "
+                "AND (s.last_run_at IS NOT NULL OR s.detector_version <> 0 "
+                "OR EXISTS (SELECT 1 FROM points p WHERE p.account_id=d.account_id "
+                "AND p.tracking_device_id=d.id) "
+                "OR EXISTS (SELECT 1 FROM trips t WHERE t.account_id=d.account_id "
+                "AND t.tracking_device_id=d.id AND t.source='detected' AND NOT t.imported) "
+                "OR EXISTS (SELECT 1 FROM trip_boundary_overrides o WHERE o.account_id=d.account_id "
+                "AND o.tracking_device_id=d.id)) "
+                "ORDER BY s.last_run_at NULLS FIRST, d.id",
+                (owner, DETECTOR_VERSION),
             )
-            locked = (await cur.fetchone())[0]
-            if not locked:
-                log.info("detector: advisory lock busy, skipping run")
-                return False
-            await self._run(conn)
-            await conn.commit()
-        return True
+            devices = [row[0] for row in await cur.fetchall()]
+        ran = not devices
+        failure = None
+        for device in devices:
+            try:
+                async with self.pool.connection() as conn:
+                    cur = await conn.execute(
+                        "SELECT pg_try_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
+                    )
+                    if not (await cur.fetchone())[0]:
+                        log.info("detector: advisory lock busy, skipping stream")
+                        continue
+                    if await self._admit_device(conn, device) is None:
+                        continue
+                    await self._run(conn, device)
+                ran = True
+            except Exception as exc:
+                log.warning("detector: stream failed: %s", type(exc).__name__)
+                failure = failure or exc
+        if failure is not None:
+            raise failure
+        return ran
 
-    async def reprocess_device_in(self, conn, device: str) -> None:
+    async def _admit_device(self, conn, device: int) -> str | None:
+        cur = await conn.execute(
+            "SELECT label FROM tracking_devices WHERE account_id = %s AND id = %s "
+            "AND enabled AND revoked_at IS NULL FOR SHARE", (account_id(conn), device),
+        )
+        row = await cur.fetchone()
+        return row[0] if row is not None else None
+
+    async def reprocess_device_in(self, conn, device: int) -> None:
         """`conn`-accepting single-device reprocess (app/ui/merge_split.py's
         merge/split UI endpoints). A deliberate user action should show its
         result immediately rather than wait on the debounce/sweep.
@@ -126,54 +156,58 @@ class DetectorRunner:
         await conn.execute(
             "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
         )
+        if await self._admit_device(conn, device) is None:
+            raise ValueError("No such tracking device")
         await self._process_device(conn, device, EPOCH, full=True)
 
-    async def reprocess_device_now(self, device: str) -> None:
+    async def reprocess_device_now(self, device: int) -> None:
         """Thin pool-owning wrapper around `reprocess_device_in` for callers
         that have no other writes to share a transaction with.
         """
         async with self.pool.connection() as conn:
             await self.reprocess_device_in(conn, device)
 
-    async def _run(self, conn) -> None:
+    async def _run(self, conn, device: int) -> None:
+        owner = account_id(conn)
         cur = await conn.execute(
-            "SELECT last_run_at, detector_version FROM detector_state WHERE id = 1"
+            "SELECT last_run_at, detector_version FROM detector_state "
+            "WHERE account_id = %s AND tracking_device_id = %s FOR UPDATE", (owner, device),
         )
-        last_run_at, stored_version = await cur.fetchone()
+        row = await cur.fetchone()
+        if row is None:
+            raise ValueError("Tracking device has no detector checkpoint")
+        last_run_at, stored_version = row
         full = stored_version != DETECTOR_VERSION
-
         cur = await conn.execute("SELECT now()")
         run_started = (await cur.fetchone())[0]
-
         if full:
-            log.info(
-                "detector: version %s -> %s, full reprocess", stored_version, DETECTOR_VERSION
-            )
-            cur = await conn.execute("SELECT DISTINCT device FROM points")
-            dirty = [(row[0], EPOCH) for row in await cur.fetchall()]
+            dirty_from = EPOCH
         else:
             cur = await conn.execute(
-                "SELECT device, min(recorded_at) FROM points "
-                "WHERE received_at > coalesce(%s, '-infinity'::timestamptz) "
-                "GROUP BY device",
-                (last_run_at,),
+                "SELECT min(recorded_at) FROM points WHERE account_id = %s "
+                "AND tracking_device_id = %s "
+                "AND received_at > COALESCE(%s, '-infinity'::timestamptz)",
+                (owner, device, last_run_at),
             )
-            dirty = list(await cur.fetchall())
-
-        for device, dirty_from in dirty:
+            dirty_from = (await cur.fetchone())[0]
+        if dirty_from is not None:
             await self._process_device(conn, device, dirty_from, full)
-
         await conn.execute(
-            "UPDATE detector_state SET last_run_at = %s, detector_version = %s WHERE id = 1",
-            (run_started - RUN_OVERLAP_MARGIN, DETECTOR_VERSION),
+            "UPDATE detector_state SET last_run_at = %s, detector_version = %s "
+            "WHERE account_id = %s AND tracking_device_id = %s",
+            (run_started - RUN_OVERLAP_MARGIN, DETECTOR_VERSION, owner, device),
         )
 
-    async def _process_device(self, conn, device: str, dirty_from: datetime, full: bool) -> None:
+    async def _process_device(self, conn, device: int, dirty_from: datetime, full: bool) -> None:
+        owner = account_id(conn)
+        label = await self._admit_device(conn, device)
+        if label is None:
+            raise ValueError("No such tracking device")
         full_started = None
         full_point_count = None
         if full:
             count_cur = await conn.execute(
-                "SELECT count(*) FROM points WHERE device = %s", (device,)
+                "SELECT count(*) FROM points WHERE account_id = %s AND tracking_device_id = %s", (owner, device)
             )
             full_point_count = (await count_cur.fetchone())[0]
             full_started = time.perf_counter()
@@ -197,8 +231,8 @@ class DetectorRunner:
         if not full:
             cur = await conn.execute(
                 "SELECT started_at FROM stays "
-                "WHERE device = %s AND ended_at < %s ORDER BY ended_at DESC LIMIT 1",
-                (device, dirty_from),
+                "WHERE account_id = %s AND tracking_device_id = %s AND ended_at < %s ORDER BY ended_at DESC LIMIT 1",
+                (owner, device, dirty_from),
             )
             row = await cur.fetchone()
             if row:
@@ -207,8 +241,8 @@ class DetectorRunner:
         cur = await conn.execute(
             "SELECT id, recorded_at, ST_Y(geom::geometry), ST_X(geom::geometry), "
             "       accuracy_m, velocity_kmh "
-            "FROM points WHERE device = %s AND recorded_at >= %s ORDER BY recorded_at",
-            (device, t0),
+            "FROM points WHERE account_id = %s AND tracking_device_id = %s AND recorded_at >= %s ORDER BY recorded_at",
+            (owner, device, t0),
         )
         points = [
             Point(t=r[1], lat=r[2], lon=r[3], accuracy_m=r[4], velocity_kmh=r[5], id=r[0])
@@ -223,8 +257,8 @@ class DetectorRunner:
         # the assembled trips present in this run.
         cur = await conn.execute(
             "SELECT kind::text, range_start, range_end, point_id "
-            "FROM trip_boundary_overrides WHERE device = %s",
-            (device,),
+            "FROM trip_boundary_overrides WHERE account_id = %s AND tracking_device_id = %s",
+            (owner, device),
         )
         overrides = [
             Override(kind=r[0], range_start=r[1], range_end=r[2], point_id=r[3])
@@ -237,19 +271,19 @@ class DetectorRunner:
         stays, trips = await asyncio.to_thread(detect, points, self.params, overrides)
 
         await conn.execute(
-            "DELETE FROM stays WHERE device = %s AND started_at >= %s", (device, t0)
+            "DELETE FROM stays WHERE account_id = %s AND tracking_device_id = %s AND started_at >= %s", (owner, device, t0)
         )
         for s in stays:
             await conn.execute(
-                "INSERT INTO stays (device, started_at, ended_at, centroid, point_count) "
-                "VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s)",
-                (device, s.started_at, s.ended_at, s.lon, s.lat, s.point_count),
+                "INSERT INTO stays (account_id, tracking_device_id, device, started_at, ended_at, centroid, point_count) "
+                "VALUES (%s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s)",
+                (owner, device, label, s.started_at, s.ended_at, s.lon, s.lat, s.point_count),
             )
 
         cur = await conn.execute(
             "SELECT id, started_at, ended_at, category::text, tag_source::text FROM trips "
-            "WHERE device = %s AND source = 'detected' AND NOT imported AND started_at >= %s",
-            (device, t0),
+            "WHERE account_id = %s AND tracking_device_id = %s AND source = 'detected' AND NOT imported AND started_at >= %s",
+            (owner, device, t0),
         )
         existing = [
             ExistingTrip(id=r[0], started_at=r[1], ended_at=r[2], category=r[3], tag_source=r[4])
@@ -268,8 +302,8 @@ class DetectorRunner:
         # Leaving the point at exactly t0 untouched keeps it pointing at that
         # correct, unchanged preceding trip.
         await conn.execute(
-            "UPDATE points SET trip_id = NULL WHERE device = %s AND recorded_at > %s",
-            (device, t0),
+            "UPDATE points SET trip_id = NULL WHERE account_id = %s AND tracking_device_id = %s AND recorded_at > %s",
+            (owner, device, t0),
         )
 
         for old in plan.deletes:
@@ -279,7 +313,7 @@ class DetectorRunner:
                     old.id, old.category,
                 )
             linked_cur = await conn.execute(
-                "SELECT count(*) FROM expenses WHERE trip_id = %s", (old.id,)
+                "SELECT count(*) FROM expenses WHERE account_id = %s AND trip_id = %s", (owner, old.id)
             )
             linked_expenses = (await linked_cur.fetchone())[0]
             if linked_expenses:
@@ -287,16 +321,16 @@ class DetectorRunner:
                     "detector: deleting trip %s with %d linked expenses; expenses detached",
                     old.id, linked_expenses,
                 )
-            await conn.execute("DELETE FROM trips WHERE id = %s", (old.id,))
+            await conn.execute("DELETE FROM trips WHERE account_id = %s AND id = %s", (owner, old.id))
 
         touched_ids: list[int] = []
         for trip_id, ni in plan.matches:
             touched_ids.append(await self._write_trip(
-                conn, device, trips[ni], trip_id=trip_id,
+                conn, device, label, trips[ni], trip_id=trip_id,
                 previous_snap_inputs=previous_snap_inputs[trip_id],
             ))
         for ni in plan.inserts:
-            touched_ids.append(await self._write_trip(conn, device, trips[ni], trip_id=None))
+            touched_ids.append(await self._write_trip(conn, device, label, trips[ni], trip_id=None))
 
         await resolve_and_autotag(conn, touched_ids)
 
@@ -327,24 +361,26 @@ class DetectorRunner:
         time-range join intentionally matches ``load_trip_points``: adjacent
         trips share boundary fixes even though ``trip_id`` is single-valued.
         """
+        account_id(conn)
         previous: dict[int, list[tuple]] = {trip.id: [] for trip in existing}
         if not previous:
             return previous
         cur = await conn.execute(
             "SELECT t.id, p.id, p.recorded_at, "
             "ST_Y(p.geom::geometry), ST_X(p.geom::geometry), p.accuracy_m "
-            "FROM trips t JOIN points p ON p.device = t.device "
+            "FROM trips t JOIN points p ON p.account_id = t.account_id "
+            "AND p.tracking_device_id = t.tracking_device_id "
             "AND p.recorded_at >= t.started_at AND p.recorded_at <= t.ended_at "
-            "WHERE t.id = ANY(%s) AND p.trip_id IS NOT NULL "
+            "WHERE t.account_id = %s AND t.id = ANY(%s) AND p.trip_id IS NOT NULL "
             "ORDER BY t.id, p.recorded_at, p.id",
-            (list(previous),),
+            (account_id(conn), list(previous)),
         )
         for row in await cur.fetchall():
             previous[row[0]].append(tuple(row[1:]))
         return previous
 
     async def _write_trip(
-        self, conn, device: str, trip: Trip, trip_id: int | None,
+        self, conn, device: int, label: str, trip: Trip, trip_id: int | None,
         previous_snap_inputs: list[tuple] | None = None,
     ) -> int:
         """Persist one detected trip without invalidating valid snap output.
@@ -358,6 +394,7 @@ class DetectorRunner:
         path is always rewritten, but legacy path differences alone do not
         invalidate a snap when the authoritative inputs are unchanged.
         """
+        owner = account_id(conn)
         args = (
             trip.started_at, trip.ended_at,
             trip.start_lon, trip.start_lat,
@@ -366,10 +403,10 @@ class DetectorRunner:
         )
         if trip_id is None:
             cur = await conn.execute(
-                "INSERT INTO trips (device, started_at, ended_at, start_geom, end_geom, "
+                "INSERT INTO trips (account_id, tracking_device_id, device, started_at, ended_at, start_geom, end_geom, "
                 " distance_m, point_count, has_gap, detector_version, "
                 " snap_status, path_snapped, distance_snapped_m, snapped_at, vehicle_id) "
-                "VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, "
+                "VALUES (%s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, "
                 " ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s, %s, %s, "
                 " 'pending', NULL, NULL, NULL, "
                 # NULL when the setting is off, no vehicle is flagged default, or the
@@ -379,11 +416,11 @@ class DetectorRunner:
                 # comes back carrying the default here -- consistent with treating an
                 # insert as a new trip, but surprising enough to call out at the site
                 # of the behavior.
-                " (SELECT v.id FROM vehicles v, app_settings s"
-                "   WHERE s.id = 1 AND s.auto_assign_default_vehicle"
+                " (SELECT v.id FROM vehicles v JOIN account_settings s ON s.account_id = v.account_id"
+                "   WHERE s.account_id = %s AND s.auto_assign_default_vehicle"
                 "     AND v.is_default AND v.active)) "
                 "RETURNING id",
-                (device,) + args,
+                (owner, device, label) + args + (owner,),
             )
             trip_id = (await cur.fetchone())[0]
         else:
@@ -397,7 +434,7 @@ class DetectorRunner:
                 "WITH new_raw AS ("
                 " SELECT ST_Simplify("
                 "   ST_MakeLine(geom::geometry ORDER BY recorded_at, id), 0.0001"
-                " ) AS path FROM points WHERE id = ANY(%s)"
+                " ) AS path FROM points WHERE account_id = %s AND tracking_device_id = %s AND id = ANY(%s)"
                 "), prior AS ("
                 " SELECT t.id, new_raw.path, ("
                 "   %s AND t.snap_status IS NOT NULL "
@@ -407,7 +444,8 @@ class DetectorRunner:
                 "   AND ST_Y(t.start_geom::geometry) IS NOT DISTINCT FROM %s "
                 "   AND ST_X(t.end_geom::geometry) IS NOT DISTINCT FROM %s "
                 "   AND ST_Y(t.end_geom::geometry) IS NOT DISTINCT FROM %s "
-                " ) AS preserve_snap FROM trips t CROSS JOIN new_raw WHERE t.id = %s"
+                " ) AS preserve_snap FROM trips t CROSS JOIN new_raw "
+                "WHERE t.account_id = %s AND t.tracking_device_id = %s AND t.id = %s"
                 ") UPDATE trips t SET started_at = %s, ended_at = %s, "
                 " start_geom = ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, "
                 " end_geom = ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, "
@@ -421,24 +459,24 @@ class DetectorRunner:
                 " snapped_at = CASE WHEN prior.preserve_snap THEN t.snapped_at ELSE NULL END "
                 "FROM prior WHERE t.id = prior.id",
                 (
-                    point_ids, same_snap_inputs,
+                    owner, device, point_ids, same_snap_inputs,
                     trip.started_at, trip.ended_at, trip.distance_m, len(trip.points),
-                    trip.start_lon, trip.start_lat, trip.end_lon, trip.end_lat, trip_id,
+                    trip.start_lon, trip.start_lat, trip.end_lon, trip.end_lat, owner, device, trip_id,
                 ) + args,
             )
 
         point_ids = [p.id for p in trip.points if p.id is not None]
         await conn.execute(
-            "UPDATE points SET trip_id = %s WHERE id = ANY(%s)", (trip_id, point_ids)
+            "UPDATE points SET trip_id = %s WHERE account_id = %s AND tracking_device_id = %s AND id = ANY(%s)", (trip_id, owner, device, point_ids)
         )
         if previous_snap_inputs is None:
             await conn.execute(
                 "UPDATE trips SET path = ("
                 " SELECT ST_Simplify("
                 "   ST_MakeLine(geom::geometry ORDER BY recorded_at, id), 0.0001"
-                " ) FROM points WHERE id = ANY(%s)"
-                ") WHERE id = %s",
-                (point_ids, trip_id),
+                " ) FROM points WHERE account_id = %s AND tracking_device_id = %s AND id = ANY(%s)"
+                ") WHERE account_id = %s AND tracking_device_id = %s AND id = %s",
+                (owner, device, point_ids, owner, device, trip_id),
             )
         return trip_id
 
@@ -463,10 +501,11 @@ async def load_trip_points(conn, trip_id: int) -> list[tuple]:
     cur = await conn.execute(
         "SELECT p.id, p.recorded_at, ST_Y(p.geom::geometry), ST_X(p.geom::geometry), p.accuracy_m "
         "FROM points p JOIN trips t ON t.id = %s "
-        "WHERE p.device = t.device AND p.recorded_at >= t.started_at "
+        "WHERE t.account_id = %s AND p.account_id = t.account_id "
+        "AND p.tracking_device_id = t.tracking_device_id AND p.recorded_at >= t.started_at "
         "  AND p.recorded_at <= t.ended_at AND p.trip_id IS NOT NULL "
         "ORDER BY p.recorded_at",
-        (trip_id,),
+        (trip_id, account_id(conn)),
     )
     return await cur.fetchall()
 
@@ -483,32 +522,33 @@ async def resolve_and_autotag(conn, trip_ids: list[int]) -> None:
     bundle format has no geometry), so re-resolving would null out the
     place ids the import set directly and cascade into un-autotagging them.
     """
+    account_id(conn)
     if not trip_ids:
         return
     await conn.execute(
         "UPDATE trips t SET "
         " start_place_id = ("
         "   SELECT p.id FROM places p"
-        "   WHERE t.start_geom IS NOT NULL AND ST_DWithin(t.start_geom, p.geom, p.radius_m)"
+        "   WHERE p.account_id = t.account_id AND t.start_geom IS NOT NULL AND ST_DWithin(t.start_geom, p.geom, p.radius_m)"
         "   ORDER BY ST_Distance(t.start_geom, p.geom) LIMIT 1"
         " ),"
         " end_place_id = ("
         "   SELECT p.id FROM places p"
-        "   WHERE t.end_geom IS NOT NULL AND ST_DWithin(t.end_geom, p.geom, p.radius_m)"
+        "   WHERE p.account_id = t.account_id AND t.end_geom IS NOT NULL AND ST_DWithin(t.end_geom, p.geom, p.radius_m)"
         "   ORDER BY ST_Distance(t.end_geom, p.geom) LIMIT 1"
         " ) "
-        "WHERE t.id = ANY(%s) AND t.source = 'detected' AND NOT t.imported",
-        (trip_ids,),
+        "WHERE t.account_id = %s AND t.id = ANY(%s) AND t.source = 'detected' AND NOT t.imported",
+        (account_id(conn), trip_ids),
     )
 
     cur = await conn.execute(
         "SELECT t.id, t.category::text, t.tag_source::text, "
         " t.start_place_id, sp.kind::text, t.end_place_id, ep.kind::text "
         "FROM trips t "
-        "LEFT JOIN places sp ON sp.id = t.start_place_id "
-        "LEFT JOIN places ep ON ep.id = t.end_place_id "
-        "WHERE t.id = ANY(%s) AND t.source = 'detected' AND NOT t.imported",
-        (trip_ids,),
+        "LEFT JOIN places sp ON sp.account_id = t.account_id AND sp.id = t.start_place_id "
+        "LEFT JOIN places ep ON ep.account_id = t.account_id AND ep.id = t.end_place_id "
+        "WHERE t.account_id = %s AND t.id = ANY(%s) AND t.source = 'detected' AND NOT t.imported",
+        (account_id(conn), trip_ids),
     )
     autotag_trips = [
         AutotagTrip(
@@ -521,7 +561,7 @@ async def resolve_and_autotag(conn, trip_ids: list[int]) -> None:
 
     cur = await conn.execute(
         "SELECT id, a_place, a_kind::text, b_place, b_kind::text, category::text "
-        "FROM tag_rules ORDER BY id"
+        "FROM tag_rules WHERE account_id = %s ORDER BY id", (account_id(conn),)
     )
     rules = [Rule(*r) for r in await cur.fetchall()]
 
@@ -535,8 +575,8 @@ async def resolve_and_autotag(conn, trip_ids: list[int]) -> None:
         # back to a rule category.
         await conn.execute(
             "UPDATE trips SET category = %s, tag_source = %s, updated_at = now() "
-            "WHERE id = %s AND tag_source IS DISTINCT FROM 'human'",
-            (result.category, result.tag_source, result.trip_id),
+            "WHERE account_id = %s AND id = %s AND tag_source IS DISTINCT FROM 'human'",
+            (result.category, result.tag_source, account_id(conn), result.trip_id),
         )
 
 
@@ -563,13 +603,14 @@ async def reprocess_places_in(conn) -> None:
         "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
     )
     cur = await conn.execute(
-        "SELECT id FROM trips WHERE source = 'detected' AND NOT imported"
+        "SELECT id FROM trips WHERE account_id = %s AND source = 'detected' AND NOT imported",
+        (account_id(conn),)
     )
     trip_ids = [r[0] for r in await cur.fetchall()]
     await resolve_and_autotag(conn, trip_ids)
 
 
-async def reprocess_places(pool: AsyncConnectionPool) -> None:
+async def reprocess_places(pool: AccountPool) -> None:
     """Re-resolve places and re-apply auto-tag rules for every detected trip.
     Called after any places/rules CRUD from the UI, so existing trips reflect
     the new configuration immediately rather than waiting for their next

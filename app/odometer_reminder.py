@@ -10,6 +10,8 @@ its own table (`odometer_reminder_windows`) and its own worker class.
 """
 from __future__ import annotations
 
+from app.account_context import account_id
+
 import logging
 from datetime import datetime
 
@@ -17,7 +19,7 @@ import httpx
 from psycopg_pool import AsyncConnectionPool
 
 from app.db import ODOMETER_REMINDER_ADVISORY_LOCK_KEY
-from app.notifications import odometer_reminder_vehicles, publish_ntfy
+from app.notifications import notification_preferences_current, odometer_reminder_vehicles, publish_ntfy
 from app.odometer import latest_quarter_start
 from app.worker import IntervalWorker
 
@@ -96,9 +98,14 @@ class OdometerReminderWorker(IntervalWorker):
                     "SELECT pg_advisory_xact_lock(%s)",
                     (ODOMETER_REMINDER_ADVISORY_LOCK_KEY,),
                 )
+                if not await notification_preferences_current(
+                    conn, ntfy_topic=self.topic, display_tz=str(self.display_tz),
+                    odometer_reminder_hour=self.hour, odometer_reminder_requested=True,
+                ) or not self.topic:
+                    return
                 existing = await conn.execute(
-                    "SELECT 1 FROM odometer_reminder_windows WHERE quarter_starts_at = %s",
-                    (quarter_start,),
+                    "SELECT 1 FROM odometer_reminder_windows WHERE account_id = %s AND quarter_starts_at = %s",
+                    (account_id(conn), quarter_start),
                 )
                 if await existing.fetchone():
                     return
@@ -109,9 +116,9 @@ class OdometerReminderWorker(IntervalWorker):
                         self.password, due, self.app_url,
                     )
                 await conn.execute(
-                    "INSERT INTO odometer_reminder_windows (quarter_starts_at, reminded) "
-                    "VALUES (%s, %s)",
-                    (quarter_start, bool(due)),
+                    "INSERT INTO odometer_reminder_windows (account_id, quarter_starts_at, reminded) "
+                    "VALUES (%s, %s, %s)",
+                    (account_id(conn), quarter_start, bool(due)),
                 )
         if due:
             log.info("odometer reminder: delivered for %d vehicle(s)", len(due))

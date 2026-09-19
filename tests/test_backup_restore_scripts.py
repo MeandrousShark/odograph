@@ -46,6 +46,14 @@ case "$cmd" in
         printf '%s\n' "${FAKE_APP_STATUS:-app  Exited (0) 3 minutes ago}"
         exit 0
         ;;
+    run)
+        log_line "run $*"
+        case "$*" in
+            *prepare-restore*) exit "${FAKE_PREPARE_RESTORE_EXIT:-0}" ;;
+            *finalize-restore*) exit "${FAKE_FINALIZE_RESTORE_EXIT:-0}" ;;
+            *) exit 99 ;;
+        esac
+        ;;
     exec)
         log_line "exec $*"
         is_runtime=0
@@ -138,6 +146,10 @@ case "$cmd" in
                     exit "${FAKE_PSQL_EXIT:-0}"
                 fi
                 case "$sql" in
+                    *pg_roles*)
+                        printf '%s\n' "${FAKE_BACKUP_PRIVILEGE:-full-instance}"
+                        exit 0
+                        ;;
                     *schema_migrations*)
                         code="${FAKE_SCHEMA_QUERY_EXIT:-0}"
                         if [ "$code" -ne 0 ]; then
@@ -320,6 +332,7 @@ def assert_successful_backup(archive: Path, expected_bytes: bytes) -> dict:
         "created_utc",
         "archive",
         "schema_version",
+        "backup_scope",
         "postgres_version",
         "postgis_version",
         "source_ref",
@@ -598,7 +611,7 @@ def test_backup_container_missing_container_fails_before_tool_and_cleans_up(tmp_
     assert not tool_marker.exists()
     log = read_log(log_path)
     assert len(log) == 1
-    assert log[0].startswith("exec -i missing-db pg_dump ")
+    assert log[0].startswith("exec -i missing-db psql -X ")
     _assert_no_backup_artifacts(archive.parent)
 
 
@@ -898,6 +911,90 @@ def test_backup_every_exec_invocation_uses_dash_T(tmp_path):
 def restore_env(bin_dir: Path, log_path: Path, **overrides: str) -> dict:
     fake = install_single_word_fake(bin_dir)
     return base_env(bin_dir, log_path, str(fake), **overrides)
+
+
+def test_backup_refuses_account_scoped_identity_before_dump(tmp_path):
+    backup_script, _ = install_scripts(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "fake.log"
+    archive = tmp_path / "backups" / "restricted.dump"
+    env = restore_env(bin_dir, log_path, FAKE_BACKUP_PRIVILEGE="refused")
+
+    result = run_script(backup_script, ["--output", str(archive)], tmp_path, env)
+
+    assert result.returncode != 0
+    assert "full-instance" in result.stderr
+    assert not any("pg_dump" in line for line in read_log(log_path))
+    _assert_no_backup_artifacts(archive.parent)
+
+
+OWNED_TOC = "1; 0 0 SCHEMA - odograph_service mileage\n2; 0 0 TABLE public trips mileage"
+
+
+def test_restore_owned_archive_rebuilds_roles_around_transaction(tmp_path):
+    _, restore_script = install_scripts(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "fake.log"
+    archive, _ = write_archive_with_sidecar(tmp_path / "d", "owned.dump", FAKE_ARCHIVE_BYTES)
+    env = restore_env(bin_dir, log_path, FAKE_TOC_CONTENT=OWNED_TOC, FAKE_SCHEMA_VERSION="26")
+
+    result = run_script(restore_script, [str(archive)], tmp_path, env)
+
+    assert result.returncode == 0, result.stderr
+    log = read_log(log_path)
+    ordered = [
+        "pg_restore --file=-",
+        "run --rm --no-deps -T app python -m app.application_roles prepare-restore",
+        "psql -X --single-transaction",
+        "run --rm --no-deps -T app python -m app.application_roles finalize-restore",
+        "ANALYZE;",
+    ]
+    positions = [next(i for i, line in enumerate(log) if marker in line) for marker in ordered]
+    assert positions == sorted(positions)
+    assert "Restored schema version: 26" in result.stdout
+
+
+@pytest.mark.parametrize("stage", ["prepare", "finalize"])
+def test_restore_owned_archive_security_failure_stops_before_next_stage(tmp_path, stage):
+    _, restore_script = install_scripts(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "fake.log"
+    archive, _ = write_archive_with_sidecar(tmp_path / "d", "owned.dump", FAKE_ARCHIVE_BYTES)
+    env = restore_env(
+        bin_dir, log_path, FAKE_TOC_CONTENT=OWNED_TOC,
+        **{f"FAKE_{stage.upper()}_RESTORE_EXIT": "7"},
+    )
+
+    result = run_script(restore_script, [str(archive)], tmp_path, env)
+
+    assert result.returncode != 0
+    log = read_log(log_path)
+    assert not any("ANALYZE" in line for line in log)
+    if stage == "prepare":
+        assert "no archive SQL was applied" in result.stderr
+        assert not any("--single-transaction" in line for line in log)
+        assert not any("finalize-restore" in line for line in log)
+    else:
+        assert "data restored" in result.stderr
+        assert "Keep the app stopped" in result.stderr
+        assert any("--single-transaction" in line for line in log)
+
+
+def test_restore_owned_archive_verify_only_never_prepares_roles(tmp_path):
+    _, restore_script = install_scripts(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "fake.log"
+    archive, _ = write_archive_with_sidecar(tmp_path / "d", "owned.dump", FAKE_ARCHIVE_BYTES)
+    env = restore_env(bin_dir, log_path, FAKE_TOC_CONTENT=OWNED_TOC)
+
+    result = run_script(restore_script, ["--verify-only", str(archive)], tmp_path, env)
+
+    assert result.returncode == 0, result.stderr
+    assert not any(line.startswith("run ") for line in read_log(log_path))
 
 
 # ---------------------------------------------------------------------------

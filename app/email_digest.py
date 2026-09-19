@@ -19,6 +19,8 @@ their ledger rows unwritten because an earlier kind's `Mailer.send()` raised.
 """
 from __future__ import annotations
 
+from app.account_context import account_id
+
 import calendar
 import logging
 import pathlib
@@ -30,7 +32,7 @@ from psycopg_pool import AsyncConnectionPool
 from app.db import EMAIL_DIGEST_ADVISORY_LOCK_KEY
 from app.formatting import format_miles, format_usd
 from app.mailer import Mailer
-from app.notifications import count_unclassified_trips, odometer_reminder_vehicles
+from app.notifications import notification_preferences_current, count_unclassified_trips, odometer_reminder_vehicles
 from app.nudge import latest_window_end
 from app.odometer import latest_quarter_start
 from app.report import build_annual_report, build_range_report
@@ -208,7 +210,7 @@ class EmailDigestWorker(IntervalWorker):
             await run(now)
         except Exception as exc:
             self.status.record_failure(exc)
-            log.exception("email digest: %s failed; will retry next hour", kind)
+            log.warning("email digest: %s failed (%s); will retry next hour", kind, type(exc).__name__)
 
     async def _already_delivered(self, conn, kind: str, period_end: datetime) -> bool:
         """Take the shared advisory lock, then check the ledger. Callers keep
@@ -218,16 +220,34 @@ class EmailDigestWorker(IntervalWorker):
         await conn.execute(
             "SELECT pg_advisory_xact_lock(%s)", (EMAIL_DIGEST_ADVISORY_LOCK_KEY,)
         )
+        preference = {
+            "weekly_nudge": "email_weekly_nudge",
+            "monthly_summary": "email_monthly_summary",
+            "filing_reminder": "email_filing_reminder",
+            "quarterly_odometer": "email_odometer_reminder",
+        }[kind]
+        expected = {"email_to": self.mailer.to_addr, "display_tz": str(self.display_tz),
+                    preference: True}
+        if kind == "weekly_nudge":
+            expected["nudge_weekly_hour"] = self.nudge_weekly_hour
+        elif kind == "quarterly_odometer":
+            expected["odometer_reminder_hour"] = self.odometer_reminder_hour
+        else:
+            expected["email_digest_hour"] = self.digest_hour
+            if kind == "filing_reminder":
+                expected["email_filing_reminder_mmdd"] = self.filing_reminder_mmdd
+        if not self.mailer.to_addr or not await notification_preferences_current(conn, **expected):
+            return True
         cur = await conn.execute(
-            "SELECT 1 FROM email_deliveries WHERE kind = %s AND period_end = %s",
-            (kind, period_end),
+            "SELECT 1 FROM email_deliveries WHERE account_id = %s AND kind = %s AND period_end = %s",
+            (account_id(conn), kind, period_end),
         )
         return await cur.fetchone() is not None
 
     async def _record_delivery(self, conn, kind: str, period_end: datetime, sent: bool) -> None:
         await conn.execute(
-            "INSERT INTO email_deliveries (kind, period_end, sent) VALUES (%s, %s, %s)",
-            (kind, period_end, sent),
+            "INSERT INTO email_deliveries (account_id, kind, period_end, sent) VALUES (%s, %s, %s, %s)",
+            (account_id(conn), kind, period_end, sent),
         )
 
     async def _run_weekly_nudge(self, now: datetime) -> None:

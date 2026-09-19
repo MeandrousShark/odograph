@@ -89,6 +89,8 @@ INITIAL_ADMIN_SIGNUP=0
 ```
 
 Use your own [IANA timezone name](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones).
+This sets the first-account suggestion. After setup, **Settings > Time zone and
+notifications** controls the saved timezone and notification preferences.
 
 That generated file is already a working local-login setup. All three required
 secrets are filled in and every optional integration is switched off. You only
@@ -170,7 +172,9 @@ Follow the [OwnTracks guide](docs/owntracks.md) to connect your phone. It walks
 through sending a test track, confirming Odograph received it, and deleting the
 test data afterward.
 
-Once that works, Odograph starts detecting trips on its own.
+Create a device in **Settings > Tracking**, then copy its issued username and
+one-time password into OwnTracks. Each credential identifies one device;
+`tid` is a label. Once that works, Odograph starts detecting trips on its own.
 
 ## Use Odograph
 
@@ -206,6 +210,12 @@ or the Podman equivalent. Only run that when you actually mean to erase the
 database.
 
 ## Security
+
+This remains a single-account application. Startup provisions restricted
+identity and account database roles, and personal queries carry explicit
+ownership. Row-level security policies are prepared but are not enabled yet;
+this release does not enable invitations or multi-user operation. See the
+[database role contract](docs/configuration.md#account-ownership-and-database-roles).
 
 Before relying on your installation, work through the
 [security hardening checklist](docs/security.md#hardening-checklist).

@@ -12,7 +12,8 @@ from app.db import make_pool
 from app.detector.core import Params
 from app.detector.runner import DetectorRunner
 from app.ui import make_router
-from conftest import reset_db
+from conftest import reset_account_db, seed_tracking_device
+from app.account_context import account_id
 from tests.synth import Drive, Stationary, build_track
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -35,11 +36,12 @@ def _endpoint():
 
 
 async def _insert_points(conn, points, device):
+    stream = await seed_tracking_device(conn, device)
     for point in points:
         await conn.execute(
-            "INSERT INTO points (device, recorded_at, received_at, geom, accuracy_m, velocity_kmh) "
-            "VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s)",
-            (device, point.t, point.t, point.lon, point.lat, point.accuracy_m, point.velocity_kmh),
+            "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, received_at, geom, accuracy_m, velocity_kmh) "
+            "VALUES (%s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s)",
+            (account_id(conn), stream, device, point.t, point.t, point.lon, point.lat, point.accuracy_m, point.velocity_kmh),
         )
 
 
@@ -61,10 +63,10 @@ async def _override_rows(conn, device):
 
 
 async def _scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         track = build_track([
             Stationary(900), Drive(km=2), Stationary(1200), Drive(km=2),
             Stationary(1200), Drive(km=2), Stationary(900),
@@ -79,15 +81,15 @@ async def _scenario():
             a = await _trips(conn, "A")
             b = await _trips(conn, "B")
             manual = await conn.execute(
-                "INSERT INTO trips (device, source, started_at, ended_at, distance_m) "
-                "VALUES ('A', 'manual', %s, %s, 1000) RETURNING id",
-                (a[0][2], a[1][1]),
+                "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m) "
+                "VALUES (%s, 'A', 'manual', %s, %s, 1000) RETURNING id",
+                (account_id(conn), a[0][2], a[1][1]),
             )
             manual_id = (await manual.fetchone())[0]
 
         handler = _endpoint()
         snap_worker = FakeSnapWorker()
-        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        request = SimpleNamespace(state=SimpleNamespace(account_pool=pool, detector_runner=runner), app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, detector_runner=runner, snap_worker=snap_worker,
         )))
         cases = [
@@ -115,7 +117,7 @@ async def _scenario():
         assert values == ("business", "Client visit", "handler", "human")
         assert snap_worker.pokes == 1
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_merge_handler_validation_and_valid_merge():
@@ -123,10 +125,10 @@ def test_merge_handler_validation_and_valid_merge():
 
 
 async def _reprocess_failure_rolls_back_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         track = build_track([
             Stationary(900), Drive(km=2), Stationary(1200), Drive(km=2), Stationary(900),
         ])
@@ -143,15 +145,16 @@ async def _reprocess_failure_rolls_back_scenario():
         # failed merge must NOT actually delete.
         async with pool.connection() as conn:
             cur = await conn.execute(
-                "SELECT id FROM points WHERE device='A' "
+                "SELECT id FROM points WHERE account_id=%s AND device='A' "
                 "AND recorded_at BETWEEN %s AND %s ORDER BY recorded_at LIMIT 1",
-                (a[0][2], a[1][1]),
+                (account_id(conn), a[0][2], a[1][1]),
             )
             force_point_id = (await cur.fetchone())[0]
             await conn.execute(
-                "INSERT INTO trip_boundary_overrides (device, kind, point_id) "
-                "VALUES ('A', 'force', %s)",
-                (force_point_id,),
+                "INSERT INTO trip_boundary_overrides (account_id, tracking_device_id, device, kind, point_id) "
+                "SELECT account_id, tracking_device_id, device, 'force', id FROM points "
+                "WHERE account_id=%s AND id=%s",
+                (account_id(conn), force_point_id),
             )
             before_overrides = await _override_rows(conn, "A")
             before_trips = await _trips(conn, "A")
@@ -167,7 +170,7 @@ async def _reprocess_failure_rolls_back_scenario():
 
         handler = _endpoint()
         snap_worker = FakeSnapWorker()
-        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        request = SimpleNamespace(state=SimpleNamespace(account_pool=pool, detector_runner=runner), app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, detector_runner=runner, snap_worker=snap_worker,
         )))
         with pytest.raises(RuntimeError, match="forced reprocess failure"):
@@ -186,7 +189,7 @@ async def _reprocess_failure_rolls_back_scenario():
         assert after_trips == before_trips, "trips must be untouched by a rolled-back merge"
         assert snap_worker.pokes == 0
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_merge_rolls_back_atomically_when_reprocess_fails():
@@ -202,10 +205,10 @@ async def _set_vehicle(conn, trip_id, vehicle_id):
 
 
 async def _vehicle_tristate_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
 
         def _two_trip_track():
             return build_track([
@@ -217,7 +220,8 @@ async def _vehicle_tristate_scenario():
             for device in devices:
                 await _insert_points(conn, _two_trip_track(), device)
             second_vehicle = await conn.execute(
-                "INSERT INTO vehicles (name) VALUES ('Second Car') RETURNING id"
+                "INSERT INTO vehicles (account_id, name) VALUES (%s, 'Second Car') RETURNING id",
+                (account_id(conn),)
             )
             second_vehicle_id = (await second_vehicle.fetchone())[0]
 
@@ -225,7 +229,7 @@ async def _vehicle_tristate_scenario():
         assert await runner.run_once() is True
 
         handler = _endpoint()
-        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        request = SimpleNamespace(state=SimpleNamespace(account_pool=pool, detector_runner=runner), app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, detector_runner=runner
         )))
 
@@ -298,7 +302,7 @@ async def _vehicle_tristate_scenario():
         assert after_overrides == before_overrides
         assert after_trips == before_trips
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_merge_vehicle_tristate():
@@ -317,10 +321,10 @@ async def _set_category(conn, trip_id, category, tag_source=None):
 
 
 async def _category_tristate_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
 
         def _two_trip_track():
             return build_track([
@@ -336,7 +340,7 @@ async def _category_tristate_scenario():
         assert await runner.run_once() is True
 
         handler = _endpoint()
-        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        request = SimpleNamespace(state=SimpleNamespace(account_pool=pool, detector_runner=runner), app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, detector_runner=runner
         )))
 
@@ -398,7 +402,7 @@ async def _category_tristate_scenario():
         assert after_overrides == before_overrides
         assert after_trips == before_trips
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_merge_category_tristate():

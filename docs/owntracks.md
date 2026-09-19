@@ -8,17 +8,20 @@ steps after installation, see the [Odograph usage guide](usage.md).
 
 ## App configuration
 
+Sign in to Odograph, open **Settings > Tracking**, and create a device for
+this phone. Copy the URL, username, and password shown there into OwnTracks.
+The password is shown only once; if you lose it, choose **Replace password**
+and update the phone. Create a separate credential for each device.
+
 In the OwnTracks app, open Settings and configure a connection:
 
 - **Mode:** HTTP
 - **URL:** `https://your-domain/ingest` (your instance's address, with
   `/ingest` appended, for example `https://mileage.example.com/ingest`)
-- **Username:** `owntracks`, unless you have set `INGEST_USERNAME` in `.env`
-  to something else
-- **Password:** the value of `INGEST_PASSWORD` from your instance's `.env`
-  file
-- **Device ID / Tracker ID (`tid`):** any short identifier, for example the
-  first two letters of the phone's name
+- **Username:** the issued username from Tracking
+- **Password:** the one-time password issued with that username
+- **Device ID / Tracker ID (`tid`):** a short descriptive label; it does not
+  select the account or device for a newly issued credential
 
 Leave "Auth" enabled. This is what makes OwnTracks send the username and
 password above as HTTP Basic auth on every request.
@@ -109,54 +112,65 @@ battery optimization and vendor background restrictions can also delay or stop
 background reporting, so follow OwnTracks' Android background-running guidance
 if updates become intermittent.
 
-## The device ID becomes your device's identity
+## Device identity and upgraded installations
 
-Whatever you set as the tracker ID (`tid`) becomes this device's identity in
-the application: trips, stays, and detection history are all tracked per
-device. If you change a phone's `tid` later, the application treats it as a
-brand-new device: existing history stays associated with the old id, and
-detection for the new id starts from a clean slate. Pick a `tid` you're happy
-keeping and avoid changing it on a phone that's already sending data.
+An issued credential selects a stable device owned by your account. Its
+history stays together when the phone changes `tid` or you replace its
+password. Two devices can send the same `tid` without sharing points or trips.
+Vehicle assignment remains a separate choice on each trip.
 
-If you track more than one phone (for example, two vehicles or two drivers),
-give each one a distinct `tid`.
+An upgraded installation retains its old shared login as a **Migrated shared
+login**, with existing tracker labels mapped to their original device
+histories. Only this compatibility adapter uses `tid` to choose among that
+account's legacy streams. A previously unseen valid label creates a stream in
+that same account. Changing `.env` does not change this saved login.
+
+Use **Give this device its own password** to keep a legacy device's history
+and move it to an issued credential. Update OwnTracks immediately: conversion
+stops that device's old label from being accepted through the shared login.
+Other legacy devices keep working. After converting them, **Revoke shared
+login** stops all remaining uploads through the old credential. Revocation is
+durable across restarts and cannot be undone by restoring old environment
+values. Recorded history remains.
+
+Replacing a device password immediately invalidates its old password. Verify
+new uploads after updating the phone. Delayed/offline queue behavior still
+needs a real-device acceptance check; the synthetic helper below does not
+prove what OwnTracks does with an existing queue during credential changes.
 
 ## Verify your setup
 
-Once OwnTracks is configured, you can prove the whole pipeline (ingest,
-storage, trip detection, and the UI) works end to end without waiting to
-actually drive anywhere. The repository includes
-`scripts/send_test_track.sh`, which posts a short synthetic stay-drive-stay
-track under a fixed test device id.
+First confirm your phone appears under **Settings > Device status** and that
+its newest location time advances. A completed trip also needs enough points
+and a quiet period for detection.
 
-From the directory containing your `compose.yaml`:
-
-```sh
-scripts/send_test_track.sh \
-  --password "$(sed -n 's/^INGEST_PASSWORD=//p' .env)"
-```
-
-By default this targets `http://127.0.0.1:8077`; pass `--base-url` to point
-it elsewhere. On success it prints how many points it sent.
-
-Wait about 90 seconds, long enough for the trip detector's debounce to run,
-then open the trip list in the UI. You should see one new trip on a device
-named `test`, with a short drive between two stays.
-
-Once you've confirmed it worked, remove the test data:
+For a synthetic pipeline check, create a separate device named exactly `test`
+in **Settings > Tracking**. Save its issued username and one-time password.
+From the directory containing your `compose.yaml`, run the matching release's
+helper, replacing the example username with the issued one:
 
 ```sh
-scripts/send_test_track.sh --cleanup
+scripts/send_test_track.sh --username odograph_ISSUED_TEST_USERNAME
 ```
 
-This deletes every trace of the `test` device (its trips, stays, points,
-and raw ingest messages), leaving your real data untouched. It shells out to
-`docker compose` or `podman-compose` (whichever is on your `PATH`; set
-`COMPOSE_CMD` to override) to run the deletion against the database
-container.
+The helper silently prompts for the issued password. It never accepts a
+password argument or reads your shared `.env` credential. Automation can use
+`ODOGRAPH_TRACKING_USERNAME` and `ODOGRAPH_TRACKING_SECRET` from protected
+process environment. By default it posts to `http://127.0.0.1:8077`; use
+`--base-url` for another instance. Only send to a trusted HTTPS address or the
+local loopback listener.
 
-If the test trip never appears, open **Settings**, expand **Diagnostics**, and
-find **Device status**. It shows the newest location fix received from every device
-that has posted to `/ingest`, which tells you whether the test script (or a
-real phone) is actually reaching your instance before you go looking any
-further.
+Wait about 90 seconds for the detector's debounce, then look for the short
+drive in the trip list. When finished, remove this dedicated test stream:
+
+```sh
+scripts/send_test_track.sh --cleanup --username odograph_ISSUED_TEST_USERNAME
+```
+
+Cleanup resolves that issued username to its account and stable device, checks
+that its device name is `test`, and deletes only that stream's trips, stays,
+points, raw messages, overrides, checkpoint, and credentials. Other devices
+with the same label are untouched. The test credential stops working afterward.
+It uses `docker compose` or `podman-compose` to access the local database;
+`COMPOSE_CMD` can select the command. Cleanup does not follow `--base-url`, so
+run it from the Compose directory of the instance you tested.

@@ -41,7 +41,11 @@ class _Connection:
     def cursor(self, row_factory=None):
         return _Cursor(self.row)
 
-    async def execute(self, *args, **kwargs):
+    async def execute(self, query, *args, **kwargs):
+        if "current_setting" in query:
+            return _Cursor((None,))
+        if "SELECT EXISTS" in query:
+            return _Cursor((False,))
         return _Cursor(self.row)
 
 
@@ -73,7 +77,7 @@ def _build_app(monkeypatch, **env):
         monkeypatch.setenv(key, value)
 
     app = create_app(Config.from_env())
-    app.state.pool = _Pool(_Connection(None))
+    app.state.control_pool = _Pool(_Connection(None))
     return app
 
 

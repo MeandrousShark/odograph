@@ -13,6 +13,7 @@ from psycopg import errors
 from psycopg.rows import dict_row
 from starlette.responses import JSONResponse, RedirectResponse, Response
 
+from app.account_context import account_id
 from app.auth import require_csrf, require_user
 from app.formatting import format_miles
 from app.page import render_page
@@ -188,8 +189,8 @@ async def _resolve_manual_route_endpoints(
         cur = conn.cursor(row_factory=dict_row)
         await cur.execute(
             "SELECT id, ST_Y(geom::geometry) AS lat, ST_X(geom::geometry) AS lon "
-            "FROM places WHERE id = ANY(%s)",
-            ([start_id, end_id],),
+            "FROM places WHERE id = ANY(%s) AND account_id = %s",
+            ([start_id, end_id], account_id(conn)),
         )
         rows = {row["id"]: row for row in await cur.fetchall()}
         if start_id not in rows or end_id not in rows:
@@ -218,7 +219,7 @@ async def _resolve_missing_trip_osrm_hint(request: Request, bridge_trip: str) ->
     `None` (no hint, not an error) on a malformed/stale id, missing OSRM
     config, missing coordinates, or any transport failure.
     """
-    cfg = request.app.state.config
+    cfg = request.state.config
     http_client = request.app.state.osrm_http_client
     if not cfg.osrm_url or http_client is None:
         return None
@@ -227,7 +228,7 @@ async def _resolve_missing_trip_osrm_hint(request: Request, bridge_trip: str) ->
     except ValueError:
         return None
     try:
-        trip = await _fetch_trip(request.app.state.pool, trip_id)
+        trip = await _fetch_trip(request.state.account_pool, trip_id)
     except HTTPException:
         return None
     from_lat, from_lon = trip.get("prev_trip_end_lat"), trip.get("prev_trip_end_lon")
@@ -270,7 +271,7 @@ def register(router: APIRouter) -> None:
                         request, bridge_trip
                     ) if bridge_trip else None,
                 }
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 vehicles = await list_vehicles(conn)
                 recent_purposes = await _fetch_recent_purposes(conn)
                 places = await _fetch_places_rows(conn)
@@ -310,7 +311,7 @@ def register(router: APIRouter) -> None:
             with a plain "unavailable" reason is all a caller ever needs to
             degrade the form to a manual distance entry.
             """
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 endpoints = await _resolve_manual_route_endpoints(
                     conn, route_mode, start_place, end_place,
                     start_lat, start_lon, end_lat, end_lon,
@@ -318,7 +319,7 @@ def register(router: APIRouter) -> None:
             if endpoints is None:
                 raise HTTPException(status_code=400, detail="Select a route to preview")
 
-            cfg = request.app.state.config
+            cfg = request.state.config
             http_client = request.app.state.osrm_http_client
             if not cfg.osrm_url or http_client is None:
                 return JSONResponse({"ok": False, "reason": "unavailable"})
@@ -383,7 +384,7 @@ def register(router: APIRouter) -> None:
             # two handlers treating a missing field the same way.
             start_label = start_label if isinstance(start_label, str) else None
             end_label = end_label if isinstance(end_label, str) else None
-            tz = request.app.state.config.display_tz
+            tz = request.state.config.display_tz
             routing_active = route_mode != "none"
             try:
                 started_at, ended_at, distance_m = parse_manual_trip_input(
@@ -435,7 +436,7 @@ def register(router: APIRouter) -> None:
                 # Resolve first, release the connection, THEN call OSRM: a
                 # slow/hung outbound route request must never hold a pooled
                 # database connection while it waits.
-                async with request.app.state.pool.connection() as conn:
+                async with request.state.account_pool.connection() as conn:
                     endpoints = await _resolve_manual_route_endpoints(
                         conn, route_mode, start_place, end_place,
                         start_lat, start_lon, end_lat, end_lon,
@@ -443,7 +444,7 @@ def register(router: APIRouter) -> None:
                 if endpoints is None:
                     raise HTTPException(status_code=400, detail="Invalid route selection")
 
-                cfg = request.app.state.config
+                cfg = request.state.config
                 http_client = request.app.state.osrm_http_client
                 routed = None
                 if cfg.osrm_url and http_client is not None:
@@ -490,19 +491,19 @@ def register(router: APIRouter) -> None:
                     start_place_id = endpoints.start_place_id
                     end_place_id = endpoints.end_place_id
 
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 try:
                     if path_geojson is not None:
                         await conn.execute(
-                            "INSERT INTO trips (device, source, started_at, ended_at, distance_m,"
+                            "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m,"
                             " category, exclusion, purpose, notes, vehicle_id, path, start_geom, end_geom,"
                             " start_place_id, end_place_id, snap_status, start_label, end_label)"
-                            " VALUES ('manual', 'manual', %s, %s, %s, %s, %s, %s, %s, %s,"
+                            " VALUES (%s, 'manual', 'manual', %s, %s, %s, %s, %s, %s, %s, %s,"
                             " ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326),"
                             " ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,"
                             " ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,"
                             " %s, %s, NULL, %s, %s)",
-                            (started_at, ended_at, distance_m, category, exclusion or None,
+                            (account_id(conn), started_at, ended_at, distance_m, category, exclusion or None,
                              purpose.strip() or None,
                              notes.strip() or None, parsed_vehicle_id,
                              json.dumps(path_geojson),
@@ -513,10 +514,10 @@ def register(router: APIRouter) -> None:
                         )
                     else:
                         await conn.execute(
-                            "INSERT INTO trips (device, source, started_at, ended_at, distance_m,"
+                            "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m,"
                             " category, exclusion, purpose, notes, vehicle_id, start_label, end_label)"
-                            " VALUES ('manual', 'manual', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                            (started_at, ended_at, distance_m, category, exclusion or None,
+                            " VALUES (%s, 'manual', 'manual', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                            (account_id(conn), started_at, ended_at, distance_m, category, exclusion or None,
                              purpose.strip() or None,
                              notes.strip() or None,
                              parsed_vehicle_id,

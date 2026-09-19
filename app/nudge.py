@@ -11,6 +11,8 @@ annoying.
 """
 from __future__ import annotations
 
+from app.account_context import account_id
+
 import logging
 from datetime import date, datetime, timedelta
 
@@ -18,7 +20,7 @@ import httpx
 from psycopg_pool import AsyncConnectionPool
 
 from app.db import NUDGE_ADVISORY_LOCK_KEY
-from app.notifications import count_unclassified_trips, publish_ntfy
+from app.notifications import notification_preferences_current, count_unclassified_trips, publish_ntfy
 from app.worker import IntervalWorker
 
 log = logging.getLogger(__name__)
@@ -123,8 +125,13 @@ class NudgeWorker(IntervalWorker):
                 await conn.execute(
                     "SELECT pg_advisory_xact_lock(%s)", (NUDGE_ADVISORY_LOCK_KEY,)
                 )
+                if not await notification_preferences_current(
+                    conn, ntfy_topic=self.topic, display_tz=str(self.display_tz),
+                    nudge_weekly_hour=self.hour,
+                ) or not self.topic:
+                    return
                 existing = await conn.execute(
-                    "SELECT 1 FROM nudge_delivery_windows WHERE window_ends_at = %s", (window_end,)
+                    "SELECT 1 FROM nudge_delivery_windows WHERE account_id = %s AND window_ends_at = %s", (account_id(conn), window_end)
                 )
                 if await existing.fetchone():
                     return
@@ -137,8 +144,8 @@ class NudgeWorker(IntervalWorker):
                         trip_count, window_end, self.app_url,
                     )
                 await conn.execute(
-                    "INSERT INTO nudge_delivery_windows (window_ends_at, trip_count) VALUES (%s, %s)",
-                    (window_end, trip_count),
+                    "INSERT INTO nudge_delivery_windows (account_id, window_ends_at, trip_count) VALUES (%s, %s, %s)",
+                    (account_id(conn), window_end, trip_count),
                 )
         if trip_count:
             log.info("nudge: delivered reminder for %d unclassified trip(s)", trip_count)

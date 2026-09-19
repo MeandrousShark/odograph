@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -10,12 +9,13 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from psycopg.rows import dict_row
 from starlette.responses import RedirectResponse, Response
 
+from app.account_context import account_id
 from app.auth import require_user
 from app.page import render_page
 from app.export import to_csv, to_range_report_xlsx, to_report_xlsx, to_xlsx
 from app.expenses import ExpenseReport, build_expense_report
 from app.odometer import OdometerReading, VehicleCoverage, vehicle_coverage_for_report
-from app.rates import ENV_PREFIX, YearRate, load_rates
+from app.rates import YearRate, load_rates
 from app.report import (
     AnnualReport,
     RangeReport,
@@ -102,8 +102,8 @@ async def _fetch_range_trips_in(conn, tz: ZoneInfo, start: date, end: date) -> t
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         f"SELECT {TRIP_COLUMNS} FROM trips WHERE started_at >= %s AND started_at < %s"
-        " ORDER BY started_at",
-        (range_start, range_end),
+        " AND account_id = %s ORDER BY started_at",
+        (range_start, range_end, account_id(conn)),
     )
     trips = await cur.fetchall()
     rates = await load_rates(conn)
@@ -134,9 +134,9 @@ async def _fetch_year_odometer_coverage(pool, tz: ZoneInfo, year: int, trips: li
         await cur.execute(
             "SELECT odometer_readings.vehicle_id, odometer_readings.recorded_at, "
             "odometer_readings.odometer_m, vehicles.name AS vehicle_name "
-            "FROM odometer_readings JOIN vehicles ON vehicles.id = odometer_readings.vehicle_id "
-            "WHERE recorded_at >= %s AND recorded_at <= %s",
-            (year_start, next_year_start),
+            "FROM odometer_readings JOIN vehicles ON vehicles.id = odometer_readings.vehicle_id AND vehicles.account_id = odometer_readings.account_id "
+            "WHERE recorded_at >= %s AND recorded_at <= %s AND odometer_readings.account_id = %s",
+            (year_start, next_year_start, account_id(conn)),
         )
         rows = await cur.fetchall()
 
@@ -175,16 +175,17 @@ async def _fetch_year_expense_report(pool, tz: ZoneInfo, year: int, trips: list[
         await expense_cur.execute(
             _EXPENSE_SELECT_JOIN
             + "WHERE expenses.incurred_on >= %s AND expenses.incurred_on < %s "
-            "ORDER BY expenses.incurred_on, expenses.id",
-            (date(year, 1, 1), date(year + 1, 1, 1)),
+            "AND expenses.account_id = %s ORDER BY expenses.incurred_on, expenses.id",
+            (date(year, 1, 1), date(year + 1, 1, 1), account_id(conn)),
         )
         expenses = await expense_cur.fetchall()
         reading_cur = conn.cursor(row_factory=dict_row)
         await reading_cur.execute(
             "SELECT odometer_readings.vehicle_id, vehicles.name AS vehicle_name, "
             "odometer_readings.recorded_at, odometer_readings.odometer_m "
-            "FROM odometer_readings JOIN vehicles ON vehicles.id = odometer_readings.vehicle_id "
-            "ORDER BY odometer_readings.recorded_at"
+            "FROM odometer_readings JOIN vehicles ON vehicles.id = odometer_readings.vehicle_id AND vehicles.account_id = odometer_readings.account_id "
+            "WHERE odometer_readings.account_id = %s ORDER BY odometer_readings.recorded_at",
+            (account_id(conn),),
         )
         readings = await reading_cur.fetchall()
     return expenses, build_expense_report(year, trips, expenses, readings, rates, tz)
@@ -193,9 +194,9 @@ async def _fetch_year_expense_report(pool, tz: ZoneInfo, year: int, trips: list[
 async def _build_range_report_data(
     request: Request, from_str: str, to_str: str,
 ) -> _RangeReportData:
-    tz = request.app.state.config.display_tz
+    tz = request.state.config.display_tz
     start, end = _parse_range_query_dates(from_str, to_str)
-    trips, rates = await _fetch_range_trips(request.app.state.pool, tz, start, end)
+    trips, rates = await _fetch_range_trips(request.state.account_pool, tz, start, end)
     try:
         report = build_range_report(trips, rates, tz, start, end)
     except ValueError as e:
@@ -204,8 +205,8 @@ async def _build_range_report_data(
 
 
 async def _build_annual_report_data(request: Request, year: int) -> _AnnualReportData:
-    pool = request.app.state.pool
-    tz = request.app.state.config.display_tz
+    pool = request.state.account_pool
+    tz = request.state.config.display_tz
     trips, rates = await _fetch_range_trips(
         pool, tz, date(year, 1, 1), date(year, 12, 31)
     )
@@ -215,18 +216,6 @@ async def _build_annual_report_data(request: Request, year: int) -> _AnnualRepor
     return _AnnualReportData(
         tz, report, trips, rates, odometer_coverage, expenses, expense_report
     )
-
-
-def _env_override_years() -> set[int]:
-    years = set()
-    for key in os.environ:
-        if not key.startswith(ENV_PREFIX):
-            continue
-        try:
-            years.add(int(key[len(ENV_PREFIX):]))
-        except ValueError:
-            continue
-    return years
 
 
 def register(router: APIRouter) -> None:
@@ -245,15 +234,16 @@ def register(router: APIRouter) -> None:
             exclusion = exclusion if isinstance(exclusion, str) else ""
             if format not in EXPORT_MEDIA_TYPES:
                 raise HTTPException(status_code=400, detail="format must be csv or xlsx")
-            tz = request.app.state.config.display_tz
+            tz = request.state.config.display_tz
             from_dt, to_dt = parse_date_range(from_, to, tz)
             vehicle_id = _parse_vehicle_id(vehicle)
             # Reuses the exact same filter SQL as index() so a filtered export
             # can never drift from what's currently on screen.
             where, params = _trip_filter_sql(
-                category, from_dt, to_dt, vehicle_id, q=q, exclusion=exclusion
+                category, from_dt, to_dt, vehicle_id, q=q, exclusion=exclusion,
+                owner_id=request.state.principal.account_id,
             )
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 cur = conn.cursor(row_factory=dict_row)
                 await cur.execute(
                     f"SELECT {TRIP_COLUMNS} FROM trips {where} ORDER BY started_at DESC", params
@@ -275,7 +265,7 @@ def register(router: APIRouter) -> None:
 
         @router.get("/report")
         async def report_redirect(request: Request, user: dict = Depends(require_user)):
-            tz = request.app.state.config.display_tz
+            tz = request.state.config.display_tz
             year = default_report_year(datetime.now(tz))
             return RedirectResponse(f"/report/{year}", status_code=302)
 

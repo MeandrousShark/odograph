@@ -15,9 +15,11 @@ import pytest
 from psycopg.rows import dict_row
 
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import fixture_device
 from app.missing_trip import missing_trip_badge
 from app.ui import TRIP_COLUMNS, _trip_filter_sql
-from conftest import reset_db
+from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -43,15 +45,15 @@ async def _insert_detected_trip(
     end_geom_sql = (
         "ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography" if end_lon is not None else "NULL"
     )
-    params = [device, started_at, ended_at]
+    params = [account_id(conn), await fixture_device(conn, device), device, started_at, ended_at]
     if start_lon is not None:
         params += [start_lon, start_lat]
     if end_lon is not None:
         params += [end_lon, end_lat]
     cur = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
+        "INSERT INTO trips (account_id, tracking_device_id, device, source, started_at, ended_at, distance_m, "
         " point_count, detector_version, start_geom, end_geom) "
-        f"VALUES (%s, 'detected', %s, %s, 1000, 2, 2, {start_geom_sql}, {end_geom_sql}) "
+        f"VALUES (%s, %s, %s, 'detected', %s, %s, 1000, 2, 2, {start_geom_sql}, {end_geom_sql}) "
         "RETURNING id",
         params,
     )
@@ -60,9 +62,9 @@ async def _insert_detected_trip(
 
 async def _insert_manual_trip(conn, device, started_at, ended_at) -> int:
     cur = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, distance_m) "
-        "VALUES (%s, 'manual', %s, %s, 500) RETURNING id",
-        (device, started_at, ended_at),
+        "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m) VALUES "
+        "(%s, %s, 'manual', %s, %s, 500) RETURNING id",
+        (account_id(conn), device, started_at, ended_at,),
     )
     return (await cur.fetchone())[0]
 
@@ -74,10 +76,10 @@ async def _fetch_row(conn, trip_id: int) -> dict:
 
 
 async def _scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         # Each scenario group gets its own day, not just its own device: the
         # covering-manual-trip check (below) is deliberately *not* filtered
         # by device -- a manual trip is always stored with device='manual'
@@ -220,7 +222,7 @@ async def _scenario():
         # the correlated subselect looks at the whole `trips` table, not
         # whatever the caller's WHERE happens to include.
         async with pool.connection() as conn:
-            where, params = _trip_filter_sql("business", None, None, None)
+            where, params = _trip_filter_sql("business", None, None, None, owner_id=account_id(conn))
             await conn.execute(
                 "UPDATE trips SET category = 'business' WHERE id = %s", (page_b,)
             )
@@ -265,7 +267,7 @@ async def _scenario():
         assert badge.prefill_url.startswith("/trips/manual?manual_date=")
         assert f"bridge_trip={cov_b}" in badge.prefill_url
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_missing_trip_detection_acceptance_criteria():

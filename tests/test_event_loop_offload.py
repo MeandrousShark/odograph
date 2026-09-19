@@ -19,7 +19,7 @@ import pytest
 
 from app.db import make_pool
 import app.portable as portable_module
-from conftest import reset_db
+from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 # Genuinely DB-backed despite the filename not ending in "_db": override the
@@ -45,7 +45,7 @@ EXPORT_DATA = _endpoint("/settings/export/data", "GET")
 
 
 def _request(pool):
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(pool=pool)))
+    return SimpleNamespace(state=SimpleNamespace(account_pool=pool))
 
 
 async def _canary(tick_times: list[float]) -> None:
@@ -69,11 +69,11 @@ def test_export_data_serialize_offload_keeps_event_loop_responsive(monkeypatch):
         pool = make_pool(TEST_DB)
         await pool.open(wait=True)
         try:
-            await reset_db(pool)
+            bound = await reset_account_db(pool)
             tick_times: list[float] = []
             canary_task = asyncio.create_task(_canary(tick_times))
             block_start = time.monotonic()
-            response = await EXPORT_DATA(_request(pool), {"sub": "test"})
+            response = await EXPORT_DATA(_request(bound), {"sub": "test"})
             block_end = time.monotonic()
             canary_task.cancel()
             try:

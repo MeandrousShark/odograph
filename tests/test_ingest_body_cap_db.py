@@ -19,7 +19,8 @@ from fastapi import FastAPI
 
 from app.db import make_pool
 from app.ingest import FailedAuthLimiter, make_router
-from conftest import reset_db
+from conftest import reset_account_db
+from app.local_auth import hash_password
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -34,30 +35,37 @@ CAP = 200
 
 def _bare_app(pool) -> FastAPI:
     app = FastAPI()
-    app.state.pool = pool
+    app.state.control_pool = pool.runtime_pool
+    app.state.runtime_pool = pool.runtime_pool
     app.state.config = SimpleNamespace(
         ingest_username="owntracks",
         ingest_password="testpw",
         ingest_max_body_bytes=CAP,
     )
     app.state.ingest_limiter = FailedAuthLimiter(1000, 60.0)
-    app.state.detector_scheduler = SimpleNamespace(poke=lambda: None)
+    app.state.detector_scheduler = SimpleNamespace(poke=lambda *key: None)
     app.include_router(make_router())
     return app
 
 
 async def _scenario(coro) -> None:
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
+        async with pool.connection() as conn:
+            await conn.execute(
+                "INSERT INTO ingest_credentials (public_id,basic_username,secret_hash,account_id,kind) "
+                "VALUES ('test-legacy','owntracks',%s,%s,'legacy')",
+                (hash_password("testpw"), pool.principal.account_id),
+            )
         transport = httpx.ASGITransport(app=_bare_app(pool))
         async with httpx.AsyncClient(
             transport=transport, base_url="http://testserver"
         ) as client:
             await coro(pool, client)
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 async def _raw_message_count(pool) -> int:

@@ -17,7 +17,8 @@ from app.db import DETECTOR_ADVISORY_LOCK_KEY, make_pool
 from app.detector.core import Params
 from app.detector.runner import DetectorRunner, load_trip_points
 from app.ui import make_router
-from conftest import reset_db
+from conftest import reset_account_db, seed_tracking_device
+from app.account_context import account_id
 from tests.synth import Drive, Stationary, build_track
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -37,6 +38,7 @@ def _endpoint(path: str):
 
 def _request(pool, runner):
     return SimpleNamespace(
+        state=SimpleNamespace(account_pool=pool, detector_runner=runner),
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, detector_runner=runner,
             config=SimpleNamespace(detector_params=Params()),
@@ -46,19 +48,20 @@ def _request(pool, runner):
 
 
 async def _split_holds_lock_scenario() -> None:
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         pts = build_track([Stationary(1200), Drive(km=5, speed_kmh=50), Stationary(1800)])
         async with pool.connection() as conn:
+            stream = await seed_tracking_device(conn, DEVICE)
             for p in pts:
                 await conn.execute(
-                    "INSERT INTO points (device, recorded_at, received_at, geom, "
+                    "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, received_at, geom, "
                     " accuracy_m, velocity_kmh) "
-                    "VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, "
+                    "VALUES (%s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, "
                     "%s, %s)",
-                    (DEVICE, p.t, p.t, p.lon, p.lat, p.accuracy_m, p.velocity_kmh),
+                    (account_id(conn), stream, DEVICE, p.t, p.t, p.lon, p.lat, p.accuracy_m, p.velocity_kmh),
                 )
         runner = DetectorRunner(pool, Params())
         assert await runner.run_once() is True
@@ -124,7 +127,7 @@ async def _split_holds_lock_scenario() -> None:
             (count,) = await cur.fetchone()
         assert count == 2, "the split must have actually applied"
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_split_holds_advisory_lock_across_validation_and_override_write():
@@ -132,19 +135,20 @@ def test_split_holds_advisory_lock_across_validation_and_override_write():
 
 
 async def _split_reads_trip_fresh_under_lock_scenario() -> None:
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         pts = build_track([Stationary(1200), Drive(km=5, speed_kmh=50), Stationary(1800)])
         async with pool.connection() as conn:
+            stream = await seed_tracking_device(conn, DEVICE)
             for p in pts:
                 await conn.execute(
-                    "INSERT INTO points (device, recorded_at, received_at, geom, "
+                    "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, received_at, geom, "
                     " accuracy_m, velocity_kmh) "
-                    "VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, "
+                    "VALUES (%s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, "
                     "%s, %s)",
-                    (DEVICE, p.t, p.t, p.lon, p.lat, p.accuracy_m, p.velocity_kmh),
+                    (account_id(conn), stream, DEVICE, p.t, p.t, p.lon, p.lat, p.accuracy_m, p.velocity_kmh),
                 )
         runner = DetectorRunner(pool, Params())
         assert await runner.run_once() is True
@@ -190,7 +194,7 @@ async def _split_reads_trip_fresh_under_lock_scenario() -> None:
             await asyncio.wait_for(task, timeout=5)
         assert exc.value.status_code == 404
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_split_trip_rereads_trip_fresh_inside_advisory_lock():

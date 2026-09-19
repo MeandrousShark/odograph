@@ -41,9 +41,7 @@ def _request():
     # No pool/osrm_http_client: the route_mode label gate rejects a nonblank
     # label before add_manual_trip ever touches either, so a fake request
     # this bare is enough to prove it never reaches that code.
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-        config=SimpleNamespace(display_tz=TZ),
-    )))
+    return SimpleNamespace(state=SimpleNamespace(config=SimpleNamespace(display_tz=TZ)))
 
 
 async def _add(**overrides):

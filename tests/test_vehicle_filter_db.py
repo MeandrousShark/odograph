@@ -19,9 +19,11 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import personal_request
 from app.main import make_templates
 from app.ui import make_router
-from conftest import reset_db
+from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -43,37 +45,37 @@ EXPORT_TRIPS = _endpoint("/export", "GET")
 
 def _request(pool):
     config = SimpleNamespace(display_tz=TZ, trips_page_size=25, app_version="test")
-    return SimpleNamespace(
+    return personal_request(SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, templates=make_templates(config), config=config,
         )),
         session={"csrf": "test-csrf"},
-    )
+    ))
 
 
 async def _insert_trip(conn, started_at: datetime, notes: str, vehicle_id: int | None = None) -> int:
     cur = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, distance_m, notes, vehicle_id) "
-        "VALUES ('FLT', 'manual', %s, %s, 1000, %s, %s) RETURNING id",
-        (started_at, started_at + timedelta(minutes=10), notes, vehicle_id),
+        "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, notes, "
+        "vehicle_id) VALUES (%s, 'FLT', 'manual', %s, %s, 1000, %s, %s) RETURNING id",
+        (account_id(conn), started_at, started_at + timedelta(minutes=10), notes, vehicle_id,),
     )
     return (await cur.fetchone())[0]
 
 
 async def _scenario(check):
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             vehicle_id = (await (await conn.execute(
-                "INSERT INTO vehicles (name) VALUES ('Car') RETURNING id"
+                "INSERT INTO vehicles (account_id, name) VALUES (%s, 'Car') RETURNING id", (account_id(conn),)
             )).fetchone())[0]
             assigned_id = await _insert_trip(conn, T0, "assigned trip", vehicle_id=vehicle_id)
             unassigned_id = await _insert_trip(conn, T0 + timedelta(hours=1), "unassigned trip")
         await check(pool, assigned_id, unassigned_id)
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_trip_list_unassigned_filter_returns_only_null_vehicle_trips():

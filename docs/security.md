@@ -9,8 +9,11 @@ which data can leave your instance and under what configuration. This
 document is about who can reach the application and what it does with what
 they send it, not about outbound data flows.
 
-This is a single-user, self-hosted application. The threat model throughout
-assumes the person operating the instance is trusted and controls the host
+This remains a single-account, self-hosted application. Account ownership is
+explicit in queries and restricted database roles are active, but row-level
+security policies are only prepared, not enabled or forced. The singleton
+account guard remains and invitations are unavailable. This stage must not be
+operated as a multi-user service. The operator is trusted and controls the host
 and database; nothing here defends against a hostile operator.
 
 ## Trust boundaries
@@ -41,8 +44,8 @@ and database; nothing here defends against a hostile operator.
 - **Phone (OwnTracks).** The device posting location fixes is trusted with
   its own ingest credentials and nothing else. It has no access to the web
   UI, and a compromised phone can only inject or spoof its own location
-  history, not read anyone else's data (there is only one instance, and no
-  other data to read).
+  history, not read the ledger. An upgraded shared login can inject into
+  legacy streams within its owning account until converted or revoked.
 - **Optional external services.** OSRM, the geocoder, ntfy, and SMTP are all
   optional and, when configured, are treated as semi-trusted network peers:
   the application sends them the minimum data each needs to do its job (see
@@ -55,15 +58,19 @@ and database; nothing here defends against a hostile operator.
 
 Every network-reachable route, and what actually guards it:
 
-- **`/ingest`**: HTTP Basic auth against `INGEST_USERNAME`/`INGEST_PASSWORD`,
-  compared with a constant-time comparison. A failed attempt counts against a
-  per-IP limiter; once that IP is over its threshold, further attempts get a
-  bare `429` without touching the credential check again. A body over
-  `INGEST_MAX_BODY_BYTES` is dropped before it's parsed. Anything that
-  authenticates but fails to parse as a valid OwnTracks location fix is
-  accepted and silently dropped (HTTP `200`), never retried by the device and
-  never logged with its own content. This endpoint's job is to never make an
-  OwnTracks device loop on a poison payload.
+- **`/ingest`**: HTTP Basic auth resolves a durable, hashed credential to an
+  enabled account and stable device before accepting data. Credential and
+  device generation/revocation are checked again in the write transaction.
+  A new device's payload `tid` cannot select another device or account. Only
+  the migrated shared-login adapter uses its account's legacy alias map.
+  Environment credentials cannot restore a revoked or replaced login.
+  Authentication failures use the per-IP limiter. An authenticated sender
+  without an established account receives a retryable `503` and writes no
+  data. Oversized or malformed authenticated input retains the poison-message
+  acknowledgment behavior: `200` with an empty list, without logging the body.
+  This server response is not a measured guarantee of OwnTracks offline-queue
+  behavior; verify credential transitions on the real phone before retiring
+  its old setup.
 - **`/login`, `/login/local`**: the local-login form. `/login/local` checks
   the same per-IP limiter described in
   [Rate limiting](#rate-limiting-and-proxy-trust) before touching the
@@ -76,7 +83,7 @@ Every network-reachable route, and what actually guards it:
   creates the sole administrator. A database singleton constraint prevents a
   concurrent request or application bug from creating a second account. The
   durable account row closes both signup routes permanently.
-- **`/settings/account`**: requires an enabled administrator account session.
+- **`/settings/account`**: requires the caller's enabled account session.
   Password changes require the current password, matching new passwords, and
   a session-bound CSRF token. A successful change increments the account's
   authentication version, invalidating older sessions while issuing a fresh
@@ -85,9 +92,19 @@ Every network-reachable route, and what actually guards it:
   requires the current password and explicit confirmation, removes the stored
   identity, increments the authentication version, and clears the current
   session.
+- **`/settings/tracking`**: requires the caller's enabled account session and
+  form CSRF token for mutations. Device creation and password replacement
+  show the new secret once, use `no-store`, and preserve stable device history.
+  Conversion retires that stream's legacy aliases. Revocation persists across
+  restart. A submitted ID belonging to another account cannot select or mutate
+  its device or credential.
+- **`/settings/diagnostics/check`**: requires an administrator session and CSRF.
+  Shared service diagnostics are also visible only to the administrator;
+  personal device status remains available with the account's settings.
 - **`/account/establish`**: available only to the narrow legacy OIDC session
   used by an upgraded OIDC-only installation with no account and public signup
-  disabled. It creates local administrator credentials and links the current
+  disabled. That accountless session cannot access personal routes. It creates
+  local administrator credentials and links the current
   provider identity in one transaction. `ALLOWED_EMAIL`, when set, gates only
   entry into this one-time transition. The operator command is the safer
   alternative if the provider's trust boundary is too broad or unavailable.
@@ -118,14 +135,40 @@ requires an authenticated session, plus a matching `X-CSRF-Token` header on
 every state-changing htmx request or a matching hidden field on the plain
 login, signup, and Account Settings forms that can't set custom headers.
 
+## Database and browser isolation
+
+Startup closes the privileged migration/setup connection before serving
+requests. Identity operations use `odograph_control`; personal routes and
+workers use `odograph_runtime` with an immutable principal and transaction-local
+account context. Every personal query still filters ownership explicitly,
+because the prepared policies are disabled. Composite foreign keys reject
+cross-account references. The live role contract and saved credentials must
+validate exactly; there is no privileged fallback for failed startup checks.
+See [Database roles](configuration.md#account-ownership-and-database-roles).
+
+Private responses carry `Cache-Control: no-store`. HTMX history snapshots are
+disabled, and account-marker checks discard responses or reload old tabs after
+an account change. These are browser privacy defenses; server-side session and
+ownership checks remain authoritative. Accountless legacy sessions are limited
+to establishment and cannot reach personal data.
+
 ## Rate limiting and proxy trust
 
-Rate limiting is per-IP, in-memory, and counts failures only. A phone
-flushing a backlog of correct-credential requests, or a person typing their
-password right the first time, is never throttled. There are two limiters:
+Failure counters are per-IP and in-memory. There are two limiters:
 one dedicated to `/ingest`, and one shared by local credential checks,
 signup validation, and the OIDC callback, since they are the same shape of risk: an
 unauthenticated caller feeding the application plausible-looking credentials.
+The local credential limiter counts failures only; a person typing their
+password right the first time is not throttled.
+
+Ingest checks the client's failure window before credential verification.
+A blocked IP receives `429` with `Retry-After` without reading the body, even
+if the new request carries correct credentials. Each application process also
+allows at most two concurrent ingest verifications. When both slots are busy,
+additional requests receive `503` with `Retry-After: 1` before verification or
+body reads. Cancelling a request does not release its slot until verification
+finishes, and a completed failure still counts. Successful verification does
+not increment the failure counter; devices can retry after either limit clears.
 
 Both limiters key on `client_ip()`, which reads only the address Uvicorn's
 `--proxy-headers` handling has already normalized from a trusted proxy's
@@ -218,19 +261,19 @@ configuration files.
    time. `SESSION_SECRET` is safely regenerable at any time. See
    [Password recovery and session revocation](../README.md#password-recovery)
    for the account-level recovery commands and session behavior.
-   `INGEST_PASSWORD` is also safely regenerable, but every OwnTracks device
-   needs its stored password updated to match before it can post again.
+   Replace an issued device password in **Settings > Tracking** and update
+   that phone. Editing `INGEST_PASSWORD` after the one-time upgrade import
+   does not change the saved credential.
    `POSTGRES_PASSWORD` is fixed for the life of a given database volume.
    See [Protecting `.env`](backups.md#protecting-env) for what a lost or
    rotated value actually costs for each secret.
 
-6. **Treat the ingest credential like any other password, not like a
-   throwaway.** `INGEST_USERNAME`/`INGEST_PASSWORD` are checked with a
-   constant-time comparison and back a per-IP failure limiter, but they are
-   still a single shared Basic-auth credential known to every OwnTracks
-   device you configure. Give it real entropy, keep it out of shell history
-   and screenshots, and rotate it (updating every device's OwnTracks
-   configuration to match) if you ever suspect it leaked.
+6. **Treat each ingest credential like any other password.** Create separate
+   credentials in Tracking, keep the one-time secret out of shell history,
+   screenshots, and logs, and replace or revoke it if it leaks. A credential
+   can submit data for its owned device but cannot read the ledger. Move
+   upgraded devices off the migrated shared login and revoke it when all
+   remaining phones have their own credentials.
 
 7. **Keep account creation and recovery narrow.** Fresh generated
    configuration sets `INITIAL_ADMIN_SIGNUP=1`; the first account row closes
@@ -267,11 +310,13 @@ configuration files.
 
 10. **If a credential leaks, rotate it and understand exactly what that
     does and doesn't fix:**
-    - **`INGEST_PASSWORD`**: generate a new value, update it in `.env`,
-      recreate the app, and update every OwnTracks device's configuration to
-      match before it can post again. A leaked ingest credential lets
-      someone inject fabricated location fixes or read nothing (the
-      endpoint has no read path), but does not expose the web UI.
+    - **A device ingest password**: replace or revoke it in **Settings >
+      Tracking**, then update that phone. The old password stops immediately;
+      historical trips remain. For a migrated shared login, convert devices
+      to their own credentials and revoke the shared login. Editing the old
+      environment secret cannot rotate or restore the durable credential.
+      An ingest credential permits fabricated uploads, not ledger reads or
+      browser sign-in.
     - **`SESSION_SECRET`**: generate a new value and recreate the app. This
       immediately invalidates every existing signed session cookie,
       including your own, so everyone has to sign back in. It does not touch

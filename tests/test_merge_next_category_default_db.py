@@ -15,7 +15,7 @@ import asyncio
 import os
 import re
 from datetime import timezone
-from types import SimpleNamespace
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -24,12 +24,14 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import RedirectResponse
 
 from app.auth import AuthRedirect
+from app.config import Config
 from app.db import make_pool
 from app.detector.core import Params
 from app.detector.runner import DetectorRunner
 from app.main import make_templates
 from app.ui import make_router as make_ui_router
-from conftest import reset_db
+from conftest import reset_account_db, seed_tracking_device
+from app.account_context import account_id
 from tests.synth import Drive, Stationary, build_track
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -41,10 +43,13 @@ CSRF_RE = re.compile(r'X-CSRF-Token": "([^"]+)"')
 def _bare_app(pool) -> FastAPI:
     app = FastAPI()
     app.state.pool = pool
-    app.state.config = SimpleNamespace(
-        dev_no_auth=True, display_tz=timezone.utc,
-        geocode_provider=None, app_version="test", app_git_revision="test",
-    )
+    app.state.runtime_pool = app.state.control_pool = pool.runtime_pool
+    app.state.dev_principal = pool.principal
+    app.state.make_detector_runner = lambda bound: DetectorRunner(bound, Params())
+    with patch.dict(os.environ, {
+        "DATABASE_URL": TEST_DB, "SESSION_SECRET": "test-secret", "DEV_NO_AUTH": "1",
+    }, clear=True):
+        app.state.config = Config.from_env()
     app.state.templates = make_templates(app.state.config)
     app.add_middleware(SessionMiddleware, secret_key="test-secret", same_site="lax", https_only=False)
 
@@ -62,11 +67,12 @@ async def _csrf(client: httpx.AsyncClient) -> str:
 
 
 async def _insert_points(conn, points, device):
+    stream = await seed_tracking_device(conn, device)
     for point in points:
         await conn.execute(
-            "INSERT INTO points (device, recorded_at, received_at, geom, accuracy_m, velocity_kmh) "
-            "VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s)",
-            (device, point.t, point.t, point.lon, point.lat, point.accuracy_m, point.velocity_kmh),
+            "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, received_at, geom, accuracy_m, velocity_kmh) "
+            "VALUES (%s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s)",
+            (account_id(conn), stream, device, point.t, point.t, point.lon, point.lat, point.accuracy_m, point.velocity_kmh),
         )
 
 
@@ -80,10 +86,10 @@ async def _trips(conn, device):
 
 
 async def _scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         track = build_track([
             Stationary(900), Drive(km=2), Stationary(1200), Drive(km=2), Stationary(900),
         ])
@@ -139,7 +145,7 @@ async def _scenario():
             "a merge the user didn't ask to reclassify must not human-lock the result"
         )
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_merge_next_with_no_category_field_preserves_pre_merge_category():

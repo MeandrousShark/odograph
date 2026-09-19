@@ -20,11 +20,13 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import personal_request
 from app.main import make_templates
 from app.rates import deduction, load_rates
 from app.ui import make_router
 import app.ui.trips as trips_ui
-from conftest import reset_db
+from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -48,7 +50,7 @@ MONTH_PAGE = _endpoint("/trips/month/{year}/{month}", "GET")
 
 def _request(pool, page_size=25):
     config = SimpleNamespace(display_tz=TZ, trips_page_size=page_size, app_version="test")
-    return SimpleNamespace(
+    return personal_request(SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, templates=make_templates(config), config=config,
         )),
@@ -57,7 +59,7 @@ def _request(pool, page_size=25):
         # canonical URL is a new history entry; no header means no page
         # context, which is what a direct route call is.
         headers={},
-    )
+    ))
 
 
 async def _insert_trip(
@@ -72,16 +74,28 @@ async def _insert_trip(
     # ST_MakePoint is strict, so a NULL argument makes the whole geography
     # NULL rather than a point at (0, 0).
     cur = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, distance_m, notes, purpose, "
-        " category, vehicle_id, start_place_id, end_place_id, start_geom, end_geom, exclusion, "
-        " start_label, end_label) "
-        "VALUES ('FLT', 'manual', %s, %s, 1000, %s, %s, %s, %s, %s, %s, "
-        " ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, "
-        " ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s, %s) RETURNING id",
+        "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, notes, "
+        "purpose,  category, vehicle_id, start_place_id, end_place_id, start_geom, end_geom, "
+        "exclusion,  start_label, end_label) VALUES (%s, 'FLT', 'manual', %s, %s, 1000, %s, %s, %s,"
+        " %s, %s, %s,  ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,  "
+        "ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s, %s) RETURNING id",
         (
-            started_at, started_at + timedelta(minutes=10), notes, purpose, category,
-            vehicle_id, start_place_id, end_place_id, start_lon, start_lat, end_lon, end_lat,
-            exclusion, start_label, end_label,
+            account_id(conn),
+            started_at,
+            started_at + timedelta(minutes=10),
+            notes,
+            purpose,
+            category,
+            vehicle_id,
+            start_place_id,
+            end_place_id,
+            start_lon,
+            start_lat,
+            end_lon,
+            end_lat,
+            exclusion,
+            start_label,
+            end_label,
         ),
     )
     return (await cur.fetchone())[0]
@@ -89,22 +103,25 @@ async def _insert_trip(
 
 async def _insert_place(conn, name: str, lat: float, lon: float) -> int:
     cur = await conn.execute(
-        "INSERT INTO places (name, geom) VALUES "
-        "(%s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography) RETURNING id",
-        (name, lon, lat),
+        "INSERT INTO places (account_id, name, geom) VALUES (%s, %s, ST_SetSRID(ST_MakePoint(%s, "
+        "%s), 4326)::geography) RETURNING id",
+        (account_id(conn), name, lon, lat,),
     )
     return (await cur.fetchone())[0]
 
 
 async def _insert_geocode(conn, lat: float, lon: float, address: str) -> None:
     await conn.execute(
-        "INSERT INTO geocode_cache (lat, lon, address) VALUES (%s, %s, %s)",
-        (round(lat, 4), round(lon, 4), address),
+        'INSERT INTO geocode_cache (account_id, lat, lon, address) VALUES (%s, %s, %s, %s)',
+        (account_id(conn), round(lat, 4), round(lon, 4), address,),
     )
 
 
 async def _insert_vehicle(conn, name: str) -> int:
-    cur = await conn.execute("INSERT INTO vehicles (name) VALUES (%s) RETURNING id", (name,))
+    cur = await conn.execute('INSERT INTO vehicles (account_id, name) VALUES (%s, %s) RETURNING id', (
+                                                                                                         account_id(conn),
+                                                                                                         name,
+                                                                                                     ))
     return (await cur.fetchone())[0]
 
 
@@ -154,17 +171,17 @@ async def _month_page(pool, year, month, offset=0, q="", category="", from_="", 
 # --- B4.1: each searchable field individually (acceptance criteria 1, 8) ---
 
 async def _notes_field_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             target_id = await _insert_trip(conn, T0, notes="Picked up client Zephyr")
             await _insert_trip(conn, T0 + timedelta(hours=1), notes="Ordinary errand")
         response = await _archive(pool, q="zephyr")
         assert _trip_ids(response) == {target_id}
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_search_matches_notes_case_insensitively_and_on_substring():
@@ -172,17 +189,17 @@ def test_search_matches_notes_case_insensitively_and_on_substring():
 
 
 async def _purpose_field_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             target_id = await _insert_trip(conn, T0, purpose="Zephyr conference")
             await _insert_trip(conn, T0 + timedelta(hours=1), purpose="Weekly standup")
         response = await _archive(pool, q="ZEPHYR")
         assert _trip_ids(response) == {target_id}
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_search_matches_purpose_case_insensitively_and_on_substring():
@@ -190,10 +207,10 @@ def test_search_matches_purpose_case_insensitively_and_on_substring():
 
 
 async def _start_place_name_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             place_id = await _insert_place(conn, "Zephyr Depot", 40.0, -74.0)
             target_id = await _insert_trip(conn, T0, start_place_id=place_id)
@@ -201,7 +218,7 @@ async def _start_place_name_scenario():
         response = await _archive(pool, q="zephyr")
         assert _trip_ids(response) == {target_id}
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_search_matches_start_place_name():
@@ -209,10 +226,10 @@ def test_search_matches_start_place_name():
 
 
 async def _end_place_name_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             place_id = await _insert_place(conn, "Zephyr Warehouse", 40.1, -74.1)
             target_id = await _insert_trip(conn, T0, end_place_id=place_id)
@@ -220,7 +237,7 @@ async def _end_place_name_scenario():
         response = await _archive(pool, q="zephyr")
         assert _trip_ids(response) == {target_id}
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_search_matches_end_place_name():
@@ -228,10 +245,10 @@ def test_search_matches_end_place_name():
 
 
 async def _start_address_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             await _insert_geocode(conn, 40.0, -74.0, "1 Zephyr Ave")
             target_id = await _insert_trip(conn, T0, start_lat=40.0, start_lon=-74.0)
@@ -239,7 +256,7 @@ async def _start_address_scenario():
         response = await _archive(pool, q="zephyr")
         assert _trip_ids(response) == {target_id}
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_search_matches_start_cached_address():
@@ -247,10 +264,10 @@ def test_search_matches_start_cached_address():
 
 
 async def _end_address_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             await _insert_geocode(conn, 40.1, -74.1, "1 Zephyr Ave")
             target_id = await _insert_trip(conn, T0, end_lat=40.1, end_lon=-74.1)
@@ -258,7 +275,7 @@ async def _end_address_scenario():
         response = await _archive(pool, q="zephyr")
         assert _trip_ids(response) == {target_id}
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_search_matches_end_cached_address():
@@ -269,10 +286,10 @@ def test_search_matches_end_cached_address():
 # independently of each other and of the saved-place/address fields above ---
 
 async def _start_label_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             target_id = await _insert_trip(
                 conn, T0, start_lat=None, start_lon=None, start_label="Zephyr Cabin"
@@ -281,7 +298,7 @@ async def _start_label_scenario():
         response = await _archive(pool, q="ZEPHYR")
         assert _trip_ids(response) == {target_id}
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_search_matches_start_label_case_insensitively_and_on_substring():
@@ -289,10 +306,10 @@ def test_search_matches_start_label_case_insensitively_and_on_substring():
 
 
 async def _end_label_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             target_id = await _insert_trip(
                 conn, T0, end_lat=None, end_lon=None, end_label="Zephyr Trailhead"
@@ -301,7 +318,7 @@ async def _end_label_scenario():
         response = await _archive(pool, q="zephyr")
         assert _trip_ids(response) == {target_id}
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_search_matches_end_label_case_insensitively_and_on_substring():
@@ -312,10 +329,10 @@ def test_search_matches_end_label_case_insensitively_and_on_substring():
 # (acceptance criterion 2) ---
 
 async def _category_combination_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             business_id = await _insert_trip(conn, T0, notes="Zephyr run", category="business")
             personal_id = await _insert_trip(
@@ -329,7 +346,7 @@ async def _category_combination_scenario():
         response = await _archive(pool, q="zephyr", category="business")
         assert _trip_ids(response) == {business_id}
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_search_combines_with_category_filter_and_narrows():
@@ -337,10 +354,10 @@ def test_search_combines_with_category_filter_and_narrows():
 
 
 async def _date_range_combination_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             july_id = await _insert_trip(conn, T0, notes="Zephyr run")
             august_id = await _insert_trip(conn, T0 + timedelta(days=31), notes="Zephyr errand")
@@ -352,7 +369,7 @@ async def _date_range_combination_scenario():
         response = await _archive(pool, q="zephyr", from_="2026-07-01", to="2026-07-31")
         assert _trip_ids(response) == {july_id}
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_search_combines_with_date_range_filter_and_narrows():
@@ -360,10 +377,10 @@ def test_search_combines_with_date_range_filter_and_narrows():
 
 
 async def _vehicle_combination_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             truck_id = await _insert_vehicle(conn, "Truck")
             sedan_id = await _insert_vehicle(conn, "Sedan")
@@ -378,7 +395,7 @@ async def _vehicle_combination_scenario():
         response = await _archive(pool, q="zephyr", vehicle=str(truck_id))
         assert _trip_ids(response) == {truck_trip_id}
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_search_combines_with_vehicle_filter_and_narrows():
@@ -393,10 +410,10 @@ def test_search_combines_with_vehicle_filter_and_narrows():
 # parenthesis around the OR group would let slip through. ---
 
 async def _label_category_combination_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             business_id = await _insert_trip(
                 conn, T0, start_lat=None, start_lon=None, start_label="Zephyr Cabin",
@@ -413,7 +430,7 @@ async def _label_category_combination_scenario():
         response = await _archive(pool, q="zephyr", category="business")
         assert _trip_ids(response) == {business_id}
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_label_search_combines_with_category_filter_and_excludes_wrong_category():
@@ -421,10 +438,10 @@ def test_label_search_combines_with_category_filter_and_excludes_wrong_category(
 
 
 async def _label_date_range_combination_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             july_id = await _insert_trip(
                 conn, T0, start_lat=None, start_lon=None, start_label="Zephyr Cabin"
@@ -440,7 +457,7 @@ async def _label_date_range_combination_scenario():
         response = await _archive(pool, q="zephyr", from_="2026-07-01", to="2026-07-31")
         assert _trip_ids(response) == {july_id}
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_label_search_combines_with_date_range_filter_and_excludes_outside_range():
@@ -448,10 +465,10 @@ def test_label_search_combines_with_date_range_filter_and_excludes_outside_range
 
 
 async def _label_vehicle_combination_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             truck_id = await _insert_vehicle(conn, "Truck")
             sedan_id = await _insert_vehicle(conn, "Sedan")
@@ -470,7 +487,7 @@ async def _label_vehicle_combination_scenario():
         response = await _archive(pool, q="zephyr", vehicle=str(truck_id))
         assert _trip_ids(response) == {truck_trip_id}
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_label_search_combines_with_vehicle_filter_and_excludes_wrong_vehicle():
@@ -478,10 +495,10 @@ def test_label_search_combines_with_vehicle_filter_and_excludes_wrong_vehicle():
 
 
 async def _label_exclusion_combination_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             excluded_id = await _insert_trip(
                 conn, T0, start_lat=None, start_lon=None, start_label="Zephyr Cabin",
@@ -503,7 +520,7 @@ async def _label_exclusion_combination_scenario():
         response = await _archive(pool, q="zephyr", exclusion="none")
         assert _trip_ids(response) == {normal_id}
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_label_search_combines_with_exclusion_filter_and_excludes_wrong_exclusion():
@@ -514,10 +531,10 @@ def test_label_search_combines_with_exclusion_filter_and_excludes_wrong_exclusio
 # (acceptance criterion 3) ---
 
 async def _link_round_trip_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             await _insert_trip(conn, T0, notes="Zephyr run", category="business")
 
@@ -529,7 +546,7 @@ async def _link_round_trip_scenario():
         assert ctx["months"], "expected at least one month bucket"
         assert "q=zephyr" in ctx["months"][0]["next_url"]
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_search_term_survives_filter_export_review_and_month_pagination_links():
@@ -537,10 +554,10 @@ def test_search_term_survives_filter_export_review_and_month_pagination_links():
 
 
 async def _export_parity_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             await _insert_trip(conn, T0, notes="Zephyr run")
             await _insert_trip(conn, T0 + timedelta(hours=1), notes="Unrelated")
@@ -558,7 +575,7 @@ async def _export_parity_scenario():
 
         assert archive_notes == export_notes == {"Zephyr run"}
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_export_taken_with_search_active_matches_what_is_on_screen():
@@ -568,10 +585,10 @@ def test_export_taken_with_search_active_matches_what_is_on_screen():
 # --- B4.2: literal wildcard characters (acceptance criterion 6) ---
 
 async def _percent_wildcard_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             target_id = await _insert_trip(conn, T0, notes="50% off parking")
             await _insert_trip(conn, T0 + timedelta(hours=1), notes="No percent sign here")
@@ -580,7 +597,7 @@ async def _percent_wildcard_scenario():
         response = await _archive(pool, q="%")
         assert _trip_ids(response) == {target_id}
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_search_term_matches_a_literal_percent_sign():
@@ -588,10 +605,10 @@ def test_search_term_matches_a_literal_percent_sign():
 
 
 async def _underscore_wildcard_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             # Unescaped, "_" matches any single character, so an unescaped
             # search for "a1_b2" would also match "a1Xb2".
@@ -601,7 +618,7 @@ async def _underscore_wildcard_scenario():
         response = await _archive(pool, q="a1_b2")
         assert _trip_ids(response) == {target_id}
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_search_term_matches_a_literal_underscore():
@@ -609,10 +626,10 @@ def test_search_term_matches_a_literal_underscore():
 
 
 async def _backslash_wildcard_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             target_id = await _insert_trip(conn, T0, notes=r"C:\Users\driver\route")
             await _insert_trip(conn, T0 + timedelta(hours=1), notes="Unrelated route notes")
@@ -620,7 +637,7 @@ async def _backslash_wildcard_scenario():
         response = await _archive(pool, q=r"Users\driver")
         assert _trip_ids(response) == {target_id}
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_search_term_matches_a_literal_backslash():
@@ -632,10 +649,10 @@ def test_search_term_matches_a_literal_backslash():
 # label are matched literally rather than as ILIKE metacharacters. ---
 
 async def _label_percent_wildcard_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             target_id = await _insert_trip(
                 conn, T0, start_lat=None, start_lon=None, start_label="50% Off Storage"
@@ -649,7 +666,7 @@ async def _label_percent_wildcard_scenario():
         response = await _archive(pool, q="%")
         assert _trip_ids(response) == {target_id}
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_label_search_matches_a_literal_percent_sign():
@@ -657,10 +674,10 @@ def test_label_search_matches_a_literal_percent_sign():
 
 
 async def _label_underscore_wildcard_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             # Unescaped, "_" matches any single character, so an unescaped
             # search for "a1_b2" would also match "a1Xb2".
@@ -675,7 +692,7 @@ async def _label_underscore_wildcard_scenario():
         response = await _archive(pool, q="a1_b2")
         assert _trip_ids(response) == {target_id}
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_label_search_matches_a_literal_underscore():
@@ -686,10 +703,10 @@ def test_label_search_matches_a_literal_underscore():
 # 5 and 9: the response contract, including exact URLs, is unchanged) ---
 
 async def _empty_and_whitespace_term_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             first_id = await _insert_trip(conn, T0, notes="Alpha")
             second_id = await _insert_trip(conn, T0 + timedelta(hours=1), notes="Beta")
@@ -711,7 +728,7 @@ async def _empty_and_whitespace_term_scenario():
         assert "q=" not in unfiltered.context["review_url"]
         assert "q=" not in whitespace.context["review_url"]
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_empty_or_whitespace_only_term_is_treated_as_no_search():
@@ -722,10 +739,10 @@ def test_empty_or_whitespace_only_term_is_treated_as_no_search():
 # over the filtered set (acceptance criterion 4) ---
 
 async def _month_and_pagination_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             july_a = await _insert_trip(conn, T0, notes="Zephyr run", category="business")
             july_b = await _insert_trip(
@@ -763,7 +780,7 @@ async def _month_and_pagination_scenario():
         assert august["trip_count"] == 1
         assert {t["id"] for t in august["trips"]} == {august_id}
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_search_narrows_month_grouping_totals_deduction_and_pagination():
@@ -778,10 +795,10 @@ async def _month_aggregate_exclusion_scenario():
     # total distance, or that any excluded trip drops out of its business
     # distance, so a regression in that shared SQL would slip past every
     # other test in the suite.
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             counted_id = await _insert_trip(
                 conn, T0, category="business", notes="Counted",
@@ -808,7 +825,7 @@ async def _month_aggregate_exclusion_scenario():
         assert july["business_m"] == pytest.approx(1000.0)
         assert _trip_ids(response) == {counted_id, not_my_vehicle_id, not_deductible_id}
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_month_aggregate_excludes_not_my_vehicle_from_total_and_any_exclusion_from_business():
@@ -816,10 +833,10 @@ def test_month_aggregate_excludes_not_my_vehicle_from_total_and_any_exclusion_fr
 
 
 async def _archive_list_parity_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             vehicle_id = await _insert_vehicle(conn, "Archive car")
             july_id = await _insert_trip(
@@ -887,7 +904,7 @@ async def _archive_list_parity_scenario():
         assert 'id="trip-archive-export-links"' in partial.body.decode()
         assert 'id="trip-archive-ytd" hx-swap-oob="outerHTML"' in partial.body.decode()
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_partial_archive_matches_full_page_rows_summaries_and_exports():
@@ -895,17 +912,17 @@ def test_partial_archive_matches_full_page_rows_summaries_and_exports():
 
 
 async def _archive_list_empty_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         response = await _archive_list(pool, q="does-not-exist")
         assert response.context["months"] == []
         body = response.body.decode()
         assert "No trips match the current filters." in body
         assert 'id="trip-archive-ytd" hx-swap-oob="outerHTML"' in body
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_partial_archive_distinguishes_empty_filtered_result():
@@ -913,8 +930,8 @@ def test_partial_archive_distinguishes_empty_filtered_result():
 
 
 async def _archive_list_no_page_only_lookup_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     old_recent_purposes = trips_ui._fetch_recent_purposes
 
     async def fail(*args, **kwargs):
@@ -922,12 +939,12 @@ async def _archive_list_no_page_only_lookup_scenario():
 
     trips_ui._fetch_recent_purposes = fail
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         response = await _archive_list(pool)
         assert response.context["months"] == []
     finally:
         trips_ui._fetch_recent_purposes = old_recent_purposes
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_partial_archive_skips_full_page_recent_purpose_lookup():
@@ -935,10 +952,10 @@ def test_partial_archive_skips_full_page_recent_purpose_lookup():
 
 
 async def _archive_list_depth_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             july_ids = [
                 await _insert_trip(conn, T0 + timedelta(hours=offset), notes=f"July {offset}")
@@ -984,7 +1001,7 @@ async def _archive_list_depth_scenario():
             & {trip["id"] for trip in august_page.context["trips"]}
         )
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_partial_archive_keeps_validated_loaded_month_depth_and_next_offset():

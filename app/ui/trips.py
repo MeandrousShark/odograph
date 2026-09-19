@@ -11,6 +11,7 @@ from psycopg import errors
 from psycopg.rows import dict_row
 from starlette.responses import JSONResponse, RedirectResponse, Response
 
+from app.account_context import account_id
 from app.auth import require_csrf, require_user
 from app.page import render_page
 from app.dashboard import parse_week_anchor
@@ -64,7 +65,7 @@ def _normalize_dashboard_week(request: Request, dashboard_week: str) -> str:
     """
     if not dashboard_week:
         return ""
-    tz = request.app.state.config.display_tz
+    tz = request.state.config.display_tz
     now = datetime.now(tz)
     return parse_week_anchor(dashboard_week, tz, now).isoformat()
 
@@ -86,7 +87,7 @@ async def _fetch_month_page(
     """Fetch one stable local-month page plus a one-row `has_more` sentinel."""
     month_start, month_end = _month_bounds(year, month, tz)
     where, params = _trip_filter_sql(
-        category, from_dt, to_dt, vehicle_id, q=q, exclusion=exclusion
+        category, from_dt, to_dt, vehicle_id, q=q, exclusion=exclusion, owner_id=account_id(conn)
     )
     where += " AND" if where else "WHERE"
     where += " started_at >= %s AND started_at < %s"
@@ -175,8 +176,8 @@ async def _fetch_trip_expenses(conn, trip_id: int, tz: ZoneInfo) -> list[dict]:
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         _EXPENSE_SELECT_JOIN
-        + "WHERE expenses.trip_id = %s ORDER BY expenses.incurred_on DESC, expenses.id DESC",
-        (trip_id,),
+        + "WHERE expenses.trip_id = %s AND expenses.account_id = %s ORDER BY expenses.incurred_on DESC, expenses.id DESC",
+        (trip_id, account_id(conn)),
     )
     return [_annotate_expense(row, tz) for row in await cur.fetchall()]
 
@@ -196,24 +197,24 @@ async def _delete_trip_in(conn, trip_id: int) -> tuple[datetime, int]:
         "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
     )
     cur = await conn.execute(
-        "SELECT device, source::text, started_at, ended_at "
-        "FROM trips WHERE id = %s FOR UPDATE",
-        (trip_id,),
+        "SELECT device, tracking_device_id, source::text, imported, started_at, ended_at "
+        "FROM trips WHERE id = %s AND account_id = %s FOR UPDATE",
+        (trip_id, account_id(conn)),
     )
     trip = await cur.fetchone()
     if not trip:
         raise HTTPException(status_code=404, detail="No such trip")
-    device, source, started_at, ended_at = trip
-    if source == "manual":
-        await conn.execute("DELETE FROM trips WHERE id = %s", (trip_id,))
+    device, tracking_device_id, source, imported, started_at, ended_at = trip
+    if source == "manual" or imported:
+        await conn.execute("DELETE FROM trips WHERE id = %s AND account_id = %s", (trip_id, account_id(conn)))
     else:
         await conn.execute(
             "INSERT INTO trip_boundary_overrides "
-            "(device, kind, range_start, range_end) "
-            "VALUES (%s, 'discard', %s, %s) ON CONFLICT DO NOTHING",
-            (device, started_at, ended_at),
+            "(account_id, tracking_device_id, device, kind, range_start, range_end) "
+            "VALUES (%s, %s, %s, 'discard', %s, %s) ON CONFLICT DO NOTHING",
+            (account_id(conn), tracking_device_id, device, started_at, ended_at),
         )
-        await conn.execute("DELETE FROM trips WHERE id = %s", (trip_id,))
+        await conn.execute("DELETE FROM trips WHERE id = %s AND account_id = %s", (trip_id, account_id(conn)))
     return started_at, trip_id
 
 
@@ -224,7 +225,7 @@ async def _trip_position(conn, trip_id: int) -> tuple[datetime, int] | None:
     callers fall back to no cursor, restarting from the oldest trip rather
     than 404ing.
     """
-    cur = await conn.execute("SELECT started_at FROM trips WHERE id = %s", (trip_id,))
+    cur = await conn.execute("SELECT started_at FROM trips WHERE id = %s AND account_id = %s", (trip_id, account_id(conn)))
     row = await cur.fetchone()
     return (row[0], trip_id) if row else None
 
@@ -248,14 +249,14 @@ async def _apply_human_tag(
     if update_purpose:
         cur = await conn.execute(
             "UPDATE trips SET category = %s, purpose = %s, tag_source = 'human', "
-            "updated_at = now() WHERE id = %s",
-            (category, (purpose or "").strip() or None, trip_id),
+            "updated_at = now() WHERE id = %s AND account_id = %s",
+            (category, (purpose or "").strip() or None, trip_id, account_id(conn)),
         )
     else:
         cur = await conn.execute(
             "UPDATE trips SET category = %s, tag_source = 'human', updated_at = now() "
-            "WHERE id = %s",
-            (category, trip_id),
+            "WHERE id = %s AND account_id = %s",
+            (category, trip_id, account_id(conn)),
         )
     if cur.rowcount == 0:
         raise HTTPException(status_code=404, detail="No such trip")
@@ -305,7 +306,7 @@ async def _fetch_month_summary(
     hollow one.
     """
     month_start, month_end = _month_bounds(year, month, tz)
-    where, params = _trip_filter_sql(category, from_dt, to_dt, vehicle_id, q=q, exclusion=exclusion)
+    where, params = _trip_filter_sql(category, from_dt, to_dt, vehicle_id, q=q, exclusion=exclusion, owner_id=account_id(conn))
     where += " AND" if where else "WHERE"
     where += " started_at >= %s AND started_at < %s"
     params.extend((month_start, month_end))
@@ -334,10 +335,10 @@ async def _fetch_ytd_deduction(conn, tz: ZoneInfo, rates) -> tuple[int, float | 
     cur = await conn.execute(
         "SELECT EXTRACT(MONTH FROM started_at AT TIME ZONE %s)::int AS m,"
         f" COALESCE(SUM({DISPLAY_DISTANCE_SQL}), 0) FROM trips"
-        " WHERE category = 'business' AND exclusion IS NULL "
+        " WHERE account_id = %s AND category = 'business' AND exclusion IS NULL "
         "AND started_at >= %s AND started_at < %s"
         " GROUP BY m",
-        (tz.key, year_start, next_year_start),
+        (tz.key, account_id(conn), year_start, next_year_start),
     )
     ytd_by_month = [(r[0], r[1]) for r in await cur.fetchall()]
     return ytd_year, sum_month_deductions(ytd_by_month, ytd_year, rates)
@@ -537,20 +538,21 @@ async def _fetch_archive_context(
     while the dedicated manual page owns its own place lookup.
     """
     exclusion = exclusion if isinstance(exclusion, str) else ""
-    tz = request.app.state.config.display_tz
+    tz = request.state.config.display_tz
     from_, to, resolved_date_preset = _resolve_archive_date_filter(
         from_, to, date_preset, tz,
     )
     from_dt, to_dt = parse_date_range(from_, to, tz)
     vehicle_id = _parse_vehicle_id(vehicle)
     where, params = _trip_filter_sql(
-        category, from_dt, to_dt, vehicle_id, q=q, exclusion=exclusion
+        category, from_dt, to_dt, vehicle_id, q=q, exclusion=exclusion,
+        owner_id=request.state.principal.account_id,
     )
-    page_size = request.app.state.config.trips_page_size
+    page_size = request.state.config.trips_page_size
     depths = _parse_archive_loaded_depth(loaded_depth, page_size)
     max_depth = max([page_size, *depths.values()])
 
-    async with request.app.state.pool.connection() as conn:
+    async with request.state.account_pool.connection() as conn:
         aggregate_cur = conn.cursor(row_factory=dict_row)
         await aggregate_cur.execute(
             "SELECT date_trunc('month', started_at AT TIME ZONE %s)::date AS local_month, "
@@ -776,16 +778,16 @@ def register_archive(router: APIRouter) -> None:
             exact snapshot even if the rows no longer match these filters.
             """
             exclusion = exclusion if isinstance(exclusion, str) else ""
-            tz = request.app.state.config.display_tz
+            tz = request.state.config.display_tz
             from_, to, _ = _resolve_archive_date_filter(
                 from_, to, date_preset, tz,
             )
             from_dt, to_dt = parse_date_range(from_, to, tz)
             where, params = _trip_filter_sql(
                 category, from_dt, to_dt, _parse_vehicle_id(vehicle),
-                q=q, exclusion=exclusion,
+                q=q, exclusion=exclusion, owner_id=request.state.principal.account_id,
             )
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 cur = await conn.execute(
                     f"SELECT id FROM trips {where} ORDER BY started_at DESC, id DESC",
                     params,
@@ -813,10 +815,10 @@ def register_month_page(router: APIRouter) -> None:
             exclusion: str = Query(""),
         ):
             exclusion = exclusion if isinstance(exclusion, str) else ""
-            tz = request.app.state.config.display_tz
-            page_size = request.app.state.config.trips_page_size
+            tz = request.state.config.display_tz
+            page_size = request.state.config.trips_page_size
             from_dt, to_dt = parse_date_range(from_, to, tz)
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 trips, has_more = await _fetch_month_page(
                     conn, tz, year, month, page_size, offset, category,
                     from_dt, to_dt, _parse_vehicle_id(vehicle), q, exclusion,
@@ -848,7 +850,7 @@ def register(router: APIRouter) -> None:
             dashboard_week: Annotated[str, Query()] = "",
         ):
             dashboard_week = _normalize_dashboard_week(request, dashboard_week)
-            ctx = await _fetch_trip_card_context(request.app.state.pool, trip_id)
+            ctx = await _fetch_trip_card_context(request.state.account_pool, trip_id)
             if dashboard_week:
                 ctx["dashboard_week"] = dashboard_week
                 return request.app.state.templates.TemplateResponse(
@@ -864,9 +866,9 @@ def register(router: APIRouter) -> None:
             dashboard_week: Annotated[str, Query()] = "",
         ):
             dashboard_week = _normalize_dashboard_week(request, dashboard_week)
-            ctx = await _fetch_trip_card_context(request.app.state.pool, trip_id)
+            ctx = await _fetch_trip_card_context(request.state.account_pool, trip_id)
             ctx.update({
-                "values": _trip_edit_values(ctx["trip"], request.app.state.config.display_tz),
+                "values": _trip_edit_values(ctx["trip"], request.state.config.display_tz),
                 "errors": {},
             })
             if dashboard_week:
@@ -927,9 +929,9 @@ def register(router: APIRouter) -> None:
 
             normalized_purpose = purpose.strip() or None
             normalized_notes = notes.strip() or None
-            pool = request.app.state.pool
+            pool = request.state.account_pool
             try:
-                async with request.app.state.pool.connection() as conn:
+                async with request.state.account_pool.connection() as conn:
                     async with conn.transaction():
                         cur = conn.cursor(row_factory=dict_row)
                         await cur.execute(
@@ -937,8 +939,8 @@ def register(router: APIRouter) -> None:
                             "tag_source::text AS tag_source, start_place_id, end_place_id, "
                             "start_geom IS NOT NULL AS has_start_geom, "
                             "end_geom IS NOT NULL AS has_end_geom "
-                            "FROM trips WHERE id = %s FOR UPDATE",
-                            (trip_id,),
+                            "FROM trips WHERE id = %s AND account_id = %s FOR UPDATE",
+                            (trip_id, account_id(conn)),
                         )
                         stored = await cur.fetchone()
                         if stored is None:
@@ -946,7 +948,7 @@ def register(router: APIRouter) -> None:
 
                         if parsed_vehicle_id is not None and "vehicle_id" not in field_errors:
                             vehicle_cur = await conn.execute(
-                                "SELECT 1 FROM vehicles WHERE id = %s", (parsed_vehicle_id,)
+                                "SELECT 1 FROM vehicles WHERE id = %s AND account_id = %s", (parsed_vehicle_id, account_id(conn))
                             )
                             if await vehicle_cur.fetchone() is None:
                                 field_errors["vehicle_id"] = "Choose a vehicle that still exists."
@@ -1002,7 +1004,7 @@ def register(router: APIRouter) -> None:
                             try:
                                 manual_values = parse_manual_trip_input(
                                     date, start_time, end_time, distance,
-                                    request.app.state.config.display_tz,
+                                    request.state.config.display_tz,
                                 )
                             except ManualTripValidationError as exc:
                                 field_errors.update(exc.errors)
@@ -1032,20 +1034,20 @@ def register(router: APIRouter) -> None:
                                     "UPDATE trips SET started_at = %s, ended_at = %s, distance_m = %s, "
                                     "category = %s, exclusion = %s, purpose = %s, notes = %s, vehicle_id = %s"
                                     + "".join(f", {clause}" for clause in label_clauses)
-                                    + ", tag_source = %s, updated_at = now() WHERE id = %s",
+                                    + ", tag_source = %s, updated_at = now() WHERE id = %s AND account_id = %s",
                                     (*manual_values, category, exclusion or None,
                                      normalized_purpose, normalized_notes,
                                      parsed_vehicle_id,
                                      *label_params,
-                                     tag_source, trip_id),
+                                     tag_source, trip_id, account_id(conn)),
                                 )
                             else:
                                 await conn.execute(
                                     "UPDATE trips SET category = %s, exclusion = %s, purpose = %s, notes = %s, "
-                                    "vehicle_id = %s, tag_source = %s, updated_at = now() WHERE id = %s",
+                                    "vehicle_id = %s, tag_source = %s, updated_at = now() WHERE id = %s AND account_id = %s",
                                     (category, exclusion or None, normalized_purpose, normalized_notes,
                                      parsed_vehicle_id,
-                                     tag_source, trip_id),
+                                     tag_source, trip_id, account_id(conn)),
                                 )
                         except errors.ForeignKeyViolation:
                             raise ManualTripValidationError(
@@ -1083,11 +1085,11 @@ def register(router: APIRouter) -> None:
         ):
             if exclusion and exclusion not in EXCLUSIONS:
                 raise HTTPException(status_code=400, detail="Unknown exclusion")
-            pool = request.app.state.pool
+            pool = request.state.account_pool
             async with pool.connection() as conn:
                 cur = await conn.execute(
-                    "UPDATE trips SET exclusion = %s, updated_at = now() WHERE id = %s",
-                    (exclusion or None, trip_id),
+                    "UPDATE trips SET exclusion = %s, updated_at = now() WHERE id = %s AND account_id = %s",
+                    (exclusion or None, trip_id, account_id(conn)),
                 )
                 if cur.rowcount == 0:
                     raise HTTPException(status_code=404, detail="No such trip")
@@ -1112,12 +1114,12 @@ def register(router: APIRouter) -> None:
             incurred_on: str = Form(""),
             user: dict = Depends(require_user),
         ):
-            tz = request.app.state.config.display_tz
-            async with request.app.state.pool.connection() as conn:
+            tz = request.state.config.display_tz
+            async with request.state.account_pool.connection() as conn:
                 cur = conn.cursor(row_factory=dict_row)
                 await cur.execute(
-                    "SELECT vehicle_id, started_at FROM trips WHERE id = %s FOR UPDATE",
-                    (trip_id,),
+                    "SELECT vehicle_id, started_at FROM trips WHERE id = %s AND account_id = %s FOR UPDATE",
+                    (trip_id, account_id(conn)),
                 )
                 trip = await cur.fetchone()
                 if trip is None:
@@ -1133,10 +1135,10 @@ def register(router: APIRouter) -> None:
                 notes_value = notes if isinstance(notes, str) else ""
                 await conn.execute(
                     "INSERT INTO expenses "
-                    "(vehicle_id, incurred_on, category, amount, treatment, notes, trip_id) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    "(account_id, vehicle_id, incurred_on, category, amount, treatment, notes, trip_id) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                     (
-                        trip["vehicle_id"], local_date, category, parsed_amount, treatment,
+                        account_id(conn), trip["vehicle_id"], local_date, category, parsed_amount, treatment,
                         notes_value.strip() or None, trip_id,
                     ),
                 )
@@ -1147,7 +1149,7 @@ def register(router: APIRouter) -> None:
 
         @router.get("/trips/{trip_id}")
         async def trip_detail(request: Request, trip_id: int, user: dict = Depends(require_user)):
-            pool = request.app.state.pool
+            pool = request.state.account_pool
             trip = await _fetch_trip(pool, trip_id)
             path_geojson = None
             path_snapped_geojson = None
@@ -1155,11 +1157,11 @@ def register(router: APIRouter) -> None:
             has_next_trip = False
             has_prev_trip = False
             expenses = []
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 vehicles = await list_vehicles(conn)
                 recent_purposes = await _fetch_recent_purposes(conn)
                 expenses = await _fetch_trip_expenses(
-                    conn, trip_id, request.app.state.config.display_tz
+                    conn, trip_id, request.state.config.display_tz
                 )
                 # A routed manual trip has a real `path` too (see add_manual_trip),
                 # so it needs the same geometry fetch a detected trip gets; the
@@ -1168,7 +1170,7 @@ def register(router: APIRouter) -> None:
                 if trip["source"] == "detected" or trip["has_route_geometry"]:
                     cur = await conn.execute(
                         "SELECT ST_AsGeoJSON(path), ST_AsGeoJSON(path_snapped) "
-                        "FROM trips WHERE id = %s", (trip_id,)
+                        "FROM trips WHERE id = %s AND account_id = %s", (trip_id, account_id(conn))
                     )
                     row = await cur.fetchone()
                     path_geojson = row[0] if row else None
@@ -1176,19 +1178,19 @@ def register(router: APIRouter) -> None:
                 if trip["source"] == "detected":
                     cur = await conn.execute(
                         "SELECT ST_AsGeoJSON(centroid::geometry) FROM stays "
-                        "WHERE device = %s AND (ended_at = %s OR started_at = %s)",
-                        (trip["device"], trip["started_at"], trip["ended_at"]),
+                        "WHERE account_id = %s AND tracking_device_id = %s AND (ended_at = %s OR started_at = %s)",
+                        (account_id(conn), trip["tracking_device_id"], trip["started_at"], trip["ended_at"]),
                     )
                     stay_centroids = [json.loads(r[0]) for r in await cur.fetchall()]
                     # Merge buttons only render when a genuine adjacent
                     # detected trip exists for this device.
                     cur = await conn.execute(
-                        "SELECT EXISTS (SELECT 1 FROM trips WHERE device = %s "
+                        "SELECT EXISTS (SELECT 1 FROM trips WHERE account_id = %s AND tracking_device_id = %s "
                         " AND source = 'detected' AND NOT imported AND started_at > %s), "
-                        "EXISTS (SELECT 1 FROM trips WHERE device = %s "
+                        "EXISTS (SELECT 1 FROM trips WHERE account_id = %s AND tracking_device_id = %s "
                         " AND source = 'detected' AND NOT imported AND started_at < %s)",
-                        (trip["device"], trip["started_at"],
-                         trip["device"], trip["started_at"]),
+                        (account_id(conn), trip["tracking_device_id"], trip["started_at"],
+                         account_id(conn), trip["tracking_device_id"], trip["started_at"]),
                     )
                     has_next_trip, has_prev_trip = await cur.fetchone()
 
@@ -1203,7 +1205,7 @@ def register(router: APIRouter) -> None:
                     "stay_centroids": json.dumps(stay_centroids),
                     "has_next_trip": has_next_trip,
                     "has_prev_trip": has_prev_trip,
-                    "min_trip_distance_m": request.app.state.config.detector_params.min_trip_distance_m,
+                    "min_trip_distance_m": request.state.config.detector_params.min_trip_distance_m,
                     "categories": CATEGORIES,
                     "expenses": expenses,
                     "expense_categories": EXPENSE_CATEGORIES,
@@ -1232,7 +1234,7 @@ def register(router: APIRouter) -> None:
             }
             field_errors: dict[str, str] = {}
             normalized_labels: dict[str, str | None] = {}
-            pool = request.app.state.pool
+            pool = request.state.account_pool
             try:
                 async with pool.connection() as conn:
                     async with conn.transaction():
@@ -1241,8 +1243,8 @@ def register(router: APIRouter) -> None:
                             "SELECT source::text AS source, start_place_id, end_place_id, "
                             "start_geom IS NOT NULL AS has_start_geom, "
                             "end_geom IS NOT NULL AS has_end_geom "
-                            "FROM trips WHERE id = %s FOR UPDATE",
-                            (trip_id,),
+                            "FROM trips WHERE id = %s AND account_id = %s FOR UPDATE",
+                            (trip_id, account_id(conn)),
                         )
                         stored = await cur.fetchone()
                         if stored is None:
@@ -1290,8 +1292,8 @@ def register(router: APIRouter) -> None:
                             await conn.execute(
                                 "UPDATE trips SET "
                                 + ", ".join(label_clauses)
-                                + ", updated_at = now() WHERE id = %s",
-                                (*label_params, trip_id),
+                                + ", updated_at = now() WHERE id = %s AND account_id = %s",
+                                (*label_params, trip_id, account_id(conn)),
                             )
             except ManualTripValidationError as exc:
                 trip = await _fetch_trip(pool, trip_id)
@@ -1316,8 +1318,8 @@ def register(router: APIRouter) -> None:
         ):
             if category not in CATEGORIES:
                 raise HTTPException(status_code=400, detail="Unknown category")
-            pool = request.app.state.pool
-            async with request.app.state.pool.connection() as conn:
+            pool = request.state.account_pool
+            async with request.state.account_pool.connection() as conn:
                 await _apply_human_tag(conn, trip_id, category)
             if dashboard_week:
                 # Importing here avoids coupling the trips module's import
@@ -1325,7 +1327,7 @@ def register(router: APIRouter) -> None:
                 from app.dashboard import parse_week_anchor
                 from app.ui.stats import _build_week_dashboard_context
 
-                tz = request.app.state.config.display_tz
+                tz = request.state.config.display_tz
                 now = datetime.now(tz)
                 anchor = parse_week_anchor(dashboard_week, tz, now)
                 dashboard_context = await _build_week_dashboard_context(request, anchor, now)
@@ -1366,8 +1368,8 @@ def register(router: APIRouter) -> None:
                     )
                 )
 
-            tz = request.app.state.config.display_tz
-            async with request.app.state.pool.connection() as conn:
+            tz = request.state.config.display_tz
+            async with request.state.account_pool.connection() as conn:
                 rates = await load_rates(conn)
                 local_started_at = ctx["trip"]["started_at"].astimezone(tz)
                 from_dt, to_dt = parse_date_range(
@@ -1399,11 +1401,11 @@ def register(router: APIRouter) -> None:
             notes: str = Form(""),
             user: dict = Depends(require_user),
         ):
-            pool = request.app.state.pool
-            async with request.app.state.pool.connection() as conn:
+            pool = request.state.account_pool
+            async with request.state.account_pool.connection() as conn:
                 await conn.execute(
-                    "UPDATE trips SET notes = %s, updated_at = now() WHERE id = %s",
-                    (notes.strip() or None, trip_id),
+                    "UPDATE trips SET notes = %s, updated_at = now() WHERE id = %s AND account_id = %s",
+                    (notes.strip() or None, trip_id, account_id(conn)),
                 )
             ctx = await _fetch_trip_card_context(pool, trip_id)
             return _mark_archive_write(
@@ -1419,12 +1421,12 @@ def register(router: APIRouter) -> None:
             purpose: str = Form(""),
             user: dict = Depends(require_user),
         ):
-            pool = request.app.state.pool
-            async with request.app.state.pool.connection() as conn:
+            pool = request.state.account_pool
+            async with request.state.account_pool.connection() as conn:
                 cur = await conn.execute(
                     "UPDATE trips SET purpose = %s, tag_source = 'human', updated_at = now() "
-                    "WHERE id = %s",
-                    (purpose.strip() or None, trip_id),
+                    "WHERE id = %s AND account_id = %s",
+                    (purpose.strip() or None, trip_id, account_id(conn)),
                 )
                 if cur.rowcount == 0:
                     raise HTTPException(status_code=404, detail="No such trip")
@@ -1443,12 +1445,12 @@ def register(router: APIRouter) -> None:
             user: dict = Depends(require_user),
         ):
             parsed_vehicle_id = _parse_vehicle_form(vehicle_id)
-            pool = request.app.state.pool
-            async with request.app.state.pool.connection() as conn:
+            pool = request.state.account_pool
+            async with request.state.account_pool.connection() as conn:
                 try:
                     await conn.execute(
-                        "UPDATE trips SET vehicle_id = %s, updated_at = now() WHERE id = %s",
-                        (parsed_vehicle_id, trip_id),
+                        "UPDATE trips SET vehicle_id = %s, updated_at = now() WHERE id = %s AND account_id = %s",
+                        (parsed_vehicle_id, trip_id, account_id(conn)),
                     )
                 except errors.ForeignKeyViolation:
                     raise HTTPException(status_code=400, detail="No such vehicle")
@@ -1469,7 +1471,7 @@ def register_delete(router: APIRouter) -> None:
             fragment: Annotated[bool, Form()] = False,
             dashboard_week: Annotated[str, Form()] = "",
         ):
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 await _delete_trip_in(conn, trip_id)
             if dashboard_week:
                 return Response(status_code=200, headers={"HX-Refresh": "true"})
@@ -1533,11 +1535,11 @@ def register_batch_and_points(router: APIRouter) -> None:
             set_clauses.append("updated_at = now()")
             params.append(trip_ids)
 
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 try:
                     cur = await conn.execute(
-                        f"UPDATE trips SET {', '.join(set_clauses)} WHERE id = ANY(%s)",
-                        params,
+                        f"UPDATE trips SET {', '.join(set_clauses)} WHERE id = ANY(%s) AND account_id = %s",
+                        [*params, account_id(conn)],
                     )
                 except errors.ForeignKeyViolation:
                     raise HTTPException(status_code=400, detail="No such vehicle")
@@ -1559,12 +1561,12 @@ def register_batch_and_points(router: APIRouter) -> None:
             if not trip_ids:
                 raise HTTPException(status_code=400, detail="Select at least one trip")
 
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 await conn.execute(
                     "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
                 )
                 cur = await conn.execute(
-                    "SELECT id FROM trips WHERE id = ANY(%s) FOR UPDATE", (trip_ids,)
+                    "SELECT id FROM trips WHERE id = ANY(%s) AND account_id = %s FOR UPDATE", (trip_ids, account_id(conn))
                 )
                 existing = {row[0] for row in await cur.fetchall()}
                 if len(existing) != len(trip_ids):
@@ -1578,10 +1580,10 @@ def register_batch_and_points(router: APIRouter) -> None:
 
         @router.get("/trips/{trip_id}/points")
         async def trip_points(request: Request, trip_id: int, user: dict = Depends(require_user)):
-            trip = await _fetch_trip(request.app.state.pool, trip_id)
+            trip = await _fetch_trip(request.state.account_pool, trip_id)
             if trip["source"] != "detected":
                 raise HTTPException(status_code=400, detail="Only detected trips have points")
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 rows = await load_trip_points(conn, trip_id)
             return JSONResponse([
                 {"id": r[0], "t": r[1].isoformat(), "lat": r[2], "lon": r[3]} for r in rows

@@ -18,9 +18,11 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import personal_request
 from app.main import make_templates
 from app.ui import make_router
-from conftest import reset_db
+from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -43,28 +45,28 @@ STATS = _endpoint()
 
 def _request(pool):
     config = SimpleNamespace(display_tz=UTC, app_version="test")
-    return SimpleNamespace(
+    return personal_request(SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, templates=make_templates(config), config=config,
         )),
         session={"csrf": "test-csrf"},
-    )
+    ))
 
 
 async def _insert_place(conn, name: str, lat: float, lon: float) -> int:
     row = await conn.execute(
-        "INSERT INTO places (name, geom) VALUES "
-        "(%s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography) RETURNING id",
-        (name, lon, lat),
+        "INSERT INTO places (account_id, name, geom) VALUES (%s, %s, ST_SetSRID(ST_MakePoint(%s, "
+        "%s), 4326)::geography) RETURNING id",
+        (account_id(conn), name, lon, lat,),
     )
     return (await row.fetchone())[0]
 
 
 async def _scenario() -> None:
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             home_id = await _insert_place(conn, "Home", 47.60, -122.30)
             work_id = await _insert_place(conn, "Work", 47.61, -122.31)
@@ -72,16 +74,13 @@ async def _scenario() -> None:
 
             # Two saved-place trips on Home <-> Work, one on Home <-> Gym.
             await conn.execute(
-                "INSERT INTO trips "
-                "(device, source, started_at, ended_at, distance_m, category, "
-                "start_place_id, end_place_id) VALUES "
-                "('stats', 'manual', '2026-06-01T09:00:00Z', '2026-06-01T09:30:00Z', "
-                "10000, 'business', %s, %s), "
-                "('stats', 'manual', '2026-06-02T09:00:00Z', '2026-06-02T09:30:00Z', "
-                "5000, 'business', %s, %s), "
-                "('stats', 'manual', '2026-06-03T09:00:00Z', '2026-06-03T09:30:00Z', "
-                "2000, 'business', %s, %s)",
-                (home_id, work_id, home_id, work_id, home_id, gym_id),
+                "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, "
+                "category, start_place_id, end_place_id) VALUES (%s, 'stats', 'manual', "
+                "'2026-06-01T09:00:00Z', '2026-06-01T09:30:00Z', 10000, 'business', %s, %s), (41, "
+                "'stats', 'manual', '2026-06-02T09:00:00Z', '2026-06-02T09:30:00Z', 5000, "
+                "'business', %s, %s), (41, 'stats', 'manual', '2026-06-03T09:00:00Z', "
+                "'2026-06-03T09:30:00Z', 2000, 'business', %s, %s)",
+                (account_id(conn), home_id, work_id, home_id, work_id, home_id, gym_id,),
             )
             # A No route manual trip with only endpoint labels, no place ids
             # or geometry. Its distance is deliberately far larger than
@@ -89,12 +88,10 @@ async def _scenario() -> None:
             # ever admitted it, it would dominate the ranking rather than
             # blend in unnoticed.
             await conn.execute(
-                "INSERT INTO trips "
-                "(device, source, started_at, ended_at, distance_m, category, "
-                "start_label, end_label) VALUES "
-                "('stats', 'manual', '2026-06-04T09:00:00Z', '2026-06-04T09:30:00Z', "
-                "999999, 'business', %s, %s)",
-                ("My Custom Start", "My Custom End"),
+                "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, "
+                "category, start_label, end_label) VALUES (%s, 'stats', 'manual', "
+                "'2026-06-04T09:00:00Z', '2026-06-04T09:30:00Z', 999999, 'business', %s, %s)",
+                (account_id(conn), "My Custom Start", "My Custom End",),
             )
 
         response = await STATS(_request(pool), USER, 2026, "", "", "")
@@ -121,7 +118,7 @@ async def _scenario() -> None:
         assert "My Custom Start" not in places_by_name
         assert "My Custom End" not in places_by_name
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_labeled_endpoints_are_excluded_from_saved_place_rankings():

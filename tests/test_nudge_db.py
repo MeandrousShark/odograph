@@ -11,7 +11,8 @@ import pytest
 
 from app.db import make_pool
 from app.nudge import NudgeWorker
-from conftest import reset_db
+from conftest import reset_account_db, seed_tracking_device
+from app.account_context import account_id
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -24,9 +25,9 @@ WINDOW_END = datetime(2026, 7, 12, 18, tzinfo=TZ)
 
 async def _insert_trip(conn, started_at, category="unclassified") -> None:
     await conn.execute(
-        "INSERT INTO trips (device, started_at, ended_at, distance_m, category) "
-        "VALUES ('phone', %s, %s, 1000, %s)",
-        (started_at, started_at + timedelta(minutes=15), category),
+        "INSERT INTO trips (account_id, tracking_device_id, device, started_at, ended_at, distance_m, category) "
+        "VALUES (%s, 1, 'phone', %s, %s, 1000, %s)",
+        (account_id(conn), started_at, started_at + timedelta(minutes=15), category),
     )
 
 
@@ -38,10 +39,13 @@ async def _ledger_scenario():
         calls += 1
         return httpx.Response(200)
 
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
+        async with pool.connection() as conn:
+            await seed_tracking_device(conn, "phone", device_id=1)
+            await conn.execute("UPDATE account_settings SET display_tz=%s,ntfy_topic='mileage' WHERE account_id=%s", (str(TZ),account_id(conn)))
         async with pool.connection() as conn:
             await _insert_trip(conn, WINDOW_END - timedelta(days=1))
             await _insert_trip(conn, WINDOW_END - timedelta(days=8))
@@ -61,7 +65,7 @@ async def _ledger_scenario():
             )
             assert await cur.fetchone() == (1,)
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_nudge_delivery_ledger_counts_only_window_trips_and_prevents_duplicate():
@@ -74,10 +78,13 @@ async def _retry_scenario():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(responses.pop(0))
 
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
+        async with pool.connection() as conn:
+            await seed_tracking_device(conn, "phone", device_id=1)
+            await conn.execute("UPDATE account_settings SET display_tz=%s,ntfy_topic='mileage' WHERE account_id=%s", (str(TZ),account_id(conn)))
         async with pool.connection() as conn:
             await _insert_trip(conn, WINDOW_END - timedelta(days=1))
 
@@ -96,7 +103,7 @@ async def _retry_scenario():
             cur = await conn.execute("SELECT trip_count FROM nudge_delivery_windows")
             assert await cur.fetchone() == (1,)
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_nudge_retries_after_failed_ntfy_response_without_marking_window_done():

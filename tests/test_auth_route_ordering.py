@@ -75,8 +75,10 @@ class _FakeCursor:
         return self
 
     async def fetchone(self):
+        if "current_setting" in self._query:
+            return (None,)
         if "FROM oidc_identities" in self._query:
-            return self._identity
+            return (self._identity is not None,) if "SELECT EXISTS" in self._query else self._identity
         return self._row
 
 
@@ -132,12 +134,13 @@ def _bare_app(*, signup: bool, oidc: bool, account=None, linked=False):
     )
     app.state.config = SimpleNamespace(
         dev_no_auth=False,
+        display_tz="UTC",
         initial_admin_signup=signup,
         allowed_email="",
         oidc_configured=oidc,
         oidc_issuer="https://idp.example.com",
     )
-    app.state.pool = _FakePool(account, {"id": 1} if linked else None)
+    app.state.control_pool = _FakePool(account, {"id": 1} if linked else None)
     app.state.oauth = _FakeOAuth() if oidc else None
     app.state.templates = SimpleNamespace(
         TemplateResponse=lambda request, name, context, status_code=200: (

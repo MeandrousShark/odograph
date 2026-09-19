@@ -23,12 +23,14 @@ import pytest
 
 from app.dashboard import week_bounds
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import personal_request
 from app.formatting import format_miles, format_usd
 from app.main import make_templates
 from app.rates import deduction as calc_deduction, load_rates
 from app.report import sum_month_deductions
 from app.ui import make_router
-from conftest import reset_db
+from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -51,35 +53,35 @@ def _request(pool, current_url: str = ""):
         display_tz=TZ, trips_page_size=25, app_version="test",
         missing_trip_gap_m=1000.0,
     )
-    return SimpleNamespace(
+    return personal_request(SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, templates=make_templates(config), config=config,
         )),
         session={"csrf": "test-csrf"},
         headers={"HX-Current-URL": current_url} if current_url else {},
-    )
+    ))
 
 
 async def _insert_trip(
     conn, started_at: datetime, category: str = "unclassified", distance_m: float = 1000.0,
 ) -> int:
     cur = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, distance_m, category) "
-        "VALUES ('TAGROLL', 'manual', %s, %s, %s, %s) RETURNING id",
-        (started_at, started_at + timedelta(hours=1), distance_m, category),
+        "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, category)"
+        " VALUES (%s, 'TAGROLL', 'manual', %s, %s, %s, %s) RETURNING id",
+        (account_id(conn), started_at, started_at + timedelta(hours=1), distance_m, category,),
     )
     return (await cur.fetchone())[0]
 
 
 def _scenario(coro) -> None:
     async def run():
-        pool = make_pool(TEST_DB)
-        await pool.open(wait=True)
+        raw_pool = make_pool(TEST_DB)
+        await raw_pool.open(wait=True)
         try:
-            await reset_db(pool)
+            pool = await reset_account_db(raw_pool)
             await coro(pool)
         finally:
-            await pool.close()
+            await raw_pool.close()
 
     asyncio.run(run())
 
@@ -98,9 +100,9 @@ async def _seed_month(pool):
         # Deterministic regardless of what migrations/002 happens to seed
         # for this year, and regardless of what year the test actually runs in.
         await conn.execute(
-            "INSERT INTO mileage_rates (year, rate_per_mi) VALUES (%s, %s) "
-            "ON CONFLICT (year) DO UPDATE SET rate_per_mi = EXCLUDED.rate_per_mi",
-            (year, "0.6700"),
+            "INSERT INTO mileage_rates (account_id, year, rate_per_mi) VALUES (%s, %s, %s) ON "
+            "CONFLICT (account_id, year) DO UPDATE SET rate_per_mi = EXCLUDED.rate_per_mi",
+            (account_id(conn), year, "0.6700",),
         )
         target_id = await _insert_trip(
             conn, datetime(year, month, 10, 9, tzinfo=TZ),

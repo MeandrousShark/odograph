@@ -83,10 +83,10 @@ def test_authenticated_shell_keeps_account_identity_and_conditional_account_secu
     assert 'href="/static/icons.svg?v=v1#sign-out"' in account
 
     non_admin = _render("/", {"id": 7, "name": "Basic User", "is_admin": False})
-    assert 'href="/settings/account"' not in non_admin
+    assert 'href="/settings/account"' in non_admin
     assert 'class="account-identity account-identity-link"' not in non_admin
     non_admin_account = non_admin.split('class="header-account"', 1)[1].split("</div>", 1)[0]
-    assert '<span class="account-identity header-control">' in non_admin_account
+    assert 'class="account-identity account-identity-link header-control"' in non_admin_account
 
     no_id = _render("/", {"id": None, "name": "Admin Legacy", "is_admin": True})
     assert 'href="/settings/account"' not in no_id

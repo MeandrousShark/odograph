@@ -155,6 +155,15 @@ exec_db() {
     fi
 }
 
+# A scoped runtime identity must never produce a deceptively partial
+# "full instance" archive, even while the prepared policies are disabled.
+backup_privilege="$(exec_db psql -X -U mileage -d mileage -Atc \
+    "SELECT CASE WHEN rolsuper OR rolbypassrls THEN 'full-instance' ELSE 'refused' END FROM pg_roles WHERE rolname = current_user")"
+if [ "$backup_privilege" != "full-instance" ]; then
+    echo "error: full-instance backup requires the privileged backup identity; scoped runtime dumps are refused." >&2
+    exit 1
+fi
+
 if [ -n "$CONTAINER_NAME" ]; then
     echo "Dumping database via: $runtime_cmd exec -i $CONTAINER_NAME pg_dump ..."
 else
@@ -170,7 +179,8 @@ fi
 # EXTENSION's own bookkeeping. pg_dump therefore emits bare CREATE SCHEMA
 # statements for them, which collide with the same image-provisioned
 # schemas already present on any fresh restore target. None of the three
-# ever holds application data -- every migration only touches public, and
+# ever holds application data -- the application uses public and its own
+# protected odograph_service schema, and
 # tiger_data is populated only if an operator explicitly runs census-loader
 # scripts, which this app never does -- so excluding them is safe. This is
 # a denylist of known image-provisioned schemas, not an allowlist, so any
@@ -225,6 +235,7 @@ created_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf 'created_utc=%s\n' "$created_utc"
     printf 'archive=%s\n' "$archive_basename"
     printf 'schema_version=%s\n' "$schema_version"
+    printf 'backup_scope=full-instance\n'
     printf 'postgres_version=%s\n' "$postgres_version"
     printf 'postgis_version=%s\n' "$postgis_version"
     printf 'source_ref=%s\n' "$source_ref"

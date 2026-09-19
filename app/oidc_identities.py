@@ -22,6 +22,15 @@ def _validate_subject(subject: str) -> str:
     return subject
 
 
+async def identity_login_available(conn, issuer: str) -> bool:
+    cur = await conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM oidc_identities i JOIN accounts a ON a.id = i.account_id "
+        "WHERE i.issuer = %s AND a.is_enabled)",
+        (normalize_issuer(issuer),),
+    )
+    return (await cur.fetchone())[0]
+
+
 async def get_identity_for_account(conn, account_id: int, issuer: str) -> dict | None:
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
@@ -151,11 +160,12 @@ async def establish_legacy_admin_identity(
     password_hash: str,
     issuer: str,
     subject: str,
+    display_timezone: str = "UTC",
     provider_email: str | None = None,
     provider_display_name: str | None = None,
 ) -> tuple[dict, dict]:
     async with conn.transaction():
-        account = await create_admin(conn, email, password_hash)
+        account = await create_admin(conn, email, password_hash, display_timezone=display_timezone)
         identity = await create_identity_link(
             conn,
             account["id"],

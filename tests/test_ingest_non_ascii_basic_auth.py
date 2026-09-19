@@ -1,8 +1,4 @@
-"""hmac.compare_digest raises TypeError on non-ASCII str operands, which
-would otherwise turn a wrong/non-ASCII Basic-auth credential into a 500
-(app/ingest.py's _check_basic_auth). No DB needed -- the auth check runs
-before anything in the handler touches the pool.
-"""
+"""Non-ASCII Basic credentials are parsed safely and rejected with a generic 401."""
 from __future__ import annotations
 
 import asyncio
@@ -12,12 +8,13 @@ from types import SimpleNamespace
 import httpx
 from fastapi import FastAPI
 
+from app import ingest
 from app.ingest import FailedAuthLimiter, make_router
 
 
 def _bare_app() -> FastAPI:
     app = FastAPI()
-    app.state.pool = None
+    app.state.control_pool = None
     app.state.config = SimpleNamespace(
         ingest_username="owntracks", ingest_password="testpw", ingest_max_body_bytes=1_000_000,
     )
@@ -27,7 +24,12 @@ def _bare_app() -> FastAPI:
     return app
 
 
-def test_ingest_rejects_non_ascii_basic_auth_credentials_with_401_not_500():
+def test_ingest_rejects_non_ascii_basic_auth_credentials_with_401_not_500(monkeypatch):
+    async def reject(_pool, username, password, **kwargs):
+        assert username == "öwntracks"
+        assert password == "tëstpw"
+        return None
+    monkeypatch.setattr(ingest, "authenticate_ingest", reject)
     header = {
         "Authorization": "Basic " + base64.b64encode("öwntracks:tëstpw".encode("utf-8")).decode()
     }

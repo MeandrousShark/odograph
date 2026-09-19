@@ -17,9 +17,11 @@ from psycopg import errors
 from psycopg.rows import dict_row
 
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import fixture_device, personal_request
 from app.main import make_templates
 from app.ui import TRIP_COLUMNS, make_router
-from conftest import reset_db
+from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -54,23 +56,23 @@ DEFAULT_SAVE_FORM = {
 
 def _add_request(pool):
     config = SimpleNamespace(osrm_url="", display_tz=TZ, app_version="test")
-    return SimpleNamespace(
+    return personal_request(SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, config=config, osrm_http_client=None,
         )),
         session={"csrf": "test"},
-    )
+    ))
 
 
 def _save_request(pool):
     config = SimpleNamespace(display_tz=TZ, app_version="test")
-    return SimpleNamespace(
+    return personal_request(SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, templates=make_templates(config), config=config,
         )),
         session={"csrf": "test"},
         headers={},
-    )
+    ))
 
 
 async def _add(pool, **overrides):
@@ -117,8 +119,8 @@ async def _fetch_trip_columns(pool, trip_id) -> dict:
 
 async def _insert_geocode(conn, lat: float, lon: float, address: str) -> None:
     await conn.execute(
-        "INSERT INTO geocode_cache (lat, lon, address) VALUES (%s, %s, %s)",
-        (round(lat, 4), round(lon, 4), address),
+        'INSERT INTO geocode_cache (account_id, lat, lon, address) VALUES (%s, %s, %s, %s)',
+        (account_id(conn), round(lat, 4), round(lon, 4), address,),
     )
 
 
@@ -134,57 +136,56 @@ async def _insert_no_route_manual(conn, **overrides) -> int:
     }
     values.update(overrides)
     row = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, distance_m, category, "
-        "purpose, notes, vehicle_id) VALUES ('manual', 'manual', %s, %s, %s, %s, %s, %s, %s) "
+        "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, category,"
+        " purpose, notes, vehicle_id) VALUES (%s, 'manual', 'manual', %s, %s, %s, %s, %s, %s, %s) "
         "RETURNING id",
-        tuple(values.values()),
+        (account_id(conn), *(tuple(values.values())),),
     )
     return (await row.fetchone())[0]
 
 
 async def _insert_routed_manual(conn) -> int:
     row = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, start_geom, end_geom, "
-        "distance_m, category) VALUES ('manual', 'manual', "
-        "'2026-07-14T16:00:00Z', '2026-07-14T17:00:00Z', "
-        "ST_SetSRID(ST_MakePoint(-122.3, 47.6), 4326)::geography, "
+        "INSERT INTO trips (account_id, device, source, started_at, ended_at, start_geom, end_geom,"
+        " distance_m, category) VALUES (%s, 'manual', 'manual', '2026-07-14T16:00:00Z', "
+        "'2026-07-14T17:00:00Z', ST_SetSRID(ST_MakePoint(-122.3, 47.6), 4326)::geography, "
         "ST_SetSRID(ST_MakePoint(-122.2, 47.7), 4326)::geography, 1609.344, 'unclassified') "
-        "RETURNING id"
+        "RETURNING id", (account_id(conn),)
     )
     return (await row.fetchone())[0]
 
 
 async def _insert_detected(conn) -> int:
     row = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, start_geom, end_geom, "
-        "distance_m, point_count, path, has_gap, category, detector_version, snap_status) "
-        "VALUES ('phone', 'detected', '2026-07-14T18:00:00Z', '2026-07-14T19:00:00Z', "
-        "ST_SetSRID(ST_MakePoint(-122.3, 47.6), 4326)::geography, "
+        "INSERT INTO trips (account_id, tracking_device_id, device, source, started_at, ended_at, "
+        "start_geom, end_geom, distance_m, point_count, path, has_gap, category, detector_version, "
+        "snap_status) VALUES (%s, %s, 'phone', 'detected', '2026-07-14T18:00:00Z', "
+        "'2026-07-14T19:00:00Z', ST_SetSRID(ST_MakePoint(-122.3, 47.6), 4326)::geography, "
         "ST_SetSRID(ST_MakePoint(-122.2, 47.7), 4326)::geography, 3200, 44, "
-        "ST_GeomFromText('LINESTRING(-122.3 47.6,-122.2 47.7)', 4326), true, "
-        "'business', 2, 'failed') RETURNING id"
+        "ST_GeomFromText('LINESTRING(-122.3 47.6,-122.2 47.7)', 4326), true, 'business', 2, "
+        "'failed') RETURNING id", (account_id(conn), await fixture_device(conn, 'phone'),)
     )
     return (await row.fetchone())[0]
 
 
 async def _insert_place(conn, name: str, lat: float, lon: float) -> int:
     row = await conn.execute(
-        "INSERT INTO places (name, geom) VALUES "
-        "(%s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography) RETURNING id",
-        (name, lon, lat),
+        "INSERT INTO places (account_id, name, geom) VALUES (%s, %s, ST_SetSRID(ST_MakePoint(%s, "
+        "%s), 4326)::geography) RETURNING id",
+        (account_id(conn), name, lon, lat,),
     )
     return (await row.fetchone())[0]
 
 
 def _run(coro_factory) -> None:
     async def run():
-        pool = make_pool(TEST_DB)
-        await pool.open(wait=True)
+        raw_pool = make_pool(TEST_DB)
+        await raw_pool.open(wait=True)
         try:
-            await reset_db(pool)
+            pool = await reset_account_db(raw_pool)
             await coro_factory(pool)
         finally:
-            await pool.close()
+            await raw_pool.close()
 
     asyncio.run(run())
 
@@ -385,8 +386,9 @@ def test_constraint_rejects_label_on_detected_trip():
         async with pool.connection() as conn:
             with pytest.raises(errors.CheckViolation):
                 await conn.execute(
-                    "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
-                    "start_label) VALUES ('phone', 'detected', now(), now(), 100, 'Somewhere')"
+                    "INSERT INTO trips (account_id, tracking_device_id, device, source, started_at,"
+                    " ended_at, distance_m, start_label) VALUES (%s, %s, 'phone', 'detected', "
+                    "now(), now(), 100, 'Somewhere')", (account_id(conn), await fixture_device(conn, 'phone'),)
                 )
 
     _run(scenario)
@@ -399,10 +401,10 @@ def test_constraint_rejects_label_alongside_saved_place_id():
         async with pool.connection() as conn:
             with pytest.raises(errors.CheckViolation):
                 await conn.execute(
-                    "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
-                    "start_place_id, start_label) VALUES "
-                    "('manual', 'manual', now(), now(), 100, %s, 'Somewhere')",
-                    (place_id,),
+                    "INSERT INTO trips (account_id, device, source, started_at, ended_at, "
+                    "distance_m, start_place_id, start_label) VALUES (%s, 'manual', 'manual', "
+                    "now(), now(), 100, %s, 'Somewhere')",
+                    (account_id(conn), place_id,),
                 )
 
     _run(scenario)
@@ -413,9 +415,9 @@ def test_constraint_rejects_label_alongside_geometry():
         async with pool.connection() as conn:
             with pytest.raises(errors.CheckViolation):
                 await conn.execute(
-                    "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
-                    "end_geom, end_label) VALUES ('manual', 'manual', now(), now(), 100, "
-                    "ST_SetSRID(ST_MakePoint(-122.3, 47.6), 4326)::geography, 'Somewhere')"
+                    "INSERT INTO trips (account_id, device, source, started_at, ended_at, "
+                    "distance_m, end_geom, end_label) VALUES (%s, 'manual', 'manual', now(), now(),"
+                    " 100, ST_SetSRID(ST_MakePoint(-122.3, 47.6), 4326)::geography, 'Somewhere')", (account_id(conn),)
                 )
 
     _run(scenario)
@@ -426,8 +428,9 @@ def test_constraint_rejects_untrimmed_label():
         async with pool.connection() as conn:
             with pytest.raises(errors.CheckViolation):
                 await conn.execute(
-                    "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
-                    "start_label) VALUES ('manual', 'manual', now(), now(), 100, ' Somewhere ')"
+                    "INSERT INTO trips (account_id, device, source, started_at, ended_at, "
+                    "distance_m, start_label) VALUES (%s, 'manual', 'manual', now(), now(), 100, ' "
+                    "Somewhere ')", (account_id(conn),)
                 )
 
     _run(scenario)
@@ -438,9 +441,10 @@ def test_constraint_rejects_label_over_100_characters():
         async with pool.connection() as conn:
             with pytest.raises(errors.CheckViolation):
                 await conn.execute(
-                    "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
-                    "start_label) VALUES ('manual', 'manual', now(), now(), 100, %s)",
-                    ("x" * 101,),
+                    "INSERT INTO trips (account_id, device, source, started_at, ended_at, "
+                    "distance_m, start_label) VALUES (%s, 'manual', 'manual', now(), now(), 100, "
+                    "%s)",
+                    (account_id(conn), "x" * 101,),
                 )
 
     _run(scenario)
@@ -450,9 +454,9 @@ def test_constraint_accepts_label_at_exactly_100_characters():
     async def scenario(pool):
         async with pool.connection() as conn:
             await conn.execute(
-                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
-                "start_label) VALUES ('manual', 'manual', now(), now(), 100, %s)",
-                ("x" * 100,),
+                "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, "
+                "start_label) VALUES (%s, 'manual', 'manual', now(), now(), 100, %s)",
+                (account_id(conn), "x" * 100,),
             )
 
     _run(scenario)
@@ -492,10 +496,10 @@ def test_effective_endpoint_name_uses_saved_place_name_when_no_label():
         async with pool.connection() as conn:
             place_id = await _insert_place(conn, "Home", 47.6, -122.3)
             row = await conn.execute(
-                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
-                "start_place_id) VALUES ('manual', 'manual', now(), now(), 100, %s) "
-                "RETURNING id",
-                (place_id,),
+                "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, "
+                "start_place_id) VALUES (%s, 'manual', 'manual', now(), now(), 100, %s) RETURNING "
+                "id",
+                (account_id(conn), place_id,),
             )
             trip_id = (await row.fetchone())[0]
 

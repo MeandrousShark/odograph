@@ -30,7 +30,9 @@ import httpx
 from psycopg_pool import AsyncConnectionPool
 
 from app.config import Config
-from app.db import MIGRATIONS_DIR, MIGRATION_FILENAME_RE, make_pool
+from app.account_context import AccountPool
+from app.db import MIGRATIONS_DIR, MIGRATION_FILENAME_RE
+from app.application_roles import application_role_pools
 from app.detector.runner import DETECTOR_VERSION
 from app.snap import route_distance_m
 
@@ -182,7 +184,6 @@ def config_presence(cfg: Config) -> dict[str, bool]:
     """
     osrm_url = getattr(cfg, "osrm_url", "")
     ntfy_url = getattr(cfg, "ntfy_url", "")
-    ntfy_topic = getattr(cfg, "ntfy_topic", "")
     ntfy_token = getattr(cfg, "ntfy_token", "")
     ntfy_username = getattr(cfg, "ntfy_username", "")
     ntfy_password = getattr(cfg, "ntfy_password", "")
@@ -192,9 +193,9 @@ def config_presence(cfg: Config) -> dict[str, bool]:
     return {
         "osrm_configured": bool(osrm_url),
         "geocode_configured": _geocode_configured(cfg),
-        "ntfy_configured": bool(ntfy_url and ntfy_topic),
+        "ntfy_configured": bool(ntfy_url),
         "ntfy_auth_configured": bool(ntfy_token or (ntfy_username and ntfy_password)),
-        "smtp_configured": bool(getattr(cfg, "email_enabled", False)),
+        "smtp_configured": bool(getattr(cfg, "smtp_host", "") and getattr(cfg, "email_from", "")),
         "smtp_auth_configured": bool(smtp_username and smtp_password),
         "oidc_configured": bool(getattr(cfg, "oidc_configured", False)),
         "initial_admin_signup": bool(getattr(cfg, "initial_admin_signup", False)),
@@ -210,9 +211,9 @@ def _worker_gates_from_config(cfg: Config) -> dict[str, bool]:
         "snap": cfg.snap_enabled,
         "geocode": _geocode_configured(cfg),
         "retention": cfg.retention_enabled,
-        "nudge": cfg.nudge_enabled,
-        "odometer_reminder": cfg.odometer_reminder_enabled,
-        "email_digest": cfg.email_enabled,
+        "nudge": bool(cfg.ntfy_url),
+        "odometer_reminder": bool(cfg.ntfy_url),
+        "email_digest": bool(cfg.smtp_host and cfg.email_from),
     }
 
 
@@ -259,8 +260,11 @@ async def build_report(
     or `None` from the standalone CLI, which has no process to ask and
     falls back to config-derived enablement only.
     """
+    # These checks read instance metadata only; use the restricted runtime
+    # pool directly rather than requiring a personal-data transaction.
+    database_pool = pool.runtime_pool if isinstance(pool, AccountPool) else pool
     database, migrations = await asyncio.gather(
-        _check_database(pool), _check_migrations(pool),
+        _check_database(database_pool), _check_migrations(database_pool),
     )
     workers = (
         worker_reports_from_state(state) if state is not None
@@ -323,9 +327,9 @@ async def _check_geocode(cfg: Config, client: httpx.AsyncClient) -> Connectivity
 
 
 async def _check_ntfy(cfg: Config, client: httpx.AsyncClient) -> ConnectivityResult:
-    if not (cfg.ntfy_url and cfg.ntfy_topic):
+    if not cfg.ntfy_url:
         return ConnectivityResult(
-            "ntfy", configured=False, detail="NTFY_URL/NTFY_TOPIC not set"
+            "ntfy", configured=False, detail="NTFY_URL not set"
         )
     url = f"{cfg.ntfy_url.rstrip('/')}/v1/health"
     try:
@@ -371,9 +375,9 @@ def _smtp_probe(cfg: Config) -> None:
 
 
 async def _check_smtp(cfg: Config) -> ConnectivityResult:
-    if not cfg.email_enabled:
+    if not (cfg.smtp_host and cfg.email_from):
         return ConnectivityResult(
-            "smtp", configured=False, detail="SMTP_HOST/EMAIL_FROM/EMAIL_TO not set"
+            "smtp", configured=False, detail="SMTP_HOST/EMAIL_FROM not set"
         )
     try:
         await asyncio.to_thread(_smtp_probe, cfg)
@@ -457,13 +461,18 @@ def render_report_text(
 
 async def _main() -> None:
     cfg = Config.from_env()
-    pool = make_pool(cfg.database_url)
-    await pool.open()
     try:
-        report = await build_report(cfg, pool, state=None)
-        connectivity = await run_connectivity_checks(cfg)
-    finally:
-        await pool.close()
+        async with application_role_pools(cfg.database_url) as pools:
+            report = await build_report(cfg, pools.runtime, state=None)
+    except Exception as exc:
+        report = DiagnosticsReport(
+            app_version=cfg.app_version, git_revision=cfg.app_git_revision,
+            detector_version=DETECTOR_VERSION,
+            database=PoolReport(ok=False, error_type=type(exc).__name__),
+            migrations=MigrationReport(applied=None, expected=_expected_migration_versions()),
+            workers=worker_reports_from_config(cfg), config_presence=config_presence(cfg),
+        )
+    connectivity = await run_connectivity_checks(cfg)
     print(render_report_text(report, connectivity))
 
 

@@ -156,7 +156,7 @@ class _FakeConn:
         return _FakeCursor(self._row)
 
     async def execute(self, *args, **kwargs):
-        return _FakeCursor((self._row is not None,))
+        return _FakeCursor((None,) if "current_setting" in args[0] else (self._row is not None,))
 
 
 class _FakeConnCtx:
@@ -206,7 +206,7 @@ def _login_app(*, trusted_hosts):
     # Wrong email on every submission short-circuits login_local's `and`
     # chain before verify_password, so failures are cheap and deterministic
     # without needing a real scrypt hash here.
-    app.state.pool = _FakePool({
+    app.state.control_pool = _FakePool({
         "id": 1,
         "email": "admin@example.com",
         "password_hash": "x",
@@ -301,7 +301,7 @@ def _callback_app(*, trusted_hosts):
         oidc_issuer="https://idp.example.com",
     )
     app.state.oauth = SimpleNamespace(pocketid=_RejectingOAuthClient())
-    app.state.pool = _FakePool(None)
+    app.state.control_pool = _FakePool(None)
     app.state.login_limiter = FailedAuthLimiter(max_failures=MAX_FAILURES, window_s=900)
     app.include_router(make_auth_router())
     return ProxyHeadersMiddleware(app, trusted_hosts=trusted_hosts)

@@ -183,11 +183,11 @@ def test_settings_links_to_the_renamed_account_settings_destination():
     assert "Account Security" not in body
 
 
-def test_settings_account_section_is_conditional_for_non_admin_and_dev_no_auth_sessions():
+def test_settings_account_section_is_available_to_every_real_account():
     for user in ({"id": 2, "name": "Tester", "is_admin": False}, None):
         body = _render_settings(user)
-        assert "settings-account-section" not in body
-        assert "<h2 id=\"account-heading\">Account</h2>" not in body
+        assert ("settings-account-section" in body) is (user is not None)
+        assert ("<h2 id=\"account-heading\">Account</h2>" in body) is (user is not None)
         appearance = body.index("<h2>Appearance</h2>")
         description = body.index("Follows your device's light/dark setting", appearance)
         theme = body.index('<fieldset class="theme-picker" id="theme-picker">', appearance)

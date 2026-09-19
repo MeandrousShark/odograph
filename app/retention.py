@@ -21,6 +21,7 @@ import logging
 from psycopg_pool import AsyncConnectionPool
 
 from app.worker import IntervalWorker
+from app.account_context import account_id
 
 log = logging.getLogger(__name__)
 
@@ -51,8 +52,8 @@ class RetentionWorker(IntervalWorker):
     async def run_once(self) -> None:
         async with self.pool.connection() as conn:
             cur = await conn.execute(
-                "DELETE FROM raw_messages WHERE received_at < now() - %s * interval '1 day'",
-                (self.retention_days,),
+                "DELETE FROM raw_messages WHERE account_id = %s AND received_at < now() - %s * interval '1 day'",
+                (account_id(conn), self.retention_days),
             )
             deleted = cur.rowcount
         log.info(

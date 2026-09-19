@@ -22,6 +22,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import psycopg
 import pytest
@@ -34,7 +36,7 @@ from app.diagnose import worker_reports_from_config
 import app.main as main_module
 from app.main import create_app
 from app.worker import RUN_SKIPPED, IntervalWorker, PokeSweepWorker
-from conftest import reset_db
+from conftest import reset_db, reset_account_db, seed_tracking_device
 
 log = logging.getLogger("test-worker-lifecycle")
 
@@ -87,11 +89,18 @@ def test_run_guarded_still_records_a_normal_success_and_no_skip():
 
 
 async def _run_detector_scheduler_records_skip_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     holder = await psycopg.AsyncConnection.connect(TEST_DB)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
+        async with pool.connection() as conn:
+            device = await seed_tracking_device(conn)
+            await conn.execute(
+                "INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom) "
+                "VALUES(%s,%s,'phone',now(),ST_SetSRID(ST_MakePoint(10,20),4326)::geography)",
+                (pool.principal.account_id, device),
+            )
 
         # Hold the detector's advisory lock in an uncommitted transaction on
         # a second connection, mimicking a concurrent instance's in-flight
@@ -108,7 +117,7 @@ async def _run_detector_scheduler_records_skip_scenario():
         assert scheduler.status.last_success_at is None
     finally:
         await holder.close()
-        await pool.close()
+        await raw_pool.close()
 
 
 @db_only
@@ -241,7 +250,7 @@ def test_lifespan_and_diagnostics_agree_on_config_worker_predicates(
     for key, value in REQUIRED_ENV.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused/unused")
-    monkeypatch.setenv("DEV_NO_AUTH", "1")
+    monkeypatch.setenv("DEV_NO_AUTH", "0")
     for key in OPTIONAL_ENV_TO_CLEAR + (
         "RAW_MESSAGE_RETENTION_DAYS", "EMAIL_FROM", "EMAIL_TO",
     ):
@@ -253,10 +262,15 @@ def test_lifespan_and_diagnostics_agree_on_config_worker_predicates(
     pool = _FakeLifespanResource()
     monkeypatch.setattr(main_module, "make_pool", lambda url: pool)
 
-    async def _run_migrations(pool):
+    async def _run_migrations(pool, config=None):
         pass
 
     monkeypatch.setattr(main_module, "run_migrations", _run_migrations)
+    @asynccontextmanager
+    async def fake_role_pools(url):
+        yield SimpleNamespace(control=pool, runtime=pool)
+    monkeypatch.setattr(main_module, "application_role_pools", fake_role_pools)
+    monkeypatch.setattr(main_module, "AccountWorker", _FakeLifespanResource)
     monkeypatch.setattr(main_module.httpx, "AsyncClient", _FakeLifespanResource)
     for name in (
         "SnapWorker", "GeocodeWorker", "RetentionWorker", "NudgeWorker",
@@ -333,7 +347,7 @@ def test_lifespan_closes_the_pool_when_run_migrations_fails(monkeypatch):
     class _MigrationBoom(Exception):
         pass
 
-    async def _raising_run_migrations(pool):
+    async def _raising_run_migrations(pool, config=None):
         raise _MigrationBoom("migrations boom")
 
     monkeypatch.setattr(main_module, "run_migrations", _raising_run_migrations)
@@ -371,22 +385,20 @@ def test_lifespan_stops_an_already_started_worker_when_a_later_worker_fails_to_s
     pools = _capture_pool(monkeypatch)
 
     retention_instances = []
-    real_retention_cls = main_module.RetentionWorker
-
-    class _CapturingRetentionWorker(real_retention_cls):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            retention_instances.append(self)
-
-    monkeypatch.setattr(main_module, "RetentionWorker", _CapturingRetentionWorker)
+    real_worker_cls = main_module.AccountWorker
 
     class _NudgeBoom(Exception):
         pass
 
-    def _raising_nudge_worker(*args, **kwargs):
-        raise _NudgeBoom("nudge worker boom")
+    class _FailingStartupWorker(real_worker_cls):
+        def __init__(self, *args, **kwargs):
+            if kwargs["label"] == "nudge-worker":
+                raise _NudgeBoom("nudge worker boom")
+            super().__init__(*args, **kwargs)
+            if kwargs["label"] == "retention-worker":
+                retention_instances.append(self)
 
-    monkeypatch.setattr(main_module, "NudgeWorker", _raising_nudge_worker)
+    monkeypatch.setattr(main_module, "AccountWorker", _FailingStartupWorker)
 
     async def scenario():
         async with app.router.lifespan_context(app):

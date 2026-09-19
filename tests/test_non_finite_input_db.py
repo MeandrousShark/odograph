@@ -18,9 +18,11 @@ import pytest
 from fastapi import HTTPException
 
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import personal_request
 from app.main import make_templates
 from app.ui import make_router
-from conftest import reset_db
+from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -39,7 +41,7 @@ def _endpoint(path: str):
 
 
 def _request(pool):
-    return SimpleNamespace(
+    return personal_request(SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool,
             config=SimpleNamespace(display_tz=TZ),
@@ -47,11 +49,14 @@ def _request(pool):
         )),
         session={"csrf": "token"},
         headers={},
-    )
+    ))
 
 
 async def _create_vehicle(conn, name: str) -> int:
-    cur = await conn.execute("INSERT INTO vehicles (name) VALUES (%s) RETURNING id", (name,))
+    cur = await conn.execute('INSERT INTO vehicles (account_id, name) VALUES (%s, %s) RETURNING id', (
+                                                                                                         account_id(conn),
+                                                                                                         name,
+                                                                                                     ))
     return (await cur.fetchone())[0]
 
 
@@ -61,10 +66,10 @@ def test_add_odometer_reading_rejects_non_finite_value(bad_value):
 
 
 async def _odometer_non_finite_scenario(bad_value):
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             truck_id = await _create_vehicle(conn, "Truck")
         add = _endpoint("/settings/odometer")
@@ -82,7 +87,7 @@ async def _odometer_non_finite_scenario(bad_value):
             (count,) = await cur.fetchone()
         assert count == 0
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_add_odometer_reading_accepts_valid_value():
@@ -90,10 +95,10 @@ def test_add_odometer_reading_accepts_valid_value():
 
 
 async def _odometer_valid_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             truck_id = await _create_vehicle(conn, "Truck")
         add = _endpoint("/settings/odometer")
@@ -109,7 +114,7 @@ async def _odometer_valid_scenario():
             (count,) = await cur.fetchone()
         assert count == 1
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 @pytest.mark.parametrize("bad_value", NON_FINITE)
@@ -118,10 +123,10 @@ def test_upsert_rate_rejects_non_finite_rate(bad_value):
 
 
 async def _rate_non_finite_scenario(bad_value):
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         upsert = _endpoint("/settings/rates")
         request = _request(pool)
         with pytest.raises(HTTPException) as exc_info:
@@ -136,7 +141,7 @@ async def _rate_non_finite_scenario(bad_value):
             (count,) = await cur.fetchone()
         assert count == 0
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 @pytest.mark.parametrize("bad_value", NON_FINITE)
@@ -145,10 +150,10 @@ def test_upsert_rate_rejects_non_finite_h2_rate(bad_value):
 
 
 async def _rate_h2_non_finite_scenario(bad_value):
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         upsert = _endpoint("/settings/rates")
         request = _request(pool)
         with pytest.raises(HTTPException) as exc_info:
@@ -162,7 +167,7 @@ async def _rate_h2_non_finite_scenario(bad_value):
             (count,) = await cur.fetchone()
         assert count == 0
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_upsert_rate_accepts_valid_flat_and_midyear_split():
@@ -170,10 +175,10 @@ def test_upsert_rate_accepts_valid_flat_and_midyear_split():
 
 
 async def _rate_valid_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         upsert = _endpoint("/settings/rates")
         request = _request(pool)
         await upsert(
@@ -200,7 +205,7 @@ async def _rate_valid_scenario():
             (2025, pytest.approx(0.70), None, None),
         ]
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 @pytest.mark.parametrize("bad_value", NON_FINITE)
@@ -209,10 +214,10 @@ def test_create_place_rejects_non_finite_radius(bad_value):
 
 
 async def _place_create_non_finite_radius_scenario(bad_value):
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         create = _endpoint("/places")
         request = _request(pool)
         with pytest.raises(HTTPException) as exc_info:
@@ -226,7 +231,7 @@ async def _place_create_non_finite_radius_scenario(bad_value):
             (count,) = await cur.fetchone()
         assert count == 0
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 @pytest.mark.parametrize("bad_value", NON_FINITE)
@@ -235,10 +240,10 @@ def test_create_place_rejects_non_finite_lat(bad_value):
 
 
 async def _place_create_non_finite_lat_scenario(bad_value):
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         create = _endpoint("/places")
         request = _request(pool)
         with pytest.raises(HTTPException) as exc_info:
@@ -252,7 +257,7 @@ async def _place_create_non_finite_lat_scenario(bad_value):
             (count,) = await cur.fetchone()
         assert count == 0
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_create_place_rejects_out_of_range_lat():
@@ -260,10 +265,10 @@ def test_create_place_rejects_out_of_range_lat():
 
 
 async def _place_create_out_of_range_lat_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         create = _endpoint("/places")
         request = _request(pool)
         with pytest.raises(HTTPException) as exc_info:
@@ -277,7 +282,7 @@ async def _place_create_out_of_range_lat_scenario():
             (count,) = await cur.fetchone()
         assert count == 0
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_create_place_rejects_out_of_range_lon():
@@ -285,10 +290,10 @@ def test_create_place_rejects_out_of_range_lon():
 
 
 async def _place_create_out_of_range_lon_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         create = _endpoint("/places")
         request = _request(pool)
         with pytest.raises(HTTPException) as exc_info:
@@ -302,7 +307,7 @@ async def _place_create_out_of_range_lon_scenario():
             (count,) = await cur.fetchone()
         assert count == 0
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_create_place_accepts_valid_input():
@@ -310,10 +315,10 @@ def test_create_place_accepts_valid_input():
 
 
 async def _place_create_valid_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         create = _endpoint("/places")
         request = _request(pool)
         await create(
@@ -325,7 +330,7 @@ async def _place_create_valid_scenario():
             (count,) = await cur.fetchone()
         assert count == 1
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 @pytest.mark.parametrize("bad_value", NON_FINITE)
@@ -334,10 +339,10 @@ def test_update_place_rejects_non_finite_radius(bad_value):
 
 
 async def _place_update_non_finite_radius_scenario(bad_value):
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         create = _endpoint("/places")
         update = _endpoint("/places/{place_id}/update")
         request = _request(pool)
@@ -360,7 +365,7 @@ async def _place_update_non_finite_radius_scenario(bad_value):
             (radius_m,) = await cur.fetchone()
         assert radius_m == original_radius
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_update_place_rejects_out_of_range_lat():
@@ -368,10 +373,10 @@ def test_update_place_rejects_out_of_range_lat():
 
 
 async def _place_update_out_of_range_lat_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         create = _endpoint("/places")
         update = _endpoint("/places/{place_id}/update")
         request = _request(pool)
@@ -398,7 +403,7 @@ async def _place_update_out_of_range_lat_scenario():
             (lat,) = await cur.fetchone()
         assert lat == pytest.approx(original_lat)
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_update_place_accepts_valid_input():
@@ -406,10 +411,10 @@ def test_update_place_accepts_valid_input():
 
 
 async def _place_update_valid_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         create = _endpoint("/places")
         update = _endpoint("/places/{place_id}/update")
         request = _request(pool)
@@ -436,4 +441,4 @@ async def _place_update_valid_scenario():
         assert row[2] == pytest.approx(47.7)
         assert row[3] == pytest.approx(-122.4)
     finally:
-        await pool.close()
+        await raw_pool.close()

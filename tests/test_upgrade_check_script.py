@@ -741,6 +741,59 @@ def _manifest_comparison_harness(tmp_path: Path) -> Path:
     return script
 
 
+@pytest.mark.parametrize(
+    "version,override,success,ingested",
+    [
+        (25, {}, True, False),
+        (26, {}, True, True),
+        (26, {"VERIFY_EXIT": "7"}, False, False),
+        (26, {"CREDENTIAL_COUNT": "0"}, False, False),
+        (26, {"INGEST_EXIT": "7"}, False, True),
+        (26, {"SKIP_POINT": "1"}, False, True),
+    ],
+)
+def test_ownership_upgrade_checks_contract_and_existing_tracker(
+    tmp_path, version, override, success, ingested,
+):
+    source = UPGRADE_SCRIPT.read_text()
+    functions = "\n\n".join(
+        _extract_function(source, name)
+        for name in ("step_pass", "step_fail", "verify_ownership_upgrade")
+    )
+    log = tmp_path / "checks.log"
+    count = tmp_path / "points"
+    count.write_text("1\n")
+    script = tmp_path / "ownership-check.sh"
+    script.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        'ADMIN_EMAIL=drill-admin@example.test\n'
+        'POSTRESTORE_DEVICE=existing-phone\n'
+        'INGEST_PASSWORD=synthetic\n'
+        'compose_dir() { printf "%s\\n" "$*" >> "$CHECK_LOG"; return "${VERIFY_EXIT:-0}"; }\n'
+        'db_query() { printf "%s\\n" "${CREDENTIAL_COUNT:-1}"; }\n'
+        'count_points() { cat "$POINTS"; }\n'
+        'ingest_one_point() {\n'
+        '  echo ingest >> "$CHECK_LOG"\n'
+        '  if [ "${SKIP_POINT:-0}" != 1 ]; then echo 2 > "$POINTS"; fi\n'
+        '  return "${INGEST_EXIT:-0}"\n'
+        '}\n'
+        f'{functions}\nverify_ownership_upgrade candidate "$1"\n'
+    )
+    script.chmod(0o755)
+    result = subprocess.run(
+        [str(script), str(version)], capture_output=True, text=True, timeout=10,
+        env={**os.environ, "CHECK_LOG": str(log), "POINTS": str(count), **override},
+    )
+
+    assert (result.returncode == 0) is success, result.stderr
+    calls = log.read_text().splitlines() if log.exists() else []
+    assert ("ingest" in calls) is ingested
+    if version < 26:
+        assert calls == []
+    else:
+        assert calls[0] == "candidate exec -T app python -m app.application_roles verify"
+
+
 def test_data_manifest_comparison_ignores_schema_version_drift(tmp_path):
     script = _manifest_comparison_harness(tmp_path)
     scratch = tmp_path / "scratch"
@@ -1013,3 +1066,19 @@ def test_mixed_auth_drill_fails_closed_on_transition_drift(
     assert "rotated-password-contract" not in combined_output
     assert "b" * 64 not in combined_output
     assert list(scratch_root.glob("upgrade_check.*")) == []
+
+
+def test_published_base_image_is_used_without_build_for_restore_and_rollback(tmp_path):
+    repo, base_ref, candidate_ref = _install_repo(tmp_path, modern_auth=True)
+    result, log_path, _, _ = _run(
+        repo, ["--base", base_ref, "--candidate", candidate_ref,
+               "--base-image", "registry.example.test/odograph@sha256:" + "a" * 64],
+        tmp_path, fail_up=False, modern_auth=True,
+    )
+    assert result.returncode == 0, result.stderr
+    base_up = [line for line in log_path.read_text().splitlines()
+               if line.startswith("compose|") and "/base/" in line and " up " in line]
+    assert base_up
+    assert all("compose.base-image.override.yml" in line for line in base_up)
+    assert all("--build" not in line for line in base_up)
+    assert any("--no-build app" in line for line in base_up)

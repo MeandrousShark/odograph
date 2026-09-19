@@ -11,7 +11,8 @@ from psycopg.rows import dict_row
 from starlette.responses import RedirectResponse
 
 import app.auth as auth_module
-from app.auth import AuthRedirect, make_router, require_user
+from app.auth import AuthRedirect, make_router, require_user, require_legacy_establishment
+from tests.auth_db_fixtures import auth_config, seed_auth_account
 from app.db import make_pool
 from app.ingest import FailedAuthLimiter
 from app.local_auth import hash_password
@@ -57,21 +58,23 @@ def _request(
     allowed_email="",
     initial_signup=False,
 ):
-    cfg = SimpleNamespace(
+    cfg = auth_config(TEST_DB,
         dev_no_auth=False,
         initial_admin_signup=initial_signup,
         allowed_email=allowed_email,
-        oidc_configured=True,
+        oidc_client_id="test-client", oidc_client_secret="test-secret",
         oidc_issuer="https://idp.example/",
     )
     return SimpleNamespace(
+        state=SimpleNamespace(),
         app=SimpleNamespace(
             state=SimpleNamespace(
-                pool=pool,
+                pool=pool, control_pool=pool, runtime_pool=pool,
+                make_detector_runner=lambda bound: SimpleNamespace(pool=bound),
                 config=cfg,
                 oauth=SimpleNamespace(pocketid=oauth_client),
                 templates=make_templates(
-                    SimpleNamespace(display_tz=TZ, app_version="test")
+                    cfg
                 ),
                 login_limiter=FailedAuthLimiter(5, 900.0),
             )
@@ -85,12 +88,9 @@ def _request(
 
 async def _create_account(pool, password="local password"):
     async with pool.connection() as conn:
+        await seed_auth_account(conn, email="local@example.com", password_hash=hash_password(password))
         cur = conn.cursor(row_factory=dict_row)
-        await cur.execute(
-            "INSERT INTO accounts (id, email, password_hash) "
-            "VALUES (1, 'local@example.com', %s) RETURNING *",
-            (hash_password(password),),
-        )
+        await cur.execute("SELECT * FROM accounts WHERE id=1")
         return await cur.fetchone()
 
 
@@ -133,6 +133,7 @@ async def _link_and_exact_login_scenario():
             "is_admin": True,
             "legacy_oidc": False,
         }
+        await require_user(request)
         response = await _endpoint("/settings/account/oidc/link", "POST")(
             request,
             current_password="local password",
@@ -212,6 +213,7 @@ async def _link_and_unlink_failures_scenario():
             oauth_client,
             session={"account_id": 1, "auth_version": 1, "csrf": "csrf"},
         )
+        await require_user(wrong)
         response = await _endpoint("/settings/account/oidc/link", "POST")(
             wrong,
             current_password="wrong password",
@@ -227,6 +229,7 @@ async def _link_and_unlink_failures_scenario():
             oauth_client,
             session={"account_id": 1, "auth_version": 1, "csrf": "csrf"},
         )
+        await require_user(link_request)
         await _endpoint("/settings/account/oidc/link", "POST")(
             link_request,
             current_password="local password",
@@ -262,6 +265,7 @@ async def _link_and_unlink_failures_scenario():
             oauth_client,
             session={"account_id": 1, "auth_version": 1, "csrf": "csrf"},
         )
+        await require_user(no_confirm)
         response = await _endpoint("/settings/account/oidc/unlink", "POST")(
             no_confirm,
             current_password="local password",
@@ -277,6 +281,7 @@ async def _link_and_unlink_failures_scenario():
             oauth_client,
             session={"account_id": 1, "auth_version": 1, "csrf": "csrf"},
         )
+        await require_user(wrong_password)
         response = await _endpoint("/settings/account/oidc/unlink", "POST")(
             wrong_password,
             current_password="wrong password",
@@ -297,6 +302,7 @@ async def _link_and_unlink_failures_scenario():
             oauth_client,
             session={"account_id": 1, "auth_version": 1, "csrf": "csrf"},
         )
+        await require_user(unlink_request)
         response = await _endpoint("/settings/account/oidc/unlink", "POST")(
             unlink_request,
             current_password="local password",
@@ -345,7 +351,7 @@ async def _legacy_establishment_and_email_fallback_scenario():
             "csrf": "csrf",
         }
         request = _request(pool, oauth_client, session=legacy_session)
-        legacy_user = await require_user(request)
+        legacy_user = await require_legacy_establishment(request)
         page = await _endpoint("/account/establish", "GET")(
             request, user=legacy_user
         )
@@ -357,6 +363,7 @@ async def _legacy_establishment_and_email_fallback_scenario():
             email="different-local@example.com",
             password="new local password",
             password_confirm="new local password",
+            display_timezone="UTC",
             csrf_token="csrf",
             user=legacy_user,
         )
@@ -409,7 +416,7 @@ async def _failed_legacy_establishment_scenario(monkeypatch):
                 "csrf": "csrf",
             },
         )
-        legacy_user = await require_user(request)
+        legacy_user = await require_legacy_establishment(request)
 
         async def reject(*args, **kwargs):
             raise IdentityLinkRejectedError()
@@ -420,12 +427,13 @@ async def _failed_legacy_establishment_scenario(monkeypatch):
             email="local@example.com",
             password="new local password",
             password_confirm="new local password",
+            display_timezone="UTC",
             csrf_token="csrf",
             user=legacy_user,
         )
         assert response.status_code == 409
         assert request.session["legacy_oidc"]["subject"] == "legacy-subject"
-        assert (await require_user(request))["legacy_oidc"] is True
+        assert (await require_legacy_establishment(request))["legacy_oidc"] is True
         assert await _account(pool) is None
         assert await _identity(pool) is None
     finally:
@@ -448,7 +456,6 @@ async def _no_provider_scenario():
             session={"account_id": 1, "auth_version": 1, "csrf": "csrf"},
         )
         request.app.state.oauth = None
-        request.app.state.config.oidc_configured = False
         request.app.state.config.oidc_issuer = ""
         user = {
             "id": 1,
@@ -457,6 +464,7 @@ async def _no_provider_scenario():
             "is_admin": True,
             "legacy_oidc": False,
         }
+        user = await require_user(request)
         page = await _endpoint("/settings/account", "GET")(request, user=user)
         assert page.status_code == 200
         assert b"No sign-in provider is configured" in page.body

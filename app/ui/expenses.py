@@ -9,6 +9,7 @@ from psycopg import errors
 from psycopg.rows import dict_row
 from starlette.responses import Response
 
+from app.account_context import account_id
 from app.auth import require_csrf, require_user
 from app.page import render_page
 from app.expenses import (
@@ -30,8 +31,8 @@ _EXPENSE_SELECT_JOIN = (
     "expenses.treatment::text AS treatment, expenses.notes, expenses.trip_id, "
     "trips.vehicle_id AS trip_vehicle_id, trips.started_at AS trip_started_at, "
     "trips.exclusion::text AS trip_exclusion "
-    "FROM expenses JOIN vehicles ON vehicles.id = expenses.vehicle_id "
-    "LEFT JOIN trips ON trips.id = expenses.trip_id "
+    "FROM expenses JOIN vehicles ON vehicles.id = expenses.vehicle_id AND vehicles.account_id = expenses.account_id "
+    "LEFT JOIN trips ON trips.id = expenses.trip_id AND trips.account_id = expenses.account_id "
 )
 
 
@@ -99,18 +100,18 @@ def register(router: APIRouter) -> None:
             vehicle: str = Query(""),
             user: dict = Depends(require_user),
         ):
-            tz = request.app.state.config.display_tz
+            tz = request.state.config.display_tz
             selected_year = year or datetime.now(tz).year
             vehicle_id = _parse_vehicle_id(vehicle)
             if vehicle_id == VEHICLE_FILTER_UNASSIGNED:
                 # expenses.vehicle_id is NOT NULL (migration 011), so there is no
                 # unassigned bucket to filter to -- unlike trips.
                 raise HTTPException(status_code=400, detail="Invalid vehicle")
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 vehicles = await list_vehicles(conn, include_inactive=True)
                 cur = conn.cursor(row_factory=dict_row)
-                clauses = ["expenses.incurred_on >= %s", "expenses.incurred_on < %s"]
-                params: list = [date(selected_year, 1, 1), date(selected_year + 1, 1, 1)]
+                clauses = ["expenses.account_id = %s", "expenses.incurred_on >= %s", "expenses.incurred_on < %s"]
+                params: list = [account_id(conn), date(selected_year, 1, 1), date(selected_year + 1, 1, 1)]
                 if vehicle_id is not None:
                     clauses.append("expenses.vehicle_id = %s")
                     params.append(vehicle_id)
@@ -128,8 +129,9 @@ def register(router: APIRouter) -> None:
                 await trip_cur.execute(
                     "SELECT trips.id, trips.started_at, trips.ended_at, trips.vehicle_id, "
                     "trips.exclusion::text AS exclusion, vehicles.name AS vehicle_name FROM trips "
-                    "LEFT JOIN vehicles ON vehicles.id = trips.vehicle_id "
-                    "ORDER BY trips.started_at DESC, trips.id DESC"
+                    "LEFT JOIN vehicles ON vehicles.id = trips.vehicle_id AND vehicles.account_id = trips.account_id "
+                    "WHERE trips.account_id = %s ORDER BY trips.started_at DESC, trips.id DESC",
+                    (account_id(conn),),
                 )
                 trips = await trip_cur.fetchall()
             category_totals: dict[str, Decimal] = {}
@@ -173,24 +175,24 @@ def register(router: APIRouter) -> None:
             parsed_date, category, parsed_amount, treatment = _parse_expense_input(
                 incurred_on, category, amount, treatment, trip_id
             )
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 vehicle_cur = await conn.execute(
-                    "SELECT 1 FROM vehicles WHERE id = %s", (vehicle_id,)
+                    "SELECT 1 FROM vehicles WHERE id = %s AND account_id = %s", (vehicle_id, account_id(conn))
                 )
                 if await vehicle_cur.fetchone() is None:
                     raise HTTPException(status_code=400, detail="No such vehicle")
                 if parsed_trip_id is not None:
                     trip_cur = await conn.execute(
-                        "SELECT 1 FROM trips WHERE id = %s", (parsed_trip_id,)
+                        "SELECT 1 FROM trips WHERE id = %s AND account_id = %s", (parsed_trip_id, account_id(conn))
                     )
                     if await trip_cur.fetchone() is None:
                         raise HTTPException(status_code=400, detail="No such trip")
                 try:
                     await conn.execute(
-                        "INSERT INTO expenses (vehicle_id, incurred_on, category, amount, treatment, notes, trip_id) "
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                        "INSERT INTO expenses (account_id, vehicle_id, incurred_on, category, amount, treatment, notes, trip_id) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                         (
-                            vehicle_id, parsed_date, category, parsed_amount, treatment,
+                            account_id(conn), vehicle_id, parsed_date, category, parsed_amount, treatment,
                             notes.strip() or None, parsed_trip_id,
                         ),
                     )
@@ -215,15 +217,15 @@ def register(router: APIRouter) -> None:
             parsed_date, category, parsed_amount, treatment = _parse_expense_input(
                 incurred_on, category, amount, treatment, trip_id
             )
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 vehicle_cur = await conn.execute(
-                    "SELECT 1 FROM vehicles WHERE id = %s", (vehicle_id,)
+                    "SELECT 1 FROM vehicles WHERE id = %s AND account_id = %s", (vehicle_id, account_id(conn))
                 )
                 if await vehicle_cur.fetchone() is None:
                     raise HTTPException(status_code=400, detail="No such vehicle")
                 if parsed_trip_id is not None:
                     trip_cur = await conn.execute(
-                        "SELECT 1 FROM trips WHERE id = %s", (parsed_trip_id,)
+                        "SELECT 1 FROM trips WHERE id = %s AND account_id = %s", (parsed_trip_id, account_id(conn))
                     )
                     if await trip_cur.fetchone() is None:
                         raise HTTPException(status_code=400, detail="No such trip")
@@ -231,10 +233,10 @@ def register(router: APIRouter) -> None:
                     cur = await conn.execute(
                         "UPDATE expenses SET vehicle_id = %s, incurred_on = %s, category = %s, "
                         "amount = %s, treatment = %s, notes = %s, trip_id = %s, "
-                        "updated_at = now() WHERE id = %s",
+                        "updated_at = now() WHERE id = %s AND account_id = %s",
                         (
                             vehicle_id, parsed_date, category, parsed_amount, treatment,
-                            notes.strip() or None, parsed_trip_id, expense_id,
+                            notes.strip() or None, parsed_trip_id, expense_id, account_id(conn),
                         ),
                     )
                 except errors.ForeignKeyViolation:
@@ -247,8 +249,8 @@ def register(router: APIRouter) -> None:
         async def delete_expense(
             request: Request, expense_id: int, user: dict = Depends(require_user)
         ):
-            async with request.app.state.pool.connection() as conn:
-                cur = await conn.execute("DELETE FROM expenses WHERE id = %s", (expense_id,))
+            async with request.state.account_pool.connection() as conn:
+                cur = await conn.execute("DELETE FROM expenses WHERE id = %s AND account_id = %s", (expense_id, account_id(conn)))
                 if cur.rowcount == 0:
                     raise HTTPException(status_code=404, detail="No such expense")
             return Response(status_code=204, headers={"HX-Redirect": "/expenses"})

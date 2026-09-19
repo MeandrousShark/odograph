@@ -16,17 +16,26 @@ checkout.
 `scripts/backup_database.sh` produces a PostgreSQL custom-format `pg_dump`
 archive of the complete `mileage` database. It includes the schema, PostGIS
 objects, trips, GPS points, raw ingest messages, account credential hashes,
-linked identity metadata, places, tagging rules, vehicles, expenses, odometer
-readings, overrides, caches, and worker delivery ledgers.
+linked identity metadata, account settings, tracking devices and credential
+hashes, places, tagging rules, vehicles, expenses, odometer readings,
+overrides, caches, and worker delivery ledgers. It also includes the protected
+`odograph_service` schema containing the application's database credential
+state. Treat the entire archive as sensitive and encrypt off-host copies.
 
 The dump has no table-level allowlist. That means a future schema change cannot
 silently add an application table that the backup leaves out.
+The script requires the instance database identity with unrestricted backup
+access and records `backup_scope=full-instance` in its manifest. It refuses
+an account-scoped runtime identity; a dump made through that identity is not
+a complete installation backup.
 
 Three things are deliberately **not** in the archive:
 
-- **`.env`.** It holds your database, ingest, session, OIDC, and
-  optional-service secrets and configuration, and none of it lives in
-  PostgreSQL. The backup script never reads or prints it. See
+- **`.env`.** It holds instance database, session, OIDC, and optional-service
+  secrets and configuration. The file itself is not stored in PostgreSQL;
+  personal settings and the legacy ingest credential are imported into the
+  database once during the ownership migration. The backup script never reads
+  or prints `.env`. See
   [Protecting `.env`](#protecting-env) below. Losing it is a real recovery
   problem even though the database restores fine on its own.
 - **The optional `osrmdata` volume.** It holds reproducible OSRM routing
@@ -38,8 +47,8 @@ Three things are deliberately **not** in the archive:
 - **The PostGIS-managed `tiger`, `tiger_data`, and `topology` schemas.**
   Database images may create these on a fresh volume. When an archive declares
   their extensions but omits the schemas, the restore script creates the
-  missing schemas within the restore transaction. All application data lives
-  in the `public` schema, which is fully included above.
+  missing schemas within the restore transaction. Application data and the
+  protected application credential schema are fully included above.
 
 Copying the live `dbdata` volume directly (filesystem copy, snapshot, `tar`
 of the volume mount, etc.) is not a supported backup path. PostgreSQL's data
@@ -148,6 +157,20 @@ you; start it yourself once you're satisfied, so its own startup migrations
 (if the target release differs from the one that made the backup) run under
 your observation.
 
+For a schema-26 archive containing `odograph_service`, use the matching
+application image and scripts. Before loading SQL, the script creates the
+required roles with login disabled. After the data commits, a one-off app
+command reconstructs ownership, permissions, and restricted-role credentials
+from the archived state, then validates the security contract. This retains
+the archive's prepared RLS policies and disabled enforcement flags; restoring
+a backup does not activate RLS. Older archives do not run these commands.
+
+If the security reconstruction fails after SQL commits, keep the app stopped.
+The script reports that data was restored but security validation failed;
+this is not a successful restore. Correct the image or configuration and
+restore into another fresh target. Do not grant broad permissions or enable
+RLS manually to get past the check.
+
 When changing the PostGIS database image, keep the old project and volume
 stopped and restore into a fresh project with a new `COMPOSE_PROJECT_NAME`.
 Use the target release's restore script after starting only its database. Do
@@ -184,9 +207,13 @@ What losing a given value actually costs, if you don't have a copy:
   Restore them with the database archive. If the password is lost, run
   `python -m app.manage_account reset-password` inside the app container;
   the reset invalidates previously issued sessions.
-- **`INGEST_PASSWORD`** is safely regenerable, but every OwnTracks device
-  needs its password field updated to match before it can post again. See
-  [Connecting OwnTracks](owntracks.md).
+- **Tracking credentials** are stored as hashes in schema-26 backups, so
+  restored devices keep working with their existing credentials. The old
+  `INGEST_PASSWORD` is imported only once; changing `.env` cannot rotate or
+  recreate it afterward. Use Tracking settings to replace a lost or revoked
+  credential, then update the affected device. With an older backup made
+  before schema 26, preserve its original `INGEST_USERNAME` and `INGEST_PASSWORD`
+  until the ownership migration imports them. See [Connecting OwnTracks](owntracks.md).
 - **`OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET`** have to be
   re-obtained from your identity provider; nothing here regenerates them
   locally.
@@ -209,8 +236,10 @@ data itself:
 - Every existing browser session is invalidated: the new `SESSION_SECRET`
   can't validate cookies signed by the old one, so everyone (including you)
   has to sign in again.
-- Every OwnTracks device needs reconfiguring with the new `INGEST_PASSWORD`
-  before it can resume posting locations.
+- Schema-26 backups retain existing tracking credential hashes, so devices
+  with their original credentials can continue posting. For an older backup,
+  preserve the old ingest credentials if available; otherwise, use the old
+  release's replacement credentials on every device before upgrading.
 - OIDC, ntfy, and SMTP all need their values re-entered from their
   respective providers before those integrations work again; the app runs
   fine without any of them in the meantime.

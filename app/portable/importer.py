@@ -10,6 +10,7 @@ from typing import Any
 
 from psycopg import errors
 from psycopg.rows import dict_row
+from app.account_context import account_id
 
 from app.db import DETECTOR_ADVISORY_LOCK_KEY, _fetch_schema_version
 from app.portable.format import SEEDED_TAG_RULES, SEEDED_VEHICLE
@@ -25,7 +26,9 @@ log = logging.getLogger(__name__)
 # schema simply has no value for either, so both default to null on import.
 # Keep the tuples explicit so a future migration never becomes cross-schema
 # compatible merely because its version is adjacent.
-_COMPATIBLE_SCHEMA_TRANSITIONS = {(1, 21, 25), (2, 22, 25), (2, 23, 25), (2, 24, 25)}
+_COMPATIBLE_SCHEMA_TRANSITIONS = {
+    (1, 21, 26), (2, 22, 26), (2, 23, 26), (2, 24, 26), (2, 25, 26), (3, 26, 26),
+}
 
 
 class PortableImportError(Exception):
@@ -66,14 +69,22 @@ async def _check_clean_target(conn) -> dict:
     that.
     """
     conflicts: dict[str, dict] = {}
-    for table in ("trips", "expenses", "odometer_readings", "places", "points", "stays"):
-        cur = await conn.execute(f"SELECT count(*) FROM {table}")
+    for table in ("trips", "expenses", "odometer_readings", "places", "points", "stays", "trip_boundary_overrides"):
+        cur = await conn.execute(f"SELECT count(*) FROM {table} WHERE account_id = %s", (account_id(conn),))
         count = (await cur.fetchone())[0]
         if count:
             conflicts[table] = {"count": count, "expected_count": 0}
 
+    cur = await conn.execute(
+        "SELECT count(*) FROM detector_state WHERE account_id = %s "
+        "AND (last_run_at IS NOT NULL OR detector_version <> 0)", (account_id(conn),),
+    )
+    progressed = (await cur.fetchone())[0]
+    if progressed:
+        conflicts["detector_state"] = {"count": progressed, "expected_count": 0}
+
     cur = conn.cursor(row_factory=dict_row)
-    await cur.execute("SELECT name, make, model, plate, is_default, active FROM vehicles")
+    await cur.execute("SELECT name, make, model, plate, is_default, active FROM vehicles WHERE account_id = %s", (account_id(conn),))
     vehicles = await cur.fetchall()
     if vehicles != [dict(SEEDED_VEHICLE)]:
         conflicts["vehicles"] = {
@@ -84,7 +95,7 @@ async def _check_clean_target(conn) -> dict:
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         "SELECT a_place, a_kind::text AS a_kind, b_place, b_kind::text AS b_kind, "
-        " category::text AS category FROM tag_rules"
+        " category::text AS category FROM tag_rules WHERE account_id = %s", (account_id(conn),)
     )
     rules = await cur.fetchall()
     expected_rules = [dict(r) for r in SEEDED_TAG_RULES]
@@ -101,9 +112,9 @@ async def _insert_vehicles(conn, rows: list[dict]) -> dict[int, int]:
     id_map: dict[int, int] = {}
     for row in rows:
         cur = await conn.execute(
-            "INSERT INTO vehicles (name, make, model, plate, is_default, active) "
-            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-            (row["name"], row["make"], row["model"], row["plate"],
+            "INSERT INTO vehicles (account_id, name, make, model, plate, is_default, active) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (account_id(conn), row["name"], row["make"], row["model"], row["plate"],
              row["is_default"], row["active"]),
         )
         id_map[row["$id"]] = (await cur.fetchone())[0]
@@ -114,9 +125,9 @@ async def _insert_places(conn, rows: list[dict]) -> dict[int, int]:
     id_map: dict[int, int] = {}
     for row in rows:
         cur = await conn.execute(
-            "INSERT INTO places (name, kind, geom, radius_m) "
-            "VALUES (%s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s) RETURNING id",
-            (row["name"], row["kind"], row["lon"], row["lat"], row["radius_m"]),
+            "INSERT INTO places (account_id, name, kind, geom, radius_m) "
+            "VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s) RETURNING id",
+            (account_id(conn), row["name"], row["kind"], row["lon"], row["lat"], row["radius_m"]),
         )
         id_map[row["$id"]] = (await cur.fetchone())[0]
     return id_map
@@ -138,6 +149,7 @@ async def _insert_many(conn, sql: str, params: list[tuple]) -> int:
 async def _insert_tag_rules(conn, rows: list[dict], place_id_map: dict[int, int]) -> int:
     params = [
         (
+            account_id(conn),
             place_id_map[row["a_place"]] if row["a_place"] is not None else None,
             row["a_kind"],
             place_id_map[row["b_place"]] if row["b_place"] is not None else None,
@@ -148,8 +160,8 @@ async def _insert_tag_rules(conn, rows: list[dict], place_id_map: dict[int, int]
     ]
     return await _insert_many(
         conn,
-        "INSERT INTO tag_rules (a_place, a_kind, b_place, b_kind, category) "
-        "VALUES (%s, %s, %s, %s, %s)",
+        "INSERT INTO tag_rules (account_id, a_place, a_kind, b_place, b_kind, category) "
+        "VALUES (%s, %s, %s, %s, %s, %s)",
         params,
     )
 
@@ -157,12 +169,12 @@ async def _insert_tag_rules(conn, rows: list[dict], place_id_map: dict[int, int]
 async def _upsert_mileage_rates(conn, rows: list[dict]) -> int:
     for row in rows:
         await conn.execute(
-            "INSERT INTO mileage_rates (year, rate_per_mi, rate_h2_per_mi, h2_start_month) "
-            "VALUES (%s, %s, %s, %s) "
-            "ON CONFLICT (year) DO UPDATE SET rate_per_mi = EXCLUDED.rate_per_mi, "
+            "INSERT INTO mileage_rates (account_id, year, rate_per_mi, rate_h2_per_mi, h2_start_month) "
+            "VALUES (%s, %s, %s, %s, %s) "
+            "ON CONFLICT (account_id, year) DO UPDATE SET rate_per_mi = EXCLUDED.rate_per_mi, "
             "rate_h2_per_mi = EXCLUDED.rate_h2_per_mi, h2_start_month = EXCLUDED.h2_start_month, "
             "updated_at = now()",
-            (row["year"], row["rate_per_mi"], row["rate_h2_per_mi"], row["h2_start_month"]),
+            (account_id(conn), row["year"], row["rate_per_mi"], row["rate_h2_per_mi"], row["h2_start_month"]),
         )
     return len(rows)
 
@@ -177,7 +189,7 @@ async def _insert_trips(
     # reconcile pass from treating it as stale and deleting it.
     params = [
         (
-            row["device"], row["source"], row["started_at"], row["ended_at"],
+            account_id(conn), row["device"], row["source"], row["started_at"], row["ended_at"],
             row["distance_m"], row["has_gap"], row["category"], row["exclusion"],
             row["purpose"], row["notes"],
             vehicle_id_map[row["vehicle"]] if row["vehicle"] is not None else None,
@@ -189,10 +201,10 @@ async def _insert_trips(
     ]
     cur = conn.cursor()
     await cur.executemany(
-        "INSERT INTO trips (device, source, started_at, ended_at, distance_m, has_gap, "
+        "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, has_gap, "
         " category, exclusion, purpose, notes, vehicle_id, start_place_id, end_place_id, "
         " tag_source, start_label, end_label, imported) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, true) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, true) "
         "RETURNING id",
         params,
         returning=True,
@@ -210,7 +222,7 @@ async def _insert_expenses(
 ) -> int:
     params = [
         (
-            vehicle_id_map[row["vehicle"]], row["incurred_on"], row["category"],
+            account_id(conn), vehicle_id_map[row["vehicle"]], row["incurred_on"], row["category"],
             row["amount"], row["treatment"], row["notes"],
             trip_id_map[row["trip"]] if row["trip"] is not None else None,
         )
@@ -218,39 +230,35 @@ async def _insert_expenses(
     ]
     return await _insert_many(
         conn,
-        "INSERT INTO expenses (vehicle_id, incurred_on, category, amount, treatment, notes, trip_id) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+        "INSERT INTO expenses (account_id, vehicle_id, incurred_on, category, amount, treatment, notes, trip_id) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
         params,
     )
 
 
 async def _insert_odometer_readings(conn, rows: list[dict], vehicle_id_map: dict[int, int]) -> int:
     params = [
-        (vehicle_id_map[row["vehicle"]], row["recorded_at"], row["odometer_m"], row["note"])
+        (account_id(conn), vehicle_id_map[row["vehicle"]], row["recorded_at"], row["odometer_m"], row["note"])
         for row in rows
     ]
     return await _insert_many(
         conn,
-        "INSERT INTO odometer_readings (vehicle_id, recorded_at, odometer_m, note) "
-        "VALUES (%s, %s, %s, %s)",
+        "INSERT INTO odometer_readings (account_id, vehicle_id, recorded_at, odometer_m, note) "
+        "VALUES (%s, %s, %s, %s, %s)",
         params,
     )
 
 
 async def _update_settings(conn, settings: dict) -> None:
     await conn.execute(
-        "UPDATE app_settings SET auto_assign_default_vehicle = %s, updated_at = now() WHERE id = 1",
-        (settings["auto_assign_default_vehicle"],),
+        "UPDATE account_settings SET auto_assign_default_vehicle = %s, "
+        "display_tz = COALESCE(%s, display_tz), updated_at = now() WHERE account_id = %s",
+        (settings["auto_assign_default_vehicle"], settings.get("display_tz"), account_id(conn)),
     )
 
 
 async def _apply_import(conn, bundle: dict) -> dict:
-    # Every other trip/place mutation path takes this lock before writing
-    # (app/ui/trips.py's trip delete and batch update, the detector itself);
-    # import is no different -- without it, a scheduled detector pass can insert
-    # trips after _check_clean_target's count returns 0 but before this
-    # transaction commits, producing exactly the interleaved state the
-    # clean-target precondition exists to prevent.
+    # Preserve the shared detector/mutation exclusion through the whole import.
     await conn.execute(
         "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
     )
@@ -260,21 +268,27 @@ async def _apply_import(conn, bundle: dict) -> dict:
     transition = (
         bundle["format_version"], source_schema_version, target_schema_version
     )
-    if (
-        source_schema_version != target_schema_version
-        and transition not in _COMPATIBLE_SCHEMA_TRANSITIONS
-    ):
+    if transition not in _COMPATIBLE_SCHEMA_TRANSITIONS:
         raise PortableImportError(
             "schema_version_mismatch",
             f"Bundle schema_version {source_schema_version} is not compatible with this "
             f"instance's schema_version {target_schema_version}.",
         )
 
+    # Ordinary personal creates do not take the detector lock. Freeze tables
+    # used by the clean-target check so their writes cannot cross its window.
+    # Reads remain available; these brief instance-wide write locks are kept
+    # within the existing single-account import transaction.
+    await conn.execute(
+        "LOCK TABLE detector_state, expenses, odometer_readings, places, points, "
+        "stays, tag_rules, trip_boundary_overrides, trips, vehicles "
+        "IN SHARE ROW EXCLUSIVE MODE"
+    )
     conflicts = await _check_clean_target(conn)
     if conflicts:
         raise PortableImportError(
             "target_not_clean",
-            "The target instance already has data beyond the freshly migrated default "
+            "The target account already has data beyond the initial default "
             "state; import only supports a clean target.",
             conflicts=conflicts,
         )
@@ -286,8 +300,9 @@ async def _apply_import(conn, bundle: dict) -> dict:
         # bundle that itself carries a "home <-> work" rule) have to go
         # first. Safe only because _check_clean_target just confirmed
         # nothing else in the target references them.
-        await conn.execute("DELETE FROM tag_rules")
-        await conn.execute("DELETE FROM vehicles")
+        await conn.execute("DELETE FROM tag_rules WHERE account_id = %s", (account_id(conn),))
+        await conn.execute("DELETE FROM vehicles WHERE account_id = %s", (account_id(conn),))
+        await conn.execute("DELETE FROM mileage_rates WHERE account_id = %s", (account_id(conn),))
 
         vehicle_id_map = await _insert_vehicles(conn, bundle["vehicles"])
         place_id_map = await _insert_places(conn, bundle["places"])

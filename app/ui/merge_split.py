@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from psycopg import errors
 from starlette.responses import JSONResponse, Response
 
+from app.account_context import account_id
 from app.auth import require_csrf, require_user
 from app.db import DETECTOR_ADVISORY_LOCK_KEY
 from app.detector.runner import load_trip_points
@@ -47,9 +48,11 @@ async def _merge_trips_core(
     keep_vehicle = vehicle == "keep"
     parsed_vehicle_id = None if keep_vehicle else _parse_vehicle_form(vehicle)
     trip_ids = sorted(set(trip_ids))
+    if not trip_ids:
+        raise HTTPException(status_code=400, detail="Select at least two trips")
 
-    runner = request.app.state.detector_runner
-    async with request.app.state.pool.connection() as conn:
+    runner = request.state.detector_runner
+    async with request.state.account_pool.connection() as conn:
         await conn.execute(
             "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
         )
@@ -66,8 +69,8 @@ async def _merge_trips_core(
         # final lookup failed to find a trip the suppress override could
         # never have produced.
         cur = await conn.execute(
-            "SELECT 1 FROM trips WHERE id = ANY(%s) AND imported LIMIT 1",
-            (trip_ids,),
+            "SELECT 1 FROM trips WHERE account_id = %s AND id = ANY(%s) AND imported LIMIT 1",
+            (account_id(conn), trip_ids),
         )
         if await cur.fetchone():
             raise HTTPException(
@@ -77,28 +80,29 @@ async def _merge_trips_core(
             )
 
         cur = await conn.execute(
-            "SELECT id, device, source::text AS source, started_at, ended_at "
-            "FROM trips WHERE id = ANY(%s) AND NOT imported",
-            (trip_ids,),
+            "SELECT id, tracking_device_id, source::text AS source, started_at, ended_at, device "
+            "FROM trips WHERE account_id = %s AND id = ANY(%s) AND NOT imported",
+            (account_id(conn), trip_ids),
         )
         rows = await cur.fetchall()
         if len(rows) != len(trip_ids):
             raise HTTPException(status_code=400, detail="One or more selected trips no longer exist")
+        if any(r[2] != "detected" for r in rows):
+            raise HTTPException(status_code=400, detail="Only detected trips can be merged")
         devices = {r[1] for r in rows}
         if len(devices) > 1:
             raise HTTPException(status_code=400, detail="Selected trips must all be from the same device")
-        if any(r[2] != "detected" for r in rows):
-            raise HTTPException(status_code=400, detail="Only detected trips can be merged")
         device = next(iter(devices))
+        label = rows[0][5]
         selected = [TripSpan(id=r[0], started_at=r[3], ended_at=r[4]) for r in rows]
 
         first_start = min(t.started_at for t in selected)
         last_start = max(t.started_at for t in selected)
         cur = await conn.execute(
-            "SELECT id, started_at, ended_at FROM trips WHERE device = %s "
+            "SELECT id, started_at, ended_at FROM trips WHERE account_id = %s AND tracking_device_id = %s "
             "AND source = 'detected' AND NOT imported AND started_at BETWEEN %s AND %s "
             "ORDER BY started_at",
-            (device, first_start, last_start),
+            (account_id(conn), device, first_start, last_start),
         )
         in_range = [TripSpan(id=r[0], started_at=r[1], ended_at=r[2]) for r in await cur.fetchall()]
 
@@ -110,14 +114,15 @@ async def _merge_trips_core(
         for range_start, range_end in ranges:
             await conn.execute(
                 "DELETE FROM trip_boundary_overrides o USING points p "
-                "WHERE o.point_id = p.id AND o.kind = 'force' AND o.device = %s "
+                "WHERE o.account_id = %s AND o.point_id = p.id AND p.account_id = o.account_id "
+                "AND p.tracking_device_id = o.tracking_device_id AND o.kind = 'force' AND o.tracking_device_id = %s "
                 "AND p.recorded_at BETWEEN %s AND %s",
-                (device, range_start, range_end),
+                (account_id(conn), device, range_start, range_end),
             )
             await conn.execute(
-                "INSERT INTO trip_boundary_overrides (device, kind, range_start, range_end) "
-                "VALUES (%s, 'suppress', %s, %s) ON CONFLICT DO NOTHING",
-                (device, range_start, range_end),
+                "INSERT INTO trip_boundary_overrides (account_id, tracking_device_id, device, kind, range_start, range_end) "
+                "VALUES (%s, %s, %s, 'suppress', %s, %s) ON CONFLICT DO NOTHING",
+                (account_id(conn), device, label, range_start, range_end),
             )
 
         ordered = sorted(selected, key=lambda t: t.started_at)
@@ -126,9 +131,9 @@ async def _merge_trips_core(
         await runner.reprocess_device_in(conn, device)
 
         cur = await conn.execute(
-            "SELECT id FROM trips WHERE device = %s AND source = 'detected' "
+            "SELECT id FROM trips WHERE account_id = %s AND tracking_device_id = %s AND source = 'detected' "
             "AND started_at = %s AND ended_at = %s",
-            (device, merged_start, merged_end),
+            (account_id(conn), device, merged_start, merged_end),
         )
         row = await cur.fetchone()
         if not row:
@@ -142,10 +147,10 @@ async def _merge_trips_core(
         if not keep_vehicle:
             set_clause += ", vehicle_id = %s"
             update_params.append(parsed_vehicle_id)
-        update_params.append(merged_id)
+        update_params.extend((account_id(conn), merged_id))
         try:
             await conn.execute(
-                f"UPDATE trips SET {set_clause}, updated_at = now() WHERE id = %s",
+                f"UPDATE trips SET {set_clause}, updated_at = now() WHERE account_id = %s AND id = %s",
                 update_params,
             )
         except errors.ForeignKeyViolation:
@@ -158,7 +163,7 @@ async def _merge_with_neighbor(
     request: Request, trip_id: int, direction: str, category: str, purpose: str, notes: str,
     vehicle: str = "keep",
 ) -> Response:
-    pool = request.app.state.pool
+    pool = request.state.account_pool
     trip = await _fetch_trip(pool, trip_id)
     # Keep this early check even though _merge_trips_core repeats it: it
     # reports the real invalid-source error before a neighbor lookup can
@@ -179,12 +184,12 @@ async def _merge_with_neighbor(
     # so interpolating op/order (rather than %s-parameterizing them) is
     # safe here; device and started_at stay as %s params.
     op, order = (">", "ASC") if direction == "next" else ("<", "DESC")
-    async with request.app.state.pool.connection() as conn:
+    async with request.state.account_pool.connection() as conn:
         cur = await conn.execute(
-            "SELECT id FROM trips WHERE device = %s "
+            "SELECT id FROM trips WHERE account_id = %s AND tracking_device_id = %s "
             f"AND source = 'detected' AND NOT imported AND started_at {op} %s "
             f"ORDER BY started_at {order} LIMIT 1",
-            (trip["device"], trip["started_at"]),
+            (account_id(conn), trip["tracking_device_id"], trip["started_at"]),
         )
         neighbor = await cur.fetchone()
         if not neighbor:
@@ -285,26 +290,28 @@ def register_split(router: APIRouter) -> None:
             boundaries out from under this split between the read and the
             override write -- same reasoning as `_delete_trip_in`.
             """
-            runner = request.app.state.detector_runner
-            async with request.app.state.pool.connection() as conn:
+            runner = request.state.detector_runner
+            async with request.state.account_pool.connection() as conn:
                 await conn.execute(
                     "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
                 )
                 cur = await conn.execute(
-                    "SELECT device, source::text, started_at, ended_at "
-                    "FROM trips WHERE id = %s FOR UPDATE",
-                    (trip_id,),
+                    "SELECT tracking_device_id, source::text, started_at, ended_at, device, imported "
+                    "FROM trips WHERE account_id = %s AND id = %s FOR UPDATE",
+                    (account_id(conn), trip_id),
                 )
                 row = await cur.fetchone()
                 if not row:
                     raise HTTPException(status_code=404, detail="No such trip")
-                device, source, started_at, ended_at = row
+                device, source, started_at, ended_at, label, imported = row
                 if source != "detected":
                     raise HTTPException(status_code=400, detail="Only detected trips can be split")
+                if imported:
+                    raise HTTPException(status_code=400, detail="Imported trips have no location points to split")
                 cur = await conn.execute(
-                    "SELECT 1 FROM points WHERE id = %s AND device = %s "
+                    "SELECT 1 FROM points WHERE account_id = %s AND id = %s AND tracking_device_id = %s "
                     "AND recorded_at > %s AND recorded_at < %s",
-                    (point_id, device, started_at, ended_at),
+                    (account_id(conn), point_id, device, started_at, ended_at),
                 )
                 if not await cur.fetchone():
                     raise HTTPException(
@@ -319,9 +326,9 @@ def register_split(router: APIRouter) -> None:
                     request.app.state.config.detector_params.min_trip_distance_m,
                 )
                 await conn.execute(
-                    "INSERT INTO trip_boundary_overrides (device, kind, point_id) "
-                    "VALUES (%s, 'force', %s) ON CONFLICT DO NOTHING",
-                    (device, point_id),
+                    "INSERT INTO trip_boundary_overrides (account_id, tracking_device_id, device, kind, point_id) "
+                    "VALUES (%s, %s, %s, 'force', %s) ON CONFLICT DO NOTHING",
+                    (account_id(conn), device, label, point_id),
                 )
                 await runner.reprocess_device_in(conn, device)
             _poke_snap_worker(request)

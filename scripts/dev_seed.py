@@ -54,6 +54,7 @@ import asyncio
 import math
 import random
 import sys
+import secrets
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -67,6 +68,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.dashboard import week_bounds
 from app.db import make_pool, run_migrations
+from app.account_context import AccountPool, AccountPrincipal, account_id, control_connection
+from app.accounts import create_admin, account_exists, get_account_by_email
+from app.application_roles import application_role_pools
+from app.local_auth import hash_password
 from app.detector.core import Params, Point, haversine_m
 from app.detector.runner import DetectorRunner
 from app.rates import METERS_PER_MILE
@@ -76,23 +81,13 @@ PACIFIC = ZoneInfo("America/Los_Angeles")
 DEVICE = "QA-IPHONE"
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
-# Every table this script fully owns the contents of. `tag_rules` is
-# included (not left to migration 003's one-time INSERT) because a data
-# script must be able to reseed it identically on every run; the two default
-# rows are re-inserted immediately after the truncate below. `mileage_rates`,
-# `detector_state`, and `schema_migrations` are deliberately NOT in this
-# list: truncating `mileage_rates` would permanently discard migration
-# 002/005's real 2025/2026 IRS rates in favor of this script's placeholder
-# formula (see `_seed_mileage_rates`) on every single run, for no benefit --
-# it only ever needs *additional* years filled in, never a clean slate.
-# `detector_state` is reset in place at the end of `_wipe` rather than
-# dropped, and `schema_migrations` must never be touched by anything but
-# `run_migrations`.
+# Delete only this synthetic account's rows, in foreign-key dependency order.
+# Rates and tracker identity survive reseeding; their values/history ownership
+# are never borrowed from another account.
 _WIPE_TABLES = [
-    "points", "stays", "trips", "trip_boundary_overrides", "expenses",
-    "odometer_readings", "vehicles", "places",
-    "geocode_cache", "raw_messages", "nudge_delivery_windows",
-    "odometer_reminder_windows", "email_deliveries", "tag_rules",
+    "trip_boundary_overrides", "expenses", "odometer_readings", "points",
+    "stays", "trips", "tag_rules", "vehicles", "places", "geocode_cache",
+    "raw_messages", "nudge_delivery_windows", "odometer_reminder_windows", "email_deliveries",
 ]
 
 
@@ -333,25 +328,27 @@ def build_all_points(now_utc: datetime) -> list[Point]:
 
 # --- DB helpers --------------------------------------------------------
 
-async def _insert_points(conn, points: list[Point]) -> None:
+async def _insert_points(conn, points: list[Point], device_id: int) -> None:
     for p in points:
         await conn.execute(
-            "INSERT INTO points (device, recorded_at, received_at, geom, "
+            "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, received_at, geom, "
             " accuracy_m, velocity_kmh) "
-            "VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s)",
-            (DEVICE, p.t, p.t, p.lon, p.lat, p.accuracy_m, p.velocity_kmh),
+            "VALUES (%s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s)",
+            (account_id(conn), device_id, DEVICE, p.t, p.t, p.lon, p.lat, p.accuracy_m, p.velocity_kmh),
         )
 
 
 async def _wipe(conn) -> None:
-    await conn.execute(f"TRUNCATE {', '.join(_WIPE_TABLES)} RESTART IDENTITY CASCADE")
+    for table in _WIPE_TABLES:
+        await conn.execute(f"DELETE FROM {table} WHERE account_id=%s", (account_id(conn),))
     # Re-seed the same two default kind-based rules migration 003 installs
     # once on a fresh DB -- `tag_rules` is in `_WIPE_TABLES` so this script
     # can reseed it identically on every run rather than depending on
     # whichever rows happened to survive from a prior run.
     await conn.execute(
-        "INSERT INTO tag_rules (a_kind, b_kind, category) VALUES "
-        "('home', 'work', 'personal'), ('work', 'work', 'business')"
+        "INSERT INTO tag_rules (account_id, a_kind, b_kind, category) VALUES "
+        "(%s, 'home', 'work', 'personal'), (%s, 'work', 'work', 'business')",
+        (account_id(conn), account_id(conn))
     )
     # Force the next run_once() to take the full-reprocess path regardless
     # of what a *previous* run of this script left in detector_state: a
@@ -359,30 +356,31 @@ async def _wipe(conn) -> None:
     # runner.py's _run) skip every point whose received_at predates it,
     # silently dropping this run's older synthetic history.
     await conn.execute(
-        "UPDATE detector_state SET last_run_at = NULL, detector_version = 0 WHERE id = 1"
+        "UPDATE detector_state SET last_run_at = NULL, detector_version = 0 WHERE account_id=%s", (account_id(conn),)
     )
 
 
 async def _seed_reference_data(conn) -> tuple[int, int]:
     await conn.execute(
-        "INSERT INTO places (name, kind, geom, radius_m) VALUES "
-        "('Home', 'home', ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, 200), "
-        "('Main Office', 'work', ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, 200), "
-        "('Client Site', 'work', ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, 200), "
-        "('Gym', 'other', ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, 150)",
+        "INSERT INTO places (account_id, name, kind, geom, radius_m) VALUES "
+        "(%s, 'Home', 'home', ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, 200), "
+        "(%s, 'Main Office', 'work', ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, 200), "
+        "(%s, 'Client Site', 'work', ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, 200), "
+        "(%s, 'Gym', 'other', ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, 150)",
         (
-            HOME[1], HOME[0], WORK[1], WORK[0], CLIENT[1], CLIENT[0], GYM[1], GYM[0],
+            account_id(conn), HOME[1], HOME[0], account_id(conn), WORK[1], WORK[0],
+            account_id(conn), CLIENT[1], CLIENT[0], account_id(conn), GYM[1], GYM[0],
         ),
     )
 
     cur = await conn.execute(
-        "INSERT INTO vehicles (name, make, model, is_default, active) VALUES "
-        "('Seed Sedan', 'Honda', 'Accord', true, true) RETURNING id"
+        "INSERT INTO vehicles (account_id, name, make, model, is_default, active) VALUES "
+        "(%s, 'Seed Sedan', 'Honda', 'Accord', true, true) RETURNING id", (account_id(conn),)
     )
     v1 = (await cur.fetchone())[0]
     cur = await conn.execute(
-        "INSERT INTO vehicles (name, make, model, is_default, active) VALUES "
-        "('Retired Wagon', 'Subaru', 'Outback', false, false) RETURNING id"
+        "INSERT INTO vehicles (account_id, name, make, model, is_default, active) VALUES "
+        "(%s, 'Retired Wagon', 'Subaru', 'Outback', false, false) RETURNING id", (account_id(conn),)
     )
     v2 = (await cur.fetchone())[0]
     return v1, v2
@@ -400,9 +398,9 @@ async def _seed_mileage_rates(conn, years: set[int]) -> None:
     for year in sorted(years):
         placeholder_rate = round(0.67 + 0.01 * (year - 2024), 4)
         await conn.execute(
-            "INSERT INTO mileage_rates (year, rate_per_mi) VALUES (%s, %s) "
-            "ON CONFLICT (year) DO NOTHING",
-            (year, placeholder_rate),
+            "INSERT INTO mileage_rates (account_id, year, rate_per_mi) VALUES (%s, %s, %s) "
+            "ON CONFLICT (account_id, year) DO NOTHING",
+            (account_id(conn), year, placeholder_rate),
         )
 
 
@@ -411,7 +409,7 @@ async def _detect_all(runner: DetectorRunner) -> None:
     assert ran, "detector run_once() skipped (advisory lock busy) on a fresh DB"
 
 
-async def _discard_missing_trip_bridge(pool, runner: DetectorRunner) -> None:
+async def _discard_missing_trip_bridge(pool, runner: DetectorRunner, device_id: int) -> None:
     """Find the WORK->AWAY artifact trip block 4's silent relocation `Gap`
     produces and discard it (see `_block_segments`'s docstring) so the
     surviving AWAY->AWAY_2 trip is left with a genuine, undetected-drive-
@@ -419,11 +417,11 @@ async def _discard_missing_trip_bridge(pool, runner: DetectorRunner) -> None:
     """
     async with pool.connection() as conn:
         cur = await conn.execute(
-            "SELECT id, started_at, ended_at FROM trips WHERE device = %s "
+            "SELECT id, started_at, ended_at FROM trips WHERE account_id=%s AND tracking_device_id=%s "
             "AND source = 'detected' "
             "AND ST_DWithin(start_geom, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, 300) "
             "AND ST_DWithin(end_geom, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, 300)",
-            (DEVICE, WORK[1], WORK[0], AWAY[1], AWAY[0]),
+            (account_id(conn), device_id, WORK[1], WORK[0], AWAY[1], AWAY[0]),
         )
         row = await cur.fetchone()
         if row is None:
@@ -433,21 +431,21 @@ async def _discard_missing_trip_bridge(pool, runner: DetectorRunner) -> None:
             )
         trip_id, started_at, ended_at = row
         await conn.execute(
-            "INSERT INTO trip_boundary_overrides (device, kind, range_start, range_end) "
-            "VALUES (%s, 'discard', %s, %s) ON CONFLICT DO NOTHING",
-            (DEVICE, started_at, ended_at),
+            "INSERT INTO trip_boundary_overrides (account_id, tracking_device_id, device, kind, range_start, range_end) "
+            "VALUES (%s, %s, %s, 'discard', %s, %s) ON CONFLICT DO NOTHING",
+            (account_id(conn), device_id, DEVICE, started_at, ended_at),
         )
-        await runner.reprocess_device_in(conn, DEVICE)
-        cur = await conn.execute("SELECT 1 FROM trips WHERE id = %s", (trip_id,))
+        await runner.reprocess_device_in(conn, device_id)
+        cur = await conn.execute("SELECT 1 FROM trips WHERE account_id=%s AND id=%s", (account_id(conn),trip_id))
         if await cur.fetchone() is not None:
             raise RuntimeError("discard override did not remove the bridging trip")
 
 
-async def _fetch_device_trips(conn) -> list[dict]:
+async def _fetch_device_trips(conn, device_id: int) -> list[dict]:
     cur = await conn.execute(
         "SELECT id, started_at, ended_at, category::text AS category FROM trips "
-        "WHERE device = %s AND source = 'detected' ORDER BY started_at",
-        (DEVICE,),
+        "WHERE account_id=%s AND tracking_device_id=%s AND source = 'detected' ORDER BY started_at",
+        (account_id(conn),device_id),
     )
     cols = [d.name for d in cur.description]
     return [dict(zip(cols, row)) for row in await cur.fetchall()]
@@ -478,7 +476,7 @@ async def _apply_trip_overrides(conn, trips: list[dict], v1: int, v2: int) -> No
 
     async def vehicle(trip_id: int, vehicle_id: int | None) -> None:
         await conn.execute(
-            "UPDATE trips SET vehicle_id = %s WHERE id = %s", (vehicle_id, trip_id)
+            "UPDATE trips SET vehicle_id = %s WHERE account_id=%s AND id = %s", (vehicle_id, account_id(conn), trip_id)
         )
 
     for t in block1 + block2 + block5:
@@ -492,8 +490,8 @@ async def _apply_trip_overrides(conn, trips: list[dict], v1: int, v2: int) -> No
     # docstring).
     await conn.execute(
         "UPDATE trips SET category = 'personal', tag_source = 'human', "
-        "purpose = 'Doctor appointment', vehicle_id = %s, updated_at = now() WHERE id = %s",
-        (v2, block3[0]["id"]),
+        "purpose = 'Doctor appointment', vehicle_id = %s, updated_at = now() WHERE account_id=%s AND id = %s",
+        (v2, account_id(conn), block3[0]["id"]),
     )
     await vehicle(block3[1]["id"], v2)
 
@@ -507,8 +505,8 @@ async def _apply_trip_overrides(conn, trips: list[dict], v1: int, v2: int) -> No
     # attention-strip trip.
     await conn.execute(
         "UPDATE trips SET category = 'personal', tag_source = 'human', "
-        "purpose = 'Back from the gym', updated_at = now() WHERE id = %s",
-        (block6[1]["id"],),
+        "purpose = 'Back from the gym', updated_at = now() WHERE account_id=%s AND id = %s",
+        (account_id(conn), block6[1]["id"]),
     )
 
 
@@ -532,11 +530,11 @@ async def _seed_manual_trips(conn, now_utc: datetime, v1: int) -> None:
     ]
     for started_at, ended_at, miles, category, purpose, tag_source, vehicle_id in rows:
         await conn.execute(
-            "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
+            "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, "
             " category, purpose, tag_source, vehicle_id) "
-            "VALUES ('manual', 'manual', %s, %s, %s, %s, %s, %s, %s)",
+            "VALUES (%s, 'manual', 'manual', %s, %s, %s, %s, %s, %s, %s)",
             (
-                started_at, ended_at, miles * METERS_PER_MILE, category,
+                account_id(conn), started_at, ended_at, miles * METERS_PER_MILE, category,
                 purpose, tag_source, vehicle_id,
             ),
         )
@@ -564,18 +562,18 @@ async def _seed_expenses_and_odometer(conn, now_utc: datetime, v1: int) -> None:
     ]
     for incurred_on, category, amount, treatment, notes in expenses:
         await conn.execute(
-            "INSERT INTO expenses (vehicle_id, incurred_on, category, amount, treatment, notes) "
-            "VALUES (%s, %s, %s, %s, %s, %s)",
-            (v1, incurred_on, category, amount, treatment, notes),
+            "INSERT INTO expenses (account_id, vehicle_id, incurred_on, category, amount, treatment, notes) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (account_id(conn), v1, incurred_on, category, amount, treatment, notes),
         )
 
     await conn.execute(
-        "INSERT INTO odometer_readings (vehicle_id, recorded_at, odometer_m, note) VALUES "
-        "(%s, %s, %s, %s), (%s, %s, %s, %s)",
+        "INSERT INTO odometer_readings (account_id, vehicle_id, recorded_at, odometer_m, note) VALUES "
+        "(%s, %s, %s, %s, %s), (%s, %s, %s, %s, %s)",
         (
-            v1, datetime(day(95).year, day(95).month, day(95).day, 9, 0, tzinfo=PACIFIC),
+            account_id(conn), v1, datetime(day(95).year, day(95).month, day(95).day, 9, 0, tzinfo=PACIFIC),
             62_000.0 * METERS_PER_MILE, "Quarterly check-in",
-            v1, datetime(day(5).year, day(5).month, day(5).day, 9, 0, tzinfo=PACIFIC),
+            account_id(conn), v1, datetime(day(5).year, day(5).month, day(5).day, 9, 0, tzinfo=PACIFIC),
             62_850.0 * METERS_PER_MILE, "Quarterly check-in",
         ),
     )
@@ -610,14 +608,35 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 async def main_async(database_url: str) -> None:
-    pool = make_pool(database_url)
-    await pool.open(wait=True)
+    bootstrap_pool = make_pool(database_url)
+    await bootstrap_pool.open(wait=True)
     try:
-        await run_migrations(pool)
-
+        await run_migrations(bootstrap_pool)
+    finally:
+        await bootstrap_pool.close()
+    async with application_role_pools(database_url) as pools:
+        async with control_connection(pools.control) as conn:
+            account = await get_account_by_email(conn, "development@localhost.invalid")
+            if account is None:
+                if await account_exists(conn):
+                    raise RuntimeError("seeding requires the synthetic development account")
+                account = await create_admin(conn, "development@localhost.invalid",
+                    hash_password(secrets.token_urlsafe(32)), display_timezone=str(PACIFIC))
+        pool = AccountPool(pools.runtime, AccountPrincipal(
+            account["id"], account["is_enabled"], account["auth_version"]))
         async with pool.connection() as conn:
             await _wipe(conn)
             v1, v2 = await _seed_reference_data(conn)
+            cur = await conn.execute("SELECT id FROM tracking_devices WHERE account_id=%s AND label=%s", (account_id(conn),DEVICE))
+            devices = await cur.fetchall()
+            if len(devices) > 1:
+                raise RuntimeError("synthetic tracker label is ambiguous")
+            if devices:
+                device_id = devices[0][0]
+            else:
+                cur = await conn.execute("INSERT INTO tracking_devices(account_id,label) VALUES(%s,%s) RETURNING id", (account_id(conn),DEVICE))
+                device_id = (await cur.fetchone())[0]
+                await conn.execute("INSERT INTO detector_state(account_id,tracking_device_id) VALUES(%s,%s)", (account_id(conn),device_id))
 
         now_utc = datetime.now(timezone.utc)
         points = build_all_points(now_utc)
@@ -625,14 +644,14 @@ async def main_async(database_url: str) -> None:
 
         async with pool.connection() as conn:
             await _seed_mileage_rates(conn, years)
-            await _insert_points(conn, points)
+            await _insert_points(conn, points, device_id)
 
         runner = DetectorRunner(pool, Params())
         await _detect_all(runner)
-        await _discard_missing_trip_bridge(pool, runner)
+        await _discard_missing_trip_bridge(pool, runner, device_id)
 
         async with pool.connection() as conn:
-            trips = await _fetch_device_trips(conn)
+            trips = await _fetch_device_trips(conn, device_id)
             await _apply_trip_overrides(conn, trips, v1, v2)
             await _seed_manual_trips(conn, now_utc, v1)
             await _seed_expenses_and_odometer(conn, now_utc, v1)
@@ -640,13 +659,11 @@ async def main_async(database_url: str) -> None:
         async with pool.connection() as conn:
             cur = await conn.execute(
                 "SELECT source::text, category::text, count(*), coalesce(sum(point_count), 0) "
-                "FROM trips GROUP BY 1, 2 ORDER BY 1, 2"
+                "FROM trips WHERE account_id=%s GROUP BY 1, 2 ORDER BY 1, 2", (account_id(conn),)
             )
             print("trips by source/category (count, total points):")
             for src, cat, count, pts in await cur.fetchall():
                 print(f"  {src:>8} / {cat:<12} count={count:<4} points={pts}")
-    finally:
-        await pool.close()
 
 
 def main(argv: list[str] | None = None) -> int:

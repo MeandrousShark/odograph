@@ -26,6 +26,8 @@ from avatar_image_fixtures import (
     _jpeg_with_unknown_scan_huffman_table, _webp_with_invalid_vp8_partition_length,
     _webp_with_oversized_dimensions,
 )
+from tests.auth_db_fixtures import auth_config, seed_auth_account
+from app.account_context import AccountPrincipal
 from app.accounts import get_account, get_account_avatar, get_sole_account
 from app.auth import AuthRedirect, _avatar_version, make_router
 from app.db import MIGRATIONS_DIR, make_pool
@@ -44,10 +46,7 @@ CSRF_RE = re.compile(r'name="csrf_token" value="([^"]+)"')
 
 
 async def _insert_account(conn, *, account_id: int = 1) -> None:
-    await conn.execute(
-        "INSERT INTO accounts (id, email, password_hash) VALUES (%s, %s, 'hash')",
-        (account_id, f"admin{account_id}@example.com"),
-    )
+    await seed_auth_account(conn, owner_id=account_id, email=f"admin{account_id}@example.com")
 
 
 async def _set_avatar(conn, account_id: int, *, mime: str = "image/png") -> None:
@@ -199,7 +198,10 @@ def _bare_app(
 ) -> FastAPI:
     app = FastAPI()
     app.state.pool = pool
-    app.state.config = SimpleNamespace(
+    app.state.control_pool = app.state.runtime_pool = pool
+    app.state.dev_principal = AccountPrincipal(1, True, 1)
+    app.state.make_detector_runner = lambda bound: SimpleNamespace(pool=bound)
+    app.state.config = auth_config(TEST_DB,
         dev_no_auth=dev_no_auth,
         initial_admin_signup=False,
         allowed_email="",
@@ -211,7 +213,7 @@ def _bare_app(
     # read-only GET /account/avatar -- a real Jinja2Templates is needed here
     # now, not just an app.state.oauth attribute to read.
     app.state.oauth = object() if oidc_enabled else None
-    app.state.templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
+    app.state.templates = make_templates(app.state.config)
     app.add_middleware(
         SessionMiddleware, secret_key="test-secret", same_site="lax", https_only=False
     )
@@ -269,8 +271,10 @@ def test_avatar_route_404s_when_account_has_no_avatar():
     _scenario(run)
 
 
-def test_avatar_route_404s_for_dev_no_auth_session():
+def test_avatar_route_404s_for_real_dev_account_without_avatar():
     async def run(pool):
+        async with pool.connection() as conn:
+            await _insert_account(conn)
         app = _bare_app(pool, dev_no_auth=True)
         async with await _client_for(app) as client:
             response = await client.get("/account/avatar")
@@ -884,12 +888,10 @@ def test_unauthenticated_request_is_rejected_on_both_routes_without_mutation():
     _scenario(run)
 
 
-def test_non_admin_legacy_session_is_rejected_on_both_routes_without_mutation():
+def test_accountless_legacy_session_is_rejected_on_both_routes_without_mutation():
     async def run(pool):
-        # No account row at all: the only non-admin authenticated shape this
-        # single-admin app can produce is a legacy OIDC session mid
-        # /account/establish (require_user, app/auth.py), which is only
-        # valid while account_exists is False.
+        # Accountless OIDC sessions can establish identity but cannot enter
+        # personal routes, including avatar upload/removal.
         app = _bare_app(pool, oidc_enabled=True)
         async with await _client_for(app) as client:
             await client.get("/test/login-as-legacy")
@@ -901,12 +903,14 @@ def test_non_admin_legacy_session_is_rejected_on_both_routes_without_mutation():
                 data={"csrf_token": csrf},
                 files={"file": ("avatar.png", PNG_UPLOAD_BYTES, "image/png")},
             )
-            assert upload_response.status_code == 403
+            assert upload_response.status_code == 303
+            assert upload_response.headers["location"] == "/login"
 
             remove_response = await client.post(
                 "/settings/account/avatar/remove", data={"csrf_token": csrf}
             )
-            assert remove_response.status_code == 403
+            assert remove_response.status_code == 303
+            assert remove_response.headers["location"] == "/login"
 
             async with pool.connection() as conn:
                 exists = await (await conn.execute("SELECT count(*) FROM accounts")).fetchone()

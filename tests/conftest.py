@@ -20,11 +20,14 @@ from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
 
 import psycopg
+from psycopg import sql
 import pytest
 
 from app.db import make_pool, run_migrations
+from app.account_context import AccountPool, AccountPrincipal, account_id
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 
@@ -43,7 +46,15 @@ _RESET_EXCLUDED_TABLES = {"spatial_ref_sys", "schema_migrations"}
 # vehicles, and app_settings, but this dict is populated from the catalog
 # rather than hardcoded, so a later migration's seed data is picked up
 # automatically.
-_seed_snapshot: dict[str, tuple[list[str], list[tuple]]] = {}
+class SeedSnapshot(dict):
+    """Rows and sequence state, including empty tables whose seeds were retired."""
+
+    def __init__(self):
+        super().__init__()
+        self.sequences = {}
+
+
+_seed_snapshot = SeedSnapshot()
 
 # Every function/trigger name attached to something in schema public right
 # after the session's one migration run. TRUNCATE removes rows, not schema
@@ -143,7 +154,7 @@ async def capture_seed_snapshot(pool) -> dict[str, tuple[list[str], list[tuple]]
     now()` column would otherwise differ from the session's) rather than
     reusing `_seed_snapshot`.
     """
-    snapshot: dict[str, tuple[list[str], list[tuple]]] = {}
+    snapshot = SeedSnapshot()
     async with pool.connection() as conn:
         for table in await _reset_target_tables(conn):
             columns = await _table_columns(conn, table)
@@ -152,6 +163,10 @@ async def capture_seed_snapshot(pool) -> dict[str, tuple[list[str], list[tuple]]
             rows = await cur.fetchall()
             if rows:
                 snapshot[table] = (columns, rows)
+        cur = await conn.execute("SELECT sequencename FROM pg_sequences WHERE schemaname='public'")
+        for (sequence,) in await cur.fetchall():
+            cur = await conn.execute(sql.SQL("SELECT last_value,is_called FROM {}").format(sql.Identifier("public", sequence)))
+            snapshot.sequences[sequence] = await cur.fetchone()
     return snapshot
 
 
@@ -187,6 +202,8 @@ async def _restore_seed_snapshot(
                 f'EXISTS (SELECT 1 FROM "{table}"))',
                 (sequence,),
             )
+    for sequence, (value, called) in getattr(snapshot, "sequences", {}).items():
+        await conn.execute("SELECT setval(%s,%s,%s)", ("public." + sequence, value, called))
 
 
 async def reset_db(pool) -> None:
@@ -200,6 +217,14 @@ async def reset_db(pool) -> None:
     instance).
     """
     _check_allowed_database(pool)
+    async with pool.connection() as conn:
+        functions = await _schema_object_names(conn)
+    # Migration-machinery tests deliberately replay SQL without role setup.
+    # Restore the complete test schema before ordinary application fixtures.
+    required = {"function:bootstrap_first_account", "function:assert_account_active",
+                "function:assert_tracking_credential"}
+    if not required <= functions:
+        await full_schema_reset(pool)
     async with pool.connection() as conn:
         await _check_no_leaked_schema_objects(conn)
         await _truncate_all(conn)
@@ -218,7 +243,7 @@ async def drop_and_recreate_schema(pool) -> None:
     """
     _check_allowed_database(pool)
     async with pool.connection() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+        await conn.execute("DROP SCHEMA IF EXISTS odograph_service CASCADE; DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
 
 
 async def full_schema_reset(pool) -> None:
@@ -228,6 +253,38 @@ async def full_schema_reset(pool) -> None:
     """
     await drop_and_recreate_schema(pool)
     await run_migrations(pool)
+    async with pool.connection() as conn:
+        for filename in ("account_bootstrap.sql", "account_admission.sql", "tracking_admission.sql"):
+            await conn.execute((Path(__file__).resolve().parents[1] / "scripts" / "sql" / filename).read_text())
+
+
+async def bootstrap_test_account(pool, *, owner_id: int = 41, email="development@localhost.invalid") -> AccountPool:
+    """Create a real owner explicitly; no production default owner is added."""
+    from app.accounts import create_admin
+    from app.local_auth import hash_password
+    async with pool.connection() as conn:
+        await conn.execute("SELECT setval(pg_get_serial_sequence('accounts','id'), %s, false)", (owner_id,))
+        # Existing personal fixtures name their default vehicle explicitly as 1.
+        await conn.execute("SELECT setval(pg_get_serial_sequence('vehicles','id'), 1, false)")
+        account = await create_admin(conn, email, hash_password("test-password"))
+    return AccountPool(pool, AccountPrincipal(account["id"], account["is_enabled"], account["auth_version"]))
+
+
+async def reset_account_db(pool, **kwargs) -> AccountPool:
+    await reset_db(pool)
+    return await bootstrap_test_account(pool, **kwargs)
+
+
+async def seed_tracking_device(conn, label="phone", *, device_id=None) -> int:
+    """Fixture writer with explicit ownership and stable stream identity."""
+    owner = account_id(conn)
+    if device_id is None:
+        cur = await conn.execute("INSERT INTO tracking_devices(account_id,label) VALUES(%s,%s) RETURNING id", (owner, label))
+    else:
+        cur = await conn.execute("INSERT INTO tracking_devices(account_id,label,id) VALUES(%s,%s,%s) RETURNING id", (owner, label, device_id))
+    stream = (await cur.fetchone())[0]
+    await conn.execute("INSERT INTO detector_state(account_id,tracking_device_id) VALUES(%s,%s)", (owner, stream))
+    return stream
 
 
 # Every collected case must carry exactly one of these three, so a coder
@@ -328,7 +385,9 @@ def _migrated_schema() -> None:
         await pool.open(wait=True)
         try:
             await full_schema_reset(pool)
-            _seed_snapshot.update(await capture_seed_snapshot(pool))
+            snapshot = await capture_seed_snapshot(pool)
+            _seed_snapshot.update(snapshot)
+            _seed_snapshot.sequences.update(snapshot.sequences)
             async with pool.connection() as conn:
                 _schema_object_baseline.update(await _schema_object_names(conn))
         finally:

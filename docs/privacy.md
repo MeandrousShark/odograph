@@ -56,10 +56,10 @@ of a hosted service, and this project has no hosted service.
     the intended deployment is a Nominatim you operate yourself, and
     respecting that policy is your responsibility if you deviate from that.
 
-  Results are cached in the database (`geocode_cache`), so the same
-  coordinate is only ever looked up once. Repeat views of the same trip do
+  Results are cached per account in the database (`geocode_cache`), so
+  repeated lookups within that account reuse the cached address. Repeat views of the same trip do
   not re-send its coordinates. That cache is provider-agnostic: it stores
-  only `(lat, lon) -> address`, with no record of which provider produced a
+  only `(account, lat, lon) -> address`, with no record of which provider produced a
   given row. **Switching `GEOCODE_PROVIDER` does not refetch anything**.
   Every already-cached address keeps whatever text the previous provider
   returned, so an instance that switches providers mid-life can end up with
@@ -95,6 +95,30 @@ of a hosted service, and this project has no hosted service.
   quarterly odometer reminder email likewise names the vehicle(s) due for
   a reading, using your own vehicle labels. None of these messages contain
   coordinates or street addresses.
+
+## Account preferences and credentials
+
+The account owns its notification destinations, choices, and local schedule.
+An upgrade imports existing effective preferences once; subsequent `.env`
+edits do not silently change the recipient. Review saved destinations in
+Settings before enabling delivery. SMTP/ntfy servers and their transport
+credentials remain operator configuration.
+
+Tracking credentials are scoped to one owned device and are stored as hashes.
+New secrets appear only on the one-time setup/replacement page. A migrated
+shared login remains limited to its owning account until revoked. Raw ingest
+messages retain the submitted label; changing a label does not transfer an
+issued credential to another device or account. Portable exports omit tracking
+credentials, delivery history, and private geocode cache state. Full backups
+include authentication state and managed database credentials and need
+appropriate encryption and access controls.
+
+Private HTML responses use `no-store`; HTMX history snapshots are disabled.
+The browser stores an account marker, without credentials or location data,
+to reload stale pages after an account change in another tab. This prevents
+accidental stale-page reuse, not access by someone who controls the browser.
+The deployment remains single-account, with row-level security prepared but
+not enabled.
 
 ## Logging
 

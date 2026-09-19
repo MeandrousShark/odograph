@@ -36,7 +36,7 @@
   <link rel="stylesheet" href="/static/style.css?v={{ static_version }}">
   {% block head %}{% endblock %}
 </head>
-<body hx-headers='{"X-CSRF-Token": "{{ csrf }}"}'>
+<body hx-history="false" data-account-id="{{ user.id if user and user.id else '' }}" hx-headers='{"X-CSRF-Token": "{{ csrf }}"}'>
   <header>
     <h1><a href="/" class="brand-link"><span class="brand-mark" aria-hidden="true"></span><span>Odograph</span></a></h1>
     {% if user %}
@@ -87,7 +87,7 @@
       <a href="/stats"{% if active_page == "stats" %} aria-current="page"{% endif %}>Stats</a>
     </nav>
     <div class="header-account">
-      {% if user.is_admin and user.id %}
+      {% if user.id %}
       <a href="/settings/account" class="account-identity account-identity-link header-control" aria-label="Account Settings, {{ display_name }}"{% if account_settings_active %} aria-current="page"{% endif %}>
         {{ account_avatar() }}
         <span class="who account-name">{{ display_name }}</span>
@@ -109,7 +109,7 @@
         <a href="/settings" class="mobile-account-item{% if settings_active %} is-active{% endif %}"{% if settings_active %} aria-current="page"{% endif %}>
           {{ icon("gear", extra_class="mobile-account-icon") }}<span>Settings</span>
         </a>
-        {% if user.is_admin and user.id %}
+        {% if user.id %}
         <a href="/settings/account" class="mobile-account-item{% if account_settings_active %} is-active{% endif %}"{% if account_settings_active %} aria-current="page"{% endif %}>
           {{ icon("gear", extra_class="mobile-account-icon") }}<span>Account Settings</span>
         </a>
@@ -232,6 +232,45 @@
       );
       if (cancel) cancel.closest("dialog")?.close("cancel");
     });
+  </script>
+  <script nonce="{{ csp_nonce }}">
+    (() => {
+      const account = document.body.dataset.accountId;
+      const marker = "odograph-account";
+      const reloadPrivatePage = () => {
+        document.documentElement.style.visibility = "hidden";
+        window.location.reload();
+      };
+      try {
+        localStorage.removeItem("htmx-history-cache");
+        localStorage.setItem(marker, account);
+      } catch (_) {}
+      if (!account) return;
+      window.addEventListener("storage", (event) => {
+        if (event.key === marker && event.newValue !== account) reloadPrivatePage();
+      });
+      window.addEventListener("pagehide", () => {
+        document.documentElement.style.visibility = "hidden";
+      });
+      window.addEventListener("pageshow", (event) => {
+        if (event.persisted) reloadPrivatePage();
+      });
+      document.addEventListener("htmx:beforeRequest", (event) => {
+        try {
+          if (localStorage.getItem(marker) !== account) {
+            event.preventDefault();
+            reloadPrivatePage();
+          }
+        } catch (_) {}
+      });
+      document.addEventListener("htmx:beforeOnLoad", (event) => {
+        const responseAccount = event.detail.xhr.getResponseHeader("X-Odograph-Account");
+        if (responseAccount && responseAccount !== account) {
+          event.preventDefault();
+          reloadPrivatePage();
+        }
+      });
+    })();
   </script>
   {% block content %}{% endblock %}
   {% if user %}

@@ -89,7 +89,7 @@ def _config(**overrides) -> SimpleNamespace:
         app_version="v1.2.3", app_git_revision="deadbeef",
         osrm_url="", geocode_provider=None, ntfy_url="", ntfy_topic="",
         ntfy_token="", ntfy_username="", ntfy_password="",
-        email_enabled=False, smtp_username="", smtp_password="",
+        email_enabled=False, email_from="", smtp_username="", smtp_password="",
         smtp_host="", smtp_port=587, smtp_security="starttls", smtp_tls_insecure=False,
         oidc_configured=False, initial_admin_signup=False, app_url="", dev_no_auth=False,
         raw_message_retention_days=365.0, odometer_reminder_requested=False,
@@ -212,7 +212,7 @@ def test_config_presence_reports_only_booleans():
         osrm_url="http://osrm.internal:5000",
         geocode_provider=GeoapifyProvider(api_key="topsecretkey", omit_country="United States of America"),
         ntfy_url="http://ntfy.internal", ntfy_topic="mileage", ntfy_token="ntfytoken",
-        smtp_username="user", smtp_password="hunter2", email_enabled=True,
+        smtp_host="smtp.example.test", email_from="from@example.test", smtp_username="user", smtp_password="hunter2", email_enabled=True,
         initial_admin_signup=True, app_url="https://mileage.example.com",
     )
     presence = config_presence(cfg)
@@ -388,7 +388,7 @@ def test_check_smtp_reports_unreachable_without_touching_credentials(monkeypatch
     monkeypatch.setattr("app.diagnose.smtplib.SMTP_SSL", _boom)
 
     cfg = _config(
-        email_enabled=True, smtp_host="smtp.invalid", smtp_port=587,
+        email_enabled=True, email_from="from@example.test", smtp_host="smtp.invalid", smtp_port=587,
         smtp_username="should-never-be-used", smtp_password="should-never-be-used",
     )
     result = asyncio.run(_check_smtp(cfg))

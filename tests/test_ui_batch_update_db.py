@@ -10,8 +10,10 @@ from fastapi import HTTPException
 from psycopg.errors import RaiseException
 
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import fixture_device, personal_request
 from app.ui import make_router
-from conftest import reset_db
+from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -33,7 +35,7 @@ def _delete_endpoint():
 
 
 def _request(pool):
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(pool=pool)))
+    return personal_request(SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(pool=pool))))
 
 
 async def _insert_trip(
@@ -41,10 +43,21 @@ async def _insert_trip(
     tag_source: str | None, vehicle_id: int,
 ) -> int:
     cur = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, distance_m, category, "
-        "purpose, tag_source, vehicle_id) VALUES (%s, %s, %s, %s::timestamptz + "
-        "interval '30 minutes', 1000, %s, %s, %s, %s) RETURNING id",
-        (device, source, started_at, started_at, category, purpose, tag_source, vehicle_id),
+        "INSERT INTO trips (account_id, tracking_device_id, device, source, started_at, ended_at, "
+        "distance_m, category, purpose, tag_source, vehicle_id) VALUES (%s, %s, %s, %s, %s, "
+        "%s::timestamptz + interval '30 minutes', 1000, %s, %s, %s, %s) RETURNING id",
+        (
+            account_id(conn),
+            await fixture_device(conn, device),
+            device,
+            source,
+            started_at,
+            started_at,
+            category,
+            purpose,
+            tag_source,
+            vehicle_id,
+        ),
     )
     return (await cur.fetchone())[0]
 
@@ -67,14 +80,14 @@ async def _exclusions(conn, trip_ids):
 
 
 async def _update_contract_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
 
         async with pool.connection() as conn:
             second_vehicle = await conn.execute(
-                "INSERT INTO vehicles (name) VALUES ('Second Car') RETURNING id"
+                "INSERT INTO vehicles (account_id, name) VALUES (%s, 'Second Car') RETURNING id", (account_id(conn),)
             )
             second_vehicle_id = (await second_vehicle.fetchone())[0]
             first_id = await _insert_trip(
@@ -167,7 +180,7 @@ async def _update_contract_scenario():
         assert [row[2] for row in rows] == [None, None]
         assert [row[3] for row in rows] == ["human", "human"]
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_batch_update_tristates_tag_ownership_and_unrestricted_selection():
@@ -175,10 +188,10 @@ def test_batch_update_tristates_tag_ownership_and_unrestricted_selection():
 
 
 async def _validation_and_rollback_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
 
         async with pool.connection() as conn:
             first_id = await _insert_trip(
@@ -227,7 +240,7 @@ async def _validation_and_rollback_scenario():
         async with pool.connection() as conn:
             assert await _rows(conn, [first_id, second_id]) == before
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_batch_update_validation_and_atomic_400_paths():
@@ -235,10 +248,10 @@ def test_batch_update_validation_and_atomic_400_paths():
 
 
 async def _single_trip_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
 
         async with pool.connection() as conn:
             trip_id = await _insert_trip(
@@ -257,7 +270,7 @@ async def _single_trip_scenario():
             "a single-trip batch update must change only the requested field"
         )
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_batch_update_accepts_a_single_selected_trip():
@@ -265,10 +278,10 @@ def test_batch_update_accepts_a_single_selected_trip():
 
 
 async def _batch_delete_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             detected_id = await _insert_trip(
                 conn, "A", "detected", "2026-01-02T09:00:00Z", "business",
@@ -283,16 +296,18 @@ async def _batch_delete_scenario():
                 "Survivor", None, 1,
             )
             await conn.execute(
-                "INSERT INTO points (device, recorded_at, geom, trip_id) "
-                "VALUES ('A', '2026-01-02T09:30:00Z', "
+                "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, geom, "
+                "trip_id) VALUES (%s, %s, 'A', '2026-01-02T09:30:00Z', "
                 "ST_SetSRID(ST_MakePoint(-122.3, 47.6), 4326)::geography, %s)",
-                (detected_id,),
+                (account_id(conn), await fixture_device(conn, 'A'), detected_id,),
             )
             await conn.execute(
-                "INSERT INTO expenses "
-                "(vehicle_id, incurred_on, category, amount, treatment, trip_id) "
-                "VALUES (1, '2026-05-04', 'fuel', 17.23, "
-                "'business_use_allocated', %s)", (manual_id,),
+                "INSERT INTO expenses (account_id, vehicle_id, incurred_on, category, amount, "
+                "treatment, trip_id) VALUES (%s, 1, '2026-05-04', 'fuel', 17.23, "
+                "'business_use_allocated', %s)", (
+                                                                                                                                                                                                  account_id(conn),
+                                                                                                                                                                                                  manual_id,
+                                                                                                                                                                                              ),
             )
 
         handler = _delete_endpoint()
@@ -324,16 +339,18 @@ async def _batch_delete_scenario():
                 "Rollback manual", None, 1,
             )
             await conn.execute(
-                "INSERT INTO points (device, recorded_at, geom, trip_id) "
-                "VALUES ('D', '2026-06-04T09:30:00Z', "
+                "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, geom, "
+                "trip_id) VALUES (%s, %s, 'D', '2026-06-04T09:30:00Z', "
                 "ST_SetSRID(ST_MakePoint(-122.3, 47.6), 4326)::geography, %s)",
-                (rollback_detected,),
+                (account_id(conn), await fixture_device(conn, 'D'), rollback_detected,),
             )
             await conn.execute(
-                "INSERT INTO expenses "
-                "(vehicle_id, incurred_on, category, amount, treatment, trip_id) "
-                "VALUES (1, '2026-06-04', 'fuel', 19.99, "
-                "'business_use_allocated', %s)", (rollback_detected,),
+                "INSERT INTO expenses (account_id, vehicle_id, incurred_on, category, amount, "
+                "treatment, trip_id) VALUES (%s, 1, '2026-06-04', 'fuel', 19.99, "
+                "'business_use_allocated', %s)", (
+                                                                                                                                                                                                  account_id(conn),
+                                                                                                                                                                                                  rollback_detected,
+                                                                                                                                                                                              ),
             )
             await conn.execute(
                 "CREATE FUNCTION reject_one_batch_delete() RETURNS trigger "
@@ -379,7 +396,7 @@ async def _batch_delete_scenario():
             cur = await conn.execute("SELECT purpose FROM trips WHERE id = %s", (survivor_id,))
             assert (await cur.fetchone())[0] == "Survivor"
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_batch_delete_is_source_aware_atomic_and_detaches_related_data():

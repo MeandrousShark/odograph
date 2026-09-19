@@ -9,6 +9,7 @@ from fastapi import HTTPException, Request
 from psycopg.rows import dict_row
 from starlette.responses import Response
 
+from app.account_context import account_id
 from app.detector.core import haversine_m
 from app.geocode import GEOCODE_PRECISION
 from app.trip_queries import DISPLAY_DISTANCE_SQL
@@ -18,16 +19,16 @@ from app.trip_queries import DISPLAY_DISTANCE_SQL
 # Factored into module-level constants (rather than left inline) so
 # `_trip_filter_sql`'s search predicate can reuse the exact same subselects
 # instead of duplicating them in the WHERE clause.
-_START_PLACE_NAME_SQL = "(SELECT name FROM places WHERE id = trips.start_place_id)"
-_END_PLACE_NAME_SQL = "(SELECT name FROM places WHERE id = trips.end_place_id)"
+_START_PLACE_NAME_SQL = "(SELECT name FROM places WHERE account_id = trips.account_id AND id = trips.start_place_id)"
+_END_PLACE_NAME_SQL = "(SELECT name FROM places WHERE account_id = trips.account_id AND id = trips.end_place_id)"
 _START_ADDRESS_SQL = (
     "(SELECT address FROM geocode_cache\n"
-    f"     WHERE lat = ROUND(ST_Y(trips.start_geom::geometry)::numeric, {GEOCODE_PRECISION})\n"
+    f"     WHERE account_id = trips.account_id AND lat = ROUND(ST_Y(trips.start_geom::geometry)::numeric, {GEOCODE_PRECISION})\n"
     f"       AND lon = ROUND(ST_X(trips.start_geom::geometry)::numeric, {GEOCODE_PRECISION}))"
 )
 _END_ADDRESS_SQL = (
     "(SELECT address FROM geocode_cache\n"
-    f"     WHERE lat = ROUND(ST_Y(trips.end_geom::geometry)::numeric, {GEOCODE_PRECISION})\n"
+    f"     WHERE account_id = trips.account_id AND lat = ROUND(ST_Y(trips.end_geom::geometry)::numeric, {GEOCODE_PRECISION})\n"
     f"       AND lon = ROUND(ST_X(trips.end_geom::geometry)::numeric, {GEOCODE_PRECISION}))"
 )
 
@@ -35,7 +36,7 @@ _END_ADDRESS_SQL = (
 # available, raw as fallback (raw distance_m stays selected as the pre-snap
 # baseline).
 TRIP_COLUMNS = f"""
-    id, device, source::text AS source, started_at, ended_at, distance_m,
+    id, device, tracking_device_id, source::text AS source, started_at, ended_at, distance_m,
     {DISPLAY_DISTANCE_SQL} AS display_distance_m,
     snap_status::text AS snap_status,
     point_count, has_gap, imported, category::text AS category,
@@ -61,8 +62,8 @@ TRIP_COLUMNS = f"""
     vehicle_id,
     -- Subselect (not JOIN) so a deactivated vehicle still shows its name on
     -- trips that point at it, despite being absent from the default picker.
-    (SELECT name FROM vehicles WHERE id = trips.vehicle_id) AS vehicle_name,
-    (SELECT count(*) FROM expenses WHERE expenses.trip_id = trips.id) AS expense_count,
+    (SELECT name FROM vehicles WHERE account_id = trips.account_id AND id = trips.vehicle_id) AS vehicle_name,
+    (SELECT count(*) FROM expenses WHERE expenses.account_id = trips.account_id AND expenses.trip_id = trips.id) AS expense_count,
     (path IS NOT NULL OR path_snapped IS NOT NULL) AS has_route_geometry,
     {_START_ADDRESS_SQL} AS start_address,
     {_END_ADDRESS_SQL} AS end_address,
@@ -76,28 +77,28 @@ TRIP_COLUMNS = f"""
     -- lacks end_geom would silently pick an even older trip, while ST_Distance
     -- against NULL is NULL, exactly "no badge".
     (SELECT ST_Distance(p.end_geom, trips.start_geom) FROM trips p
-     WHERE p.device = trips.device AND p.source = 'detected'
+     WHERE p.account_id = trips.account_id AND p.tracking_device_id = trips.tracking_device_id AND p.source = 'detected'
        AND p.exclusion IS DISTINCT FROM 'not_my_vehicle'
        AND p.started_at < trips.started_at
      ORDER BY p.started_at DESC LIMIT 1) AS prev_end_gap_m,
     (SELECT p.ended_at FROM trips p
-     WHERE p.device = trips.device AND p.source = 'detected'
+     WHERE p.account_id = trips.account_id AND p.tracking_device_id = trips.tracking_device_id AND p.source = 'detected'
        AND p.exclusion IS DISTINCT FROM 'not_my_vehicle'
        AND p.started_at < trips.started_at
      ORDER BY p.started_at DESC LIMIT 1) AS prev_trip_ended_at,
     (SELECT ST_Y(p.end_geom::geometry) FROM trips p
-     WHERE p.device = trips.device AND p.source = 'detected'
+     WHERE p.account_id = trips.account_id AND p.tracking_device_id = trips.tracking_device_id AND p.source = 'detected'
        AND p.exclusion IS DISTINCT FROM 'not_my_vehicle'
        AND p.started_at < trips.started_at
      ORDER BY p.started_at DESC LIMIT 1) AS prev_trip_end_lat,
     (SELECT ST_X(p.end_geom::geometry) FROM trips p
-     WHERE p.device = trips.device AND p.source = 'detected'
+     WHERE p.account_id = trips.account_id AND p.tracking_device_id = trips.tracking_device_id AND p.source = 'detected'
        AND p.exclusion IS DISTINCT FROM 'not_my_vehicle'
        AND p.started_at < trips.started_at
      ORDER BY p.started_at DESC LIMIT 1) AS prev_trip_end_lon,
-    (SELECT name FROM places WHERE id = (
+    (SELECT name FROM places WHERE account_id = trips.account_id AND id = (
        SELECT p.end_place_id FROM trips p
-       WHERE p.device = trips.device AND p.source = 'detected'
+       WHERE p.account_id = trips.account_id AND p.tracking_device_id = trips.tracking_device_id AND p.source = 'detected'
          AND p.exclusion IS DISTINCT FROM 'not_my_vehicle'
          AND p.started_at < trips.started_at
        ORDER BY p.started_at DESC LIMIT 1
@@ -107,11 +108,11 @@ TRIP_COLUMNS = f"""
     -- the predecessor's ended_at once more purely to test the overlap.
     EXISTS (
       SELECT 1 FROM trips m
-      WHERE m.source = 'manual' AND m.started_at < trips.started_at
+      WHERE m.account_id = trips.account_id AND m.source = 'manual' AND m.started_at < trips.started_at
         AND m.exclusion IS DISTINCT FROM 'not_my_vehicle'
         AND m.ended_at > (
           SELECT p.ended_at FROM trips p
-          WHERE p.device = trips.device AND p.source = 'detected'
+          WHERE p.account_id = trips.account_id AND p.tracking_device_id = trips.tracking_device_id AND p.source = 'detected'
             AND p.exclusion IS DISTINCT FROM 'not_my_vehicle'
             AND p.started_at < trips.started_at
           ORDER BY p.started_at DESC LIMIT 1
@@ -239,10 +240,10 @@ async def _fetch_recent_purposes(conn, limit: int = 10) -> list[str]:
     cur = await conn.execute(
         "SELECT purpose FROM ("
         " SELECT DISTINCT ON (btrim(purpose)) btrim(purpose) AS purpose, updated_at"
-        " FROM trips WHERE purpose IS NOT NULL AND btrim(purpose) <> ''"
+        " FROM trips WHERE account_id = %s AND purpose IS NOT NULL AND btrim(purpose) <> ''"
         " ORDER BY btrim(purpose), updated_at DESC"
         ") recent ORDER BY updated_at DESC, purpose LIMIT %s",
-        (limit,),
+        (account_id(conn), limit),
     )
     return [row[0] for row in await cur.fetchall()]
 
@@ -286,6 +287,7 @@ def _trip_filter_sql(
     vehicle_id: int | None | Literal["none"] = None,
     q: str = "",
     exclusion: str = "",
+    *, owner_id: int,
 ) -> tuple[str, list]:
     """Build a `WHERE` clause + params list for filtering trips by category,
     vehicle, date range, exclusion state, and/or a free-text search term.
@@ -310,8 +312,10 @@ def _trip_filter_sql(
     junk, the same role `VEHICLE_FILTER_UNASSIGNED` plays for `vehicle_id`:
     it means "normal trips only", i.e. `exclusion IS NULL`.
     """
-    clauses = []
-    params: list = []
+    if type(owner_id) is not int or not 1 <= owner_id <= 2**63 - 1:
+        raise ValueError("owner_id must be a positive bigint")
+    clauses = ["trips.account_id = %s"]
+    params: list = [owner_id]
     if category in CATEGORIES:
         clauses.append("category = %s")
         params.append(category)
@@ -402,7 +406,10 @@ def _month_page_url(
 async def _fetch_trip(pool, trip_id: int) -> dict:
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
-        await cur.execute(f"SELECT {TRIP_COLUMNS} FROM trips WHERE id = %s", (trip_id,))
+        await cur.execute(
+            f"SELECT {TRIP_COLUMNS} FROM trips WHERE id = %s AND account_id = %s",
+            (trip_id, account_id(conn)),
+        )
         trip = await cur.fetchone()
     if not trip:
         raise HTTPException(status_code=404, detail="No such trip")

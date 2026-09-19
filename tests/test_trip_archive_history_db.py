@@ -20,10 +20,12 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import personal_request
 from app.main import make_templates
 from app.ui import make_router
 from app.ui.trips import _archive_date_preset_ranges
-from conftest import reset_db
+from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -46,20 +48,20 @@ BATCH_UPDATE = _endpoint("/trips/batch_update", "POST")
 
 def _request(pool, headers: dict | None = None, page_size: int = 25):
     config = SimpleNamespace(display_tz=TZ, trips_page_size=page_size, app_version="test")
-    return SimpleNamespace(
+    return personal_request(SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, templates=make_templates(config), config=config,
         )),
         session={"csrf": "test-csrf"},
         headers=headers or {},
-    )
+    ))
 
 
 async def _insert_trip(conn, started_at, category="business"):
     cur = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, distance_m, category) "
-        "VALUES ('ARCHHIST', 'manual', %s, %s, 1000, %s) RETURNING id",
-        (started_at, started_at + timedelta(minutes=10), category),
+        "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, category)"
+        " VALUES (%s, 'ARCHHIST', 'manual', %s, %s, 1000, %s) RETURNING id",
+        (account_id(conn), started_at, started_at + timedelta(minutes=10), category,),
     )
     return (await cur.fetchone())[0]
 
@@ -79,15 +81,15 @@ async def _list(pool, current_url=None, page_size=25, **filters):
 
 def _scenario(coro) -> None:
     async def run():
-        pool = make_pool(TEST_DB)
-        await pool.open(wait=True)
+        raw_pool = make_pool(TEST_DB)
+        await raw_pool.open(wait=True)
         try:
-            await reset_db(pool)
+            pool = await reset_account_db(raw_pool)
             async with pool.connection() as conn:
                 await _insert_trip(conn, T0)
             await coro(pool)
         finally:
-            await pool.close()
+            await raw_pool.close()
 
     asyncio.run(run())
 

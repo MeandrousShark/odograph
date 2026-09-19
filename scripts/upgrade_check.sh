@@ -32,7 +32,7 @@ OIDC_EMAIL="drill-oidc@example.test"
 
 usage() {
     cat >&2 <<'EOF'
-usage: scripts/upgrade_check.sh --base REF --candidate REF [--candidate-image IMAGE] [--database-image-migration] [--keep]
+usage: scripts/upgrade_check.sh --base REF --candidate REF [--base-image IMAGE] [--candidate-image IMAGE] [--database-image-migration] [--keep]
 
 Runs a disposable Compose backup/restore/upgrade/rollback rehearsal from a
 base git ref to a candidate git ref. When --candidate-image is given, the
@@ -41,6 +41,7 @@ uses that exact published image. Never touches the default Compose project,
 any existing container/volume, or the repository working tree.
 
   --base REF              git commit-ish for the currently-supported release
+  --base-image IMAGE      exact earlier app image, instead of rebuilding base source
   --candidate REF         git commit-ish to build as the candidate
   --candidate-image IMAGE published candidate image with an explicit non-latest
                           tag or digest; omitted to build candidate source
@@ -57,6 +58,7 @@ EOF
 }
 
 BASE_REF=""
+BASE_IMAGE=""
 CANDIDATE_REF=""
 CANDIDATE_IMAGE=""
 DATABASE_IMAGE_MIGRATION=0
@@ -66,6 +68,9 @@ while [ "$#" -gt 0 ]; do
         --base)
             [ "$#" -ge 2 ] || { echo "error: --base requires a value" >&2; usage; }
             BASE_REF="$2"; shift 2 ;;
+        --base-image)
+            [ "$#" -ge 2 ] || { echo "error: --base-image requires a value" >&2; usage; }
+            BASE_IMAGE="$2"; shift 2 ;;
         --candidate)
             [ "$#" -ge 2 ] || { echo "error: --candidate requires a value" >&2; usage; }
             CANDIDATE_REF="$2"; shift 2 ;;
@@ -98,6 +103,11 @@ immutable_image_ref() {
     fi
     return 1
 }
+
+if [ -n "$BASE_IMAGE" ] && ! immutable_image_ref "$BASE_IMAGE"; then
+    echo "error: --base-image must use an explicit non-latest tag or a full sha256 digest" >&2
+    usage
+fi
 
 if [ -n "$CANDIDATE_IMAGE" ] && ! immutable_image_ref "$CANDIDATE_IMAGE"; then
     echo "error: --candidate-image must use an explicit non-latest tag or a full sha256 digest" >&2
@@ -202,10 +212,20 @@ compose_in() {
 # including "down", sidesteps that class of surprise entirely.
 compose_base() {
     local files=(-f compose.yaml -f compose.seed-port.override.yml)
-    if [ -f "$BASE_DIR/compose.build.override.yml" ]; then
+    if [ -n "$BASE_IMAGE" ]; then
+        files+=(-f compose.base-image.override.yml)
+    elif [ -f "$BASE_DIR/compose.build.override.yml" ]; then
         files+=(-f compose.build.override.yml)
     fi
     (cd "$BASE_DIR" && $compose_cmd "${files[@]}" "$@")
+}
+
+start_base_app() {
+    if [ -n "$BASE_IMAGE" ]; then
+        compose_base up -d --no-build "$@"
+    else
+        compose_base up -d --build "$@"
+    fi
 }
 
 # Same rule as compose_base above: each side keeps its own file set stable for
@@ -449,7 +469,7 @@ administrator_email() {
 # below); every other comparison in this drill is base-to-base and expects
 # the whole file, schema_version included, to match byte-for-byte.
 capture_manifest() {
-    local dir="$1" outfile="$2"
+    local dir="$1" outfile="$2" table
     {
         echo "== schema_version =="
         schema_version "$dir"
@@ -501,7 +521,37 @@ capture_manifest() {
              UNION ALL SELECT 'odometer_reminder_windows', count(*) FROM odometer_reminder_windows
              UNION ALL SELECT 'email_deliveries', count(*) FROM email_deliveries
              ORDER BY 1"
+
+        # Exact synthetic rows catch geometry, IDs, foreign keys, exclusions,
+        # labels and human edits that aggregate totals alone can conceal.
+        # New nullable columns and the ownership columns are expected additions.
+        for table in trips points stays places tag_rules vehicles expenses odometer_readings trip_boundary_overrides; do
+            echo "== exact_${table} =="
+            db_query "$dir" \
+                "SELECT jsonb_strip_nulls(to_jsonb(t) - ARRAY['account_id', 'tracking_device_id']) FROM $table t ORDER BY id"
+        done
+        echo "== exact_mileage_rates =="
+        db_query "$dir" \
+            "SELECT to_jsonb(r) - 'account_id' FROM mileage_rates r ORDER BY year"
     } > "$outfile"
+}
+
+verify_ownership_upgrade() {
+    local dir="$1" version="$2" credential_count before after
+    [ "$version" -ge 26 ] || return 0
+    compose_dir "$dir" exec -T app python -m app.application_roles verify \
+        || step_fail "step 7: prepared account security contract did not validate"
+    credential_count="$(db_query "$dir" \
+        "SELECT count(*) FROM ingest_credentials c JOIN accounts a ON a.id = c.account_id WHERE a.email = '${ADMIN_EMAIL}' AND c.kind = 'legacy' AND c.revoked_at IS NULL")"
+    [ "$credential_count" = "1" ] \
+        || step_fail "step 7: legacy ingest credential was not imported exactly once"
+    before="$(count_points "$dir" "$POSTRESTORE_DEVICE")"
+    ingest_one_point "$INGEST_PASSWORD" "$POSTRESTORE_DEVICE" \
+        || step_fail "step 7: original ingest credential was rejected after ownership migration"
+    after="$(count_points "$dir" "$POSTRESTORE_DEVICE")"
+    [ "$after" -eq "$((before + 1))" ] \
+        || step_fail "step 7: migrated tracker did not accept a new point ($before -> $after)"
+    step_pass "step 7: prepared security contract validated and original tracker credentials still ingest"
 }
 
 assert_manifests_equal() {
@@ -810,13 +860,23 @@ step1_base_up() {
     # nothing reads the port from this copy.
     write_seed_port_override "$CAND_DIR" "$SEED_PORT"
 
+    if [ -n "$BASE_IMAGE" ]; then
+        local base_image_quoted
+        base_image_quoted="${BASE_IMAGE//\'/\'\'}"
+        cat > "$BASE_DIR/compose.base-image.override.yml" <<EOF
+services:
+  app:
+    image: '${base_image_quoted}'
+    pull_policy: always
+EOF
+    fi
     if [ -n "$CANDIDATE_IMAGE" ]; then
         write_candidate_image_override
     fi
     assert_stable_db_service \
         || step_fail "step 1: base/candidate db service definitions are not stable"
 
-    compose_base up -d --build db app
+    start_base_app db app
     wait_for_healthz 240 || step_fail "step 1: base install did not become healthy at ${BASE_URL}/healthz"
     if [ "$DATABASE_IMAGE_MIGRATION" -eq 1 ]; then
         capture_db_image_identity "$BASE_DIR" "$SCRATCH/base-db-before-migration.txt" \
@@ -932,7 +992,7 @@ step6_post_restore_check() {
     # share one project name and therefore one image tag, so without
     # --build here this would silently keep running whatever image a
     # later candidate build (step 7) leaves behind.
-    compose_base up -d --build app
+    start_base_app app
     wait_for_healthz 120 || step_fail "step 6: restored app did not become healthy"
 
     login_local_admin "$ADMIN_EMAIL" "$ADMIN_PASSWORD" \
@@ -1003,6 +1063,7 @@ step7_upgrade() {
     capture_manifest "$CAND_DIR" "$SCRATCH/manifest-after-upgrade.txt"
     assert_data_manifests_equal "$SCRATCH/manifest-after-ingest.txt" "$SCRATCH/manifest-after-upgrade.txt" \
         "step 7a: candidate healthy, schema_version=$v matches migration count, data unchanged"
+    verify_ownership_upgrade "$CAND_DIR" "$v"
 
     oidc_env_loaded "$CAND_DIR" \
         || step_fail "step 7: candidate app did not receive the preserved OIDC configuration"
@@ -1064,7 +1125,7 @@ step8_rollback() {
     (cd "$BASE_DIR" && "$CAND_DIR/scripts/restore_database.sh" "$BACKUP_ARCHIVE") \
         || step_fail "step 8: restore_database.sh failed restoring the pre-upgrade archive"
 
-    compose_base up -d --build app
+    start_base_app app
     wait_for_healthz 120 || step_fail "step 8: rolled-back base app did not become healthy"
 
     v="$(schema_version "$BASE_DIR")"

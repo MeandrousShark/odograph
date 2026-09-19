@@ -21,6 +21,8 @@ from fastapi import FastAPI
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import configure_personal_app
 from app.main import make_templates
 from app.ui import make_router
 from app.vehicles import (
@@ -32,7 +34,7 @@ from app.vehicles import (
     set_default_vehicle,
     update_vehicle,
 )
-from conftest import reset_db
+from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -44,18 +46,18 @@ NOW = datetime.now(timezone.utc)
 
 async def _insert_trip(conn, vehicle_id: int | None) -> int:
     cur = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, distance_m, vehicle_id) "
-        "VALUES ('manual', 'manual', %s, %s, 1000, %s) RETURNING id",
-        (NOW - timedelta(hours=1), NOW, vehicle_id),
+        "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, "
+        "vehicle_id) VALUES (%s, 'manual', 'manual', %s, %s, 1000, %s) RETURNING id",
+        (account_id(conn), NOW - timedelta(hours=1), NOW, vehicle_id,),
     )
     return (await cur.fetchone())[0]
 
 
 async def _crud_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
 
         async with pool.connection() as conn:
             # 008_vehicles.sql seeds one default vehicle ("My Car").
@@ -81,7 +83,7 @@ async def _crud_scenario():
             assert truck_id in {v["id"] for v in all_vehicles}
             assert next(v for v in all_vehicles if v["id"] == truck_id)["active"] is False
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_vehicle_crud_add_edit_deactivate():
@@ -89,10 +91,10 @@ def test_vehicle_crud_add_edit_deactivate():
 
 
 async def _single_default_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
 
         async with pool.connection() as conn:
             seeded = (await list_vehicles(conn))[0]
@@ -113,7 +115,7 @@ async def _single_default_scenario():
             cur = await conn.execute("SELECT count(*) FROM vehicles WHERE is_default")
             assert (await cur.fetchone())[0] == 1
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_set_default_vehicle_clears_previous_default():
@@ -121,10 +123,10 @@ def test_set_default_vehicle_clears_previous_default():
 
 
 async def _delete_detaches_trip_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
 
         async with pool.connection() as conn:
             truck_id = await create_vehicle(conn, "Truck")
@@ -139,7 +141,7 @@ async def _delete_detaches_trip_scenario():
             assert row is not None, "deleting a vehicle must not delete its trips"
             assert row[0] is None, "trips.vehicle_id must be nulled, not left dangling"
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_deleting_vehicle_nulls_trip_vehicle_id_not_the_trip():
@@ -147,10 +149,10 @@ def test_deleting_vehicle_nulls_trip_vehicle_id_not_the_trip():
 
 
 async def _deactivate_clears_default_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
 
         async with pool.connection() as conn:
             # 008_vehicles.sql seeds "My Car" as the default.
@@ -162,7 +164,7 @@ async def _deactivate_clears_default_scenario():
             assert rows[seeded["id"]]["active"] is False
             assert rows[seeded["id"]]["is_default"] is False
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_deactivate_vehicle_clears_is_default():
@@ -174,18 +176,18 @@ def test_deactivate_vehicle_clears_is_default():
 
 
 async def _app_settings_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
 
         async with pool.connection() as conn:
             versions = await conn.execute(
                 "SELECT COALESCE(max(version), 0) FROM schema_migrations"
             )
-            assert (await versions.fetchone())[0] == 25
+            assert (await versions.fetchone())[0] == 26
 
-            row = await conn.execute("SELECT count(*) FROM app_settings")
+            row = await conn.execute("SELECT count(*) FROM account_settings")
             assert (await row.fetchone())[0] == 1
 
             assert await get_auto_assign_default_vehicle(conn) is False
@@ -196,7 +198,7 @@ async def _app_settings_scenario():
             await set_auto_assign_default_vehicle(conn, False)
             assert await get_auto_assign_default_vehicle(conn) is False
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_app_settings_migration_seeds_row_defaulting_auto_assign_off():
@@ -205,7 +207,7 @@ def test_app_settings_migration_seeds_row_defaulting_auto_assign_off():
 
 def _bare_app(pool) -> FastAPI:
     app = FastAPI()
-    app.state.pool = pool
+    configure_personal_app(app, pool)
     app.state.config = SimpleNamespace(
         dev_no_auth=True, display_tz=timezone.utc,
         geocode_provider=None, app_version="test", app_git_revision="test",
@@ -225,10 +227,10 @@ def _checkbox_checked(page_html: str) -> bool:
 
 
 async def _auto_assign_route_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         transport = httpx.ASGITransport(app=_bare_app(pool))
         async with httpx.AsyncClient(
             transport=transport, base_url="http://testserver",
@@ -257,7 +259,7 @@ async def _auto_assign_route_scenario():
             assert await _read_auto_assign(pool) is False
             assert not _checkbox_checked((await client.get("/settings")).text)
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 async def _read_auto_assign(pool) -> bool:

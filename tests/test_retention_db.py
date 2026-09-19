@@ -19,7 +19,8 @@ import pytest
 
 from app.db import make_pool
 from app.retention import RetentionWorker
-from conftest import reset_db
+from conftest import reset_account_db, seed_tracking_device
+from app.account_context import account_id
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -31,8 +32,8 @@ NOW = datetime.now(timezone.utc)
 
 async def _insert_raw_message(conn, received_at, payload) -> int:
     cur = await conn.execute(
-        "INSERT INTO raw_messages (received_at, payload) VALUES (%s, %s) RETURNING id",
-        (received_at, json.dumps(payload)),
+        "INSERT INTO raw_messages (account_id, received_at, payload) VALUES (%s, %s, %s) RETURNING id",
+        (account_id(conn), received_at, json.dumps(payload)),
     )
     return (await cur.fetchone())[0]
 
@@ -43,10 +44,10 @@ async def _all_ids(conn) -> set[int]:
 
 
 async def _scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         old_at = NOW - timedelta(days=400)
         recent_at = NOW - timedelta(days=10)
 
@@ -76,7 +77,7 @@ async def _scenario():
             surviving_again = await _all_ids(conn)
         assert surviving_again == recent_ids
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_retentionworker_prunes_only_rows_older_than_window():
@@ -84,10 +85,10 @@ def test_retentionworker_prunes_only_rows_older_than_window():
 
 
 async def _large_window_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         recent_at = NOW - timedelta(days=10)
 
         async with pool.connection() as conn:
@@ -106,7 +107,7 @@ async def _large_window_scenario():
             surviving = await _all_ids(conn)
         assert surviving == recent_ids
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_retentionworker_large_window_keeps_recent_rows():

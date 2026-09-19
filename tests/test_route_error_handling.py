@@ -38,7 +38,7 @@ def _request():
     # needed even though the scenario never reaches the database.
     config = SimpleNamespace(display_tz=ZoneInfo("UTC"))
     state = SimpleNamespace(pool=pool, config=config)
-    return SimpleNamespace(app=SimpleNamespace(state=state), headers={})
+    return SimpleNamespace(state=SimpleNamespace(account_pool=pool, config=config), app=SimpleNamespace(state=state), headers={})
 
 
 def test_create_rule_rejects_a_non_numeric_place():

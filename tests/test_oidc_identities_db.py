@@ -162,7 +162,11 @@ async def _duplicate_and_owner_scenario():
             )
 
             await conn.execute("DROP INDEX accounts_singleton_idx")
-            other = await create_admin(conn, "other@example.com", "hash")
+            # A privileged synthetic second identity isolates link ownership;
+            # first-account bootstrap correctly remains closed even without its index.
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute("INSERT INTO accounts(email,password_hash) VALUES('other@example.com','hash') RETURNING id")
+            other = await cur.fetchone()
             assert (
                 await create_identity_link(
                     conn, other["id"], "https://id.example", "subject-1"
@@ -277,7 +281,7 @@ async def _legacy_establishment_scenario():
             await create_identity_link(
                 conn, owner["id"], "https://id.example", "subject-1"
             )
-            with pytest.raises(IdentityLinkRejectedError):
+            with pytest.raises(errors.UniqueViolation):
                 await establish_legacy_admin_identity(
                     conn,
                     email="new@example.com",
@@ -294,5 +298,31 @@ async def _legacy_establishment_scenario():
         await pool.close()
 
 
-def test_failed_legacy_establishment_rolls_back_account_and_identity():
+def test_legacy_establishment_cannot_bypass_completed_bootstrap_by_dropping_singleton_index():
     asyncio.run(_legacy_establishment_scenario())
+
+
+def test_failed_identity_link_rolls_back_first_account_and_all_owned_defaults(monkeypatch):
+    import app.oidc_identities as identities
+
+    async def rejected_link(*args, **kwargs):
+        return None
+    monkeypatch.setattr(identities, "create_identity_link", rejected_link)
+
+    async def run():
+        pool = make_pool(TEST_DB)
+        await pool.open(wait=True)
+        try:
+            await reset_db(pool)
+            async with pool.connection() as conn:
+                with pytest.raises(IdentityLinkRejectedError):
+                    await establish_legacy_admin_identity(
+                        conn, email="admin@example.com", password_hash="test-hash",
+                        issuer="https://id.example", subject="subject-1",
+                    )
+                for table in ("accounts", "account_settings", "vehicles", "tag_rules", "mileage_rates", "oidc_identities"):
+                    assert (await (await conn.execute(f"SELECT count(*) FROM {table}")).fetchone())[0] == 0
+                assert (await (await conn.execute("SELECT first_account_id,bootstrap_completed_at FROM instance_state WHERE id=1")).fetchone()) == (None,None)
+        finally:
+            await pool.close()
+    asyncio.run(run())

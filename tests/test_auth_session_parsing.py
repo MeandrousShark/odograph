@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.auth import AuthRedirect, require_user
+from app.auth import AuthRedirect, require_user, require_legacy_establishment
 
 
 class _Cursor:
@@ -27,7 +27,7 @@ class _Connection:
         return _Cursor(self.account)
 
     async def execute(self, *args, **kwargs):
-        return _Cursor((self.account is not None,))
+        return _Cursor((None,) if "current_setting" in args[0] else (self.account is not None,))
 
 
 class _ConnectionContext:
@@ -62,7 +62,7 @@ def _request(session, *, account=None, issuer="https://idp.example.com/"):
                     oidc_issuer=issuer,
                 ),
                 oauth=object(),
-                pool=pool,
+                control_pool=pool,
             )
         ),
         session=dict(session),
@@ -79,6 +79,8 @@ def _request(session, *, account=None, issuer="https://idp.example.com/"):
         {"account_id": 1, "auth_version": False},
         {"account_id": 0, "auth_version": 1},
         {"account_id": -1, "auth_version": 1},
+        {"account_id": 2**63, "auth_version": 1},
+        {"account_id": 1, "auth_version": 2**63},
         {"account_id": 1, "auth_version": 0},
         {"account_id": "1", "auth_version": 1},
         {"account_id": 1, "auth_version": "é"},
@@ -96,7 +98,13 @@ def test_malformed_account_session_fails_closed_without_database_access(session)
     assert pool.connection_count == 0
 
 
-def test_exact_positive_integer_account_session_is_accepted():
+def test_exact_positive_integer_account_session_is_accepted(monkeypatch):
+    import app.auth
+
+    async def bind_account(request, account):
+        return app.auth._account_user(account)
+
+    monkeypatch.setattr(app.auth, "_bind_account", bind_account)
     account = {
         "id": 1,
         "email": "admin@example.com",
@@ -137,7 +145,7 @@ def test_malformed_or_wrong_issuer_legacy_session_fails_closed(legacy):
     request, pool = _request({"legacy_oidc": legacy, "csrf": "csrf"})
 
     with pytest.raises(AuthRedirect):
-        asyncio.run(require_user(request))
+        asyncio.run(require_legacy_establishment(request))
 
     assert request.session == {}
     assert pool.connection_count == 0
@@ -155,7 +163,7 @@ def test_configured_issuer_change_invalidates_existing_legacy_cookie():
     )
 
     with pytest.raises(AuthRedirect):
-        asyncio.run(require_user(request))
+        asyncio.run(require_legacy_establishment(request))
 
     assert request.session == {}
 
@@ -171,7 +179,7 @@ def test_valid_legacy_session_binds_to_normalized_current_issuer():
         }
     )
 
-    user = asyncio.run(require_user(request))
+    user = asyncio.run(require_legacy_establishment(request))
 
     assert user["legacy_oidc"] is True
     assert pool.connection_count == 1
@@ -193,7 +201,17 @@ def test_malformed_pre_m9_user_session_fails_closed(old_user):
     request, pool = _request({"user": old_user, "csrf": "csrf"})
 
     with pytest.raises(AuthRedirect):
-        asyncio.run(require_user(request))
+        asyncio.run(require_legacy_establishment(request))
 
     assert request.session == {}
+    assert pool.connection_count == 0
+
+
+def test_accountless_legacy_session_cannot_enter_personal_routes():
+    request, pool = _request({
+        "legacy_oidc": {"issuer": "https://idp.example.com", "subject": "subject-1"},
+        "csrf": "csrf",
+    })
+    with pytest.raises(AuthRedirect):
+        asyncio.run(require_user(request))
     assert pool.connection_count == 0

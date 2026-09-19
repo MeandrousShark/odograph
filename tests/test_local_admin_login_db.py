@@ -14,6 +14,7 @@ from app.ingest import FailedAuthLimiter
 from app.local_auth import hash_password
 from app.main import make_templates
 from conftest import reset_db
+from tests.auth_db_fixtures import auth_config, seed_auth_account
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -32,20 +33,18 @@ def _endpoint(path: str, method: str):
 
 async def _seed_admin(pool, *, email=ADMIN_EMAIL, password=ADMIN_PASSWORD, enabled=True):
     async with pool.connection() as conn:
-        await conn.execute(
-            "INSERT INTO accounts (id, email, password_hash, is_enabled) "
-            "VALUES (1, %s, %s, %s)",
-            (email, hash_password(password), enabled),
-        )
+        await seed_auth_account(conn, email=email, password_hash=hash_password(password))
+        if not enabled:
+            await conn.execute("UPDATE accounts SET is_enabled = false WHERE id = 1")
 
 
 def _request(pool, *, ip="203.0.113.9", limiter=None, session=None):
-    cfg = SimpleNamespace(
+    cfg = auth_config(TEST_DB,
         initial_admin_signup=False, dev_no_auth=False, allowed_email=""
     )
     return SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
-            pool=pool, config=cfg,
+            control_pool=pool, config=cfg,
             templates=make_templates(SimpleNamespace(display_tz=TZ, app_version="test")),
             oauth=None,
             login_limiter=limiter or FailedAuthLimiter(3, 900.0),

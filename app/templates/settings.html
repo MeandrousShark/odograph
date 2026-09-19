@@ -12,10 +12,66 @@
   </div>
 </div>
 
-{% if user.is_admin and user.id %}
+{% if user.id %}
 <section class="settings-account-section" aria-labelledby="account-heading">
 <h2 id="account-heading">Account</h2>
 <p><a href="/settings/account">Manage your avatar, login, and password in Account Settings</a>.</p>
+</section>
+{% endif %}
+
+<p><a href="/settings/tracking">Tracking devices and credentials</a></p>
+
+{% if preferences is defined %}
+<section class="settings-section">
+<h2>Time zone and notifications</h2>
+<p class="muted">Your time zone applies to dates, reports, manual entries, and reminder schedules.</p>
+<form class="settings-preferences-form" hx-post="/settings/preferences" hx-swap="none">
+  <label class="settings-preference-field settings-timezone-field">Time zone
+    <input name="display_timezone" value="{{ preferences.display_tz }}" required maxlength="128">
+  </label>
+  <fieldset class="settings-preference-group">
+    <legend>Notification destinations</legend>
+    <div class="settings-preference-grid">
+      <label class="settings-preference-field">ntfy topic
+        <input name="ntfy_topic" value="{{ preferences.ntfy_topic }}" maxlength="200">
+      </label>
+      <label class="settings-preference-field">Email recipients
+        <input name="email_to" value="{{ preferences.email_to }}" maxlength="512">
+      </label>
+    </div>
+    <p class="muted">Leave a destination blank to disable that delivery channel. Delivery also requires the instance's configured provider.</p>
+  </fieldset>
+  <fieldset class="settings-preference-group">
+    <legend>Reminders to receive</legend>
+    <div class="settings-preference-checks">
+      <label><input type="checkbox" name="odometer_reminder_requested" value="1"{% if preferences.odometer_reminder_requested %} checked{% endif %}> ntfy odometer reminders</label>
+      {% for key, label in (("email_weekly_nudge", "Weekly email reminders"), ("email_monthly_summary", "Monthly email summary"), ("email_filing_reminder", "Filing email reminder"), ("email_odometer_reminder", "Odometer email reminders")) %}
+      <label><input type="checkbox" name="{{ key }}" value="1"{% if preferences[key] %} checked{% endif %}> {{ label }}</label>
+      {% endfor %}
+    </div>
+  </fieldset>
+  <fieldset class="settings-preference-group">
+    <legend>Delivery schedule</legend>
+    <div class="settings-preference-grid">
+      <label class="settings-preference-field">Weekly reminder hour
+        <input type="number" name="nudge_weekly_hour" min="0" max="23" value="{{ preferences.nudge_weekly_hour }}">
+      </label>
+      <label class="settings-preference-field">Odometer reminder hour
+        <input type="number" name="odometer_reminder_hour" min="0" max="23" value="{{ preferences.odometer_reminder_hour }}">
+      </label>
+      <label class="settings-preference-field">Email delivery hour
+        <input type="number" name="email_digest_hour" min="0" max="23" value="{{ preferences.email_digest_hour }}">
+      </label>
+      <label class="settings-preference-field">Filing reminder month and day
+        <input name="email_filing_reminder_mmdd" value="{{ preferences.email_filing_reminder_mmdd }}" pattern="[0-9]{2}-[0-9]{2}" maxlength="5">
+      </label>
+    </div>
+    <p class="muted">Hours use your time zone, from 0 (midnight) to 23. Enter the filing date as MM-DD.</p>
+  </fieldset>
+  <div class="settings-preference-actions">
+    <button type="submit" class="control control-primary">Save preferences</button>
+  </div>
+</form>
 </section>
 {% endif %}
 
@@ -104,9 +160,8 @@
 
 <section class="settings-section settings-rates">
 <h2>Mileage rates</h2>
-<p class="muted">IRS standard mileage rate per business mile, used for the deduction
-  estimates on the trip list. A <code>MILEAGE_RATE_&lt;YEAR&gt;</code> environment
-  variable overrides the stored rate for that year until the app restarts.</p>
+<p class="muted">Your saved IRS mileage rates are used for deduction estimates
+  on trips and reports. Changes here apply to your ledger.</p>
 
 {% include "_rates_table.html" %}
 </section>
@@ -125,7 +180,7 @@
     <input type="checkbox" name="auto_assign_default_vehicle" value="1"
            hx-post="/settings/vehicles/auto_assign" hx-trigger="change" hx-swap="none"
            {{ 'checked' if auto_assign_default_vehicle }}>
-    Assign the default vehicle to newly detected trips
+    Assign my default vehicle to newly detected trips
   </label>
 </p>
 </section>
@@ -331,13 +386,12 @@ document.addEventListener('click', function (event) {
 
 <section class="settings-section settings-data">
 <h2>Data export / import</h2>
-<p class="muted">Export the whole ledger: vehicles, places, auto-tag rules,
-  mileage rates, trips (category/purpose/notes/vehicle/place assignments),
-  expenses, odometer readings, and this settings row, as one JSON file. It
-  does not include route/path geometry or raw location points. Import only
-  supports a freshly migrated, otherwise-empty instance on the same schema
-  version; the response is the raw JSON result of the attempt, including a
-  structured error report if it's refused.</p>
+<p class="muted">Export your ledger as one JSON file: vehicles, places, auto-tag
+  rules, mileage rates, trips, expenses, odometer readings, time zone, and
+  default-vehicle preference. It excludes route geometry, raw location points,
+  login and tracking credentials, and notification settings or history.
+  Import into an otherwise-empty account. Supported older Odograph exports
+  are accepted too. Use Dry run to check a file before importing it.</p>
 
 <p><a href="/settings/export/data">Download export</a></p>
 
@@ -349,6 +403,7 @@ document.addEventListener('click', function (event) {
 </form>
 </section>
 
+{% if user.is_admin %}
 <section class="settings-section settings-diagnostics">
 <details class="section-disclosure" id="diagnostics">
   <summary><h2>Diagnostics</h2></summary>
@@ -431,6 +486,11 @@ document.addEventListener('click', function (event) {
   {% endif %}
   {% endif %}
 
+</details>
+</section>
+{% endif %}
+
+<section class="settings-section">
   <h2>Device status</h2>
   <p class="muted">Newest location fix received from each device that has posted to
     <code>/ingest</code>, and how many it has sent in total. This is the fastest way to tell
@@ -455,7 +515,6 @@ document.addEventListener('click', function (event) {
   {% else %}
   <p class="muted">No location fixes received yet.</p>
   {% endif %}
-</details>
 </section>
 
 </div>

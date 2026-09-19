@@ -10,6 +10,9 @@ without changing anything in this module's Geoapify section.
 """
 from __future__ import annotations
 
+from app.account_context import account_id
+from app.account_jobs import lock_device_generation
+
 import asyncio
 import logging
 from typing import Protocol
@@ -335,20 +338,27 @@ class GeocodeWorker(PokeSweepWorker):
         async with self.pool.connection() as conn:
             cur = await conn.execute(
                 f"""
+                WITH eligible AS (
+                    SELECT t.start_geom,t.end_geom,t.start_place_id,t.end_place_id
+                    FROM trips t LEFT JOIN tracking_devices d
+                      ON d.account_id=t.account_id AND d.id=t.tracking_device_id
+                    WHERE t.account_id=%s AND
+                      (t.tracking_device_id IS NULL OR (d.enabled AND d.revoked_at IS NULL))
+                )
                 SELECT lat, lon FROM (
                     SELECT DISTINCT ROUND(ST_Y(start_geom::geometry)::numeric, {GEOCODE_PRECISION}) AS lat,
                                     ROUND(ST_X(start_geom::geometry)::numeric, {GEOCODE_PRECISION}) AS lon
-                    FROM trips WHERE start_place_id IS NULL AND start_geom IS NOT NULL
+                    FROM eligible WHERE start_place_id IS NULL AND start_geom IS NOT NULL
                     UNION
                     SELECT DISTINCT ROUND(ST_Y(end_geom::geometry)::numeric, {GEOCODE_PRECISION}),
                                     ROUND(ST_X(end_geom::geometry)::numeric, {GEOCODE_PRECISION})
-                    FROM trips WHERE end_place_id IS NULL AND end_geom IS NOT NULL
+                    FROM eligible WHERE end_place_id IS NULL AND end_geom IS NOT NULL
                 ) endpoints
                 EXCEPT
-                SELECT lat, lon FROM geocode_cache
+                SELECT lat, lon FROM geocode_cache WHERE account_id = %s
                 LIMIT %s
                 """,
-                (self.batch_size,),
+                (account_id(conn), account_id(conn), self.batch_size),
             )
             coords = [(float(r[0]), float(r[1])) for r in await cur.fetchall()]
         if not coords:
@@ -358,7 +368,27 @@ class GeocodeWorker(PokeSweepWorker):
                 await asyncio.sleep(self.min_interval_s)
             await self._geocode_one(lat, lon)
 
+    async def _sources(self, conn, lat: float, lon: float, *, lock=False):
+        cur = await conn.execute(
+            f"""SELECT t.id,t.updated_at,t.tracking_device_id,d.generation
+            FROM trips t LEFT JOIN tracking_devices d
+              ON d.account_id=t.account_id AND d.id=t.tracking_device_id
+            WHERE t.account_id=%s AND
+              (t.tracking_device_id IS NULL OR (d.enabled AND d.revoked_at IS NULL)) AND (
+              (t.start_place_id IS NULL AND ROUND(ST_Y(t.start_geom::geometry)::numeric,{GEOCODE_PRECISION})=%s
+               AND ROUND(ST_X(t.start_geom::geometry)::numeric,{GEOCODE_PRECISION})=%s) OR
+              (t.end_place_id IS NULL AND ROUND(ST_Y(t.end_geom::geometry)::numeric,{GEOCODE_PRECISION})=%s
+               AND ROUND(ST_X(t.end_geom::geometry)::numeric,{GEOCODE_PRECISION})=%s))"""
+            + (" FOR SHARE OF t" if lock else ""),
+            (account_id(conn), lat, lon, lat, lon),
+        )
+        return await cur.fetchall()
+
     async def _geocode_one(self, lat: float, lon: float) -> None:
+        async with self.pool.connection() as conn:
+            sources = await self._sources(conn, lat, lon)
+        if not sources:
+            return
         try:
             address = await self.provider.reverse(self.http, lat, lon)
         except (httpx.HTTPError, ValueError) as e:
@@ -372,10 +402,26 @@ class GeocodeWorker(PokeSweepWorker):
             log.warning("geocode: lookup failed (%s), leaving uncached", type(e).__name__)
             return
         async with self.pool.connection() as conn:
+            current_sources = set(await self._sources(conn, lat, lon, lock=True))
+            eligible = False
+            for trip_id, trip_generation, device_id, device_generation in sources:
+                if (trip_id, trip_generation, device_id, device_generation) not in current_sources:
+                    continue
+                if device_id is not None and not await lock_device_generation(conn, device_id, device_generation):
+                    continue
+                cur = await conn.execute(
+                    "SELECT 1 FROM trips WHERE account_id=%s AND id=%s AND updated_at=%s FOR SHARE",
+                    (account_id(conn), trip_id, trip_generation),
+                )
+                if await cur.fetchone() is not None:
+                    eligible = True
+                    break
+            if not eligible:
+                return
             await conn.execute(
-                "INSERT INTO geocode_cache (lat, lon, address) VALUES (%s, %s, %s) "
-                "ON CONFLICT (lat, lon) DO NOTHING",
-                (lat, lon, address),
+                "INSERT INTO geocode_cache (account_id, lat, lon, address) VALUES (%s, %s, %s, %s) "
+                "ON CONFLICT (account_id, lat, lon) DO NOTHING",
+                (account_id(conn), lat, lon, address),
             )
         if address is None:
             log.info("geocode: lookup complete, no address found")

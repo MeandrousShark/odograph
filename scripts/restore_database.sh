@@ -248,10 +248,28 @@ if ! {
 fi
 chmod 600 "$restore_input"
 
+owned_archive=0
+if toc_has_schema odograph_service; then
+    owned_archive=1
+    # Use the matching app image as a one-off tool; never start its server or
+    # apply migrations while reconstructing the archived security contract.
+    if ! $compose_cmd run --rm --no-deps -T app python -m app.application_roles prepare-restore; then
+        echo "error: restricted role preparation failed; no archive SQL was applied. Use the application image matching this backup." >&2
+        exit 1
+    fi
+fi
+
 echo "Restoring $ARCHIVE into the mileage database in one transaction via: $compose_cmd exec -T db psql ..."
 if ! $compose_cmd exec -T db psql -X --single-transaction -v ON_ERROR_STOP=1 -U mileage -d mileage -f - < "$restore_input"; then
     echo "error: transactional restore failed; schema bootstrap and archive restore were rolled back. Fix the underlying issue and retry." >&2
     exit 1
+fi
+
+if [ "$owned_archive" -eq 1 ]; then
+    if ! $compose_cmd run --rm --no-deps -T app python -m app.application_roles finalize-restore; then
+        echo "error: data restored, but restricted-role reconstruction or security validation failed. Keep the app stopped; restore into a fresh target with the matching application image." >&2
+        exit 1
+    fi
 fi
 
 $compose_cmd exec -T db psql -U mileage -d mileage -v ON_ERROR_STOP=1 -c "ANALYZE;" > /dev/null

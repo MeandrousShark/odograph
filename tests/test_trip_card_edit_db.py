@@ -11,10 +11,12 @@ import pytest
 from fastapi import HTTPException
 
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import fixture_device, personal_request
 from app.main import make_templates
 from app.rates import METERS_PER_MILE
 from app.ui import make_router
-from conftest import reset_db
+from conftest import reset_account_db
 
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -45,13 +47,13 @@ EXCLUSION = _endpoint("/trips/{trip_id}/exclusion", "POST")
 
 def _request(pool):
     config = SimpleNamespace(display_tz=TZ, app_version="test")
-    return SimpleNamespace(
+    return personal_request(SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, templates=make_templates(config), config=config,
         )),
         session={"csrf": "test"},
         headers={},
-    )
+    ))
 
 
 async def _save(request, trip_id, **overrides):
@@ -76,39 +78,40 @@ async def _insert_manual(conn, **overrides):
     }
     values.update(overrides)
     row = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, distance_m, category, "
-        "purpose, notes, vehicle_id) VALUES ('manual', 'manual', %s, %s, %s, %s, %s, %s, %s) "
+        "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, category,"
+        " purpose, notes, vehicle_id) VALUES (%s, 'manual', 'manual', %s, %s, %s, %s, %s, %s, %s) "
         "RETURNING id",
-        tuple(values.values()),
+        (account_id(conn), *(tuple(values.values())),),
     )
     return (await row.fetchone())[0]
 
 
 async def _scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         request = _request(pool)
 
         async with pool.connection() as conn:
             active_id = (await (await conn.execute(
-                "INSERT INTO vehicles (name) VALUES ('Active car') RETURNING id"
+                "INSERT INTO vehicles (account_id, name) VALUES (%s, 'Active car') RETURNING id", (account_id(conn),)
             )).fetchone())[0]
             inactive_id = (await (await conn.execute(
-                "INSERT INTO vehicles (name, active) VALUES ('Retired car', false) RETURNING id"
+                "INSERT INTO vehicles (account_id, name, active) VALUES (%s, 'Retired car', false) "
+                "RETURNING id", (account_id(conn),)
             )).fetchone())[0]
             manual_id = await _insert_manual(conn, vehicle_id=inactive_id)
             detected_id = (await (await conn.execute(
-                "INSERT INTO trips (device, source, started_at, ended_at, start_geom, end_geom, "
-                "distance_m, point_count, path, has_gap, category, purpose, notes, vehicle_id, "
-                "detector_version, snap_status) VALUES ('phone', 'detected', "
-                "'2026-07-14T18:00:00Z', '2026-07-14T19:00:00Z', "
+                "INSERT INTO trips (account_id, tracking_device_id, device, source, started_at, "
+                "ended_at, start_geom, end_geom, distance_m, point_count, path, has_gap, category, "
+                "purpose, notes, vehicle_id, detector_version, snap_status) VALUES (%s, %s, "
+                "'phone', 'detected', '2026-07-14T18:00:00Z', '2026-07-14T19:00:00Z', "
                 "ST_SetSRID(ST_MakePoint(-122.3, 47.6), 4326)::geography, "
                 "ST_SetSRID(ST_MakePoint(-122.2, 47.7), 4326)::geography, 3200, 44, "
-                "ST_GeomFromText('LINESTRING(-122.3 47.6,-122.2 47.7)', 4326), true, "
-                "'business', 'Original purpose', 'Original notes', %s, 2, 'failed') RETURNING id",
-                (active_id,),
+                "ST_GeomFromText('LINESTRING(-122.3 47.6,-122.2 47.7)', 4326), true, 'business', "
+                "'Original purpose', 'Original notes', %s, 2, 'failed') RETURNING id",
+                (account_id(conn), await fixture_device(conn, 'phone'), active_id,),
             )).fetchone())[0]
 
         card = await CARD(request, detected_id, USER)
@@ -350,7 +353,7 @@ async def _scenario():
                 "WHEN (NEW.vehicle_id IS DISTINCT FROM OLD.vehicle_id) EXECUTE FUNCTION remove_edit_vehicle()"
             )
             race_vehicle = (await (await conn.execute(
-                "INSERT INTO vehicles (name) VALUES ('Race car') RETURNING id"
+                "INSERT INTO vehicles (account_id, name) VALUES (%s, 'Race car') RETURNING id", (account_id(conn),)
             )).fetchone())[0]
         try:
             response = await _save(request, manual_id, **{**valid_manual, "vehicle_id": str(race_vehicle)})
@@ -374,7 +377,7 @@ async def _scenario():
                 await conn.execute("DROP TRIGGER remove_edit_vehicle ON trips")
                 await conn.execute("DROP FUNCTION remove_edit_vehicle()")
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_card_fragments_and_atomic_source_specific_editing():

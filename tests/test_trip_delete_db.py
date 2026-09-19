@@ -15,10 +15,12 @@ import pytest
 from psycopg import errors
 
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import fixture_device, personal_request
 from app.detector.core import Params
 from app.detector.runner import DetectorRunner
 from app.ui import make_router
-from conftest import reset_db
+from conftest import reset_account_db
 from tests.synth import Drive, Stationary, build_track
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -40,13 +42,19 @@ async def _insert_detectable_track(conn, device: str = "DELETEDEV") -> None:
     ])
     for point in points:
         await conn.execute(
-            "INSERT INTO points "
-            "(device, recorded_at, received_at, geom, accuracy_m, velocity_kmh) "
-            "VALUES (%s, %s, %s, "
+            "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, received_at, "
+            "geom, accuracy_m, velocity_kmh) VALUES (%s, %s, %s, %s, %s, "
             "ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s)",
             (
-                device, point.t, point.t, point.lon, point.lat,
-                point.accuracy_m, point.velocity_kmh,
+                account_id(conn),
+                await fixture_device(conn, device),
+                device,
+                point.t,
+                point.t,
+                point.lon,
+                point.lat,
+                point.accuracy_m,
+                point.velocity_kmh,
             ),
         )
 
@@ -86,6 +94,7 @@ class TrackingPool:
 
     def __init__(self, pool):
         self.pool = pool
+        self.principal = pool.principal
         self.in_context = False
         self.last_committed = False
 
@@ -113,20 +122,20 @@ class TrackingConnection:
 
 
 def _request(pool, runner, snap_worker=None):
-    return SimpleNamespace(
+    return personal_request(SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, detector_runner=runner, snap_worker=snap_worker,
             config=SimpleNamespace(detector_params=Params()),
         )),
         headers={},
-    )
+    ))
 
 
 async def _delete_and_restore_scenario() -> None:
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         runner = DetectorRunner(pool, Params())
         tracking_pool = TrackingPool(pool)
         snap_worker = FakeSnapWorker(tracking_pool)
@@ -136,18 +145,16 @@ async def _delete_and_restore_scenario() -> None:
 
         async with pool.connection() as conn:
             manual = await conn.execute(
-                "INSERT INTO trips "
-                "(device, source, started_at, ended_at, distance_m) "
-                "VALUES ('manual', 'manual', now() - interval '1 hour', now(), 1000) "
-                "RETURNING id"
+                "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m) "
+                "VALUES (%s, 'manual', 'manual', now() - interval '1 hour', now(), 1000) RETURNING "
+                "id", (account_id(conn),)
             )
             manual_id = (await manual.fetchone())[0]
             await conn.execute(
-                "INSERT INTO expenses "
-                "(vehicle_id, incurred_on, category, amount, treatment, notes, trip_id) "
-                "VALUES (1, '2026-05-04', 'fuel', 17.23, 'business_use_allocated', "
-                "'keep after trip deletion', %s)",
-                (manual_id,),
+                "INSERT INTO expenses (account_id, vehicle_id, incurred_on, category, amount, "
+                "treatment, notes, trip_id) VALUES (%s, 1, '2026-05-04', 'fuel', 17.23, "
+                "'business_use_allocated', 'keep after trip deletion', %s)",
+                (account_id(conn), manual_id,),
             )
 
         response = await delete(request, manual_id, {"sub": "test"})
@@ -168,8 +175,9 @@ async def _delete_and_restore_scenario() -> None:
 
         async with pool.connection() as conn:
             fragment_manual = await conn.execute(
-                "INSERT INTO trips (device, source, started_at, ended_at, distance_m) "
-                "VALUES ('manual', 'manual', now() - interval '1 hour', now(), 1000) RETURNING id"
+                "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m) "
+                "VALUES (%s, 'manual', 'manual', now() - interval '1 hour', now(), 1000) RETURNING "
+                "id", (account_id(conn),)
             )
             fragment_manual_id = (await fragment_manual.fetchone())[0]
         response = await delete(request, fragment_manual_id, {"sub": "test"}, True)
@@ -180,9 +188,9 @@ async def _delete_and_restore_scenario() -> None:
 
         async with pool.connection() as conn:
             dashboard_manual = await conn.execute(
-                "INSERT INTO trips (device, source, started_at, ended_at, distance_m) "
-                "VALUES ('manual', 'manual', now() - interval '1 hour', now(), 1000) "
-                "RETURNING id"
+                "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m) "
+                "VALUES (%s, 'manual', 'manual', now() - interval '1 hour', now(), 1000) RETURNING "
+                "id", (account_id(conn),)
             )
             dashboard_manual_id = (await dashboard_manual.fetchone())[0]
         response = await delete(
@@ -215,12 +223,18 @@ async def _delete_and_restore_scenario() -> None:
             discard = await _discard_rows(conn)
         assert [(r[1], r[2]) for r in discard] == [(started_at, ended_at)]
 
-        await runner.reprocess_device_now("DELETEDEV")
+        async with pool.connection() as conn:
+            device_id = await fixture_device(conn, "DELETEDEV")
+        await runner.reprocess_device_now(device_id)
         async with pool.connection() as conn:
             assert await _detected_trip(conn) is None
 
         async with pool.connection() as conn:
-            await conn.execute("UPDATE detector_state SET detector_version = 0 WHERE id = 1")
+            await conn.execute(
+                "UPDATE detector_state SET detector_version = 0 "
+                "WHERE account_id = %s AND tracking_device_id = %s",
+                (account_id(conn), device_id),
+            )
         assert await runner.run_once() is True
         async with pool.connection() as conn:
             assert await _detected_trip(conn) is None
@@ -234,7 +248,7 @@ async def _delete_and_restore_scenario() -> None:
             assert (restored[1], restored[2]) == (started_at, ended_at)
             assert await _discard_rows(conn) == []
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_manual_delete_and_detected_delete_persistence_and_restore():
@@ -242,10 +256,10 @@ def test_manual_delete_and_detected_delete_persistence_and_restore():
 
 
 async def _delete_rollback_scenario() -> None:
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             await _insert_detectable_track(conn)
         runner = DetectorRunner(pool, Params())
@@ -285,7 +299,7 @@ async def _delete_rollback_scenario() -> None:
                 await conn.execute("DROP TRIGGER reject_trip_delete ON trips")
                 await conn.execute("DROP FUNCTION reject_trip_delete()")
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_detected_delete_rolls_back_override_when_target_delete_fails():
@@ -293,10 +307,10 @@ def test_detected_delete_rolls_back_override_when_target_delete_fails():
 
 
 async def _surviving_snap_results_scenario() -> None:
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         track = build_track([
             Stationary(900), Drive(km=2), Stationary(1200),
             Drive(km=2), Stationary(1200), Drive(km=2), Stationary(900),
@@ -304,13 +318,18 @@ async def _surviving_snap_results_scenario() -> None:
         async with pool.connection() as conn:
             for point in track:
                 await conn.execute(
-                    "INSERT INTO points "
-                    "(device, recorded_at, received_at, geom, accuracy_m, velocity_kmh) "
-                    "VALUES ('DELETEDEV', %s, %s, "
-                    "ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s)",
+                    "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, "
+                    "received_at, geom, accuracy_m, velocity_kmh) VALUES (%s, %s, 'DELETEDEV', %s, "
+                    "%s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s)",
                     (
-                        point.t, point.t, point.lon, point.lat,
-                        point.accuracy_m, point.velocity_kmh,
+                        account_id(conn),
+                        await fixture_device(conn, 'DELETEDEV'),
+                        point.t,
+                        point.t,
+                        point.lon,
+                        point.lat,
+                        point.accuracy_m,
+                        point.velocity_kmh,
                     ),
                 )
 
@@ -373,7 +392,7 @@ async def _surviving_snap_results_scenario() -> None:
         }
         assert stays_after == stays_before
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_detected_delete_preserves_terminal_snaps_on_unchanged_surviving_trips():
@@ -381,10 +400,10 @@ def test_detected_delete_preserves_terminal_snaps_on_unchanged_surviving_trips()
 
 
 async def _split_pokes_snap_after_commit_scenario() -> None:
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             await _insert_detectable_track(conn)
         runner = DetectorRunner(pool, Params())
@@ -416,7 +435,7 @@ async def _split_pokes_snap_after_commit_scenario() -> None:
             )
             assert (await cur.fetchone())[0] == 2
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_successful_split_pokes_snap_worker_after_reprocess_commit():

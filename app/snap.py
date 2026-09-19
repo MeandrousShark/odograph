@@ -4,6 +4,9 @@ same "pure function + thin I/O wrapper" convention as
 """
 from __future__ import annotations
 
+from app.account_context import account_id
+from app.account_jobs import lock_device_generation
+
 import json
 import logging
 from dataclasses import dataclass
@@ -318,9 +321,12 @@ class SnapWorker(PokeSweepWorker):
     async def run_once(self) -> None:
         async with self.pool.connection() as conn:
             cur = await conn.execute(
-                "SELECT id FROM trips WHERE snap_status = 'pending' "
-                "ORDER BY id LIMIT %s",
-                (self.batch_size,),
+                "SELECT t.id FROM trips t JOIN tracking_devices d "
+                "ON d.account_id=t.account_id AND d.id=t.tracking_device_id "
+                "WHERE t.account_id=%s AND t.snap_status='pending' "
+                "AND t.source='detected' AND NOT t.imported AND d.enabled AND d.revoked_at IS NULL "
+                "ORDER BY t.id LIMIT %s",
+                (account_id(conn), self.batch_size),
             )
             trip_ids = [r[0] for r in await cur.fetchall()]
         if not trip_ids:
@@ -354,10 +360,16 @@ class SnapWorker(PokeSweepWorker):
             # means a rewrite superseded the points this result was computed
             # from.
             cur = await conn.execute(
-                "SELECT updated_at FROM trips WHERE id = %s", (trip_id,)
+                "SELECT t.updated_at, t.tracking_device_id, d.generation FROM trips t "
+                "JOIN tracking_devices d ON d.account_id=t.account_id AND d.id=t.tracking_device_id "
+                "WHERE t.account_id=%s AND t.id=%s AND t.snap_status='pending' "
+                "AND t.source='detected' AND NOT t.imported AND d.enabled AND d.revoked_at IS NULL",
+                (account_id(conn), trip_id),
             )
             row = await cur.fetchone()
-            generation = row[0] if row else None
+            if row is None:
+                return
+            generation, device_id, device_generation = row
             points = await self._load_points(conn, trip_id)
         if len(points) < 2:
             # A detected trip should always have >= 2 points; if one somehow
@@ -367,10 +379,12 @@ class SnapWorker(PokeSweepWorker):
             # landing here means the point count itself may be stale
             # (e.g. the rewrite's own point set is >= 2), so don't clobber it.
             async with self.pool.connection() as conn:
+                if not await lock_device_generation(conn, device_id, device_generation):
+                    return
                 cur = await conn.execute(
                     "UPDATE trips SET snap_status = 'failed', snapped_at = now() "
-                    "WHERE id = %s AND updated_at = %s",
-                    (trip_id, generation),
+                    "WHERE account_id = %s AND id = %s AND updated_at = %s",
+                    (account_id(conn), trip_id, generation),
                 )
             if cur.rowcount == 0:
                 log.info(
@@ -414,7 +428,7 @@ class SnapWorker(PokeSweepWorker):
             # transport failure and leave the trip pending forever (retried
             # every sweep, same NoMatch every time) instead of landing on
             # the correct terminal 'failed' via parse_match_response below.
-            log.warning("snap: trip %s OSRM call failed (%s), leaving pending", trip_id, e)
+            log.warning("snap: trip %s OSRM call failed (%s), leaving pending", trip_id, type(e).__name__)
             return
         if not isinstance(body, dict) or "code" not in body:
             log.warning("snap: trip %s got an unrecognized OSRM response, leaving pending", trip_id)
@@ -422,13 +436,15 @@ class SnapWorker(PokeSweepWorker):
 
         result = parse_match_response(body, self.min_confidence, len(sampled))
         async with self.pool.connection() as conn:
+            if not await lock_device_generation(conn, device_id, device_generation):
+                return
             cur = await conn.execute(
                 "UPDATE trips SET path_snapped = ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326), "
                 " distance_snapped_m = %s, snap_status = %s, snapped_at = now() "
-                "WHERE id = %s AND updated_at = %s",
+                "WHERE account_id = %s AND id = %s AND updated_at = %s",
                 (
                     json.dumps(result.path_geojson) if result.path_geojson else None,
-                    result.distance_m, result.status, trip_id, generation,
+                    result.distance_m, result.status, account_id(conn), trip_id, generation,
                 ),
             )
         if cur.rowcount == 0:

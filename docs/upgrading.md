@@ -189,6 +189,58 @@ preflight database-image migration drill.
    anything you want to watch closely. Don't let your normal backup
    retention expire it before that window closes.
 
+## Account ownership migration (schema 26)
+
+Schema 26 assigns existing personal data to the installation's established
+account. It preserves that account's actual ID, local password and linked
+identity, along with record IDs, trip geometry, edits, categories, exclusions,
+and detector progress. Registration remains closed after the first account.
+The application uses restricted database roles and explicit account ownership;
+RLS policies are prepared, but enforcement remains disabled in this stage.
+
+Before this upgrade, establish the account on the previous release if the
+installation contains data but has no account. Sign in through the existing
+provider and complete account establishment, or use the previous release's
+supported `create-admin` command. The migration refuses to guess an owner
+for populated accountless databases. Do not delete data or insert account
+ID 1 by hand to bypass that check.
+
+Stop the app, ingest and background writes before the final pre-upgrade
+backup. Keep that verified archive, its sidecars, the previous exact image,
+and the original `.env` until acceptance and the observation window finish.
+If this upgrade also changes the database image, follow the fresh-volume
+procedure above.
+
+The migration imports effective personal settings and mileage-rate overrides
+from the old configuration once. Afterward, change personal preferences in
+Settings; editing their old environment variables does not overwrite stored
+preferences. Instance transport settings, provider secrets, and worker
+intervals remain environment configuration.
+
+Existing tracker labels become account-owned devices. Existing Basic ingest
+credentials are imported once as a legacy adapter, preserving configured
+phones through the upgrade. Device credentials issued in Tracking settings
+identify their device without trusting the payload's tracker label. Revoking
+the adapter or a device credential stays effective across restart; leaving
+old environment values in place does not recreate it.
+
+After startup, sign in with the original credentials and check representative
+trips, exclusions, places, vehicles, mileage rates and notification settings.
+Submit an authenticated point from an existing phone and confirm it appears
+under the intended device. Check the prepared security contract with:
+
+```sh
+docker compose exec -T app python -m app.application_roles verify
+```
+
+Use the matching release's backup and restore scripts for schema-26 archives;
+they include protected role state and reconstruct permissions before startup.
+A failed security-contract check blocks startup and must be investigated,
+not repaired by granting runtime access to the database owner. If rollback is
+needed after migration commits, restore the verified pre-upgrade archive into
+a fresh database using the previous exact image. Starting that old image
+against the migrated database is unsupported.
+
 ## Failure guidance
 
 **A failed migration** (startup logs an error and the app doesn't come up
@@ -309,7 +361,8 @@ mention migrations 020 or 021.
 The account foundation uses two additive migrations. Migration 020 moves an
 existing local administrator into account ID 1 without changing the normalized
 email or password hash. Migration 021 adds linked OIDC identity records. No
-trip, point, report, or settings row becomes user-owned in this release.
+trip, point, report, or settings row becomes user-owned in those two migrations;
+schema 26 performs the later ownership migration described above.
 
 An existing local administrator is migrated to account ID 1 with the same
 normalized email and password hash. The old password continues to work. An

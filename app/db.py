@@ -12,9 +12,10 @@ MIGRATIONS_DIR = pathlib.Path(__file__).resolve().parent.parent / "migrations"
 
 MIGRATION_FILENAME_RE = re.compile(r"^\d+_")
 
-# PostgreSQL advisory locks share one global integer namespace. Keep every key
-# here so adding a new lock cannot silently collide with an existing workflow.
+# These use PostgreSQL's single-bigint namespace. Its two-int namespace is
+# separate: every detector/import/structural mutation must keep this same key.
 DETECTOR_ADVISORY_LOCK_KEY = 0x6D696C6531  # "mile1"
+TRACKING_PROVISION_LOCK_KEY = 0x6D696C6537
 NUDGE_ADVISORY_LOCK_KEY = 901405
 ODOMETER_REMINDER_ADVISORY_LOCK_KEY = 901406
 EMAIL_DIGEST_ADVISORY_LOCK_KEY = 901407
@@ -36,7 +37,7 @@ async def _fetch_schema_version(conn) -> int:
     return row[0]
 
 
-async def run_migrations(pool: AsyncConnectionPool) -> None:
+async def run_migrations(pool: AsyncConnectionPool, config=None) -> None:
     paths = sorted(MIGRATIONS_DIR.glob("*.sql"))
     for path in paths:
         if not MIGRATION_FILENAME_RE.match(path.name):
@@ -70,7 +71,13 @@ async def run_migrations(pool: AsyncConnectionPool) -> None:
             if version in applied:
                 continue
             log.info("applying migration %s", path.name)
+            if version == 26:
+                from app.ownership import preflight_ownership
+                await preflight_ownership(conn)
             await conn.execute(path.read_text())
+            if version == 26:
+                from app.ownership import import_legacy_configuration
+                await import_legacy_configuration(conn, config)
             await conn.execute(
                 "INSERT INTO schema_migrations (version) VALUES (%s)", (version,)
             )

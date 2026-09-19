@@ -63,6 +63,7 @@ RUN pip install --no-cache-dir -r requirements.lock \
 COPY app/ app/
 COPY migrations/ migrations/
 COPY static/ static/
+COPY scripts/sql/account_bootstrap.sql scripts/sql/account_admission.sql scripts/sql/tracking_admission.sql scripts/sql/
 
 # Fixed numeric UID/GID, not a named user: rootless Podman and rootful Docker
 # both map a numeric identity the same way, while a name would need an

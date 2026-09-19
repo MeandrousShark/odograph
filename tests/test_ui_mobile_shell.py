@@ -87,7 +87,7 @@ def test_authenticated_mobile_shell_has_account_fallback_and_post_logout():
     member = _render(user=MEMBER)
     member_account = member.split('<details class="mobile-account-menu"', 1)[1].split("</details>", 1)[0]
     assert 'href="/settings" class="mobile-account-item"' in member_account
-    assert 'href="/settings/account" class="mobile-account-item"' not in member_account
+    assert 'href="/settings/account" class="mobile-account-item"' in member_account
 
 
 def test_mobile_account_trigger_avatar_image_replaces_initials_when_uploaded():

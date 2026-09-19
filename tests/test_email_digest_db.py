@@ -18,7 +18,8 @@ from app.email_digest import EmailDigestWorker
 from app.mailer import Mailer
 from app.rates import load_rates
 from app.report import build_range_report
-from conftest import reset_db
+from conftest import reset_account_db, seed_tracking_device
+from app.account_context import account_id
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -29,15 +30,18 @@ TZ = ZoneInfo("America/Los_Angeles")
 APP_URL = "https://miles.example.com"
 
 
-async def _reset_schema(pool) -> None:
-    await reset_db(pool)
+async def _reset_schema(raw_pool):
+    pool = await reset_account_db(raw_pool)
     # migrations/008_vehicles.sql seeds an active default vehicle ("My Car")
     # that would otherwise always look "due" to the quarterly-odometer
     # kind's scenarios below -- deactivate it so each scenario's assertions
     # are only about the vehicles it explicitly creates (same fix
     # tests/test_odometer_reminder_db.py applies for the ntfy worker).
     async with pool.connection() as conn:
-        await conn.execute("UPDATE vehicles SET active = false WHERE name = 'My Car'")
+        await conn.execute("UPDATE vehicles SET active = false WHERE account_id=%s AND name = 'My Car'", (account_id(conn),))
+        await seed_tracking_device(conn, "phone", device_id=1)
+        await conn.execute("UPDATE account_settings SET display_tz=%s,ntfy_topic='mileage',odometer_reminder_requested=true,email_to='you@example.com',email_weekly_nudge=true,email_monthly_summary=true,email_filing_reminder=true,email_odometer_reminder=true WHERE account_id=%s", (str(TZ),account_id(conn)))
+    return pool
 
 
 async def _insert_trip(
@@ -45,23 +49,23 @@ async def _insert_trip(
     distance_m: float = 1000.0, vehicle_id: int | None = None,
 ) -> None:
     await conn.execute(
-        "INSERT INTO trips (device, started_at, ended_at, distance_m, category, vehicle_id) "
-        "VALUES ('phone', %s, %s, %s, %s, %s)",
-        (started_at, started_at + timedelta(minutes=15), distance_m, category, vehicle_id),
+        "INSERT INTO trips (account_id, tracking_device_id, device, started_at, ended_at, distance_m, category, vehicle_id) "
+        "VALUES (%s, 1, 'phone', %s, %s, %s, %s, %s)",
+        (account_id(conn), started_at, started_at + timedelta(minutes=15), distance_m, category, vehicle_id),
     )
 
 
 async def _create_vehicle(conn, name: str, active: bool = True) -> int:
     cur = await conn.execute(
-        "INSERT INTO vehicles (name, active) VALUES (%s, %s) RETURNING id", (name, active)
+        "INSERT INTO vehicles (account_id, name, active) VALUES (%s, %s, %s) RETURNING id", (account_id(conn), name, active)
     )
     return (await cur.fetchone())[0]
 
 
 async def _insert_reading(conn, vehicle_id: int, recorded_at: datetime, mi: float) -> None:
     await conn.execute(
-        "INSERT INTO odometer_readings (vehicle_id, recorded_at, odometer_m) VALUES (%s, %s, %s)",
-        (vehicle_id, recorded_at, mi * 1609.344),
+        "INSERT INTO odometer_readings (account_id, vehicle_id, recorded_at, odometer_m) VALUES (%s, %s, %s, %s)",
+        (account_id(conn), vehicle_id, recorded_at, mi * 1609.344),
     )
 
 
@@ -94,13 +98,13 @@ def _worker(
 
 
 async def _with_pool(scenario):
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        pool = await _reset_schema(raw_pool)
         await scenario(pool)
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 # --- weekly_nudge --------------------------------------------------------
