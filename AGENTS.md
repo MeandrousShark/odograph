@@ -8,6 +8,7 @@ procedures are outside this checkout.
 
 - Create a short-lived branch from current `main`.
 - Keep changes focused and include regression tests for behavior changes.
+- Commit each logical change separately rather than batching unrelated work.
 - Open a pull request for review. Do not force-push `main` or release tags.
 - Run the full suite before merge. Maintainers review the complete PR diff and
   merge the approved result to `main`.
