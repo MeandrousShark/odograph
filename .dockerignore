@@ -1,8 +1,5 @@
-# The Dockerfile only COPYs app/, migrations/, static/, and the
-# requirements files, so nothing here is strictly required for a correct
-# build. It exists to keep the build context small and to make secret
-# leakage into an image layer structurally impossible even if the
-# COPY set changes later.
+# Keep the build context small and exclude local secrets. Only the three
+# account setup functions from scripts/ are needed in the runtime image.
 .env*
 !.env.example
 
@@ -16,7 +13,12 @@ __pycache__/
 *.pyc
 .pytest_cache/
 compose.yaml
-scripts/
+scripts/*
+!scripts/sql/
+scripts/sql/*
+!scripts/sql/account_bootstrap.sql
+!scripts/sql/account_admission.sql
+!scripts/sql/tracking_admission.sql
 .pgdump/
 backups/
 
