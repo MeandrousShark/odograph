@@ -23,8 +23,10 @@ set -euo pipefail
 
 HEALTH_PORT=8077
 BASE_URL="http://127.0.0.1:${HEALTH_PORT}"
-ADMIN_EMAIL="drill-admin@example.test"
+ADMIN_EMAIL="development@localhost.invalid"
 POSTRESTORE_DEVICE="postrestore-check"
+BASE_SCHEMA_VERSION=0
+INGEST_USERNAME="owntracks"
 OIDC_ISSUER="https://idp.example.test"
 OIDC_CLIENT_ID="upgrade-drill-client"
 OIDC_SUBJECT="upgrade-drill-subject"
@@ -164,8 +166,7 @@ port_in_use() {
     # A plain connect probe (no lsof/netstat dependency): success means
     # something is already listening on the port compose.yaml publishes,
     # which this drill must refuse to run against.
-    (exec 3<>"/dev/tcp/127.0.0.1/${HEALTH_PORT}") 2>/dev/null && { exec 3<&- 3>&- 2>/dev/null || true; return 0; }
-    return 1
+    (exec 3<>"/dev/tcp/127.0.0.1/${HEALTH_PORT}") 2>/dev/null
 }
 if port_in_use; then
     echo "error: something is already listening on 127.0.0.1:${HEALTH_PORT}; this drill needs that port free. Stop whatever is using it first." >&2
@@ -340,6 +341,20 @@ compose_dir() {
     else
         compose_cand "$@"
     fi
+}
+
+# Backup/restore invoke Compose themselves, including the one-off app used
+# for schema-26 role recovery. Keep their image and file set identical too.
+run_install_script() {
+    local dir="$1" compose_files="compose.yaml:compose.seed-port.override.yml"; shift
+    if [ "$dir" = "$BASE_DIR" ] && [ -n "$BASE_IMAGE" ]; then
+        compose_files="$compose_files:compose.base-image.override.yml"
+    elif [ "$dir" = "$CAND_DIR" ] && [ -n "$CANDIDATE_IMAGE" ]; then
+        compose_files="$compose_files:compose.candidate-image.override.yml"
+    elif [ -f "$dir/compose.build.override.yml" ]; then
+        compose_files="$compose_files:compose.build.override.yml"
+    fi
+    (cd "$dir" && COMPOSE_FILE="$compose_files" COMPOSE_PATH_SEPARATOR=: COMPOSE_CMD="$compose_cmd" "$@")
 }
 
 db_query() {
@@ -537,14 +552,18 @@ capture_manifest() {
 }
 
 verify_ownership_upgrade() {
-    local dir="$1" version="$2" credential_count before after
+    local dir="$1" version="$2" credential_count credential_filter before after
     [ "$version" -ge 26 ] || return 0
     compose_dir "$dir" exec -T app python -m app.application_roles verify \
         || step_fail "step 7: prepared account security contract did not validate"
+    credential_filter="c.kind = 'legacy'"
+    if [ "$BASE_SCHEMA_VERSION" -ge 26 ]; then
+        credential_filter="c.kind = 'device' AND c.basic_username = '${INGEST_USERNAME}'"
+    fi
     credential_count="$(db_query "$dir" \
-        "SELECT count(*) FROM ingest_credentials c JOIN accounts a ON a.id = c.account_id WHERE a.email = '${ADMIN_EMAIL}' AND c.kind = 'legacy' AND c.revoked_at IS NULL")"
+        "SELECT count(*) FROM ingest_credentials c JOIN accounts a ON a.id = c.account_id WHERE a.email = '${ADMIN_EMAIL}' AND $credential_filter AND c.revoked_at IS NULL")"
     [ "$credential_count" = "1" ] \
-        || step_fail "step 7: legacy ingest credential was not imported exactly once"
+        || step_fail "step 7: original ingest credential was not preserved exactly once"
     before="$(count_points "$dir" "$POSTRESTORE_DEVICE")"
     ingest_one_point "$INGEST_PASSWORD" "$POSTRESTORE_DEVICE" \
         || step_fail "step 7: original ingest credential was rejected after ownership migration"
@@ -675,11 +694,51 @@ ingest_one_point() {
     # Same illustrative Golden Gate Park coordinate scripts/send_test_track.sh
     # already uses -- not tied to any operator's real location.
     status="$(curl -sS -m 8 -o "$SCRATCH/http/ingest-post.json" -w '%{http_code}' \
-        -u "owntracks:${ingest_password}" \
+        -u "${INGEST_USERNAME}:${ingest_password}" \
         -H 'Content-Type: application/json' \
         --data-binary "{\"_type\":\"location\",\"tid\":\"${device}\",\"lat\":37.76940,\"lon\":-122.48300,\"tst\":$(date +%s),\"acc\":10}" \
         "${BASE_URL}/ingest")"
     [ "$status" = "200" ]
+}
+
+issue_synthetic_tracking_credentials() {
+    local credentials="$SCRATCH/http/tracking-credentials.json"
+    # Use the normal restricted account API, only after checking the one
+    # known synthetic account. The secret output stays in private scratch.
+    if ! compose_base exec -T app python - > "$credentials" <<'PYEOF'
+import asyncio
+import json
+import os
+
+from app.account_context import AccountPool, AccountPrincipal, control_connection
+from app.accounts import get_account_by_email
+from app.application_roles import application_role_pools
+from app.tracking import create_device
+
+async def main():
+    async with application_role_pools(os.environ["DATABASE_URL"]) as pools:
+        async with control_connection(pools.control) as conn:
+            account = await get_account_by_email(conn, "development@localhost.invalid")
+            count = (await (await conn.execute("SELECT count(*) FROM accounts")).fetchone())[0]
+            if count != 1 or account is None or not account["is_enabled"]:
+                raise RuntimeError("tracker issuance requires the sole synthetic development account")
+        pool = AccountPool(pools.runtime, AccountPrincipal(
+            account["id"], account["is_enabled"], account["auth_version"]))
+        async with pool.connection() as conn:
+            issued = [await create_device(conn, label) for label in ("test", "postrestore-check")]
+        print(json.dumps([[item.username, item.secret] for item in issued]))
+
+asyncio.run(main())
+PYEOF
+    then
+        step_fail "step 2: could not issue synthetic tracking credentials"
+    fi
+    chmod 600 "$credentials"
+    TEST_TRACKING_USERNAME="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[0][0])' "$credentials")"
+    TEST_TRACKING_SECRET="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[0][1])' "$credentials")"
+    INGEST_USERNAME="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[1][0])' "$credentials")"
+    INGEST_PASSWORD="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[1][1])' "$credentials")"
+    rm -f -- "$credentials"
 }
 
 seed_python_bin() {
@@ -910,8 +969,12 @@ step2_seed() {
     if ! POSTGRES_PASSWORD="$(env_value "$BASE_DIR/.env" POSTGRES_PASSWORD)"; then
         step_fail "step 2: missing required POSTGRES_PASSWORD in base environment"
     fi
-    if ! INGEST_PASSWORD="$(env_value "$BASE_DIR/.env" INGEST_PASSWORD)"; then
+    BASE_SCHEMA_VERSION="$(schema_version "$BASE_DIR")"
+    if [ "$BASE_SCHEMA_VERSION" -lt 26 ] && ! INGEST_PASSWORD="$(env_value "$BASE_DIR/.env" INGEST_PASSWORD)"; then
         step_fail "step 2: missing required INGEST_PASSWORD in base environment"
+    fi
+    if [ "$BASE_SCHEMA_VERSION" -lt 26 ]; then
+        INGEST_USERNAME="$(env_value "$BASE_DIR/.env" INGEST_USERNAME 2>/dev/null || printf owntracks)"
     fi
     ADMIN_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_urlsafe(18))')"
 
@@ -947,8 +1010,15 @@ step2_seed() {
     # dev_seed.py truncates points/stays/trips, so the real detected trip
     # below is sent only after seeding -- sending it first would have had
     # dev_seed.py's --wipe erase it again.
-    BASE_URL="$BASE_URL" INGEST_PASSWORD="$INGEST_PASSWORD" "$BASE_DIR/scripts/send_test_track.sh" \
-        || step_fail "step 2: send_test_track.sh failed"
+    if [ "$BASE_SCHEMA_VERSION" -ge 26 ]; then
+        issue_synthetic_tracking_credentials
+        BASE_URL="$BASE_URL" ODOGRAPH_TRACKING_USERNAME="$TEST_TRACKING_USERNAME" \
+            ODOGRAPH_TRACKING_SECRET="$TEST_TRACKING_SECRET" "$BASE_DIR/scripts/send_test_track.sh" \
+            || step_fail "step 2: send_test_track.sh failed with the issued test-device login"
+    else
+        BASE_URL="$BASE_URL" INGEST_PASSWORD="$INGEST_PASSWORD" "$BASE_DIR/scripts/send_test_track.sh" \
+            || step_fail "step 2: send_test_track.sh failed"
+    fi
     wait_for_detected_trip "$BASE_DIR" test 240 \
         || step_fail "step 2: no detected trip appeared for device 'test' within the debounce window"
     step_pass "step 2c: a real detected trip (with points/geometry) captured via send_test_track.sh"
@@ -965,9 +1035,9 @@ step4_backup_and_verify() {
     # test, invoked by absolute path from the candidate materialization
     # but run with the base install as the live target, exactly as an
     # operator upgrading from base to candidate would run them.
-    (cd "$BASE_DIR" && "$CAND_DIR/scripts/backup_database.sh" --output "$BACKUP_ARCHIVE") \
+    run_install_script "$BASE_DIR" "$CAND_DIR/scripts/backup_database.sh" --output "$BACKUP_ARCHIVE" \
         || step_fail "step 4: backup_database.sh failed"
-    (cd "$BASE_DIR" && "$CAND_DIR/scripts/restore_database.sh" --verify-only "$BACKUP_ARCHIVE") \
+    run_install_script "$BASE_DIR" "$CAND_DIR/scripts/restore_database.sh" --verify-only "$BACKUP_ARCHIVE" \
         || step_fail "step 4: restore_database.sh --verify-only rejected the archive it just produced"
     step_pass "step 4: online backup produced and verified via the candidate's backup/restore scripts"
 }
@@ -979,7 +1049,7 @@ step5_destroy_and_restore() {
     # First-init PostGIS provisioning on a fresh volume can run well past a
     # minute, more so under CPU emulation.
     wait_for_pg_ready "$BASE_DIR" 180 || step_fail "step 5: fresh db did not become ready"
-    (cd "$BASE_DIR" && "$CAND_DIR/scripts/restore_database.sh" "$BACKUP_ARCHIVE") \
+    run_install_script "$BASE_DIR" "$CAND_DIR/scripts/restore_database.sh" "$BACKUP_ARCHIVE" \
         || step_fail "step 5: restore_database.sh failed against the fresh volume"
     capture_manifest "$BASE_DIR" "$SCRATCH/manifest-after-restore.txt"
     assert_manifests_equal "$SCRATCH/manifest-before.txt" "$SCRATCH/manifest-after-restore.txt" \
@@ -1012,9 +1082,9 @@ step6_post_restore_check() {
 step7_database_image_migration() {
     local base_image candidate_image
     compose_base stop app
-    (cd "$BASE_DIR" && "$CAND_DIR/scripts/backup_database.sh" --output "$MIGRATION_BACKUP_ARCHIVE") \
+    run_install_script "$BASE_DIR" "$CAND_DIR/scripts/backup_database.sh" --output "$MIGRATION_BACKUP_ARCHIVE" \
         || step_fail "step 7: post-ingest backup_database.sh failed before database-image migration"
-    (cd "$BASE_DIR" && "$CAND_DIR/scripts/restore_database.sh" --verify-only "$MIGRATION_BACKUP_ARCHIVE") \
+    run_install_script "$BASE_DIR" "$CAND_DIR/scripts/restore_database.sh" --verify-only "$MIGRATION_BACKUP_ARCHIVE" \
         || step_fail "step 7: post-ingest restore_database.sh --verify-only rejected the migration archive"
     step_pass "step 7: post-ingest backup produced and verified before replacing the task-owned db volume"
 
@@ -1033,7 +1103,7 @@ step7_database_image_migration() {
         || step_fail "step 7: candidate db container is still using the original image identity"
     step_pass "step 7: candidate db image identity differs from the original base image ($base_image -> $candidate_image)"
 
-    (cd "$CAND_DIR" && "$CAND_DIR/scripts/restore_database.sh" "$MIGRATION_BACKUP_ARCHIVE") \
+    run_install_script "$CAND_DIR" "$CAND_DIR/scripts/restore_database.sh" "$MIGRATION_BACKUP_ARCHIVE" \
         || step_fail "step 7: candidate restore_database.sh failed on the fresh candidate-image volume"
     capture_manifest "$CAND_DIR" "$SCRATCH/manifest-after-database-image-restore.txt"
     assert_data_manifests_equal "$SCRATCH/manifest-after-ingest.txt" \
@@ -1122,7 +1192,7 @@ step8_rollback() {
         [ "$base_image" != "$candidate_image" ] \
             || step_fail "step 8: rollback db image identity unexpectedly matches the candidate image"
     fi
-    (cd "$BASE_DIR" && "$CAND_DIR/scripts/restore_database.sh" "$BACKUP_ARCHIVE") \
+    run_install_script "$BASE_DIR" "$CAND_DIR/scripts/restore_database.sh" "$BACKUP_ARCHIVE" \
         || step_fail "step 8: restore_database.sh failed restoring the pre-upgrade archive"
 
     start_base_app app
