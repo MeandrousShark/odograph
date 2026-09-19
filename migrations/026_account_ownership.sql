@@ -241,4 +241,3 @@ CREATE INDEX stays_account_device_ended_at_idx ON stays (account_id, tracking_de
 CREATE INDEX raw_messages_account_received_at_idx ON raw_messages (account_id, received_at);
 CREATE INDEX expenses_account_date_idx ON expenses (account_id, incurred_on DESC, id DESC);
 CREATE INDEX odometer_readings_account_vehicle_idx ON odometer_readings (account_id, vehicle_id, recorded_at);
-
