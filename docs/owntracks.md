@@ -125,18 +125,27 @@ histories. Only this compatibility adapter uses `tid` to choose among that
 account's legacy streams. A previously unseen valid label creates a stream in
 that same account. Changing `.env` does not change this saved login.
 
-Use **Give this device its own password** to keep a legacy device's history
-and move it to an issued credential. Update OwnTracks immediately: conversion
+Before choosing **Give this device its own password** on iOS, let OwnTracks
+finish uploading its queue. Changing its username or URL clears queued
+locations. Conversion keeps the history already saved in Odograph and moves
+the device to an issued credential. Update OwnTracks immediately: conversion
 stops that device's old label from being accepted through the shared login.
 Other legacy devices keep working. After converting them, **Revoke shared
 login** stops all remaining uploads through the old credential. Revocation is
 durable across restarts and cannot be undone by restoring old environment
 values. Recorded history remains.
 
-Replacing a device password immediately invalidates its old password. Verify
-new uploads after updating the phone. Delayed/offline queue behavior still
-needs a real-device acceptance check; the synthetic helper below does not
-prove what OwnTracks does with an existing queue during credential changes.
+Replacing a device password immediately invalidates its old password. On iOS,
+turn off phone networking before choosing **Replace password**, change only
+the password in OwnTracks while offline, then reconnect. A password-only edit
+preserves the queue; a request with the old password receives `401`, causing
+OwnTracks iOS to discard that queued location. Keep the username and URL unchanged. These distinctions
+come from [OwnTracks iOS connection settings](https://github.com/owntracks/ios/blob/26.2.3/OwnTracks/OwnTracks/SettingsTVC.swift#L1002-L1027)
+and its [HTTP response handling](https://github.com/owntracks/ios/blob/26.2.3/OwnTracks/OwnTracks/Connection.m#L535-L568).
+
+Verify new uploads after updating the phone. Delayed/offline queue behavior
+still needs a real-device acceptance check; source inspection and the synthetic
+helper below do not replace it.
 
 ## Verify your setup
 

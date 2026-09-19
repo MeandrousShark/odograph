@@ -41,12 +41,17 @@
       {% if device.has_legacy_alias %}
       <p>This device uses the migrated shared login. Give it its own password to keep its history
         and stop accepting its old tracker label through the shared login. Other legacy devices will keep working.</p>
+      <p>On iOS, let OwnTracks finish uploading its queue before converting.
+        Changing its username or URL clears queued locations.</p>
       <form method="post" action="/settings/tracking/devices/{{ device.id }}/convert">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
         <button type="submit">Give this device its own password</button>
       </form>
       {% endif %}
       {% for credential in credentials if credential.tracking_device_id == device.id %}
+      <p>On iOS, turn off phone networking before replacing this password. Change only the password
+        in OwnTracks while offline, then reconnect. This preserves its queue and avoids rejected uploads
+        with the old password. Keep the username and URL unchanged.</p>
       {% if credential.revoked_at %}
       <p class="muted">Access revoked.</p>
       <form method="post" action="/settings/tracking/credentials/{{ credential.public_id }}/rotate">
