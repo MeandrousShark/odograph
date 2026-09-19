@@ -1,7 +1,7 @@
 """OwnTracks ingest endpoint.
 
-Contract summary: bad auth -> 401 (429 once an IP trips the failure limiter),
-authentication at capacity -> 503 with Retry-After before any body reads,
+Contract summary: bad auth -> 401,
+temporary authentication limits -> 503 with Retry-After before any body reads,
 garbage -> 200-and-drop so OwnTracks never retry-loops a poison payload,
 bodies over INGEST_MAX_BODY_BYTES -> 200-and-drop the same way (real
 OwnTracks payloads are tiny, so an oversized body is either poison or
@@ -181,8 +181,10 @@ def make_router() -> APIRouter:
         limiter: FailedAuthLimiter = request.app.state.ingest_limiter
         ip = client_ip(request)
         if limiter.blocked(ip):
+            # OwnTracks iOS drops queued messages on every 4xx, including 429.
+            # A shared IP's temporary failure window must preserve valid fixes.
             return Response(
-                status_code=429, headers={"Retry-After": str(max(1, math.ceil(limiter.window_s)))},
+                status_code=503, headers={"Retry-After": str(max(1, math.ceil(limiter.window_s)))},
             )
         cfg = request.app.state.config
         basic = _basic_credentials(request)

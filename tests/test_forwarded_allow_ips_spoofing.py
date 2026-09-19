@@ -69,7 +69,7 @@ def test_ingest_limiter_blocks_untrusted_peer_regardless_of_spoofed_xff():
 
     results = asyncio.run(run())
     assert results[:MAX_FAILURES] == [401] * MAX_FAILURES
-    assert results[MAX_FAILURES:] == [429] * 2
+    assert results[MAX_FAILURES:] == [503] * 2
 
 
 def test_ingest_spoofed_xff_cannot_poison_a_victims_ledger():
@@ -106,8 +106,8 @@ def test_ingest_spoofed_xff_cannot_reset_attackers_own_block():
         return blocked, still_blocked
 
     blocked, still_blocked = asyncio.run(run())
-    assert blocked.status_code == 429
-    assert still_blocked.status_code == 429
+    assert blocked.status_code == 503
+    assert still_blocked.status_code == 503
 
 
 def test_ingest_trusted_proxy_still_gets_forwarded_ip_honored():
@@ -130,7 +130,7 @@ def test_ingest_trusted_proxy_still_gets_forwarded_ip_honored():
         return results, other_visitor
 
     results, other_visitor = asyncio.run(run())
-    assert [r.status_code for r in results] == [401] * MAX_FAILURES + [429]
+    assert [r.status_code for r in results] == [401] * MAX_FAILURES + [503]
     assert other_visitor.status_code == 401
 
 

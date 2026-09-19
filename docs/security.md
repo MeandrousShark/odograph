@@ -162,13 +162,17 @@ The local credential limiter counts failures only; a person typing their
 password right the first time is not throttled.
 
 Ingest checks the client's failure window before credential verification.
-A blocked IP receives `429` with `Retry-After` without reading the body, even
+A blocked IP receives `503` with `Retry-After` without reading the body, even
 if the new request carries correct credentials. Each application process also
 allows at most two concurrent ingest verifications. When both slots are busy,
 additional requests receive `503` with `Retry-After: 1` before verification or
 body reads. Cancelling a request does not release its slot until verification
 finishes, and a completed failure still counts. Successful verification does
 not increment the failure counter; devices can retry after either limit clears.
+Ingest uses `503` for these temporary limits because the
+[OwnTracks iOS response handler](https://github.com/owntracks/ios/blob/26.2.3/OwnTracks/OwnTracks/Connection.m#L508-L532)
+deletes a queued message after any `4xx` response, including `429`. Incorrect credentials
+still receive `401`; the separate local credential limiter still uses `429`.
 
 Both limiters key on `client_ip()`, which reads only the address Uvicorn's
 `--proxy-headers` handling has already normalized from a trusted proxy's

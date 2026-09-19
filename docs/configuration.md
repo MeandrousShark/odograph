@@ -106,7 +106,7 @@ detector parameters, and worker intervals remain operator configuration.
 | `INITIAL_ADMIN_SIGNUP` | `0` when absent | `1` permits creation of the first administrator only while no account exists. Generated fresh-install config sets it to `1`; the durable account row closes signup permanently. |
 | `LOGIN_AUTH_MAX_FAILURES` | `10` | Failed local credential checks allowed per client within the login window. |
 | `LOGIN_AUTH_WINDOW_S` | `900` | Local login, signup, password, and account-credential limiter window in seconds. |
-| `INGEST_AUTH_MAX_FAILURES` | `10` | Failed OwnTracks authentication attempts allowed per client within the ingest window. Blocked clients receive `429` with `Retry-After` before credential verification or body reads, even when retrying with correct credentials. |
+| `INGEST_AUTH_MAX_FAILURES` | `10` | Failed OwnTracks authentication attempts allowed per client within the ingest window. Blocked clients receive `503` with `Retry-After` before credential verification or body reads, even when retrying with correct credentials. |
 | `INGEST_AUTH_WINDOW_S` | `900` | Ingest authentication limiter window in seconds. |
 | `INGEST_MAX_BODY_BYTES` | `65536` | Maximum OwnTracks request body. Oversized authenticated bodies are logged and dropped with a successful empty response so a phone does not retry-loop poison input. |
 

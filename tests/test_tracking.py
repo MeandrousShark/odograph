@@ -95,11 +95,11 @@ def test_issued_secret_is_not_in_debug_representation():
     assert issued.secret not in repr(issued)
 
 
-def test_blocked_ip_skips_verification_and_body_then_valid_retry_succeeds(monkeypatch):
+def test_blocked_shared_ip_retains_valid_sender_for_retry_without_verification_or_body(monkeypatch):
     calls = []
 
-    async def verify(*args, **kwargs):
-        calls.append(args)
+    async def verify(_pool, username, _password, **kwargs):
+        calls.append(username)
         return object()
 
     monkeypatch.setattr(ingest, "authenticate_ingest", verify)
@@ -109,7 +109,6 @@ def test_blocked_ip_skips_verification_and_body_then_valid_retry_succeeds(monkey
         app = _app()
         limiter = ingest.FailedAuthLimiter(1, 60, clock=lambda: now[0])
         app.state.ingest_limiter = limiter
-        limiter.record_failure("127.0.0.1")
         read = False
 
         async def body():
@@ -120,14 +119,18 @@ def test_blocked_ip_skips_verification_and_body_then_valid_retry_succeeds(monkey
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://testserver",
         ) as client:
+            # Another sender behind the same IP exhausts its failure window.
+            assert (await client.post("/ingest")).status_code == 401
             response = await client.post("/ingest", content=body(), auth=("valid", "password"))
-            assert response.status_code == 429
+            assert response.status_code == 503
             assert int(response.headers["Retry-After"]) > 0
+            assert response.content == b""
+            assert "www-authenticate" not in response.headers
             assert calls == [] and not read
             now[0] = 61
             response = await client.post("/ingest", content=b"", auth=("valid", "password"))
             assert response.status_code == 200
-            assert len(calls) == 1
+            assert calls == ["valid"]
             assert not limiter.blocked("127.0.0.1")
     asyncio.run(run())
 
@@ -234,7 +237,7 @@ def test_cancelled_authentication_still_records_completed_failure(monkeypatch):
                 await asyncio.wait_for(asyncio.gather(*active), 5)
                 assert limiter.blocked("127.0.0.1")
                 response = await client.post("/ingest", content=b"", auth=("valid", "password"))
-                assert response.status_code == 429 and calls == ["bad"]
+                assert response.status_code == 503 and calls == ["bad"]
                 now[0] = 61
                 response = await client.post("/ingest", content=b"", auth=("valid", "password"))
                 assert response.status_code == 200 and calls == ["bad", "valid"]
