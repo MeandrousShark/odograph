@@ -40,7 +40,7 @@ if [ "$ACTION" = cleanup ]; then
         [ -n "$container_id" ] || continue
         labels="$(podman inspect -f "{{ index .Config.Labels \"$OWNER_LABEL\" }}|{{ index .Config.Labels \"$TASK_LABEL\" }}" "$container_id")"
         if [ "$labels" = "1|$TASK_ID" ]; then
-            podman rm -f "$container_id" >/dev/null
+            podman rm -f --volumes "$container_id" >/dev/null
         fi
     done <<< "$container_ids"
     exit 0
@@ -52,18 +52,18 @@ container_id="$(podman run -d --name "$container_name" \
     -e POSTGRES_DB=mileage -e POSTGRES_USER=mileage -e POSTGRES_PASSWORD=testpw \
     -p 127.0.0.1::5432 "$IMAGE")"
 
-# shellcheck disable=SC2329 # Invoked by the ERR trap.
+# shellcheck disable=SC2329 # Invoked by the EXIT trap until startup succeeds.
 cleanup_failed_start() {
-    podman rm -f "$container_id" >/dev/null 2>&1 || true
+    podman rm -f --volumes "$container_id" >/dev/null 2>&1 || true
 }
-trap cleanup_failed_start ERR
+trap cleanup_failed_start EXIT
 
 for ((attempt = 0; attempt < 30; attempt++)); do
     if podman exec "$container_id" pg_isready -h 127.0.0.1 -U mileage -d mileage >/dev/null 2>&1; then
         host_port="$(podman port "$container_id" 5432/tcp | sed -n 's/^127\.0\.0\.1:\([0-9][0-9]*\)$/\1/p')"
         if [ -n "$host_port" ]; then
             printf "export TEST_DATABASE_URL='postgresql://mileage:testpw@127.0.0.1:%s/mileage'\n" "$host_port"
-            trap - ERR
+            trap - EXIT
             exit 0
         fi
     fi

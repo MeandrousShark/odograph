@@ -274,23 +274,20 @@ remove_stamp_images() {
     # per project that plain "compose down" never removes, so this is the
     # only thing that cleans it up. The two frontends name it differently --
     # podman-compose: "localhost/mtdrill<stamp>_app"; docker compose:
-    # "mtdrill<stamp>-app" (no localhost/ prefix, hyphen not underscore) --
-    # so both forms are matched. An image is only ever removed after it's
-    # been positively discovered (via image ls, not assumed) to match one of
-    # those two forms against this run's stamp.
+    # "mtdrill<stamp>-app" (no localhost/ prefix, hyphen not underscore).
+    # Match only this task's exact app repository, preserving every tag:
+    # dropping :dev would make rmi default to an unrelated/missing :latest.
     local runtime matches img
     runtime="$(runtime_cmd)"
-    matches="$($runtime image ls --format '{{.Repository}}' 2>/dev/null | grep -E "^(localhost/${PROJECT}|${PROJECT}[-_])" || true)"
+    matches="$($runtime image ls --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | sort -u || true)"
     [ -n "$matches" ] || return 0
     while IFS= read -r img; do
         [ -z "$img" ] && continue
-        case "$img" in
-            "localhost/${PROJECT}"*|"${PROJECT}"[-_]*) ;;
-            *)
-                echo "error: refusing to remove image '$img' -- does not begin with 'localhost/$PROJECT' or '$PROJECT-'/'${PROJECT}_'" >&2
-                return 1
-                ;;
+        case "${img%:*}" in
+            "localhost/${PROJECT}_app"|"localhost/${PROJECT}-app"|"${PROJECT}_app"|"${PROJECT}-app") ;;
+            *) continue ;;
         esac
+        case "${img##*:}" in "<none>"|"") continue ;; esac
         echo "Removing disposable image: $img"
         # Best-effort: an image can still be in use if a prior step failed
         # unusually, and that must not turn a cleanup pass into a hard error.
@@ -307,7 +304,7 @@ cleanup() {
         echo "  scratch:  $SCRATCH"
         echo "  manual teardown: (cd '$BASE_DIR' && $compose_cmd down), then remove any"
         echo "  volume(s) beginning with '$PROJECT' and any image(s) named"
-        echo "  'localhost/$PROJECT*' (podman) or '$PROJECT-*'/'${PROJECT}_*' (docker),"
+        echo "  'localhost/${PROJECT}_app:*' (podman) or '${PROJECT}-app:*'/'${PROJECT}_app:*' (docker),"
         echo "  then: rm -rf '$SCRATCH'"
         exit "$exit_code"
     fi

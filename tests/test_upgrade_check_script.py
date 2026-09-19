@@ -914,7 +914,7 @@ def test_keep_teardown_message_reports_project_patterns_without_unbound_variable
     match = re.search(r"^  project:\s+(\S+)$", result.stdout, re.MULTILINE)
     assert match, result.stdout
     project = match.group(1)
-    assert f"'{project}-*'/'{project}_*' (docker)," in result.stdout
+    assert f"'{project}-app:*'/'{project}_app:*' (docker)," in result.stdout
     assert list(scratch_root.glob("upgrade_check.*")) != []
 
 
@@ -1263,3 +1263,44 @@ def test_occupied_port_probe_keeps_failure_diagnostics_visible(tmp_path):
         result = subprocess.run([str(script)], capture_output=True, text=True, timeout=10)
     assert result.returncode == 9
     assert result.stderr == "port is occupied\n"
+
+
+@pytest.mark.parametrize("frontend", ["docker compose", "podman-compose"])
+def test_image_cleanup_removes_exact_task_tags_only(tmp_path, frontend):
+    source = UPGRADE_SCRIPT.read_text()
+    functions = "\n".join(_extract_function(source, name)
+                          for name in ("runtime_cmd", "remove_stamp_images"))
+    project = "mtdrill12345"
+    own_images = [f"localhost/{project}_app:dev", f"{project}-app:latest",
+                  f"{project}_app:dev", f"localhost/{project}-app:old"]
+    images = tmp_path / "images"
+    images.write_text("\n".join(own_images + [
+        own_images[0], f"localhost/{project}_app:<none>",
+        f"localhost/{project}6_app:dev", f"{project}-app-other:dev",
+        "ghcr.io/example/odograph:v1", "<none>:<none>",
+    ]) + "\n")
+    log = tmp_path / "runtime.log"
+    binary = "docker" if frontend == "docker compose" else "podman"
+    _write_executable(
+        tmp_path / binary,
+        "#!/usr/bin/env bash\nset -eu\n"
+        'printf "%s\\n" "$*" >> "$RUNTIME_LOG"\n'
+        'case "$1" in\n'
+        '  image) [ "$*" = "image ls --format {{.Repository}}:{{.Tag}}" ]; cat "$IMAGES" ;;\n'
+        '  rmi) [ "$#" = 2 ] ;;\n'
+        '  *) exit 99 ;;\nesac',
+    )
+    script = _write_executable(
+        tmp_path / "cleanup.sh",
+        f"#!/usr/bin/env bash\nset -euo pipefail\nPROJECT={project}\n"
+        f"compose_cmd='{frontend}'\n{functions}\nremove_stamp_images",
+    )
+    result = subprocess.run(
+        [str(script)], capture_output=True, text=True, timeout=10,
+        env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}",
+             "RUNTIME_LOG": str(log), "IMAGES": str(images)},
+    )
+    assert result.returncode == 0, result.stderr
+    removed = [line.removeprefix("rmi ") for line in log.read_text().splitlines()
+               if line.startswith("rmi ")]
+    assert removed == sorted(own_images)
