@@ -40,6 +40,25 @@ whole-country extract works but costs far more RAM and disk than most
 operators need, and Geofabrik also publishes smaller sub-regional extracts
 for some metro areas if a full state is still more than you need.
 
+## Driving outside the extract
+
+OSRM only knows the roads in the extract you gave it, and a trip that leaves
+that area does not fail cleanly. OSRM matches whatever spans it does have road
+data for and returns nothing for the rest, so a matched fragment can come back
+looking like a confident, complete result.
+
+Odograph checks every snapped route against the trip's own raw GPS distance. A
+route covering less than 85% of it is treated as not describing the trip: the
+trip keeps its raw GPS distance for its displayed figure, for every total, and
+for the deduction; the partial snapped route is drawn beneath the raw track
+rather than in place of it; and the trip page reads **Road-snap incomplete,
+showing raw GPS distance**.
+
+Mileage therefore stays correct wherever you drive, and a missing region costs
+only the tidier road-following line on those trips. If that label shows up on
+trips through somewhere you drive regularly, that area is outside your extract
+and is worth provisioning a larger one to cover.
+
 ## Provisioning
 
 ```sh
