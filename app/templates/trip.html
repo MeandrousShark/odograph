@@ -47,7 +47,9 @@
       </p>
       <div class="trip-detail-meta">
         <span>{{ trip.point_count }} points</span>
-        {% if trip.snap_status in ('ok', 'low_confidence') %}
+        {% if trip.snap_status in ('ok', 'low_confidence') and trip.distance_snapped_m is none %}
+        <span class="trip-detail-snap">Road-snap incomplete, showing raw GPS distance</span>
+        {% elif trip.snap_status in ('ok', 'low_confidence') %}
         <span class="trip-detail-snap">Road-snapped{% if trip.snap_status == 'low_confidence' %}, low confidence{% endif %}; raw GPS {{ trip.distance_m | mi }} mi</span>
         {% elif trip.snap_status == 'pending' %}
         <span class="trip-detail-snap">Not yet road-snapped</span>
@@ -291,6 +293,10 @@ document.addEventListener('change', function (event) {
 <script nonce="{{ csp_nonce }}">
   const path = {{ path_geojson | safe if path_geojson else 'null' }};
   const pathSnapped = {{ path_snapped_geojson | safe if path_snapped_geojson else 'null' }};
+  // A NULL distance_snapped_m on a trip that *has* a snapped path means the
+  // match covered only part of the drive and its distance was declined
+  // (app/snap.py's min_coverage), so the raw track is the honest primary line.
+  const snappedDistanceUsed = {{ 'true' if trip.distance_snapped_m is not none else 'false' }};
   const stays = {{ stay_centroids | safe }};
   const start = [{{ trip.start_lat }}, {{ trip.start_lon }}];
   const end = [{{ trip.end_lat }}, {{ trip.end_lon }}];
@@ -317,15 +323,19 @@ document.addEventListener('change', function (event) {
   }).addTo(map);
 
   const hasSnapped = pathSnapped && pathSnapped.coordinates && pathSnapped.coordinates.length > 0;
+  // Only a snapped path whose distance was trusted may take over as the
+  // primary line and the framing. A partial one must not: reassigning bounds
+  // to it zooms the map to the matched fragment and leaves the rest of the
+  // drive off-screen, which is exactly how a trip that left the OSRM extract
+  // came to look like a route that stopped at the border.
+  const snappedIsPrimary = hasSnapped && snappedDistanceUsed;
+  const underlayStyle = { color: routeColor, weight: 2, opacity: 0.5, dashArray: '4' };
 
-  // Raw path becomes a thin, faded, dashed underlay once a snapped path
-  // exists (for comparison); otherwise it's the primary solid line, same
-  // as before M6. pathSnapped, when present, is drawn solid on top and
-  // wins framing (bounds is reassigned last).
+  // Raw path becomes a thin, faded, dashed underlay once a trusted snapped
+  // path exists (for comparison); otherwise it's the primary solid line, same
+  // as before M6.
   if (path && path.coordinates && path.coordinates.length > 1) {
-    const rawStyle = hasSnapped
-      ? { color: routeColor, weight: 2, opacity: 0.5, dashArray: '4' }
-      : { color: routeColor, weight: 4 };
+    const rawStyle = snappedIsPrimary ? underlayStyle : { color: routeColor, weight: 4 };
     const rawLine = L.geoJSON(path, { style: rawStyle }).addTo(map);
     bounds = rawLine.getBounds();
   } else if (!hasSnapped) {
@@ -335,8 +345,11 @@ document.addEventListener('change', function (event) {
     L.polyline([start, end], { color: routeColor, weight: 3, dashArray: '6' }).addTo(map);
   }
   if (hasSnapped) {
-    const snappedLine = L.geoJSON(pathSnapped, { style: { color: routeColor, weight: 4 } }).addTo(map);
-    bounds = snappedLine.getBounds();
+    const snappedStyle = snappedIsPrimary ? { color: routeColor, weight: 4 } : underlayStyle;
+    const snappedLine = L.geoJSON(pathSnapped, { style: snappedStyle }).addTo(map);
+    if (snappedIsPrimary) {
+      bounds = snappedLine.getBounds();
+    }
   }
   map.fitBounds(bounds.pad(0.15));
 

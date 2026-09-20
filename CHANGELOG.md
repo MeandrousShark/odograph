@@ -9,6 +9,37 @@ reproduced here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A partial road-snap no longer reports itself as the whole trip.** When a
+  trace leaves the provisioned OSRM extract, OSRM matches only the spans it
+  has road data for and returns null tracepoints for the rest. The length of
+  that fragment was stored and used as the trip's distance, so the unmatched
+  miles left the displayed figure, every mileage total, and the deduction,
+  and the map framed only the matched part. A snapped route covering less
+  than 85% of the trip's own raw GPS distance is now recorded without a
+  snapped distance, which falls the display back to the raw distance. The
+  partial route is still drawn, beneath the raw track rather than in place of
+  it, and no longer takes over the map framing. The trip page reads
+  **Road-snap incomplete, showing raw GPS distance**. See
+  [docs/osrm.md](docs/osrm.md).
+
+### Correcting existing trips
+
+Trips snapped before this release keep their stored partial distance until
+they are next re-snapped. To correct them in place, against a database you
+have backed up first:
+
+```sql
+UPDATE trips SET distance_snapped_m = NULL
+WHERE distance_snapped_m IS NOT NULL
+  AND distance_m > 0
+  AND distance_snapped_m / distance_m < 0.85;
+```
+
+There is no schema change and nothing to migrate. The statement is not
+reversible without that backup, because it discards the partial value.
+
 ## [0.11.0] - 2026-09-14
 
 ### Added
