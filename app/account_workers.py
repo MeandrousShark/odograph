@@ -11,6 +11,20 @@ log = logging.getLogger(__name__)
 _PARTIAL_FAILURE = object()
 
 
+def _did_not_run(result) -> bool:
+    """True when a wrapped worker reports that it never did its work.
+
+    `RUN_SKIPPED` is the shared sentinel every worker in app/worker.py uses.
+    `DetectorRunner.run_once()` predates that sentinel and still reports
+    advisory-lock contention as a plain `False`, which is not `RUN_SKIPPED`:
+    counting it as a run would record `last_success_at` on a sweep that never
+    held the lock, never record `last_skip_at` again, and still fire
+    `after_run` to poke the snap/geocode workers. Both values mean the same
+    thing here, so both must land as a skip.
+    """
+    return result is RUN_SKIPPED or result is False
+
+
 async def enabled_principals(control_pool) -> list[AccountPrincipal]:
     async with control_connection(control_pool) as conn:
         cur = await conn.execute(
@@ -54,11 +68,17 @@ class AccountWorker(PokeSweepWorker):
                 if worker is None:
                     continue
                 result = await worker.run_once()
-                ran |= result is not RUN_SKIPPED
-                if worker.status.last_failure_at is not None:
+                ran |= not _did_not_run(result)
+                # Not every wrapped job is a _LoopWorker: DetectorRunner owns
+                # no WorkerStatus and reports failure by raising, which the
+                # clause below already records. Reading `.status` off it
+                # unconditionally turns every sweep, successful or not, into
+                # an AttributeError logged as an account-job failure.
+                status = getattr(worker, "status", None)
+                if status is not None and status.last_failure_at is not None:
                     failed = True
-                    self.status.last_failure_at = worker.status.last_failure_at
-                    self.status.last_failure_type = worker.status.last_failure_type
+                    self.status.last_failure_at = status.last_failure_at
+                    self.status.last_failure_type = status.last_failure_type
             except Exception as exc:
                 failed = True
                 # Provider exceptions can contain private URLs/coordinates.

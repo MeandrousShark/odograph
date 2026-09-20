@@ -8,13 +8,16 @@ from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import httpx
+import psycopg
 import pytest
 from psycopg import errors
 
 from app.account_context import AccountPool, AccountPrincipal, account_id
 from app.account_settings import AccountSettings
 from app.account_workers import AccountWorker
-from app.db import NUDGE_ADVISORY_LOCK_KEY, make_pool
+from app.db import DETECTOR_ADVISORY_LOCK_KEY, NUDGE_ADVISORY_LOCK_KEY, make_pool
+from app.detector.core import Params
+from app.detector.runner import DetectorRunner
 from app.geocode import GeocodeWorker
 from app.nudge import NudgeWorker
 from app.snap import SnapWorker
@@ -307,3 +310,83 @@ async def _account_failure_independence():
 
 def test_one_account_failure_does_not_block_another_or_claim_complete_success():
     asyncio.run(_account_failure_independence())
+
+
+async def _detector_sweep_status(*, contended: bool):
+    """Drive the real production wiring: AccountWorker wrapping DetectorRunner.
+
+    `create_app` passes `DetectorRunner` to `AccountWorker` directly, so this
+    is the path a live sweep takes. `DetectorScheduler` is not involved.
+    """
+    raw = make_pool(TEST_DB)
+    await raw.open(wait=True)
+    holder = await psycopg.AsyncConnection.connect(TEST_DB)
+    try:
+        pool = await reset_account_db(raw)
+        async with pool.connection() as conn:
+            device = await seed_tracking_device(conn)
+            await conn.execute(
+                "INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom) "
+                "VALUES(%s,%s,'phone',now(),ST_SetSRID(ST_MakePoint(10,20),4326)::geography)",
+                (account_id(conn), device),
+            )
+        poked = []
+        worker = AccountWorker(
+            SimpleNamespace(control=raw, runtime=raw), AccountSettings(ZoneInfo("UTC")),
+            lambda account_pool, config: DetectorRunner(account_pool, Params()),
+            label="detector-scheduler", debounce_s=0, sweep_s=60,
+            after_run=lambda: poked.append("poked"),
+        )
+        if contended:
+            # Hold the shared detector lock in an uncommitted transaction on a
+            # second connection, exactly as a concurrent import or another
+            # instance's in-flight run would.
+            await holder.execute(
+                "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
+            )
+        await worker._run_guarded()
+        async with raw.connection() as conn:
+            checkpoint = await (await conn.execute(
+                "SELECT last_run_at IS NOT NULL FROM detector_state")).fetchone()
+        return worker.status, poked, checkpoint[0]
+    finally:
+        await holder.close()
+        await raw.close()
+
+
+async def _detector_lock_contention_is_a_skip():
+    status, poked, advanced = await _detector_sweep_status(contended=True)
+    # Nothing ran, so nothing may claim to have succeeded, and the dependent
+    # snap/geocode workers must not be woken for work that never happened.
+    assert status.last_skip_at is not None
+    assert status.last_success_at is None
+    assert status.last_failure_at is None, status.last_failure_type
+    assert poked == []
+    assert advanced is False
+
+
+async def _detector_sweep_that_runs_is_a_success():
+    status, poked, advanced = await _detector_sweep_status(contended=False)
+    assert status.last_success_at is not None
+    assert status.last_skip_at is None
+    assert status.last_failure_at is None, status.last_failure_type
+    assert poked == ["poked"]
+    assert advanced is True
+
+
+@pytest.mark.db
+def test_detector_sweep_records_a_skip_when_the_shared_lock_is_held():
+    """A lock-contended sweep through AccountWorker must land as a skip.
+
+    DetectorRunner.run_once() reports contention as False rather than the
+    RUN_SKIPPED sentinel, which AccountWorker has to translate: otherwise a
+    sweep that never held the lock records last_success_at, never records
+    last_skip_at again, and still pokes snap/geocode.
+    """
+    asyncio.run(_detector_lock_contention_is_a_skip())
+
+
+@pytest.mark.db
+def test_detector_sweep_that_actually_runs_records_a_success():
+    """Contrast case: a real run is a success, not a skip, and does poke."""
+    asyncio.run(_detector_sweep_that_runs_is_a_success())
