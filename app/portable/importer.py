@@ -61,8 +61,18 @@ def _tag_rule_sort_key(row: dict) -> tuple:
 async def _check_clean_target(conn) -> dict:
     """Empty dict means clean. Otherwise, one entry per table that isn't
     in the state a freshly migrated instance would be in -- content-compared
-    for vehicles/tag_rules (not just counted), since a target could have
-    zero *extra* rows but an edited seeded one. points/stays are counted
+    for vehicles/tag_rules/mileage_rates (not just counted), since a target
+    could have zero *extra* rows but an edited seeded one.
+
+    Rates are the one *one-directional* comparison: `_apply_import` deletes
+    them before reinserting the bundle's, so what must not be destroyed is a
+    row the account holds that the canonical set does not -- an edited year,
+    or one created by the one-time `MILEAGE_RATE_<YEAR>` upgrade import.
+    Canonical rows the account happens to be *missing* are not a conflict:
+    the delete destroys nothing, and requiring exact equality would refuse an
+    import on any account provisioned outside `bootstrap_first_account`, or
+    after a future reference year existing accounts have not been given.
+    points/stays are counted
     because either can survive an operator deleting the trips they produced,
     letting the next detector pass manufacture trips from them alongside the
     imported ledger; raw_messages is excluded because it cannot itself cause
@@ -103,6 +113,23 @@ async def _check_clean_target(conn) -> dict:
         conflicts["tag_rules"] = {
             "count": len(rules),
             "expected": "exactly the migration-seeded default rules",
+        }
+
+    # EXCEPT, so the comparison uses PostgreSQL numeric equality: a
+    # hand-entered 0.70 and a seeded 0.7000 are the same rate.
+    rate_columns = "year, rate_per_mi, rate_h2_per_mi, h2_start_month"
+    cur = await conn.execute(
+        "SELECT (SELECT count(*) FROM mileage_rates WHERE account_id = %s), "
+        f"(SELECT count(*) FROM (SELECT {rate_columns} FROM mileage_rates "
+        f"WHERE account_id = %s EXCEPT SELECT {rate_columns} "
+        "FROM reference_mileage_rates) beyond_canonical)",
+        (account_id(conn), account_id(conn)),
+    )
+    total, beyond_canonical = await cur.fetchone()
+    if beyond_canonical:
+        conflicts["mileage_rates"] = {
+            "count": total,
+            "expected": "no rate beyond this instance's canonical reference rates",
         }
 
     return conflicts
@@ -280,8 +307,8 @@ async def _apply_import(conn, bundle: dict) -> dict:
     # Reads remain available; these brief instance-wide write locks are kept
     # within the existing single-account import transaction.
     await conn.execute(
-        "LOCK TABLE detector_state, expenses, odometer_readings, places, points, "
-        "stays, tag_rules, trip_boundary_overrides, trips, vehicles "
+        "LOCK TABLE detector_state, expenses, mileage_rates, odometer_readings, "
+        "places, points, stays, tag_rules, trip_boundary_overrides, trips, vehicles "
         "IN SHARE ROW EXCLUSIVE MODE"
     )
     conflicts = await _check_clean_target(conn)

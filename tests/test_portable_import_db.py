@@ -1266,3 +1266,87 @@ def test_seeded_constants_match_a_freshly_migrated_database():
             )
 
     _scenario(run)
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("mutation,label", [
+    (
+        "INSERT INTO mileage_rates (account_id, year, rate_per_mi) VALUES (41, 2024, 0.6700)",
+        "an extra year the bundle does not carry",
+    ),
+    (
+        "UPDATE mileage_rates SET rate_per_mi = 0.9100 WHERE account_id = 41 AND year = 2026",
+        "an edited canonical year",
+    ),
+])
+def test_import_into_target_with_edited_rates_is_refused_and_keeps_them(mutation, label):
+    """`_apply_import` deletes the account's rates before reinserting the
+    bundle's, so a year the target holds and the bundle lacks would vanish.
+    An edited rate is exactly as much operator data as an edited vehicle or
+    tag rule, and must refuse the import the same way rather than disappear.
+    The one-time `MILEAGE_RATE_<YEAR>` upgrade import lands here too.
+    """
+    async def run(pool):
+        async with pool.connection() as conn:
+            await conn.execute(mutation)
+            cur = await conn.execute(
+                "SELECT year, rate_per_mi FROM mileage_rates WHERE account_id = 41 ORDER BY year"
+            )
+            before = await cur.fetchall()
+
+        transport = httpx.ASGITransport(app=_bare_app(pool))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            csrf = await _csrf(client)
+            response = await _import(client, csrf, _minimal_bundle(26))
+
+        assert response.status_code == 409
+        body = response.json()
+        assert body["error"] == "target_not_clean"
+        assert "mileage_rates" in body["conflicts"], body["conflicts"]
+
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT year, rate_per_mi FROM mileage_rates WHERE account_id = 41 ORDER BY year"
+            )
+            assert await cur.fetchall() == before
+
+    _scenario(run)
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("mutation,label", [
+    (
+        "UPDATE mileage_rates SET rate_per_mi = round(rate_per_mi, 2) "
+        "WHERE account_id = 41 AND rate_per_mi = 0.7000",
+        "a stored 0.70 still matches a seeded 0.7000",
+    ),
+    (
+        "DELETE FROM mileage_rates WHERE account_id = 41",
+        "an account holding no rates at all loses nothing to the delete",
+    ),
+    (
+        "DELETE FROM mileage_rates WHERE account_id = 41 AND year = 2026",
+        "a canonical year the account is simply missing",
+    ),
+])
+def test_rates_the_delete_cannot_destroy_do_not_block_an_import(mutation, label):
+    """The rates check is one-directional on purpose.
+
+    What must refuse an import is a row the account holds and the canonical
+    set does not. A canonical row the account is *missing* destroys nothing,
+    and treating it as a conflict would refuse imports for any account
+    provisioned outside `bootstrap_first_account`, or after a future
+    reference year that existing accounts have not been given.
+    """
+    async def run(pool):
+        async with pool.connection() as conn:
+            await conn.execute(mutation)
+
+        transport = httpx.ASGITransport(app=_bare_app(pool))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            csrf = await _csrf(client)
+            response = await _import(client, csrf, _minimal_bundle(26))
+
+        assert response.status_code == 200, response.text
+
+    _scenario(run)
