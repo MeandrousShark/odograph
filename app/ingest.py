@@ -7,6 +7,11 @@ bodies over INGEST_MAX_BODY_BYTES -> 200-and-drop the same way (real
 OwnTracks payloads are tiny, so an oversized body is either poison or
 someone abusing the credentials -- never something worth a retry loop),
 genuine server errors -> 5xx so OwnTracks queues and redelivers.
+
+That last rule is why the admission boundary matters: a database privilege
+error raised while *checking* the credential is a rejected sender and gets
+401, but the same error raised while *storing* an already-admitted fix is a
+server fault, and answering 4xx there would make iOS drop a good payload.
 """
 from __future__ import annotations
 
@@ -240,6 +245,7 @@ def make_router() -> APIRouter:
         location = payload.get("_type") == "location"
         reason = _validate_location(payload) if location else None
         label = str(payload.get("tid") or "default")
+        admitted = False
         try:
             async with pool.connection() as conn:
                 if location and reason is None:
@@ -252,6 +258,12 @@ def make_router() -> APIRouter:
                     conn, credential, stream,
                     legacy_label=label if stream is not None and credential.kind == "legacy" else None,
                 )
+                # This sender is now admitted, so every later 42501 is a
+                # server-side grant/policy fault rather than a rejected
+                # credential -- and OwnTracks iOS deletes the payload it is
+                # holding on any 4xx. Past this line those errors must reach
+                # the 5xx handler so the phone keeps the fix and redelivers.
+                admitted = True
                 await conn.execute(
                     "INSERT INTO raw_messages (account_id, tracking_device_id, payload) "
                     "VALUES (%s, %s, %s)",
@@ -280,6 +292,8 @@ def make_router() -> APIRouter:
         except (TrackingNotFound, InsufficientPrivilege):
             # Rotation, revocation and legacy-alias conversion may commit while
             # the body is in flight. Final admission must fail before storage.
+            if admitted:
+                raise
             return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="ingest"'})
 
         request.app.state.detector_scheduler.poke(
