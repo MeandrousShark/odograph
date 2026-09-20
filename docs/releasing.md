@@ -81,8 +81,11 @@ git switch -c release/$VERSION
 Stop if `git status --short` prints anything or the revision check fails.
 
 Update `compose.yaml` so `services.app.image` is exactly
-`$IMAGE:$VERSION`. Move the release's entries out of `Unreleased` into one
-exact, nonempty changelog section:
+`$IMAGE:$VERSION`, and `RELEASE_IMAGE` in `tests/test_compose_config.py` to
+match. That constant pins the release image independently of
+`check_release_contract.py`, so leaving it behind passes the contract check and
+fails the full suite in CI instead. Move the release's entries out of
+`Unreleased` into one exact, nonempty changelog section:
 
 ```text
 ## [X.Y.Z] - YYYY-MM-DD
@@ -179,7 +182,7 @@ version input is optional and otherwise comes from the checked
 out Compose app image; when supplied, it must match that release contract:
 
 ```sh
-VERSION=v0.11.0
+VERSION=v0.11.1
 REF=release/$VERSION
 gh workflow run release-preflight.yml --ref "$REF" \
   --field mode=preflight
@@ -219,7 +222,7 @@ nonempty SPDX package list. Native AMD64 and ARM64 jobs pull their child by
 digest, check its platform and release identity, and run the same HTTPS smoke.
 The published upgrade and rollback drill uses Docker Compose with base
 `v0.10.2`, the exact checked-out revision as `--candidate`, and the exact OCI
-index digest as `--candidate-image`. The current v0.11.0 workflow uses
+index digest as `--candidate-image`. The current v0.11.1 workflow uses
 `v0.10.2`; later releases must cover their supported base release in the
 workflow and the manual drill.
 

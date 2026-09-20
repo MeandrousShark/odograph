@@ -9,6 +9,8 @@ reproduced here.
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-09-20
+
 ### Fixed
 
 - **A partial road-snap no longer reports itself as the whole trip.** When a
@@ -39,6 +41,17 @@ WHERE distance_snapped_m IS NOT NULL
 
 There is no schema change and nothing to migrate. The statement is not
 reversible without that backup, because it discards the partial value.
+
+### Supported upgrade path
+
+- `v0.11.0` and `v0.10.2` may upgrade directly to `v0.11.1`. Earlier releases
+  should first follow the supported upgrade path to `v0.10.2`.
+
+### Breaking changes
+
+- There are no breaking application, database, configuration, or operational
+  changes. Schema version 25, detector version 2, and portable format 2 are
+  unchanged.
 
 ## [0.11.0] - 2026-09-14
 
