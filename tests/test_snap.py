@@ -96,7 +96,7 @@ def test_parse_ok_full_confidence_full_match():
         "matchings": [_matching(confidence=0.95)],
         "tracepoints": [{}, {}, {}],
     }
-    result = parse_match_response(response, min_confidence=0.5, input_count=3)
+    result = parse_match_response(response, min_confidence=0.5, input_count=3, raw_distance_m=1080.0)
     assert result.status == "ok"
     assert result.reason is None
     assert result.distance_m == 1000.0
@@ -109,7 +109,7 @@ def test_parse_low_confidence_due_to_matching_confidence():
         "matchings": [_matching(confidence=0.2)],
         "tracepoints": [{}, {}, {}],
     }
-    result = parse_match_response(response, min_confidence=0.5, input_count=3)
+    result = parse_match_response(response, min_confidence=0.5, input_count=3, raw_distance_m=1080.0)
     assert result.status == "low_confidence"
     assert "confidence" in result.reason
 
@@ -121,14 +121,14 @@ def test_parse_low_confidence_due_to_tracepoint_fraction():
         "matchings": [_matching(confidence=0.95)],
         "tracepoints": [{}, None, None],
     }
-    result = parse_match_response(response, min_confidence=0.5, input_count=3)
+    result = parse_match_response(response, min_confidence=0.5, input_count=3, raw_distance_m=1080.0)
     assert result.status == "low_confidence"
     assert "tracepoints" in result.reason
 
 
 def test_parse_failed_on_bad_code():
     response = {"code": "NoMatch", "matchings": [], "tracepoints": []}
-    result = parse_match_response(response, min_confidence=0.5, input_count=3)
+    result = parse_match_response(response, min_confidence=0.5, input_count=3, raw_distance_m=1080.0)
     assert result.status == "failed"
     assert result.path_geojson is None
     assert result.distance_m is None
@@ -136,7 +136,7 @@ def test_parse_failed_on_bad_code():
 
 def test_parse_failed_on_empty_matchings_despite_ok_code():
     response = {"code": "Ok", "matchings": [], "tracepoints": []}
-    result = parse_match_response(response, min_confidence=0.5, input_count=3)
+    result = parse_match_response(response, min_confidence=0.5, input_count=3, raw_distance_m=1080.0)
     assert result.status == "failed"
 
 
@@ -149,8 +149,128 @@ def test_parse_stitches_two_matchings_as_multilinestring():
         ],
         "tracepoints": [{}, {}, {}, {}],
     }
-    result = parse_match_response(response, min_confidence=0.5, input_count=4)
+    result = parse_match_response(response, min_confidence=0.5, input_count=4, raw_distance_m=1300.0)
     assert result.distance_m == 1200.0
     assert len(result.path_geojson["coordinates"]) == 2  # two separate lines, not joined
     # Worst-of-two confidence (0.4) is below min_confidence (0.5) -> low_confidence.
     assert result.status == "low_confidence"
+
+
+# ---- parse_match_response: distance coverage ----
+
+def test_parse_declines_distance_when_match_covers_only_a_fragment():
+    """The silent form of the Richmond BC case: every tracepoint matched and
+    confidence is high, so neither older gate fires, yet the matched route is
+    a fragment of a 25km drive.
+    """
+    response = {
+        "code": "Ok",
+        "matchings": [_matching(confidence=0.95, distance=400.0)],
+        "tracepoints": [{}, {}, {}],
+    }
+    result = parse_match_response(
+        response, min_confidence=0.5, input_count=3, raw_distance_m=25000.0,
+    )
+    assert result.status == "low_confidence"
+    assert result.distance_m is None
+    assert "raw distance" in result.reason
+    # Only the distance is refused; the geometry still describes what matched.
+    assert result.path_geojson["type"] == "MultiLineString"
+
+
+def test_parse_keeps_distance_just_above_the_coverage_threshold():
+    response = {
+        "code": "Ok",
+        "matchings": [_matching(confidence=0.95, distance=860.0)],
+        "tracepoints": [{}, {}, {}],
+    }
+    result = parse_match_response(
+        response, min_confidence=0.5, input_count=3, raw_distance_m=1000.0,
+    )
+    assert result.status == "ok"
+    assert result.distance_m == 860.0
+
+
+def test_parse_declines_distance_just_below_the_coverage_threshold():
+    response = {
+        "code": "Ok",
+        "matchings": [_matching(confidence=0.95, distance=840.0)],
+        "tracepoints": [{}, {}, {}],
+    }
+    result = parse_match_response(
+        response, min_confidence=0.5, input_count=3, raw_distance_m=1000.0,
+    )
+    assert result.status == "low_confidence"
+    assert result.distance_m is None
+
+
+def test_parse_keeps_distance_when_snapped_route_exceeds_raw():
+    """Coverage is a floor, not a band. A snapped route is routinely longer
+    than the raw track where the fixes cut a corner the road goes around.
+    """
+    response = {
+        "code": "Ok",
+        "matchings": [_matching(confidence=0.95, distance=1400.0)],
+        "tracepoints": [{}, {}, {}],
+    }
+    result = parse_match_response(
+        response, min_confidence=0.5, input_count=3, raw_distance_m=1000.0,
+    )
+    assert result.status == "ok"
+    assert result.distance_m == 1400.0
+
+
+def test_parse_coverage_gate_ignores_zero_raw_distance():
+    """A zero raw distance can't be divided into. It must pass the gate, not
+    trip it: a trip that short has no mileage to protect.
+    """
+    response = {
+        "code": "Ok",
+        "matchings": [_matching(confidence=0.95, distance=1000.0)],
+        "tracepoints": [{}, {}, {}],
+    }
+    result = parse_match_response(
+        response, min_confidence=0.5, input_count=3, raw_distance_m=0.0,
+    )
+    assert result.status == "ok"
+    assert result.distance_m == 1000.0
+
+
+def test_parse_coverage_gate_ignores_missing_raw_distance():
+    response = {
+        "code": "Ok",
+        "matchings": [_matching(confidence=0.95, distance=1000.0)],
+        "tracepoints": [{}, {}, {}],
+    }
+    result = parse_match_response(
+        response, min_confidence=0.5, input_count=3, raw_distance_m=None,
+    )
+    assert result.status == "ok"
+    assert result.distance_m == 1000.0
+
+
+def test_parse_coverage_reason_is_reported_ahead_of_the_tracepoint_reason():
+    """The real Richmond trips trip both gates. Coverage is the one that
+    explains the distance fallback, so it is the one logged.
+    """
+    response = {
+        "code": "Ok",
+        "matchings": [_matching(confidence=0.95, distance=400.0)],
+        "tracepoints": [{}, None, None],
+    }
+    result = parse_match_response(
+        response, min_confidence=0.5, input_count=3, raw_distance_m=25000.0,
+    )
+    assert "raw distance" in result.reason
+    assert result.distance_m is None
+
+
+def test_parse_coverage_threshold_is_configurable():
+    response = {
+        "code": "Ok",
+        "matchings": [_matching(confidence=0.95, distance=500.0)],
+        "tracepoints": [{}, {}, {}],
+    }
+    kwargs = dict(min_confidence=0.5, input_count=3, raw_distance_m=1000.0)
+    assert parse_match_response(response, **kwargs).distance_m is None
+    assert parse_match_response(response, min_coverage=0.4, **kwargs).distance_m == 500.0

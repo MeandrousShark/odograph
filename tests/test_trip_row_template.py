@@ -18,6 +18,9 @@ def _trip(**overrides) -> dict:
         "ended_at": datetime(2026, 7, 1, 9, 20, tzinfo=TZ),
         "display_distance_m": 1609.344,
         "distance_m": 1609.344,
+        # Mirrors TRIP_COLUMNS: always selected, and NULL alongside a snapped
+        # path means the match didn't cover the trip (app/snap.py min_coverage).
+        "distance_snapped_m": None,
         "snap_status": "pending",
         "point_count": 20,
         "has_gap": False,
@@ -585,7 +588,10 @@ def test_detected_trip_detail_shows_map_before_advanced_tools_disclosure():
 
 
 def test_trip_detail_summary_keeps_source_route_and_map_hooks_scoped():
-    body = _render_detail(_trip(source="detected", snap_status="low_confidence", has_gap=True))
+    body = _render_detail(_trip(
+        source="detected", snap_status="low_confidence", has_gap=True,
+        distance_snapped_m=1500.0,
+    ))
     stylesheet = (Path(__file__).parents[1] / "static/style.css").read_text()
 
     assert 'class="trip-detail-page"' in body
@@ -817,3 +823,56 @@ def test_advanced_tools_summary_is_text_only_with_no_decorative_glyph():
     summary = body.split("<summary>Advanced trip tools", 1)[1].split("</summary>", 1)[0]
     for glyph in ("＋", "🚗", "✅", "📊", "🧾", "📈", "⚙", "🌙", "☀", "⬇", "🗑", "▾"):
         assert glyph not in summary
+
+
+def test_trip_detail_labels_a_shaky_but_complete_snap_with_its_raw_baseline():
+    body = _render_detail(_trip(snap_status="low_confidence", distance_snapped_m=1500.0))
+
+    assert "Road-snapped, low confidence" in body
+    assert "raw GPS" in body
+    assert "Road-snap incomplete" not in body
+
+
+def test_trip_detail_labels_an_incomplete_snap_instead_of_calling_it_snapped():
+    """A snapped path with no snapped distance is a match that covered part of
+    the drive. Its displayed distance is the raw one, and the label has to say
+    so rather than read as an ordinary road-snapped trip.
+    """
+    body = _render_detail(_trip(snap_status="low_confidence", distance_snapped_m=None))
+
+    assert "Road-snap incomplete, showing raw GPS distance" in body
+    assert "Road-snapped, low confidence" not in body
+
+
+def test_trip_detail_labels_an_incomplete_snap_that_never_tripped_the_older_gates():
+    """The silent case: the tracepoint and confidence gates passed, so the row
+    is 'ok', but coverage declined the distance.
+    """
+    body = _render_detail(_trip(snap_status="ok", distance_snapped_m=None))
+
+    assert "Road-snap incomplete, showing raw GPS distance" in body
+
+
+def test_trip_detail_lets_a_trusted_snapped_route_lead_the_map():
+    body = _render_detail(
+        _trip(snap_status="ok", distance_snapped_m=1500.0),
+        path_geojson='{"type": "LineString", "coordinates": [[-122.3, 47.6], [-122.4, 47.7]]}',
+        path_snapped_geojson='{"type": "MultiLineString", "coordinates": [[[-122.3, 47.6], [-122.4, 47.7]]]}',
+    )
+
+    assert "const snappedDistanceUsed = true;" in body
+
+
+def test_trip_detail_keeps_the_raw_track_leading_when_the_snap_is_incomplete():
+    """The flag the map branches on. A partial snapped line must not take the
+    framing, or the map zooms to the matched fragment and the rest of the drive
+    falls off-screen -- the original British Columbia symptom.
+    """
+    body = _render_detail(
+        _trip(snap_status="low_confidence", distance_snapped_m=None),
+        path_geojson='{"type": "LineString", "coordinates": [[-122.3, 47.6], [-122.4, 47.7]]}',
+        path_snapped_geojson='{"type": "MultiLineString", "coordinates": [[[-122.3, 47.6], [-122.31, 47.61]]]}',
+    )
+
+    assert "const snappedDistanceUsed = false;" in body
+    assert "const snappedIsPrimary = hasSnapped && snappedDistanceUsed;" in body

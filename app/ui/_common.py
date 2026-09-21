@@ -34,9 +34,14 @@ _END_ADDRESS_SQL = (
 
 # display_distance_m is the canonical "distance to show": snapped when
 # available, raw as fallback (raw distance_m stays selected as the pre-snap
-# baseline).
+# baseline). distance_snapped_m comes along raw because NULL on a trip that
+# does have a snapped path carries its own meaning: the match didn't cover the
+# trip and its distance was declined (app/snap.py's min_coverage). The trip
+# page labels and draws that case differently, and COALESCE alone can't
+# distinguish it from a trip that was never snapped.
 TRIP_COLUMNS = f"""
     id, device, tracking_device_id, source::text AS source, started_at, ended_at, distance_m,
+    distance_snapped_m,
     {DISPLAY_DISTANCE_SQL} AS display_distance_m,
     snap_status::text AS snap_status,
     point_count, has_gap, imported, category::text AS category,
