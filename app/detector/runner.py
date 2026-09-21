@@ -22,7 +22,6 @@ from app.autotag import AutotagTrip, Rule, plan_autotags
 from app.db import DETECTOR_ADVISORY_LOCK_KEY
 from app.detector.core import Override, Params, Point, Trip, detect
 from app.detector.reconcile import ExistingTrip, plan_reconcile
-from app.worker import PokeSweepWorker, RUN_SKIPPED
 
 log = logging.getLogger(__name__)
 
@@ -621,47 +620,3 @@ async def reprocess_places(pool: AccountPool) -> None:
     """
     async with pool.connection() as conn:
         await reprocess_places_in(conn)
-
-
-class DetectorScheduler(PokeSweepWorker):
-    """Single loop that serializes detector runs.
-
-    poke() (from ingest) resets a debounce deadline; independently, a sweep
-    fires every sweep_s to catch anything a crashed/skipped run left behind.
-    The loop itself, `start`/`stop`, and the guarded-run wrapper live in
-    `PokeSweepWorker` (app/worker.py), shared with
-    `SnapWorker`/`GeocodeWorker`; this class supplies `run_once()` and
-    overrides `after_run_once()` to poke the snap/geocode workers once a
-    detector run actually happens (not one skipped for advisory-lock
-    contention), the poke that turns "trip geometry just changed" into
-    "go re-snap/re-geocode it soon" without either worker waiting for its
-    own sweep.
-    """
-
-    def __init__(
-        self, runner: DetectorRunner, debounce_s: float, sweep_s: float,
-        snap_worker=None, geocode_worker=None,
-    ):
-        super().__init__(
-            task_name="detector-scheduler",
-            log=log,
-            failure_message="detector run failed; will retry on next debounce/sweep",
-            debounce_s=debounce_s,
-            sweep_s=sweep_s,
-        )
-        self.runner = runner
-        self.snap_worker = snap_worker  # None when OSRM disabled
-        self.geocode_worker = geocode_worker  # None when no geocode provider is configured
-
-    async def run_once(self) -> bool:
-        # Translate DetectorRunner's own False-means-skipped bool into the
-        # shared RUN_SKIPPED sentinel so _run_guarded (app/worker.py) records
-        # a lock-contended run as a skip, not a success.
-        ran = await self.runner.run_once()
-        return ran if ran else RUN_SKIPPED
-
-    async def after_run_once(self, ran: bool) -> None:
-        if ran and self.snap_worker is not None:
-            self.snap_worker.poke()
-        if ran and self.geocode_worker is not None:
-            self.geocode_worker.poke()

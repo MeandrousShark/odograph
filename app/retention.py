@@ -26,9 +26,10 @@ from app.account_context import account_id
 log = logging.getLogger(__name__)
 
 # No poke/debounce here, since nothing else in the app needs to react to this
-# job, unlike DetectorScheduler/SnapWorker which chain off each other. A
-# plain daily wake keeps the growth of a slow, low-priority prune bounded
-# without a dedicated cadence env var.
+# job, unlike the detector, which pokes SnapWorker and GeocodeWorker after
+# each sweep that does something (app/main.py's after_detection). A plain
+# daily wake keeps the growth of a slow, low-priority prune bounded without
+# a dedicated cadence env var.
 RUN_INTERVAL_S = 24 * 60 * 60.0
 
 

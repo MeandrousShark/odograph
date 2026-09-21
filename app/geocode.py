@@ -298,7 +298,7 @@ class GeocodeWorker(PokeSweepWorker):
 
     The poke/debounce/sweep loop, `start`/`stop`, and guarded-run wrapper
     live in `PokeSweepWorker` (app/worker.py) -- shared with
-    `DetectorScheduler` and `SnapWorker`; this class only supplies
+    `AccountWorker` and `SnapWorker`; this class only supplies
     `run_once()`.
 
     Processes its batch **one coordinate at a time with a fixed delay**

@@ -309,7 +309,7 @@ class SnapWorker(PokeSweepWorker):
     """Poke+sweep background worker draining `snap_status='pending'` trips
     against a self-hosted OSRM instance. The poke/debounce/sweep loop,
     `start`/`stop`, and guarded-run wrapper live in `PokeSweepWorker`
-    (app/worker.py) -- shared with `DetectorScheduler` and `GeocodeWorker`,
+    (app/worker.py) -- shared with `AccountWorker` and `GeocodeWorker`,
     which need the identical machinery; this class only supplies `run_once()`.
 
     No advisory lock and no cross-process claim (unlike the detector, which

@@ -316,7 +316,7 @@ async def _detector_sweep_status(*, contended: bool):
     """Drive the real production wiring: AccountWorker wrapping DetectorRunner.
 
     `create_app` passes `DetectorRunner` to `AccountWorker` directly, so this
-    is the path a live sweep takes. `DetectorScheduler` is not involved.
+    is the path a live sweep takes.
     """
     raw = make_pool(TEST_DB)
     await raw.open(wait=True)

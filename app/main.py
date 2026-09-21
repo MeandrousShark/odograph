@@ -30,7 +30,7 @@ from app.config import (
 )
 from app.dashboard import format_week_range
 from app.db import make_pool, run_migrations
-from app.detector.runner import DetectorRunner, DetectorScheduler
+from app.detector.runner import DetectorRunner
 from app.email_digest import EmailDigestWorker
 from app.expenses import EXPENSE_CONFLICT_LABELS, comparison_caveat_lines, comparison_status
 from app.formatting import format_duration, format_miles, format_usd
