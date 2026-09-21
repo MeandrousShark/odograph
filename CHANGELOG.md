@@ -30,6 +30,50 @@ reproduced here.
 - Refuse to attach a newly created QA database container to an orphaned
   persistent volume; recover it with its original image or a verified backup.
 
+## [0.11.1] - 2026-09-20
+
+### Fixed
+
+- **A partial road-snap no longer reports itself as the whole trip.** When a
+  trace leaves the provisioned OSRM extract, OSRM matches only the spans it
+  has road data for and returns null tracepoints for the rest. The length of
+  that fragment was stored and used as the trip's distance, so the unmatched
+  miles left the displayed figure, every mileage total, and the deduction,
+  and the map framed only the matched part. A snapped route covering less
+  than 85% of the trip's own raw GPS distance is now recorded without a
+  snapped distance, which falls the display back to the raw distance. The
+  partial route is still drawn, beneath the raw track rather than in place of
+  it, and no longer takes over the map framing. The trip page reads
+  **Road-snap incomplete, showing raw GPS distance**. See
+  [docs/osrm.md](docs/osrm.md).
+
+### Correcting existing trips
+
+Trips snapped before this release keep their stored partial distance until
+they are next re-snapped. To correct them in place, against a database you
+have backed up first:
+
+```sql
+UPDATE trips SET distance_snapped_m = NULL
+WHERE distance_snapped_m IS NOT NULL
+  AND distance_m > 0
+  AND distance_snapped_m / distance_m < 0.85;
+```
+
+There is no schema change and nothing to migrate. The statement is not
+reversible without that backup, because it discards the partial value.
+
+### Supported upgrade path
+
+- `v0.11.0` and `v0.10.2` may upgrade directly to `v0.11.1`. Earlier releases
+  should first follow the supported upgrade path to `v0.10.2`.
+
+### Breaking changes
+
+- There are no breaking application, database, configuration, or operational
+  changes. Schema version 25, detector version 2, and portable format 2 are
+  unchanged.
+
 ## [0.11.0] - 2026-09-14
 
 ### Added
