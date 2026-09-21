@@ -76,7 +76,7 @@ def _app(pool):
     )
     app.state.ingest_limiter = FailedAuthLimiter(100, 60)
     app.state.wakes = []
-    app.state.detector_scheduler = SimpleNamespace(poke=lambda *key: app.state.wakes.append(key))
+    app.state.detector_scheduler = SimpleNamespace(poke=lambda: app.state.wakes.append(None))
     app.include_router(make_router())
     return app
 
@@ -120,8 +120,12 @@ def test_identical_labels_and_timestamps_are_separate_authenticated_streams():
                 # "location") are stored; the "status" post is not (see
                 # STORED_MESSAGE_TYPES in app/ingest.py).
                 assert (await (await conn.execute("SELECT count(*) FROM raw_messages")).fetchone())[0] == 5
-            assert set(app.state.wakes) == {(42, first.tracking_device_id), (42, second.tracking_device_id),
-                                          (84, third.tracking_device_id)}
+            # poke() carries no per-account/device target (AccountWorker's
+            # wake-key bookkeeping was unused dead weight -- every sweep
+            # already revalidates every enabled principal); just confirm the
+            # 4 accepted location posts each woke the detector once, even
+            # the repeat that landed on an existing point via ON CONFLICT.
+            assert len(app.state.wakes) == 4
     asyncio.run(run())
 
 

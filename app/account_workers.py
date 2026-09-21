@@ -36,7 +36,9 @@ class AccountWorker(PokeSweepWorker):
     """Each account gets an independent job and immutable configuration.
 
     A failed account does not roll back another account's completed work.
-    Queued wakeups contain stable identity only; every sweep revalidates it.
+    poke() (inherited from PokeSweepWorker) takes no target: every sweep
+    already revalidates every enabled principal, so there is nothing to
+    narrow a wakeup to.
     """
 
     def __init__(self, pools, config, factory, *, label, debounce_s, sweep_s, after_run=None):
@@ -47,15 +49,8 @@ class AccountWorker(PokeSweepWorker):
         self.config = config
         self.factory = factory
         self.after_run = after_run
-        self._wake_keys: set[tuple[int, int | None]] = set()
-
-    def poke(self, account_id: int | None = None, tracking_device_id: int | None = None):
-        if account_id is not None:
-            self._wake_keys.add((account_id, tracking_device_id))
-        super().poke()
 
     async def run_once(self):
-        self._wake_keys.clear()
         ran = False
         failed = False
         for principal in await enabled_principals(self.pools.control):

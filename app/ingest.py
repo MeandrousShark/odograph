@@ -318,9 +318,7 @@ def make_router() -> APIRouter:
                 raise
             return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="ingest"'})
 
-        request.app.state.detector_scheduler.poke(
-            credential.account.account_id, stream.tracking_device_id,
-        )
+        request.app.state.detector_scheduler.poke()
         return _ok()
 
     return router
