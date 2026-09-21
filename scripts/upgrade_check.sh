@@ -279,7 +279,7 @@ remove_stamp_images() {
     # dropping :dev would make rmi default to an unrelated/missing :latest.
     local runtime matches img
     runtime="$(runtime_cmd)"
-    matches="$($runtime image ls --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | sort -u || true)"
+    matches="$($runtime image ls --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | LC_ALL=C sort -u || true)"
     [ -n "$matches" ] || return 0
     while IFS= read -r img; do
         [ -z "$img" ] && continue
