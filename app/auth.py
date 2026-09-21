@@ -1240,7 +1240,11 @@ def make_router() -> APIRouter:
     @router.post("/logout", dependencies=[Depends(require_csrf)])
     async def logout(request: Request):
         request.session.clear()
-        return Response(status_code=204, headers={"HX-Redirect": "/login"})
+        # The query marker (read by base.html's inline script, never by the
+        # server) is how a real sign-out still clears the shared cross-tab
+        # account marker, so every other signed-in tab still hides and
+        # reloads -- merely landing on /login some other way must not.
+        return Response(status_code=204, headers={"HX-Redirect": "/login?signed_out=1"})
 
     return router
 

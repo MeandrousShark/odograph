@@ -243,9 +243,31 @@
       };
       try {
         localStorage.removeItem("htmx-history-cache");
+      } catch (_) {}
+
+      // Signing out redirects here with this query marker so a real
+      // sign-out still changes the shared marker and every other
+      // signed-in tab still hides and reloads. Merely landing on a page
+      // with no account -- opening the sign-in or account-creation page
+      // in a new tab -- must not touch it, or that alone would reload
+      // every tab that already had one open.
+      const params = new URLSearchParams(window.location.search);
+      if (params.has("signed_out")) {
+        try {
+          localStorage.removeItem(marker);
+        } catch (_) {}
+        params.delete("signed_out");
+        const query = params.toString();
+        window.history.replaceState(
+          null, "",
+          window.location.pathname + (query ? "?" + query : "") + window.location.hash,
+        );
+      }
+
+      if (!account) return;
+      try {
         localStorage.setItem(marker, account);
       } catch (_) {}
-      if (!account) return;
       window.addEventListener("storage", (event) => {
         if (event.key === marker && event.newValue !== account) reloadPrivatePage();
       });

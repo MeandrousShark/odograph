@@ -140,7 +140,10 @@ def test_post_logout_with_valid_csrf_clears_session_and_redirects():
                 "/logout", headers={"X-CSRF-Token": "test-csrf-token"}
             )
             assert response.status_code == 204
-            assert response.headers["HX-Redirect"] == "/login"
+            # The query marker is read only by base.html's inline script
+            # (never the server) so a real sign-out still clears the shared
+            # cross-tab account marker and other signed-in tabs reload.
+            assert response.headers["HX-Redirect"] == "/login?signed_out=1"
 
             logged_out = await client.get("/test/session")
             assert logged_out.json() == {"has_user": False}
