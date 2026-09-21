@@ -116,7 +116,10 @@ def test_identical_labels_and_timestamps_are_separate_authenticated_streams():
                 assert rows == [(42, first.tracking_device_id, 1), (42, second.tracking_device_id, 1),
                                 (84, third.tracking_device_id, 1)]
                 assert (await (await conn.execute("SELECT count(*) FROM raw_messages WHERE account_id IS NULL")).fetchone())[0] == 0
-                assert (await (await conn.execute("SELECT count(*) FROM raw_messages")).fetchone())[0] == 6
+                # 4 location posts + the invalid-location post (still _type
+                # "location") are stored; the "status" post is not (see
+                # STORED_MESSAGE_TYPES in app/ingest.py).
+                assert (await (await conn.execute("SELECT count(*) FROM raw_messages")).fetchone())[0] == 5
             assert set(app.state.wakes) == {(42, first.tracking_device_id), (42, second.tracking_device_id),
                                           (84, third.tracking_device_id)}
     asyncio.run(run())

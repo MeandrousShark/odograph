@@ -30,6 +30,14 @@ reproduced here.
 - Refuse to attach a newly created QA database container to an orphaned
   persistent volume; recover it with its original image or a verified backup.
 
+### Security
+
+- Ingest stores only `location`, `transition`, `waypoint`, and `waypoints`
+  messages. Other message types, including the configuration dump OwnTracks'
+  Publish Settings button sends (which contains the tracker's plaintext
+  password), are acknowledged and discarded instead of being stored in
+  `raw_messages`.
+
 ## [0.11.1] - 2026-09-20
 
 ### Fixed

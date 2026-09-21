@@ -6,6 +6,12 @@ garbage -> 200-and-drop so OwnTracks never retry-loops a poison payload,
 bodies over INGEST_MAX_BODY_BYTES -> 200-and-drop the same way (real
 OwnTracks payloads are tiny, so an oversized body is either poison or
 someone abusing the credentials -- never something worth a retry loop),
+a message type outside STORED_MESSAGE_TYPES -> 200-and-drop with no
+raw_messages row (OwnTracks' Publish Settings button, and a remote dump
+command, send _type "dump" with a configuration object carrying the
+tracker's plaintext username, password and URL; raw_messages exists only so
+points can be rebuilt from scratch, see app/retention.py, never to hold a
+credential),
 genuine server errors -> 5xx so OwnTracks queues and redelivers.
 
 That last rule is why the admission boundary matters: a database privilege
@@ -45,6 +51,10 @@ MAX_FUTURE_SKEW = timedelta(minutes=5)
 # a fixed, comfortably-future date instead of relying on that exception: no
 # real OwnTracks fix will ever carry a timestamp past it.
 MAX_TST = datetime(2100, 1, 1, tzinfo=timezone.utc).timestamp()
+
+# Only these _type values are stored in raw_messages; see the module
+# docstring for why everything else is acknowledged and discarded instead.
+STORED_MESSAGE_TYPES = frozenset({"location", "transition", "waypoint", "waypoints"})
 
 
 class FailedAuthLimiter:
@@ -264,6 +274,18 @@ def make_router() -> APIRouter:
                 # holding on any 4xx. Past this line those errors must reach
                 # the 5xx handler so the phone keeps the fix and redelivers.
                 admitted = True
+                # OwnTracks' Publish Settings button (and a remote dump
+                # command) sends _type "dump" whose configuration object
+                # holds the tracker's plaintext username, password and URL.
+                # Nothing outside STORED_MESSAGE_TYPES reaches raw_messages,
+                # and only the type -- safely rendered and truncated, never
+                # the payload -- reaches the log.
+                msg_type = payload.get("_type")
+                if not (isinstance(msg_type, str) and msg_type in STORED_MESSAGE_TYPES):
+                    log.info(
+                        "ingest: discarding message type %s", _discarded_type_for_log(payload)
+                    )
+                    return _ok()
                 await conn.execute(
                     "INSERT INTO raw_messages (account_id, tracking_device_id, payload) "
                     "VALUES (%s, %s, %s)",
@@ -310,6 +332,37 @@ def _num(v) -> float | None:
 
 def _int(v) -> int | None:
     return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _discarded_type_for_log(payload: dict) -> str:
+    """Safe-for-logs rendering of a dropped message's _type -- enough to
+    tell discarded messages apart in the log, never enough to leak one.
+
+    A string is repr'd and truncated to 40 characters. Anything else is
+    rendered by its JSON kind only (<dict>, <list>, <int>, <float>, <bool>,
+    or <null>): a _type that is itself an object, as in a malformed
+    dump-shaped payload, must never have its contents -- a field like a
+    password -- reach the log through this rendering. A missing key logs as
+    "missing", distinct from an explicit JSON null.
+    """
+    if "_type" not in payload:
+        return "missing"
+    value = payload["_type"]
+    if isinstance(value, str):
+        return repr(value[:40])
+    if value is None:
+        return "<null>"
+    if isinstance(value, bool):
+        return "<bool>"
+    if isinstance(value, dict):
+        return "<dict>"
+    if isinstance(value, list):
+        return "<list>"
+    if isinstance(value, int):
+        return "<int>"
+    if isinstance(value, float):
+        return "<float>"
+    return f"<{type(value).__name__}>"
 
 
 def _jsonb_encode(payload: dict) -> tuple[str | None, str | None]:

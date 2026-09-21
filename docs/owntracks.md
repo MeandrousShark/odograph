@@ -98,6 +98,11 @@ messages. Odograph stores those non-location messages in the raw ingest history
 but uses only valid location messages to create points and trips, so enabling
 regions does not create phantom trips.
 
+Odograph stores location, transition, and waypoint messages only. Other
+message types, including the configuration dump sent by OwnTracks' **Publish
+Settings** button (which contains the tracker's password), are acknowledged
+and discarded rather than stored.
+
 ### Android note
 
 On Android, `locatorInterval` controls the desired interval in Significant
