@@ -1110,6 +1110,16 @@ input.notes:hover, input.notes:focus { border-color: var(--border-strong); }
   }
 }
 
+/* Row summary repeated at the top of the inline editor (B25). */
+.trip-edit-identity {
+  display: grid; gap: var(--space-1); margin-bottom: var(--space-3); padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+.trip-edit-identity p { margin: 0; }
+.trip-edit-when { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); align-items: baseline; }
+.trip-edit-distance { margin-left: auto; font-weight: 600; }
+.trip-edit-route { display: flex; flex-wrap: wrap; gap: var(--space-1); align-items: center; color: var(--fg-muted); }
+.trip-edit-route .icon { flex: 0 0 auto; }
 .trip-edit-heading { display: flex; justify-content: space-between; gap: var(--space-3); align-items: start; margin-bottom: var(--space-3); }
 .trip-edit-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
 .trip-edit-grid + .trip-edit-grid { margin-top: var(--space-3); }
