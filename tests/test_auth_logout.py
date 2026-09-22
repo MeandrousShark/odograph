@@ -35,13 +35,17 @@ class _FakeOAuth:
 
 class _FakeCursor:
     async def execute(self, *args, **kwargs):
+        self.query = args[0]
         return self
 
     async def fetchone(self):
-        return None  # no account row in the OIDC-only upgrade configuration
+        return (None,) if "current_setting" in self.query else (False,)
 
 
 class _FakeConn:
+    async def execute(self, *args, **kwargs):
+        return await _FakeCursor().execute(*args, **kwargs)
+
     def cursor(self, row_factory=None):
         return _FakeCursor()
 
@@ -74,7 +78,7 @@ def _bare_app() -> FastAPI:
         oidc_configured=True,
     )
     app.state.oauth = _FakeOAuth()
-    app.state.pool = _FakePool()
+    app.state.control_pool = _FakePool()
     app.state.templates = SimpleNamespace(
         TemplateResponse=lambda request, name, context, status_code=200: (
             PlainTextResponse(f"rendered:{name}", status_code=status_code)
@@ -136,7 +140,10 @@ def test_post_logout_with_valid_csrf_clears_session_and_redirects():
                 "/logout", headers={"X-CSRF-Token": "test-csrf-token"}
             )
             assert response.status_code == 204
-            assert response.headers["HX-Redirect"] == "/login"
+            # The query marker is read only by base.html's inline script
+            # (never the server) so a real sign-out still clears the shared
+            # cross-tab account marker and other signed-in tabs reload.
+            assert response.headers["HX-Redirect"] == "/login?signed_out=1"
 
             logged_out = await client.get("/test/session")
             assert logged_out.json() == {"has_user": False}

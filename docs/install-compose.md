@@ -16,7 +16,7 @@ You need:
 
 - A Linux host with Docker Engine and the Compose v2 plugin. Podman with
   podman-compose 1.3.0 or newer is supported as a substitution.
-- `curl`, plus OpenSSL or Python 3 for generating the three secrets.
+- `curl` and Python 3 for writing generated secrets directly to `.env`.
 - A dedicated directory that you own, a domain pointing at the host, and a
   reverse proxy that can terminate HTTPS.
 - About 2 GB of RAM and 5 GB of free disk to start.
@@ -77,31 +77,37 @@ directory. The two URLs contain the same release tag. Keep that tag recorded
 with the installation so a later upgrade can select the correct release notes and
 matching helper scripts.
 
-## Fill in `.env` by hand
+## Configure `.env`
 
-Open `.env` in an editor. Set a stable Compose project name and an explicit
-IANA timezone. Paste fresh random values into the three secret fields. Do not
-put shell expressions such as `$(openssl rand ...)` in `.env`; Compose does
-not run them.
-
-Generate each value separately and copy the output into the matching field:
+From the installation directory, fill the blank secret fields without printing
+their values or putting them on process arguments. This command refuses to
+replace an existing nonblank secret:
 
 ```sh
-openssl rand -hex 32
+python3 - <<'PYENV'
+from pathlib import Path
+import os
+import re
+import secrets
+
+path = Path(".env")
+text = path.read_text()
+for key in ("POSTGRES_PASSWORD", "INGEST_PASSWORD", "SESSION_SECRET"):
+    pattern = rf"(?m)^{key}=$"
+    if len(re.findall(pattern, text)) != 1:
+        raise SystemExit(f"Expected exactly one blank {key}; existing values were not changed")
+    text = re.sub(pattern, f"{key}={secrets.token_hex(32)}", text)
+os.chmod(path, 0o600)
+path.write_text(text)
+PYENV
 ```
 
-If OpenSSL is unavailable, use:
-
-```sh
-python3 -c 'import secrets; print(secrets.token_hex(32))'
-```
-
-Use one fresh value for each field. The database password must be hexadecimal
-or another URI-safe value because the canonical Compose file interpolates it
-into `DATABASE_URL`.
-
-The relevant values should look like this after editing, with the example
-secrets replaced by your copied output:
+Then open `.env` in an editor and set a stable Compose project name and an
+explicit IANA timezone. Keep the generated secrets private. The relevant
+fields are shown below with placeholders, not values to copy over your file.
+`INGEST_PASSWORD` is retained for legacy-upgrade compatibility; after fresh
+setup, issue device credentials in Tracking. `DISPLAY_TZ` supplies the initial
+account timezone; Settings controls it afterward.
 
 ```dotenv
 COMPOSE_PROJECT_NAME=odograph
@@ -200,11 +206,11 @@ client IP based controls.
 Follow [Connecting OwnTracks](owntracks.md) with these values:
 
 - URL: `https://mileage.example.com/ingest`
-- Username: `owntracks`, unless you set `INGEST_USERNAME` yourself
-- Password: the `INGEST_PASSWORD` value from `.env`
-- A stable short device ID for the phone
+- Username and password: create a device in **Settings > Tracking** and use
+  the issued values. The password is displayed once.
+- Tracker ID (`tid`): a short label; the issued credential selects the device.
 
-Confirm that the device appears under Settings > Diagnostics > Device status
+Confirm that the device appears under Settings > Device status
 and that its newest location time advances. Location points can arrive before the
 detector has enough quiet time to create a completed trip. The two-file path
 does not include `scripts/send_test_track.sh`; use a real phone for this check
@@ -214,6 +220,13 @@ Then continue with [Use Odograph](usage.md) for vehicle setup, trip review,
 corrections, and reports.
 
 ## Limits and upgrades
+
+Startup uses the privileged database URL to migrate and provision managed
+restricted roles, then closes the setup connection. Personal data is explicitly
+account-scoped, but row-level security remains disabled in this prepared
+stage and the singleton account guard remains. Follow the
+[database role and preference contract](configuration.md#account-ownership-and-database-roles)
+when configuring an external database or upgrading an existing installation.
 
 These two files are enough for the baseline application, but they intentionally
 omit the repository's operator toolkit:

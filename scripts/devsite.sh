@@ -378,12 +378,13 @@ cmd_migrate() {
 import asyncio
 import os
 from app.db import make_pool, run_migrations
+from app.config import Config
 
 async def _run():
     pool = make_pool(os.environ["DATABASE_URL"])
     await pool.open(wait=True)
     try:
-        await run_migrations(pool)
+        await run_migrations(pool, Config.from_env())
     finally:
         await pool.close()
 

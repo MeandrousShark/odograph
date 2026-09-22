@@ -28,9 +28,6 @@
       <td class="settings-table-actions">
         <button type="button" class="control control-secondary" hx-post="/settings/rates" hx-include="closest tr"
                 hx-target="#rates-table" hx-swap="outerHTML">Save</button>
-        {% if rate.env_override %}
-        <span class="manual-badge" title="MILEAGE_RATE_{{ rate.year }} env var overrides this until the app restarts">env override</span>
-        {% endif %}
       </td>
     </tr>
     {% endfor %}

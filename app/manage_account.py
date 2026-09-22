@@ -16,7 +16,8 @@ from app.accounts import (
     valid_email,
 )
 from app.auth import MIN_LOCAL_PASSWORD_LENGTH
-from app.db import make_pool
+from app.application_roles import application_role_pools
+from app.account_context import control_connection
 from app.local_auth import hash_password
 
 
@@ -48,28 +49,22 @@ async def _create_admin(database_url: str) -> None:
     password = _read_new_password()
     password_hash = await asyncio.to_thread(hash_password, password)
 
-    pool = make_pool(database_url)
-    await pool.open(wait=True)
-    try:
-        async with pool.connection() as conn:
+    async with application_role_pools(database_url) as pools:
+        async with control_connection(pools.control) as conn:
             if await get_sole_account(conn) is not None:
                 raise ValueError("An administrator account already exists.")
             try:
-                await create_admin(conn, email, password_hash)
+                await create_admin(conn, email, password_hash, display_timezone=os.environ.get("DISPLAY_TZ", "UTC"))
             except (errors.UniqueViolation, errors.CheckViolation) as exc:
                 raise ValueError("An administrator account already exists.") from exc
-    finally:
-        await pool.close()
 
 
 async def _reset_password(database_url: str) -> None:
     password = _read_new_password()
     password_hash = await asyncio.to_thread(hash_password, password)
 
-    pool = make_pool(database_url)
-    await pool.open(wait=True)
-    try:
-        async with pool.connection() as conn:
+    async with application_role_pools(database_url) as pools:
+        async with control_connection(pools.control) as conn:
             account = await get_sole_account(conn)
             if account is None:
                 raise ValueError(
@@ -78,8 +73,6 @@ async def _reset_password(database_url: str) -> None:
             updated = await replace_password(conn, account["id"], password_hash)
             if updated is None:
                 raise ValueError("The administrator password could not be reset.")
-    finally:
-        await pool.close()
 
 
 class _SafeArgumentParser(argparse.ArgumentParser):

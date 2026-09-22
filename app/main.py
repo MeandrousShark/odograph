@@ -8,6 +8,8 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import datetime
 
 import httpx
+from jinja2 import pass_context
+
 from fastapi import FastAPI, Request
 from fastapi.templating import Jinja2Templates
 from starlette.datastructures import MutableHeaders
@@ -17,6 +19,9 @@ from starlette.staticfiles import StaticFiles
 
 from app import auth, ingest, portable, ui
 from app.auth import AuthRedirect
+from app.account_context import AccountPrincipal, control_connection
+from app.account_workers import AccountWorker
+from app.application_roles import application_role_pools
 from app.config import (
     DEFAULT_MAP_TILE_ATTRIBUTION,
     DEFAULT_MAP_TILE_URL,
@@ -25,7 +30,7 @@ from app.config import (
 )
 from app.dashboard import format_week_range
 from app.db import make_pool, run_migrations
-from app.detector.runner import DetectorRunner, DetectorScheduler
+from app.detector.runner import DetectorRunner
 from app.email_digest import EmailDigestWorker
 from app.expenses import EXPENSE_CONFLICT_LABELS, comparison_caveat_lines, comparison_status
 from app.formatting import format_duration, format_miles, format_usd
@@ -109,6 +114,10 @@ class SecurityHeadersMiddleware:
         async def send_wrapper(message):
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(raw=message["headers"])
+                principal = scope.get("state", {}).get("principal")
+                if principal is not None:
+                    headers["Cache-Control"] = "no-store, private"
+                    headers["X-Odograph-Account"] = str(principal.account_id)
                 if headers.get("content-type", "").startswith("text/html"):
                     headers["Content-Security-Policy"] = (
                         f"script-src 'self' 'nonce-{nonce}'; "
@@ -147,7 +156,11 @@ def _csp_nonce_context(request: Request) -> dict:
     # Request, which always has one), and this context processor now runs on
     # every TemplateResponse call, including theirs.
     state = getattr(request, "state", None)
-    return {"csp_nonce": getattr(state, "csp_nonce", "")}
+    context = {"csp_nonce": getattr(state, "csp_nonce", "")}
+    config = getattr(state, "config", None)
+    if config is not None:
+        context["display_tz"] = str(config.display_tz)
+    return context
 
 
 def make_templates(config: Config) -> Jinja2Templates:
@@ -158,14 +171,22 @@ def make_templates(config: Config) -> Jinja2Templates:
     tz = config.display_tz
     static_dir = BASE_DIR / "static"
 
-    def local_dt(dt, fmt="%a %Y-%m-%d %H:%M"):
-        return dt.astimezone(tz).strftime(fmt)
+    def timezone_for(context):
+        request = context.get("request")
+        state = getattr(request, "state", None)
+        return getattr(getattr(state, "config", None), "display_tz", tz)
 
-    def local_time(dt):
-        return dt.astimezone(tz).strftime("%H:%M")
+    @pass_context
+    def local_dt(context, dt, fmt="%a %Y-%m-%d %H:%M"):
+        return dt.astimezone(timezone_for(context)).strftime(fmt)
 
-    def local_date(dt):
-        return dt.astimezone(tz).strftime("%a %b %-d")
+    @pass_context
+    def local_time(context, dt):
+        return dt.astimezone(timezone_for(context)).strftime("%H:%M")
+
+    @pass_context
+    def local_date(context, dt):
+        return dt.astimezone(timezone_for(context)).strftime("%a %b %-d")
 
     def duration(trip):
         return format_duration(trip["started_at"], trip["ended_at"])
@@ -173,13 +194,14 @@ def make_templates(config: Config) -> Jinja2Templates:
     def km(meters):
         return f"{meters / 1000.0:.1f}"
 
-    def now_local():
+    @pass_context
+    def now_local(context):
         """Current instant in the display timezone, for prefilling date/time
         form inputs. Matches the tz the odometer/manual-trip routes stamp on
         the submitted naive date+time, so the default a user sees and the
         value the server stores agree.
         """
-        return datetime.now(tz)
+        return datetime.now(timezone_for(context))
 
     templates.env.filters.update(
         local_dt=local_dt, local_time=local_time, local_date=local_date,
@@ -222,9 +244,11 @@ def make_templates(config: Config) -> Jinja2Templates:
     # badge whenever a trip dict lacks the predecessor TRIP_COLUMNS keys
     # regardless of the threshold, so a fallback here can't mask a real bug.
     threshold_m = getattr(config, "missing_trip_gap_m", DEFAULT_MISSING_TRIP_GAP_M)
-    templates.env.globals["missing_trip_badge"] = (
-        lambda trip: missing_trip_badge(trip, threshold_m, tz)
-    )
+    @pass_context
+    def account_missing_trip_badge(context, trip):
+        return missing_trip_badge(trip, threshold_m, timezone_for(context))
+
+    templates.env.globals["missing_trip_badge"] = account_missing_trip_badge
     # A query-string version, not the Cache-Control header alone, is what
     # actually unsticks a browser that cached style.css *before* this
     # value existed on a response -- that old cache entry's freshness was
@@ -252,118 +276,87 @@ def create_app(config: Config | None = None) -> FastAPI:
         # its resource is successfully created, so a resource that never
         # came up is never torn down.
         async with AsyncExitStack() as stack:
-            pool = make_pool(cfg.database_url)
-            await pool.open(wait=True)
-            stack.push_async_callback(pool.close)
-            await run_migrations(pool)
+            bootstrap_pool = make_pool(cfg.database_url)
+            try:
+                await bootstrap_pool.open(wait=True)
+                await run_migrations(bootstrap_pool, cfg)
+            finally:
+                await bootstrap_pool.close()
+            pools = await stack.enter_async_context(application_role_pools(cfg.database_url))
+            app.state.control_pool = pools.control
+            app.state.runtime_pool = pools.runtime
+            app.state.make_detector_runner = lambda pool: DetectorRunner(
+                pool, cfg.detector_params, cfg.full_reprocess_warn_points)
 
-            http_client = None
-            snap_worker = None
-            if cfg.snap_enabled:
-                http_client = _make_worker_http_client()
+            if cfg.dev_no_auth:
+                from app.accounts import create_admin, get_account_by_email, account_exists
+                from app.local_auth import hash_password
+                async with control_connection(pools.control) as conn:
+                    account = await get_account_by_email(conn, "development@localhost.invalid")
+                    if account is None:
+                        if await account_exists(conn):
+                            raise RuntimeError("DEV_NO_AUTH requires a synthetic development account")
+                        account = await create_admin(conn, "development@localhost.invalid",
+                            hash_password(secrets.token_urlsafe(32)), display_timezone=str(cfg.display_tz))
+                app.state.dev_principal = AccountPrincipal(account["id"], account["is_enabled"], account["auth_version"])
+
+            http_client = _make_worker_http_client() if cfg.snap_enabled else None
+            if http_client is not None:
                 stack.push_async_callback(http_client.aclose)
-                snap_worker = SnapWorker(
-                    pool, http_client, cfg.osrm_url, cfg.osrm_min_confidence,
-                    cfg.osrm_max_coords, cfg.snap_debounce_s, cfg.snap_sweep_s,
-                )
-                await snap_worker.start()
-                stack.push_async_callback(snap_worker.stop)
-
-            geocode_http_client = None
-            geocode_worker = None
-            geocode_provider = cfg.geocode_provider
-            if geocode_provider is not None:
-                geocode_http_client = _make_worker_http_client()
-                stack.push_async_callback(geocode_http_client.aclose)
-                geocode_worker = GeocodeWorker(
-                    pool, geocode_http_client, geocode_provider, cfg.geocode_min_interval_s,
-                    cfg.geocode_debounce_s, cfg.geocode_sweep_s,
-                )
-                await geocode_worker.start()
-                stack.push_async_callback(geocode_worker.stop)
-
-            runner = DetectorRunner(
-                pool, cfg.detector_params, cfg.full_reprocess_warn_points
-            )
-            scheduler = DetectorScheduler(
-                runner, cfg.detect_debounce_s, cfg.detect_sweep_s,
-                snap_worker=snap_worker, geocode_worker=geocode_worker,
-            )
-
-            retention_worker = None
-            if cfg.retention_enabled:
-                retention_worker = RetentionWorker(pool, cfg.raw_message_retention_days)
-                await retention_worker.start()
-                stack.push_async_callback(retention_worker.stop)
-
-            nudge_http_client = None
-            nudge_worker = None
-            if cfg.nudge_enabled:
-                nudge_http_client = _make_worker_http_client()
-                stack.push_async_callback(nudge_http_client.aclose)
-                nudge_worker = NudgeWorker(
-                    pool, nudge_http_client, cfg.ntfy_url, cfg.ntfy_topic, cfg.ntfy_token,
-                    cfg.ntfy_username, cfg.ntfy_password,
-                    cfg.app_url, cfg.display_tz, cfg.nudge_weekly_hour,
-                )
-                await nudge_worker.start()
-                stack.push_async_callback(nudge_worker.stop)
-                log.info("nudge worker enabled")
-
-            odometer_reminder_http_client = None
-            odometer_reminder_worker = None
-            if cfg.odometer_reminder_enabled:
-                odometer_reminder_http_client = _make_worker_http_client()
-                stack.push_async_callback(odometer_reminder_http_client.aclose)
-                odometer_reminder_worker = OdometerReminderWorker(
-                    pool, odometer_reminder_http_client, cfg.ntfy_url, cfg.ntfy_topic, cfg.ntfy_token,
-                    cfg.ntfy_username, cfg.ntfy_password,
-                    cfg.app_url, cfg.display_tz, cfg.odometer_reminder_hour,
-                )
-                await odometer_reminder_worker.start()
-                stack.push_async_callback(odometer_reminder_worker.stop)
-                log.info("odometer reminder worker enabled")
-
-            email_digest_worker = None
-            if cfg.email_enabled:
-                mailer = Mailer(
-                    cfg.smtp_host, cfg.smtp_port, cfg.smtp_username, cfg.smtp_password,
-                    cfg.smtp_security, cfg.smtp_tls_insecure, cfg.email_from, cfg.email_to,
-                )
-                email_digest_worker = EmailDigestWorker(
-                    pool, mailer, cfg.app_url, cfg.display_tz,
-                    cfg.nudge_weekly_hour, cfg.odometer_reminder_hour, cfg.email_digest_hour,
-                    cfg.email_filing_reminder_mmdd,
-                    cfg.email_weekly_nudge, cfg.email_monthly_summary,
-                    cfg.email_filing_reminder, cfg.email_odometer_reminder,
-                )
-                await email_digest_worker.start()
-                stack.push_async_callback(email_digest_worker.stop)
-                log.info("email digest worker enabled")
-
-            app.state.pool = pool
-            app.state.detector_runner = runner
-            app.state.detector_scheduler = scheduler
-            app.state.snap_worker = snap_worker
-            # Reused directly (not just by SnapWorker) for the missing-trip
-            # OSRM `/route` suggestion (app/ui/manual.py) -- same pattern as
-            # geocode_http_client below, which /places/search already calls
-            # on-demand outside its worker.
+            provider = cfg.geocode_provider
+            geocode_http = _make_worker_http_client() if provider is not None else None
+            if geocode_http is not None:
+                stack.push_async_callback(geocode_http.aclose)
+            notification_http = _make_worker_http_client() if cfg.ntfy_url else None
+            if notification_http is not None:
+                stack.push_async_callback(notification_http.aclose)
             app.state.osrm_http_client = http_client
-            app.state.geocode_http_client = geocode_http_client
-            # Needed for its WorkerStatus (app/worker.py), read by the
-            # diagnostics report builder (app/diagnose.py) -- previously only
-            # its http client was kept on app.state.
-            app.state.geocode_worker = geocode_worker
-            app.state.retention_worker = retention_worker
-            app.state.nudge_worker = nudge_worker
-            app.state.odometer_reminder_worker = odometer_reminder_worker
-            app.state.email_digest_worker = email_digest_worker
-            await scheduler.start()
-            # Registered last, so it stops first on the way out -- LIFO
-            # matches the pre-AsyncExitStack teardown order, where the
-            # scheduler always stopped before any other worker.
-            stack.push_async_callback(scheduler.stop)
+            app.state.geocode_http_client = geocode_http
+
+            async def start_worker(name, factory, debounce, sweep, *, enabled=True, after_run=None):
+                worker = None
+                if enabled:
+                    worker = AccountWorker(pools, cfg, factory, label=name.replace("_", "-"),
+                        debounce_s=debounce, sweep_s=sweep, after_run=after_run)
+                    await worker.start()
+                    stack.push_async_callback(worker.stop)
+                setattr(app.state, name, worker)
+                return worker
+
+            snap_worker = await start_worker("snap_worker", lambda pool, c: SnapWorker(
+                pool, http_client, c.osrm_url, c.osrm_min_confidence, c.osrm_max_coords,
+                c.snap_debounce_s, c.snap_sweep_s), cfg.snap_debounce_s, cfg.snap_sweep_s,
+                enabled=cfg.snap_enabled)
+            geocode_worker = await start_worker("geocode_worker", lambda pool, c: GeocodeWorker(
+                pool, geocode_http, provider, c.geocode_min_interval_s, c.geocode_debounce_s,
+                c.geocode_sweep_s), cfg.geocode_debounce_s, cfg.geocode_sweep_s,
+                enabled=provider is not None)
+            await start_worker("retention_worker", lambda pool, c: RetentionWorker(
+                pool, c.raw_message_retention_days), 1, 86400, enabled=cfg.retention_enabled)
+            await start_worker("nudge_worker", lambda pool, c: NudgeWorker(
+                pool, notification_http, c.ntfy_url, c.ntfy_topic, c.ntfy_token,
+                c.ntfy_username, c.ntfy_password, c.app_url, c.display_tz, c.nudge_weekly_hour
+                ) if c.nudge_enabled else None, 1, 3600, enabled=bool(cfg.ntfy_url))
+            await start_worker("odometer_reminder_worker", lambda pool, c: OdometerReminderWorker(
+                pool, notification_http, c.ntfy_url, c.ntfy_topic, c.ntfy_token,
+                c.ntfy_username, c.ntfy_password, c.app_url, c.display_tz, c.odometer_reminder_hour
+                ) if c.odometer_reminder_enabled else None, 1, 3600, enabled=bool(cfg.ntfy_url))
+            await start_worker("email_digest_worker", lambda pool, c: EmailDigestWorker(
+                pool, Mailer(c.smtp_host, c.smtp_port, c.smtp_username, c.smtp_password,
+                    c.smtp_security, c.smtp_tls_insecure, c.email_from, c.email_to),
+                c.app_url, c.display_tz, c.nudge_weekly_hour, c.odometer_reminder_hour,
+                c.email_digest_hour, c.email_filing_reminder_mmdd, c.email_weekly_nudge,
+                c.email_monthly_summary, c.email_filing_reminder, c.email_odometer_reminder
+                ) if c.email_enabled else None, 1, 3600, enabled=bool(cfg.smtp_host and cfg.email_from))
+
+            def after_detection():
+                for worker in (snap_worker, geocode_worker):
+                    if worker is not None:
+                        worker.poke()
+
+            await start_worker("detector_scheduler", lambda pool, c: DetectorRunner(
+                pool, c.detector_params, c.full_reprocess_warn_points),
+                cfg.detect_debounce_s, cfg.detect_sweep_s, after_run=after_detection)
             yield
 
     # FastAPI's /docs and openapi.json disabled: they'd be reachable without OIDC
@@ -413,7 +406,7 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.get("/healthz")
     async def healthz(request: Request):
-        async with request.app.state.pool.connection() as conn:
+        async with request.app.state.control_pool.connection() as conn:
             await conn.execute("SELECT 1")
         return JSONResponse({"ok": True})
 

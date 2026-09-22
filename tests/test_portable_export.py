@@ -43,7 +43,7 @@ def _bundle(**overrides):
             "vehicle_id": 1, "recorded_at": datetime(2026, 1, 1, tzinfo=TZ),
             "odometer_m": 160934.4, "note": None,
         }],
-        settings={"auto_assign_default_vehicle": True},
+        settings={"auto_assign_default_vehicle": True, "display_tz": "Asia/Tokyo"},
         schema_version=18,
         exported_at=datetime(2026, 8, 5, 12, 0, tzinfo=TZ),
     )
@@ -62,7 +62,7 @@ def test_top_level_shape():
         "odometer_readings",
     ):
         assert isinstance(bundle[table], list)
-    assert bundle["settings"] == {"auto_assign_default_vehicle": True}
+    assert bundle["settings"] == {"auto_assign_default_vehicle": True, "display_tz": "Asia/Tokyo"}
 
 
 def test_vehicle_carries_dollar_id_equal_to_source_id():

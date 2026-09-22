@@ -18,9 +18,11 @@ import pytest
 from fastapi import HTTPException
 
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import fixture_device, personal_request
 from app.ui import make_router
 import app.ui.places as ui_module
-from conftest import reset_db
+from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -36,9 +38,9 @@ def _endpoint(path: str):
 
 
 def _request(pool):
-    return SimpleNamespace(
+    return personal_request(SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(pool=pool)), headers={},
-    )
+    ))
 
 
 class _ForcedReprocessFailure:
@@ -60,10 +62,10 @@ class _ForcedReprocessFailure:
 
 
 async def _create_place_rollback_scenario() -> None:
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         create = _endpoint("/places")
         with _ForcedReprocessFailure():
             with pytest.raises(RuntimeError, match="forced reprocess failure"):
@@ -76,7 +78,7 @@ async def _create_place_rollback_scenario() -> None:
             (count,) = await cur.fetchone()
         assert count == 0, "a failed reprocess must roll back the place insert too"
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_create_place_rolls_back_when_reprocess_fails():
@@ -84,10 +86,10 @@ def test_create_place_rolls_back_when_reprocess_fails():
 
 
 async def _delete_place_rollback_scenario() -> None:
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         create = _endpoint("/places")
         delete = _endpoint("/places/{place_id}/delete")
         await create(
@@ -107,7 +109,7 @@ async def _delete_place_rollback_scenario() -> None:
             (count,) = await cur.fetchone()
         assert count == 1, "a failed reprocess must roll back the place delete too"
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_delete_place_rolls_back_when_reprocess_fails():
@@ -115,10 +117,10 @@ def test_delete_place_rolls_back_when_reprocess_fails():
 
 
 async def _create_rule_rollback_scenario() -> None:
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         # migrations/003_places.sql seeds two default rules, so the baseline
         # is 2, not 0 -- compare against that baseline rather than assuming
         # an empty table.
@@ -141,7 +143,7 @@ async def _create_rule_rollback_scenario() -> None:
             "a failed reprocess must roll back the rule insert too"
         )
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_create_rule_rolls_back_when_reprocess_fails():
@@ -154,10 +156,10 @@ async def _create_rule_rejects_a_deleted_place_scenario() -> None:
     submit must surface as a 400 (errors.ForeignKeyViolation on the INSERT),
     not an uncaught 500.
     """
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         create = _endpoint("/places")
         delete = _endpoint("/places/{place_id}/delete")
         await create(
@@ -178,7 +180,7 @@ async def _create_rule_rejects_a_deleted_place_scenario() -> None:
             )
         assert exc.value.status_code == 400
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_create_rule_rejects_a_deleted_place():
@@ -186,10 +188,10 @@ def test_create_rule_rejects_a_deleted_place():
 
 
 async def _delete_rule_rollback_scenario() -> None:
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         create_rule = _endpoint("/rules")
         delete_rule = _endpoint("/rules/{rule_id}/delete")
         # a_kind/b_kind='other' distinguishes this from migrations/003_places.sql's
@@ -215,7 +217,7 @@ async def _delete_rule_rollback_scenario() -> None:
             (count,) = await cur.fetchone()
         assert count == 1, "a failed reprocess must roll back the rule delete too"
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_delete_rule_rolls_back_when_reprocess_fails():
@@ -228,16 +230,16 @@ async def _place_and_trip_tags_stay_consistent_scenario() -> None:
     tags reprocess would have touched exactly as they were -- not a
     committed place with trips still reflecting the old configuration, nor
     (worse) a rolled-back place with trips that got reprocessed anyway."""
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             cur = await conn.execute(
-                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
-                " category, tag_source) "
-                "VALUES ('A', 'detected', '2026-01-01T09:00:00Z', "
-                "'2026-01-01T09:30:00Z', 1000, 'personal', 'rule') RETURNING id"
+                "INSERT INTO trips (account_id, tracking_device_id, device, source, started_at, "
+                "ended_at, distance_m,  category, tag_source) VALUES (%s, %s, 'A', 'detected', "
+                "'2026-01-01T09:00:00Z', '2026-01-01T09:30:00Z', 1000, 'personal', 'rule') "
+                "RETURNING id", (account_id(conn), await fixture_device(conn, 'A'),)
             )
             trip_id = (await cur.fetchone())[0]
 
@@ -262,7 +264,7 @@ async def _place_and_trip_tags_stay_consistent_scenario() -> None:
             "no reprocessed trip"
         )
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_failed_reprocess_leaves_config_and_trip_tags_consistent():

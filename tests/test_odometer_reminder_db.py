@@ -15,7 +15,8 @@ import pytest
 
 from app.db import make_pool
 from app.odometer_reminder import OdometerReminderWorker
-from conftest import reset_db
+from conftest import reset_account_db, seed_tracking_device
+from app.account_context import account_id
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -26,27 +27,30 @@ TZ = ZoneInfo("America/Los_Angeles")
 QUARTER_START = datetime(2026, 7, 1, 9, tzinfo=TZ)
 
 
-async def _reset_schema(pool) -> None:
-    await reset_db(pool)
+async def _reset_schema(raw_pool):
+    pool = await reset_account_db(raw_pool)
     # migrations/008_vehicles.sql seeds an active default vehicle ("My Car")
     # that every scenario below would otherwise see as permanently due (it
     # never gets a reading) -- deactivate it so each scenario's assertions
     # are only about the vehicles it explicitly creates.
     async with pool.connection() as conn:
-        await conn.execute("UPDATE vehicles SET active = false WHERE name = 'My Car'")
+        await conn.execute("UPDATE vehicles SET active = false WHERE account_id=%s AND name = 'My Car'", (account_id(conn),))
+        await seed_tracking_device(conn, "phone", device_id=1)
+        await conn.execute("UPDATE account_settings SET display_tz=%s,ntfy_topic='mileage',odometer_reminder_requested=true,email_to='you@example.com',email_weekly_nudge=true,email_monthly_summary=true,email_filing_reminder=true,email_odometer_reminder=true WHERE account_id=%s", (str(TZ),account_id(conn)))
+    return pool
 
 
 async def _create_vehicle(conn, name: str, active: bool = True) -> int:
     cur = await conn.execute(
-        "INSERT INTO vehicles (name, active) VALUES (%s, %s) RETURNING id", (name, active)
+        "INSERT INTO vehicles (account_id, name, active) VALUES (%s, %s, %s) RETURNING id", (account_id(conn), name, active)
     )
     return (await cur.fetchone())[0]
 
 
 async def _insert_reading(conn, vehicle_id: int, recorded_at: datetime, mi: float) -> None:
     await conn.execute(
-        "INSERT INTO odometer_readings (vehicle_id, recorded_at, odometer_m) VALUES (%s, %s, %s)",
-        (vehicle_id, recorded_at, mi * 1609.344),
+        "INSERT INTO odometer_readings (account_id, vehicle_id, recorded_at, odometer_m) VALUES (%s, %s, %s, %s)",
+        (account_id(conn), vehicle_id, recorded_at, mi * 1609.344),
     )
 
 
@@ -60,10 +64,10 @@ async def _due_vehicle_scenario():
         captured_content = request.content.decode()
         return httpx.Response(200)
 
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        pool = await _reset_schema(raw_pool)
         async with pool.connection() as conn:
             truck_id = await _create_vehicle(conn, "Truck")
             # An inactive vehicle with no reading at all must never trigger
@@ -90,7 +94,7 @@ async def _due_vehicle_scenario():
             )
             assert await cur.fetchone() == (True,)
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_reminder_sends_once_per_quarter_for_vehicle_with_no_new_reading():
@@ -105,10 +109,10 @@ async def _already_logged_scenario():
         calls += 1
         return httpx.Response(200)
 
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        pool = await _reset_schema(raw_pool)
         async with pool.connection() as conn:
             truck_id = await _create_vehicle(conn, "Truck")
             # Logged after the quarter boundary: already satisfied this quarter.
@@ -128,7 +132,7 @@ async def _already_logged_scenario():
             )
             assert await cur.fetchone() == (False,)
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_reminder_skips_vehicle_already_logged_this_quarter_and_sends_nothing():
@@ -141,10 +145,10 @@ async def _retry_scenario():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(responses.pop(0))
 
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        pool = await _reset_schema(raw_pool)
         async with pool.connection() as conn:
             await _create_vehicle(conn, "Truck")
 
@@ -163,7 +167,7 @@ async def _retry_scenario():
             cur = await conn.execute("SELECT count(*) FROM odometer_reminder_windows")
             assert await cur.fetchone() == (1,)
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_reminder_retries_after_failed_ntfy_response_without_marking_window_done():
@@ -178,10 +182,10 @@ async def _all_logged_no_send_scenario():
         calls += 1
         return httpx.Response(200)
 
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await _reset_schema(pool)
+        pool = await _reset_schema(raw_pool)
         async with pool.connection() as conn:
             truck_id = await _create_vehicle(conn, "Truck")
             sedan_id = await _create_vehicle(conn, "Sedan")
@@ -196,7 +200,7 @@ async def _all_logged_no_send_scenario():
 
         assert calls == 0
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_reminder_sends_nothing_when_every_active_vehicle_already_logged():

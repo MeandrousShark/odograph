@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import os
 import re
+import socket
 import subprocess
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -45,15 +48,22 @@ def _install_repo(
     candidate_db_image: str = "db:stable",
     modern_auth: bool = False,
     no_bootstrap: bool = False,
+    owned_schema: bool = False,
 ) -> tuple[Path, str, str]:
     repo = tmp_path / "repo"
     scripts_dir = repo / "scripts"
     migrations_dir = repo / "migrations"
     scripts_dir.mkdir(parents=True)
     migrations_dir.mkdir()
-    _write_executable(scripts_dir / "upgrade_check.sh", UPGRADE_SCRIPT.read_text())
+    source = UPGRADE_SCRIPT.read_text()
+    # Fake Compose/curl never open a server. A real development site or
+    # independent upgrade drill must not change these orchestration tests.
+    source = source.replace(_extract_function(source, "port_in_use"), "port_in_use() { return 1; }")
+    _write_executable(scripts_dir / "upgrade_check.sh", source)
     if no_bootstrap:
         bootstrap_env = "'POSTGRES_PASSWORD=fake' 'INGEST_PASSWORD=fake'"
+    elif owned_schema:
+        bootstrap_env = "'POSTGRES_PASSWORD=fake' 'INITIAL_ADMIN_SIGNUP=1'"
     elif modern_auth:
         bootstrap_env = "'POSTGRES_PASSWORD=fake' 'INGEST_PASSWORD=fake' 'INITIAL_ADMIN_SIGNUP=1'"
     else:
@@ -63,7 +73,15 @@ def _install_repo(
         "#!/usr/bin/env bash\n"
         f"printf '%s\\n' {bootstrap_env} > .env",
     )
-    _write_executable(scripts_dir / "send_test_track.sh", "#!/usr/bin/env bash\nexit 0")
+    _write_executable(
+        scripts_dir / "send_test_track.sh",
+        "#!/usr/bin/env bash\n"
+        "if [ \"${FAKE_SCHEMA_VERSION:-1}\" -ge 26 ]; then\n"
+        "  [ \"${ODOGRAPH_TRACKING_USERNAME:-}\" = odograph_test ] || exit 97\n"
+        "  [ \"${ODOGRAPH_TRACKING_SECRET:-}\" = synthetic-track-secret ] || exit 97\n"
+        "  echo tracking-issued-login >> \"$FAKE_LOG\"\n"
+        "fi\nexit 0",
+    )
     _write_executable(
         scripts_dir / "backup_database.sh",
         "#!/usr/bin/env bash\nexit 77",
@@ -72,6 +90,13 @@ def _install_repo(
     (scripts_dir / "dev_seed.py").write_text("raise SystemExit(0)\n")
     (repo / "compose.yaml").write_text(_compose_yaml("db:stable", "base"))
     (migrations_dir / "001_base.sql").write_text("SELECT 1;\n")
+    if owned_schema:
+        for version in range(2, 27):
+            (migrations_dir / f"{version:03d}_fixture.sql").write_text("SELECT 1;\n")
+        (scripts_dir / "dev_seed.py").write_text(
+            "import os, pathlib\n"
+            "assert pathlib.Path(os.environ['FAKE_SIGNUP_EMAIL']).read_text() == 'development@localhost.invalid'\n"
+        )
 
     _git(repo, "init", "-q")
     _git(repo, "config", "user.name", "Upgrade Test")
@@ -84,13 +109,19 @@ def _install_repo(
     _write_executable(
         scripts_dir / "backup_database.sh",
         "#!/usr/bin/env bash\nset -u\n"
+        "printf 'child|backup|%s|%s|%s\\n' \"$PWD\" \"${COMPOSE_FILE:-}\" \"${COMPOSE_CMD:-}\" >> \"$FAKE_LOG\"\n"
         "while [ \"$#\" -gt 0 ]; do\n"
         "  if [ \"$1\" = --output ]; then : > \"$2\"; exit 0; fi\n"
         "  shift\n"
         "done\n"
         "exit 1",
     )
-    _write_executable(scripts_dir / "restore_database.sh", "#!/usr/bin/env bash\nexit 0")
+    _write_executable(
+        scripts_dir / "restore_database.sh",
+        "#!/usr/bin/env bash\n"
+        "printf 'child|restore|%s|%s|%s\\n' \"$PWD\" \"${COMPOSE_FILE:-}\" \"${COMPOSE_CMD:-}\" >> \"$FAKE_LOG\"\n"
+        "exit 0",
+    )
     (repo / "compose.build.override.yml").write_text(
         "services:\n  app:\n    build: .\n"
     )
@@ -177,6 +208,14 @@ case "${1-}" in
     exec)
         case "$original" in
             *pg_isready*) exit 0 ;;
+            *"exec -T app python -")
+                cat > "$FAKE_ISSUANCE_SCRIPT"
+                [ "${FAKE_AUTH_FAULT:-}" != issuance-failed ] || exit 96
+                printf '%s\n' '[["odograph_test", "synthetic-track-secret"], ["odograph_restore", "synthetic-restore-secret"]]'
+                printf 'tracking|issued\n' >> "$FAKE_LOG"
+                exit 0
+                ;;
+            *"python -m app.application_roles verify"*) exit 0 ;;
             *"python -m app.manage_account reset-password"*)
                 IFS= read -r password
                 IFS= read -r confirmation
@@ -240,13 +279,15 @@ case "${1-}" in
                 exit 0
                 ;;
             *"count(*) FROM local_admin WHERE id = 1"*) printf '%s\n' 1; exit 0 ;;
+            *"count(*) FROM ingest_credentials"*) printf '%s\n' 1; exit 0 ;;
+            *"find migrations"*) printf '%s\n' "${FAKE_SCHEMA_VERSION:-1}"; exit 0 ;;
             *"sh -c"*) printf '%s\n' 1; exit 0 ;;
             *"count(*) FROM trips"*) printf '%s\n' 1; exit 0 ;;
             *"count(*) FROM points"*)
-                if [ -f "$FAKE_INGEST_MARKER" ]; then printf '%s\n' 1; else printf '%s\n' 0; fi
+                if [ -f "$FAKE_INGEST_MARKER" ]; then cat "$FAKE_INGEST_MARKER"; else printf '%s\n' 0; fi
                 exit 0
                 ;;
-            *schema_migrations*) printf '%s\n' 1; exit 0 ;;
+            *schema_migrations*) printf '%s\n' "${FAKE_SCHEMA_VERSION:-1}"; exit 0 ;;
             *psql*) printf '%s\n' row; exit 0 ;;
         esac
         exit 93
@@ -322,6 +363,7 @@ def _run(
     volume_failure: bool = False,
     auth_fault: str = "",
     modern_auth: bool = False,
+    owned_schema: bool = False,
 ) -> tuple[subprocess.CompletedProcess, Path, Path, Path]:
     bin_dir = tmp_path / "bin"
     scratch_root = tmp_path / "scratch"
@@ -339,11 +381,15 @@ def _run(
         "outfile=\"\"\n"
         "headerfile=\"\"\n"
         "password=\"\"\n"
+        "email=\"\"\n"
+        "basic=\"\"\n"
         "previous=\"\"\n"
         "for arg in \"$@\"; do\n"
         "  if [ \"$previous\" = -o ]; then outfile=\"$arg\"; fi\n"
         "  if [ \"$previous\" = -D ]; then headerfile=\"$arg\"; fi\n"
+        "  if [ \"$previous\" = -u ]; then basic=\"$arg\"; fi\n"
         "  case \"$arg\" in password=*) password=\"${arg#password=}\";; esac\n"
+        "  case \"$arg\" in email=*) email=\"${arg#email=}\";; esac\n"
         "  previous=\"$arg\"\n"
         "done\n"
         "if [ -n \"$outfile\" ] && [ \"$outfile\" != /dev/null ]; then\n"
@@ -360,7 +406,7 @@ def _run(
         "status=200\n"
         "case \"$url\" in\n"
         "  */signup)\n"
-        "    case \"$args\" in *--data-urlencode*) status=303; printf '%s' \"$password\" > \"$FAKE_ORIGINAL_PASSWORD\";; esac\n"
+        "    case \"$args\" in *--data-urlencode*) status=303; printf '%s' \"$password\" > \"$FAKE_ORIGINAL_PASSWORD\"; printf '%s' \"$email\" > \"$FAKE_SIGNUP_EMAIL\";; esac\n"
         "    if [ -n \"$headerfile\" ]; then printf '%s\\n' 'HTTP/1.1 303 See Other' 'Location: /' > \"$headerfile\"; fi\n"
         "    ;;\n"
         "  */login/local)\n"
@@ -378,7 +424,14 @@ def _run(
         "  */setup)\n"
         "    case \"$args\" in *--data-urlencode*) status=303; printf '%s' \"$password\" > \"$FAKE_ORIGINAL_PASSWORD\";; esac\n"
         "    ;;\n"
-        "  */ingest) : > \"$FAKE_INGEST_MARKER\";;\n"
+        "  */ingest)\n"
+        "    if [ \"${FAKE_SCHEMA_VERSION:-1}\" -ge 26 ]; then\n"
+        "      [ \"$basic\" = odograph_restore:synthetic-restore-secret ] || exit 97\n"
+        "      echo ingest-issued-login >> \"$FAKE_LOG\"\n"
+        "    fi\n"
+        "    count=$(cat \"$FAKE_INGEST_MARKER\" 2>/dev/null || echo 0)\n"
+        "    echo $((count + 1)) > \"$FAKE_INGEST_MARKER\"\n"
+        "    ;;\n"
         "esac\n"
         "case \"$args\" in *'-w %'*|*\"-w %\"*) printf '%s' \"$status\";; esac",
     )
@@ -429,6 +482,9 @@ def _run(
         "FAKE_OIDC_SECRET": oidc_secret,
         "FAKE_AUTH_FAULT": auth_fault,
         "FAKE_MODERN_AUTH": "1" if modern_auth else "",
+        "FAKE_SCHEMA_VERSION": "26" if owned_schema else "1",
+        "FAKE_SIGNUP_EMAIL": str(tmp_path / "signup-email"),
+        "FAKE_ISSUANCE_SCRIPT": str(tmp_path / "issuance.py"),
         "FAKE_DB_EVENTS": str(tmp_path / "db-events"),
         "FAKE_ACTIVE_DB": str(tmp_path / "active-db"),
         "FAKE_INSPECT_EVENTS": str(tmp_path / "inspect-events"),
@@ -741,6 +797,61 @@ def _manifest_comparison_harness(tmp_path: Path) -> Path:
     return script
 
 
+@pytest.mark.parametrize(
+    "version,override,success,ingested",
+    [
+        (25, {}, True, False),
+        (26, {}, True, True),
+        (26, {"VERIFY_EXIT": "7"}, False, False),
+        (26, {"CREDENTIAL_COUNT": "0"}, False, False),
+        (26, {"INGEST_EXIT": "7"}, False, True),
+        (26, {"SKIP_POINT": "1"}, False, True),
+    ],
+)
+def test_ownership_upgrade_checks_contract_and_existing_tracker(
+    tmp_path, version, override, success, ingested,
+):
+    source = UPGRADE_SCRIPT.read_text()
+    functions = "\n\n".join(
+        _extract_function(source, name)
+        for name in ("step_pass", "step_fail", "verify_ownership_upgrade")
+    )
+    log = tmp_path / "checks.log"
+    count = tmp_path / "points"
+    count.write_text("1\n")
+    script = tmp_path / "ownership-check.sh"
+    script.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        'ADMIN_EMAIL=development@localhost.invalid\n'
+        'BASE_SCHEMA_VERSION=25\n'
+        'INGEST_USERNAME=owntracks\n'
+        'POSTRESTORE_DEVICE=existing-phone\n'
+        'INGEST_PASSWORD=synthetic\n'
+        'compose_dir() { printf "%s\\n" "$*" >> "$CHECK_LOG"; return "${VERIFY_EXIT:-0}"; }\n'
+        'db_query() { printf "%s\\n" "${CREDENTIAL_COUNT:-1}"; }\n'
+        'count_points() { cat "$POINTS"; }\n'
+        'ingest_one_point() {\n'
+        '  echo ingest >> "$CHECK_LOG"\n'
+        '  if [ "${SKIP_POINT:-0}" != 1 ]; then echo 2 > "$POINTS"; fi\n'
+        '  return "${INGEST_EXIT:-0}"\n'
+        '}\n'
+        f'{functions}\nverify_ownership_upgrade candidate "$1"\n'
+    )
+    script.chmod(0o755)
+    result = subprocess.run(
+        [str(script), str(version)], capture_output=True, text=True, timeout=10,
+        env={**os.environ, "CHECK_LOG": str(log), "POINTS": str(count), **override},
+    )
+
+    assert (result.returncode == 0) is success, result.stderr
+    calls = log.read_text().splitlines() if log.exists() else []
+    assert ("ingest" in calls) is ingested
+    if version < 26:
+        assert calls == []
+    else:
+        assert calls[0] == "candidate exec -T app python -m app.application_roles verify"
+
+
 def test_data_manifest_comparison_ignores_schema_version_drift(tmp_path):
     script = _manifest_comparison_harness(tmp_path)
     scratch = tmp_path / "scratch"
@@ -803,7 +914,7 @@ def test_keep_teardown_message_reports_project_patterns_without_unbound_variable
     match = re.search(r"^  project:\s+(\S+)$", result.stdout, re.MULTILINE)
     assert match, result.stdout
     project = match.group(1)
-    assert f"'{project}-*'/'{project}_*' (docker)," in result.stdout
+    assert f"'{project}-app:*'/'{project}_app:*' (docker)," in result.stdout
     assert list(scratch_root.glob("upgrade_check.*")) != []
 
 
@@ -1013,3 +1124,183 @@ def test_mixed_auth_drill_fails_closed_on_transition_drift(
     assert "rotated-password-contract" not in combined_output
     assert "b" * 64 not in combined_output
     assert list(scratch_root.glob("upgrade_check.*")) == []
+
+
+def test_published_base_image_is_used_without_build_for_restore_and_rollback(tmp_path):
+    repo, base_ref, candidate_ref = _install_repo(tmp_path, modern_auth=True)
+    result, log_path, _, _ = _run(
+        repo, ["--base", base_ref, "--candidate", candidate_ref,
+               "--base-image", "registry.example.test/odograph@sha256:" + "a" * 64],
+        tmp_path, fail_up=False, modern_auth=True,
+    )
+    assert result.returncode == 0, result.stderr
+    base_up = [line for line in log_path.read_text().splitlines()
+               if line.startswith("compose|") and "/base/" in line and " up " in line]
+    assert base_up
+    assert all("compose.base-image.override.yml" in line for line in base_up)
+    assert all("--build" not in line for line in base_up)
+    assert any("--no-build app" in line for line in base_up)
+
+
+@pytest.mark.parametrize("frontend", ["docker", "podman"])
+@pytest.mark.parametrize("published", [False, True])
+def test_backup_restore_children_use_the_parent_compose_file_set(tmp_path, frontend, published):
+    repo, base_ref, candidate_ref = _install_repo(tmp_path, candidate_db_image="db:native")
+    args = ["--base", base_ref, "--candidate", candidate_ref, "--database-image-migration"]
+    if published:
+        args += ["--base-image", "registry.example.test/base:v1",
+                 "--candidate-image", "registry.example.test/candidate:v2"]
+    result, log, _, _ = _run(repo, args, tmp_path, frontend=frontend, fail_up=False)
+    assert result.returncode == 0, result.stderr
+    lines = log.read_text().splitlines()
+    config = {line.split("|")[1]: re.findall(r"-f (\S+)", line)
+              for line in lines if line.startswith("compose|") and line.endswith(" config")}
+    children = [line.split("|") for line in lines if line.startswith("child|")]
+    assert len(children) == 7
+    assert {"/base/" in child[2] for child in children} == {False, True}
+    for _, _, directory, files, command in children:
+        assert files.split(":") == config[directory]
+        assert command == ("docker compose" if frontend == "docker" else "podman-compose")
+
+
+@pytest.mark.parametrize("issuance_fails", [False, True])
+def test_schema26_base_uses_the_seed_account_and_issued_device_logins(tmp_path, issuance_fails):
+    repo, base_ref, candidate_ref = _install_repo(tmp_path, modern_auth=True, owned_schema=True)
+    result, log, _, scratch = _run(
+        repo, ["--base", base_ref, "--candidate", candidate_ref], tmp_path,
+        fail_up=False, modern_auth=True, owned_schema=True,
+        auth_fault="issuance-failed" if issuance_fails else "",
+    )
+    assert (result.returncode != 0) is issuance_fails, result.stderr
+    assert (tmp_path / "signup-email").read_text() == "development@localhost.invalid"
+    lines = log.read_text().splitlines()
+    if issuance_fails:
+        assert "could not issue synthetic tracking credentials" in result.stderr
+        assert not any(line.startswith("child|") for line in lines)
+        assert "tracking-issued-login" not in lines
+    else:
+        assert "tracking-issued-login" in lines
+        assert lines.count("ingest-issued-login") == 2
+        assert any("c.kind = 'device'" in line and "odograph_restore" in line for line in lines)
+        assert "all drill steps passed" in result.stdout
+    for secret in ("synthetic-track-secret", "synthetic-restore-secret"):
+        assert secret not in result.stdout + result.stderr + log.read_text()
+    assert list(scratch.glob("upgrade_check.*")) == []
+
+
+@pytest.mark.parametrize("count,enabled", [(1, True), (2, True), (1, False), (0, True)])
+def test_tracking_issuance_refuses_any_other_account_state(monkeypatch, capsys, count, enabled):
+    from app import account_context, accounts, application_roles, tracking
+
+    program = _extract_function(UPGRADE_SCRIPT.read_text(), "issue_synthetic_tracking_credentials")
+    program = program.split("<<'PYEOF'\n", 1)[1].split("\nPYEOF", 1)[0]
+    control, runtime, scoped = object(), object(), object()
+    created = []
+
+    class Connection:
+        async def execute(self, statement):
+            assert statement == "SELECT count(*) FROM accounts"
+            return self
+
+        async def fetchone(self):
+            return (count,)
+
+    @asynccontextmanager
+    async def pools(url):
+        assert url == "synthetic-database-url"
+        yield SimpleNamespace(control=control, runtime=runtime)
+
+    @asynccontextmanager
+    async def control_connection(pool):
+        assert pool is control
+        yield Connection()
+
+    async def lookup(conn, email):
+        assert email == "development@localhost.invalid"
+        return {"id": 41, "is_enabled": enabled, "auth_version": 3} if count else None
+
+    @asynccontextmanager
+    async def connection():
+        yield scoped
+
+    def account_pool(pool, principal):
+        assert pool is runtime
+        assert principal == account_context.AccountPrincipal(41, True, 3)
+        return SimpleNamespace(connection=connection)
+
+    async def create_device(conn, label):
+        assert conn is scoped
+        created.append(label)
+        return SimpleNamespace(username="odograph_" + label, secret="synthetic-secret")
+
+    monkeypatch.setenv("DATABASE_URL", "synthetic-database-url")
+    monkeypatch.setattr(application_roles, "application_role_pools", pools)
+    monkeypatch.setattr(account_context, "control_connection", control_connection)
+    monkeypatch.setattr(account_context, "AccountPool", account_pool)
+    monkeypatch.setattr(accounts, "get_account_by_email", lookup)
+    monkeypatch.setattr(tracking, "create_device", create_device)
+    if count == 1 and enabled:
+        exec(compile(program, "drill-tracking-issuance", "exec"), {})
+        assert created == ["test", "postrestore-check"]
+        assert "odograph_test" in capsys.readouterr().out
+    else:
+        with pytest.raises(RuntimeError, match="sole synthetic development account"):
+            exec(compile(program, "drill-tracking-issuance", "exec"), {})
+        assert created == []
+        assert capsys.readouterr().out == ""
+
+
+def test_occupied_port_probe_keeps_failure_diagnostics_visible(tmp_path):
+    helper = _extract_function(UPGRADE_SCRIPT.read_text(), "port_in_use")
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        script = _write_executable(
+            tmp_path / "probe.sh",
+            f"#!/usr/bin/env bash\nHEALTH_PORT={listener.getsockname()[1]}\n{helper}\n"
+            'if port_in_use; then echo "port is occupied" >&2; exit 9; fi\nexit 0',
+        )
+        result = subprocess.run([str(script)], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 9
+    assert result.stderr == "port is occupied\n"
+
+
+@pytest.mark.parametrize("frontend", ["docker compose", "podman-compose"])
+def test_image_cleanup_removes_exact_task_tags_only(tmp_path, frontend):
+    source = UPGRADE_SCRIPT.read_text()
+    functions = "\n".join(_extract_function(source, name)
+                          for name in ("runtime_cmd", "remove_stamp_images"))
+    project = "mtdrill12345"
+    own_images = [f"localhost/{project}_app:dev", f"{project}-app:latest",
+                  f"{project}_app:dev", f"localhost/{project}-app:old"]
+    images = tmp_path / "images"
+    images.write_text("\n".join(own_images + [
+        own_images[0], f"localhost/{project}_app:<none>",
+        f"localhost/{project}6_app:dev", f"{project}-app-other:dev",
+        "ghcr.io/example/odograph:v1", "<none>:<none>",
+    ]) + "\n")
+    log = tmp_path / "runtime.log"
+    binary = "docker" if frontend == "docker compose" else "podman"
+    _write_executable(
+        tmp_path / binary,
+        "#!/usr/bin/env bash\nset -eu\n"
+        'printf "%s\\n" "$*" >> "$RUNTIME_LOG"\n'
+        'case "$1" in\n'
+        '  image) [ "$*" = "image ls --format {{.Repository}}:{{.Tag}}" ]; cat "$IMAGES" ;;\n'
+        '  rmi) [ "$#" = 2 ] ;;\n'
+        '  *) exit 99 ;;\nesac',
+    )
+    script = _write_executable(
+        tmp_path / "cleanup.sh",
+        f"#!/usr/bin/env bash\nset -euo pipefail\nPROJECT={project}\n"
+        f"compose_cmd='{frontend}'\n{functions}\nremove_stamp_images",
+    )
+    result = subprocess.run(
+        [str(script)], capture_output=True, text=True, timeout=10,
+        env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}",
+             "RUNTIME_LOG": str(log), "IMAGES": str(images)},
+    )
+    assert result.returncode == 0, result.stderr
+    removed = [line.removeprefix("rmi ") for line in log.read_text().splitlines()
+               if line.startswith("rmi ")]
+    assert removed == sorted(own_images)

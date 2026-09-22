@@ -10,7 +10,8 @@ from psycopg import errors
 from psycopg.rows import dict_row
 
 import app.auth as auth_module
-from app.auth import AuthRedirect, make_router, require_admin, require_user
+from app.auth import AuthRedirect, make_router, require_admin, require_user, require_legacy_establishment
+from tests.auth_db_fixtures import auth_config, seed_auth_account
 from app.db import MIGRATIONS_DIR, make_pool
 from conftest import drop_and_recreate_schema, full_schema_reset, reset_db
 from app.ingest import FailedAuthLimiter
@@ -34,19 +35,21 @@ def _endpoint(path: str, method: str):
 def _request(
     pool, *, signup=True, session=None, ip="203.0.113.5", limiter=None
 ):
-    cfg = SimpleNamespace(
+    cfg = auth_config(TEST_DB,
         initial_admin_signup=signup,
         dev_no_auth=False,
         allowed_email="",
         oidc_issuer="",
     )
     return SimpleNamespace(
+        state=SimpleNamespace(),
         app=SimpleNamespace(
             state=SimpleNamespace(
-                pool=pool,
+                pool=pool, control_pool=pool, runtime_pool=pool,
+                make_detector_runner=lambda bound: SimpleNamespace(pool=bound),
                 config=cfg,
                 templates=make_templates(
-                    SimpleNamespace(display_tz=TZ, app_version="test")
+                    cfg
                 ),
                 oauth=None,
                 login_limiter=limiter or FailedAuthLimiter(5, 900.0),
@@ -128,7 +131,7 @@ async def _migration_preserves_local_admin_scenario():
             # above.
             async with pool.connection() as conn:
                 for path in paths:
-                    if int(path.name.split("_", 1)[0]) < 21:
+                    if not 21 <= int(path.name.split("_", 1)[0]) <= 25:
                         continue
                     await conn.execute(path.read_text())
 
@@ -175,6 +178,7 @@ async def _signup_scenario():
             email=" Admin@Example.COM ",
             password="correct horse battery",
             password_confirm="correct horse battery",
+            display_timezone="UTC",
             csrf_token="test-csrf",
         )
         assert response.status_code == 303
@@ -192,6 +196,7 @@ async def _signup_scenario():
                 email="other@example.com",
                 password="another password",
                 password_confirm="another password",
+                display_timezone="UTC",
                 csrf_token="test-csrf",
             )
         assert post_closed.value.status_code == 404
@@ -219,6 +224,7 @@ async def _signup_disabled_scenario():
                         email="admin@example.com",
                         password="password one",
                         password_confirm="password one",
+                        display_timezone="UTC",
                         csrf_token="test-csrf",
                     )
             assert exc_info.value.status_code == 404
@@ -242,6 +248,7 @@ async def _signup_csrf_and_limiter_scenario():
                 email="admin@example.com",
                 password="password one",
                 password_confirm="password one",
+                display_timezone="UTC",
                 csrf_token="wrong",
             )
         assert csrf_error.value.status_code == 403
@@ -253,6 +260,7 @@ async def _signup_csrf_and_limiter_scenario():
             email="admin@example.com",
             password="password one",
             password_confirm="password two",
+            display_timezone="UTC",
             csrf_token="test-csrf",
         )
         assert invalid.status_code == 400
@@ -263,6 +271,7 @@ async def _signup_csrf_and_limiter_scenario():
             email="admin@example.com",
             password="password one",
             password_confirm="password one",
+            display_timezone="UTC",
             csrf_token="test-csrf",
         )
         assert blocked.status_code == 429
@@ -285,6 +294,7 @@ async def _signup_invalid_email_scenario(email):
             email=email,
             password="password one",
             password_confirm="password one",
+            display_timezone="UTC",
             csrf_token="test-csrf",
         )
         assert response.status_code == 400
@@ -326,6 +336,7 @@ async def _concurrent_signup_scenario(monkeypatch):
                 email="one@example.com",
                 password="password one",
                 password_confirm="password one",
+                display_timezone="UTC",
                 csrf_token="test-csrf",
             ),
             endpoint(
@@ -333,6 +344,7 @@ async def _concurrent_signup_scenario(monkeypatch):
                 email="two@example.com",
                 password="password two",
                 password_confirm="password two",
+                display_timezone="UTC",
                 csrf_token="test-csrf",
             ),
         )
@@ -358,15 +370,12 @@ async def _password_change_revokes_sessions_scenario():
         await reset_db(pool)
         old_hash = hash_password("old password")
         async with pool.connection() as conn:
-            await conn.execute(
-                "INSERT INTO accounts (id, email, password_hash) "
-                "VALUES (1, 'admin@example.com', %s)",
-                (old_hash,),
-            )
+            await seed_auth_account(conn, password_hash=old_hash)
 
         old_session = {"account_id": 1, "auth_version": 1, "csrf": "old-csrf"}
         current = _request(pool, session=dict(old_session))
         other = _request(pool, session=dict(old_session))
+        await require_user(current)
         endpoint = _endpoint("/settings/account/password", "POST")
         response = await endpoint(
             current,
@@ -399,11 +408,7 @@ async def _password_change_failure_scenario():
         await reset_db(pool)
         password_hash = hash_password("old password")
         async with pool.connection() as conn:
-            await conn.execute(
-                "INSERT INTO accounts (id, email, password_hash) "
-                "VALUES (1, 'admin@example.com', %s)",
-                (password_hash,),
-            )
+            await seed_auth_account(conn, password_hash=password_hash)
         endpoint = _endpoint("/settings/account/password", "POST")
         user = {"id": 1, "name": "admin", "is_admin": True}
 
@@ -424,6 +429,7 @@ async def _password_change_failure_scenario():
             limiter=limiter,
             session={"account_id": 1, "auth_version": 1, "csrf": "test-csrf"},
         )
+        await require_user(request)
         wrong = await endpoint(
             request,
             current_password="wrong password",
@@ -437,12 +443,13 @@ async def _password_change_failure_scenario():
         assert password_hash.encode() not in wrong.body
         assert limiter.blocked(request.client.host)
 
+        blocked_request = _request(
+            pool, limiter=limiter,
+            session={"account_id": 1, "auth_version": 1, "csrf": "test-csrf"},
+        )
+        await require_user(blocked_request)
         blocked = await endpoint(
-            _request(
-                pool,
-                limiter=limiter,
-                session={"account_id": 1, "auth_version": 1, "csrf": "test-csrf"},
-            ),
+            blocked_request,
             current_password="old password",
             password="new password",
             password_confirm="new password",
@@ -479,11 +486,12 @@ async def _legacy_session_boundary_scenario():
         request.app.state.oauth = object()
         request.app.state.config.oidc_issuer = "https://idp.example.com"
 
-        legacy_user = await require_user(request)
+        legacy_user = await require_legacy_establishment(request)
         assert legacy_user["legacy_oidc"] is True
-        with pytest.raises(Exception) as admin_denied:
+        with pytest.raises(AuthRedirect):
+            await require_user(request)
+        with pytest.raises(AuthRedirect):
             await require_admin(request)
-        assert admin_denied.value.status_code == 403
 
         async with pool.connection() as conn:
             await conn.execute(
@@ -491,7 +499,7 @@ async def _legacy_session_boundary_scenario():
                 "VALUES (1, 'admin@example.com', 'hash')"
             )
         with pytest.raises(AuthRedirect):
-            await require_user(request)
+            await require_legacy_establishment(request)
         assert request.session == {}
     finally:
         await pool.close()
@@ -521,7 +529,9 @@ async def _pre_account_session_bridge_scenario():
         request.app.state.oauth = object()
         request.app.state.config.oidc_issuer = "https://idp.example.com/"
 
-        user = await require_user(request)
+        with pytest.raises(AuthRedirect):
+            await require_user(request)
+        user = await require_legacy_establishment(request)
         assert user["legacy_oidc"] is True
         assert "user" not in request.session
         assert request.session["legacy_oidc"] == {

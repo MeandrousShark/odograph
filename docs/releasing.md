@@ -446,6 +446,11 @@ candidate app definitions may differ, but their rendered database service must
 remain identical; a database-service operational change needs a release-specific
 drill documented in that release's notes.
 
+Add `--base-image "$IMAGE@sha256:..."` with the previous release's verified
+digest to use its published application for both the starting installation and
+backup-based rollback. The base ref still supplies that release's Compose and
+scripts. Without this option the drill rebuilds the base source.
+
 ### Database image migration drill
 
 When a candidate changes only the rendered database image, use the explicit

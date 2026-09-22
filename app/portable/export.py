@@ -11,6 +11,7 @@ from datetime import datetime
 from psycopg.rows import dict_row
 
 from app.portable.format import FORMAT, FORMAT_VERSION
+from app.account_context import account_id
 from app.trip_queries import DISPLAY_DISTANCE_SQL
 
 
@@ -44,6 +45,7 @@ def build_export_bundle(
         "odometer_readings": [_export_odometer_reading(r) for r in odometer_readings],
         "settings": {
             "auto_assign_default_vehicle": bool(settings["auto_assign_default_vehicle"]),
+            "display_tz": settings["display_tz"],
         },
     }
 
@@ -119,14 +121,14 @@ def _export_odometer_reading(row: dict) -> dict:
 
 async def _fetch_all(conn, sql: str) -> list[dict]:
     cur = conn.cursor(row_factory=dict_row)
-    await cur.execute(sql)
+    await cur.execute(sql, (account_id(conn),))
     return await cur.fetchall()
 
 
 async def _fetch_export_vehicles(conn) -> list[dict]:
     return await _fetch_all(
         conn,
-        "SELECT id, name, make, model, plate, is_default, active FROM vehicles ORDER BY id",
+        "SELECT id, name, make, model, plate, is_default, active FROM vehicles WHERE account_id = %s ORDER BY id",
     )
 
 
@@ -135,7 +137,7 @@ async def _fetch_export_places(conn) -> list[dict]:
         conn,
         "SELECT id, name, kind::text AS kind, "
         " ST_Y(geom::geometry) AS lat, ST_X(geom::geometry) AS lon, radius_m "
-        "FROM places ORDER BY id",
+        "FROM places WHERE account_id = %s ORDER BY id",
     )
 
 
@@ -143,7 +145,7 @@ async def _fetch_export_tag_rules(conn) -> list[dict]:
     return await _fetch_all(
         conn,
         "SELECT a_place, a_kind::text AS a_kind, b_place, b_kind::text AS b_kind, "
-        " category::text AS category FROM tag_rules ORDER BY id",
+        " category::text AS category FROM tag_rules WHERE account_id = %s ORDER BY id",
     )
 
 
@@ -152,7 +154,7 @@ async def _fetch_export_mileage_rates(conn) -> list[dict]:
         conn,
         "SELECT year, rate_per_mi::float AS rate_per_mi, "
         " rate_h2_per_mi::float AS rate_h2_per_mi, h2_start_month "
-        "FROM mileage_rates ORDER BY year",
+        "FROM mileage_rates WHERE account_id = %s ORDER BY year",
     )
 
 
@@ -171,7 +173,7 @@ async def _fetch_export_trips(conn) -> list[dict]:
         " purpose, notes, vehicle_id, "
         " start_place_id, end_place_id, tag_source::text AS tag_source, "
         " start_label, end_label "
-        "FROM trips ORDER BY id",
+        "FROM trips WHERE account_id = %s ORDER BY id",
     )
 
 
@@ -179,18 +181,18 @@ async def _fetch_export_expenses(conn) -> list[dict]:
     return await _fetch_all(
         conn,
         "SELECT vehicle_id, incurred_on, category::text AS category, amount, "
-        " treatment::text AS treatment, notes, trip_id FROM expenses ORDER BY id",
+        " treatment::text AS treatment, notes, trip_id FROM expenses WHERE account_id = %s ORDER BY id",
     )
 
 
 async def _fetch_export_odometer_readings(conn) -> list[dict]:
     return await _fetch_all(
         conn,
-        "SELECT vehicle_id, recorded_at, odometer_m, note FROM odometer_readings ORDER BY id",
+        "SELECT vehicle_id, recorded_at, odometer_m, note FROM odometer_readings WHERE account_id = %s ORDER BY id",
     )
 
 
 async def _fetch_export_settings(conn) -> dict:
     cur = conn.cursor(row_factory=dict_row)
-    await cur.execute("SELECT auto_assign_default_vehicle FROM app_settings WHERE id = 1")
+    await cur.execute("SELECT auto_assign_default_vehicle, display_tz FROM account_settings WHERE account_id = %s", (account_id(conn),))
     return await cur.fetchone()

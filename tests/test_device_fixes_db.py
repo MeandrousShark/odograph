@@ -11,8 +11,10 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import fixture_device
 from app.ui import _fetch_device_fixes
-from conftest import reset_db
+from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -23,17 +25,18 @@ T0 = datetime(2026, 7, 1, 8, 0, 0, tzinfo=UTC)
 
 async def _insert_point(conn, device, recorded_at, received_at) -> None:
     await conn.execute(
-        "INSERT INTO points (device, recorded_at, received_at, geom, accuracy_m) "
-        "VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(-122.0, 47.0), 4326)::geography, 10)",
-        (device, recorded_at, received_at),
+        "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, received_at, "
+        "geom, accuracy_m) VALUES (%s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(-122.0, 47.0), "
+        "4326)::geography, 10)",
+        (account_id(conn), await fixture_device(conn, device), device, recorded_at, received_at,),
     )
 
 
 async def _scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
 
         async with pool.connection() as conn:
             fixes = await _fetch_device_fixes(conn)
@@ -70,7 +73,7 @@ async def _scenario():
         assert test_device["newest_recorded_at"] == T0 - timedelta(days=1)
         assert test_device["newest_received_at"] == T0 - timedelta(days=1)
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_fetch_device_fixes_reports_per_device_counts_and_newest_timestamps():

@@ -22,9 +22,11 @@ from starlette.responses import RedirectResponse
 
 from app.auth import AuthRedirect
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import configure_personal_app, fixture_device
 from app.main import make_templates
 from app.ui import make_router
-from conftest import reset_db
+from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -34,7 +36,7 @@ CSRF_RE = re.compile(r'X-CSRF-Token": "([^"]+)"')
 
 def _bare_app(pool, *, dev_no_auth: bool = True) -> FastAPI:
     app = FastAPI()
-    app.state.pool = pool
+    configure_personal_app(app, pool)
     app.state.config = SimpleNamespace(
         dev_no_auth=dev_no_auth,
         display_tz=TZ,
@@ -56,13 +58,13 @@ def _bare_app(pool, *, dev_no_auth: bool = True) -> FastAPI:
 
 def _scenario(coro_factory) -> None:
     async def run():
-        pool = make_pool(TEST_DB)
-        await pool.open(wait=True)
+        raw_pool = make_pool(TEST_DB)
+        await raw_pool.open(wait=True)
         try:
-            await reset_db(pool)
+            pool = await reset_account_db(raw_pool)
             await coro_factory(pool)
         finally:
-            await pool.close()
+            await raw_pool.close()
 
     asyncio.run(run())
 
@@ -79,34 +81,32 @@ async def _insert_manual(conn, **overrides) -> int:
     }
     values.update(overrides)
     cur = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, distance_m, category, "
-        "purpose, notes, vehicle_id, start_label, end_label) "
-        "VALUES ('manual', 'manual', %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
-        tuple(values.values()) + (None, None),
+        "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, category,"
+        " purpose, notes, vehicle_id, start_label, end_label) VALUES (%s, 'manual', 'manual', %s, "
+        "%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+        (account_id(conn), *(tuple(values.values()) + (None, None)),),
     )
     return (await cur.fetchone())[0]
 
 
 async def _insert_detected(conn) -> int:
     cur = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, start_geom, end_geom, "
-        "distance_m, point_count, category, detector_version, snap_status) "
-        "VALUES ('phone', 'detected', '2026-07-14T18:00:00Z', '2026-07-14T19:00:00Z', "
-        "ST_SetSRID(ST_MakePoint(-122.3, 47.6), 4326)::geography, "
-        "ST_SetSRID(ST_MakePoint(-122.2, 47.7), 4326)::geography, "
-        "3200, 2, 'business', 2, 'failed') RETURNING id"
+        "INSERT INTO trips (account_id, tracking_device_id, device, source, started_at, ended_at, "
+        "start_geom, end_geom, distance_m, point_count, category, detector_version, snap_status) "
+        "VALUES (%s, %s, 'phone', 'detected', '2026-07-14T18:00:00Z', '2026-07-14T19:00:00Z', "
+        "ST_SetSRID(ST_MakePoint(-122.3, 47.6), 4326)::geography, ST_SetSRID(ST_MakePoint(-122.2, "
+        "47.7), 4326)::geography, 3200, 2, 'business', 2, 'failed') RETURNING id", (account_id(conn), await fixture_device(conn, 'phone'),)
     )
     return (await cur.fetchone())[0]
 
 
 async def _insert_routed_manual(conn) -> int:
     cur = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, start_geom, end_geom, "
-        "distance_m, category) VALUES ('manual', 'manual', '2026-07-14T20:00:00Z', "
-        "'2026-07-14T21:00:00Z', "
-        "ST_SetSRID(ST_MakePoint(-122.3, 47.6), 4326)::geography, "
-        "ST_SetSRID(ST_MakePoint(-122.2, 47.7), 4326)::geography, 1609.344, "
-        "'unclassified') RETURNING id"
+        "INSERT INTO trips (account_id, device, source, started_at, ended_at, start_geom, end_geom,"
+        " distance_m, category) VALUES (%s, 'manual', 'manual', '2026-07-14T20:00:00Z', "
+        "'2026-07-14T21:00:00Z', ST_SetSRID(ST_MakePoint(-122.3, 47.6), 4326)::geography, "
+        "ST_SetSRID(ST_MakePoint(-122.2, 47.7), 4326)::geography, 1609.344, 'unclassified') "
+        "RETURNING id", (account_id(conn),)
     )
     return (await cur.fetchone())[0]
 

@@ -10,6 +10,8 @@ import httpx
 import app.ui as ui
 import app.ui.settings as ui_settings
 from app.config import Config
+from app.account_context import AccountConnection, AccountPrincipal
+from app.account_settings import AccountSettings
 from app.db import _fetch_schema_version
 from app.detector.runner import DETECTOR_VERSION
 from app.main import create_app, make_templates
@@ -42,7 +44,7 @@ class _Connection:
 
     async def execute(self, query, *args, **kwargs):
         self.queries.append(query)
-        return _Cursor(self.row)
+        return _Cursor((None,) if "current_setting" in query else (False,) if "SELECT EXISTS" in query else self.row)
 
 
 class _ConnectionContext:
@@ -72,7 +74,7 @@ def _render_settings(diagnostics):
     return templates.env.get_template("settings.html").render(
         boundary_overrides=[], rates=[], vehicles=[], odometer=[], places=[], rules=[],
         geocode_enabled=False, device_fixes=[], diagnostics=diagnostics,
-        user={"name": "Tester"}, csrf="test",
+        user={"id": 41, "name": "Tester", "is_admin": True}, csrf="test",
     )
 
 
@@ -211,11 +213,16 @@ def test_authenticated_settings_context_uses_config_and_live_schema(monkeypatch)
         ),
         session={"csrf": "test"},
     )
+    request.state = SimpleNamespace(
+        account_pool=_Pool(AccountConnection(_Connection((0,)), AccountPrincipal(41, True, 1))),
+        principal=AccountPrincipal(41, True, 1),
+        config=request.app.state.config, account_settings=AccountSettings(display_tz=TZ),
+    )
     settings_endpoint = next(
         route.endpoint for route in ui.make_router().routes if route.path == "/settings"
     )
 
-    context = asyncio.run(settings_endpoint(request, user={"name": "Tester"}))
+    context = asyncio.run(settings_endpoint(request, user={"id": 41, "name": "Tester", "is_admin": True}))
 
     assert context["diagnostics"] == {
         "app_version": "v0.6.0-rc.1",
@@ -241,7 +248,7 @@ def test_unauthenticated_surfaces_do_not_disclose_runtime_identity(monkeypatch):
         monkeypatch.delenv(key, raising=False)
 
     app = create_app(Config.from_env())
-    app.state.pool = _Pool(_Connection())
+    app.state.control_pool = _Pool(_Connection())
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)

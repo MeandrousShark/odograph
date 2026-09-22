@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 from fastapi import APIRouter, Depends, Query, Request
 from psycopg.rows import dict_row
 
+from app.account_context import account_id
 from app.auth import require_user
 from app.page import render_page
 from app.config import DEFAULT_MISSING_TRIP_GAP_M
@@ -38,21 +39,21 @@ async def _build_week_dashboard_context(
     rebuilt after a tag always has the same trip set, rates, expenses, and
     card context as a normal navigation.
     """
-    config = request.app.state.config
+    config = request.state.config
     tz = config.display_tz
     bounds = week_bounds(anchor, tz)
-    async with request.app.state.pool.connection() as conn:
+    async with request.state.account_pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         await cur.execute(
             f"SELECT {TRIP_COLUMNS} FROM trips WHERE started_at >= %s AND started_at < %s "
-            "ORDER BY started_at DESC, id DESC",
-            (bounds.start, bounds.end),
+            "AND account_id = %s ORDER BY started_at DESC, id DESC",
+            (bounds.start, bounds.end, account_id(conn)),
         )
         trips = await cur.fetchall()
         expense_cur = await conn.execute(
             "SELECT COALESCE(SUM(amount), 0) FROM expenses "
-            "WHERE incurred_on >= %s AND incurred_on < %s",
-            (bounds.monday, bounds.monday + timedelta(days=7)),
+            "WHERE incurred_on >= %s AND incurred_on < %s AND account_id = %s",
+            (bounds.monday, bounds.monday + timedelta(days=7), account_id(conn)),
         )
         expense_total = (await expense_cur.fetchone())[0]
         rates = await load_rates(conn)
@@ -87,7 +88,7 @@ def register(router: APIRouter) -> None:
             a chosen year or range, while the report preserves its tax-specific
             caveats and rate-period accounting.
             """
-            tz = request.app.state.config.display_tz
+            tz = request.state.config.display_tz
             now = datetime.now(tz)
             selected_year = year or now.year
             year_start = datetime(selected_year, 1, 1, tzinfo=tz)
@@ -120,40 +121,40 @@ def register(router: APIRouter) -> None:
             period_start_date = max(period_start_date, date(selected_year, 1, 1))
             period_end_date = min(period_end_date, date(selected_year, 12, 31))
 
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 category_cur = await conn.execute(
                     "SELECT CASE WHEN exclusion = 'not_deductible' THEN 'nondeductible' "
                     "ELSE category::text END, count(*), "
                     f"COALESCE(SUM({DISPLAY_DISTANCE_SQL}), 0) "
-                    "FROM trips WHERE exclusion IS DISTINCT FROM 'not_my_vehicle' "
+                    "FROM trips WHERE account_id = %s AND exclusion IS DISTINCT FROM 'not_my_vehicle' "
                     f"AND started_at >= %s AND started_at < %s{vehicle_clause} GROUP BY 1",
-                    (year_start, next_year_start, *vehicle_params),
+                    (account_id(conn), year_start, next_year_start, *vehicle_params),
                 )
                 weekly_cur = await conn.execute(
                     "SELECT date_trunc('week', started_at AT TIME ZONE %s)::date, "
                     "CASE WHEN exclusion = 'not_deductible' THEN 'nondeductible' "
                     "ELSE category::text END, count(*), "
                     f"COALESCE(SUM({DISPLAY_DISTANCE_SQL}), 0) "
-                    "FROM trips WHERE exclusion IS DISTINCT FROM 'not_my_vehicle' "
+                    "FROM trips WHERE account_id = %s AND exclusion IS DISTINCT FROM 'not_my_vehicle' "
                     f"AND started_at >= %s AND started_at < %s{vehicle_clause} "
                     "GROUP BY 1, 2 ORDER BY 1",
-                    (tz.key, year_start, next_year_start, *vehicle_params),
+                    (tz.key, account_id(conn), year_start, next_year_start, *vehicle_params),
                 )
                 monthly_cur = await conn.execute(
                     "SELECT date_trunc('month', started_at AT TIME ZONE %s)::date, "
                     "CASE WHEN exclusion = 'not_deductible' THEN 'nondeductible' "
                     "ELSE category::text END, count(*), "
                     f"COALESCE(SUM({DISPLAY_DISTANCE_SQL}), 0) "
-                    "FROM trips WHERE exclusion IS DISTINCT FROM 'not_my_vehicle' "
+                    "FROM trips WHERE account_id = %s AND exclusion IS DISTINCT FROM 'not_my_vehicle' "
                     f"AND started_at >= %s AND started_at < %s{vehicle_clause} "
                     "GROUP BY 1, 2 ORDER BY 1",
-                    (tz.key, year_start, next_year_start, *vehicle_params),
+                    (tz.key, account_id(conn), year_start, next_year_start, *vehicle_params),
                 )
                 routes_cur = await conn.execute(
                     "WITH named_routes AS ("
                     " SELECT LEAST(start_place_id, end_place_id) AS a_id, GREATEST(start_place_id, end_place_id) AS b_id, "
                     f" count(*) AS trip_count, COALESCE(SUM({DISPLAY_DISTANCE_SQL}), 0) AS total_m "
-                    " FROM trips WHERE exclusion IS DISTINCT FROM 'not_my_vehicle' "
+                    " FROM trips WHERE account_id = %s AND exclusion IS DISTINCT FROM 'not_my_vehicle' "
                     " AND started_at >= %s AND started_at < %s "
                     " AND start_place_id IS NOT NULL AND end_place_id IS NOT NULL"
                     f"{vehicle_clause} "
@@ -161,28 +162,29 @@ def register(router: APIRouter) -> None:
                     "SELECT a.name, b.name, named_routes.trip_count, named_routes.total_m "
                     "FROM named_routes JOIN places a ON a.id = named_routes.a_id "
                     "JOIN places b ON b.id = named_routes.b_id "
+                    "WHERE a.account_id = %s AND b.account_id = %s "
                     "ORDER BY total_m DESC, trip_count DESC, a.name, b.name LIMIT 5",
-                    (year_start, next_year_start, *vehicle_params),
+                    (account_id(conn), year_start, next_year_start, *vehicle_params, account_id(conn), account_id(conn)),
                 )
                 places_cur = await conn.execute(
                     "WITH endpoints AS ("
                     " SELECT start_place_id AS place_id FROM trips "
-                    " WHERE exclusion IS DISTINCT FROM 'not_my_vehicle' "
+                    " WHERE account_id = %s AND exclusion IS DISTINCT FROM 'not_my_vehicle' "
                     f" AND started_at >= %s AND started_at < %s{vehicle_clause} "
                     " UNION ALL SELECT end_place_id FROM trips "
-                    " WHERE exclusion IS DISTINCT FROM 'not_my_vehicle' "
+                    " WHERE account_id = %s AND exclusion IS DISTINCT FROM 'not_my_vehicle' "
                     f" AND started_at >= %s AND started_at < %s{vehicle_clause}) "
                     "SELECT places.name, count(*) AS visit_count FROM endpoints "
-                    "JOIN places ON places.id = endpoints.place_id GROUP BY places.id, places.name "
+                    "JOIN places ON places.id = endpoints.place_id WHERE places.account_id = %s GROUP BY places.id, places.name "
                     "ORDER BY visit_count DESC, places.name LIMIT 5",
-                    (year_start, next_year_start, *vehicle_params, year_start, next_year_start, *vehicle_params),
+                    (account_id(conn), year_start, next_year_start, *vehicle_params, account_id(conn), year_start, next_year_start, *vehicle_params, account_id(conn)),
                 )
                 unnamed_cur = await conn.execute(
                     "SELECT count(*) FROM trips "
-                    "WHERE exclusion IS DISTINCT FROM 'not_my_vehicle' "
+                    "WHERE account_id = %s AND exclusion IS DISTINCT FROM 'not_my_vehicle' "
                     f"AND started_at >= %s AND started_at < %s{vehicle_clause} "
                     "AND (start_place_id IS NULL OR end_place_id IS NULL)",
-                    (year_start, next_year_start, *vehicle_params),
+                    (account_id(conn), year_start, next_year_start, *vehicle_params),
                 )
 
                 def drill_url(start: date, end: date, category: str) -> str:
@@ -221,9 +223,9 @@ def register(router: APIRouter) -> None:
                     "CASE WHEN exclusion = 'not_deductible' THEN 'nondeductible' "
                     "ELSE category::text END, count(*), "
                     f"COALESCE(SUM({DISPLAY_DISTANCE_SQL}), 0) "
-                    "FROM trips WHERE exclusion IS DISTINCT FROM 'not_my_vehicle'"
+                    "FROM trips WHERE account_id = %s AND exclusion IS DISTINCT FROM 'not_my_vehicle'"
                     f"{vehicle_clause} GROUP BY 1, 2, 3 ORDER BY 1, 2",
-                    (tz.key, tz.key, *vehicle_params),
+                    (tz.key, tz.key, account_id(conn), *vehicle_params),
                 )
                 cross_year_rows = await cross_year_cur.fetchall()
                 years_present = sorted({row[0] for row in cross_year_rows})
@@ -251,18 +253,18 @@ def register(router: APIRouter) -> None:
                     "CASE WHEN t.exclusion = 'not_deductible' THEN 'nondeductible' "
                     "ELSE t.category::text END, count(*), "
                     f"COALESCE(SUM({DISPLAY_DISTANCE_SQL}), 0) "
-                    "FROM trips t LEFT JOIN vehicles v ON v.id = t.vehicle_id "
-                    "WHERE t.exclusion IS DISTINCT FROM 'not_my_vehicle' "
+                    "FROM trips t LEFT JOIN vehicles v ON v.id = t.vehicle_id AND v.account_id = t.account_id "
+                    "WHERE t.account_id = %s AND t.exclusion IS DISTINCT FROM 'not_my_vehicle' "
                     f"AND t.started_at >= %s AND t.started_at < %s{vehicle_clause} "
                     "GROUP BY 1, 2, 3, 4",
-                    (tz.key, year_start, next_year_start, *vehicle_params),
+                    (tz.key, account_id(conn), year_start, next_year_start, *vehicle_params),
                 )
                 vehicle_expenses_cur = await conn.execute(
                     "SELECT expenses.vehicle_id, vehicles.name, COALESCE(SUM(expenses.amount), 0) "
-                    "FROM expenses JOIN vehicles ON vehicles.id = expenses.vehicle_id "
-                    f"WHERE expenses.incurred_on >= %s AND expenses.incurred_on <= %s{vehicle_clause} "
+                    "FROM expenses JOIN vehicles ON vehicles.id = expenses.vehicle_id AND vehicles.account_id = expenses.account_id "
+                    f"WHERE expenses.account_id = %s AND expenses.incurred_on >= %s AND expenses.incurred_on <= %s{vehicle_clause} "
                     "GROUP BY 1, 2",
-                    (period_start_date, period_end_date, *vehicle_params),
+                    (account_id(conn), period_start_date, period_end_date, *vehicle_params),
                 )
                 rates = await load_rates(conn)
                 vehicle_breakdown = build_vehicle_breakdown(
@@ -308,7 +310,7 @@ def register(router: APIRouter) -> None:
             same fetched `trips` that become the day-grouped cards, so the
             numbers can't drift from what's on screen.
             """
-            config = request.app.state.config
+            config = request.state.config
             tz = config.display_tz
             now = datetime.now(tz)
             anchor = parse_week_anchor(week, tz, now)

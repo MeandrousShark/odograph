@@ -6,6 +6,8 @@ here, with every issue collected rather than raising on the first one.
 """
 from __future__ import annotations
 
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -28,7 +30,7 @@ from app.validation import parse_finite_number as _parse_finite_number
 # lacks them and _normalize_trips applies their absence defaults. Keep every
 # supported version literal here. Deriving this from only the oldest and
 # current versions would silently drop version 2 when version 3 is introduced.
-SUPPORTED_FORMAT_VERSIONS = (1, 2)
+SUPPORTED_FORMAT_VERSIONS = (1, 2, 3)
 
 
 # ---------------------------------------------------------------------------
@@ -525,7 +527,7 @@ def _normalize_odometer_readings(raw: Any, issues: list[str], vehicle_ids: set[i
     return out
 
 
-def _normalize_settings(raw: Any, issues: list[str]) -> dict:
+def _normalize_settings(raw: Any, issues: list[str], format_version: int) -> dict:
     if not isinstance(raw, dict):
         issues.append("settings must be an object")
         return {}
@@ -533,7 +535,15 @@ def _normalize_settings(raw: Any, issues: list[str]) -> dict:
     if not isinstance(value, bool):
         issues.append("settings.auto_assign_default_vehicle must be a boolean")
         return {}
-    return {"auto_assign_default_vehicle": value}
+    display_tz = raw.get("display_tz") if format_version == 3 else None
+    if format_version == 3:
+        try:
+            if not isinstance(display_tz, str) or len(display_tz) > 128:
+                raise ValueError
+            ZoneInfo(display_tz)
+        except (ValueError, ZoneInfoNotFoundError):
+            issues.append("settings.display_tz must be an IANA timezone")
+    return {"auto_assign_default_vehicle": value, "display_tz": display_tz}
 
 
 def normalize_bundle(bundle: Any) -> tuple[dict | None, list[str]]:
@@ -573,7 +583,7 @@ def normalize_bundle(bundle: Any) -> tuple[dict | None, list[str]]:
     odometer_readings = _normalize_odometer_readings(
         bundle.get("odometer_readings"), issues, vehicle_ids
     )
-    settings = _normalize_settings(bundle.get("settings"), issues)
+    settings = _normalize_settings(bundle.get("settings"), issues, format_version)
 
     if issues:
         return None, issues

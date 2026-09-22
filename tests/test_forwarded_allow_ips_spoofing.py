@@ -69,7 +69,7 @@ def test_ingest_limiter_blocks_untrusted_peer_regardless_of_spoofed_xff():
 
     results = asyncio.run(run())
     assert results[:MAX_FAILURES] == [401] * MAX_FAILURES
-    assert results[MAX_FAILURES:] == [429] * 2
+    assert results[MAX_FAILURES:] == [503] * 2
 
 
 def test_ingest_spoofed_xff_cannot_poison_a_victims_ledger():
@@ -106,8 +106,8 @@ def test_ingest_spoofed_xff_cannot_reset_attackers_own_block():
         return blocked, still_blocked
 
     blocked, still_blocked = asyncio.run(run())
-    assert blocked.status_code == 429
-    assert still_blocked.status_code == 429
+    assert blocked.status_code == 503
+    assert still_blocked.status_code == 503
 
 
 def test_ingest_trusted_proxy_still_gets_forwarded_ip_honored():
@@ -130,7 +130,7 @@ def test_ingest_trusted_proxy_still_gets_forwarded_ip_honored():
         return results, other_visitor
 
     results, other_visitor = asyncio.run(run())
-    assert [r.status_code for r in results] == [401] * MAX_FAILURES + [429]
+    assert [r.status_code for r in results] == [401] * MAX_FAILURES + [503]
     assert other_visitor.status_code == 401
 
 
@@ -156,7 +156,7 @@ class _FakeConn:
         return _FakeCursor(self._row)
 
     async def execute(self, *args, **kwargs):
-        return _FakeCursor((self._row is not None,))
+        return _FakeCursor((None,) if "current_setting" in args[0] else (self._row is not None,))
 
 
 class _FakeConnCtx:
@@ -206,7 +206,7 @@ def _login_app(*, trusted_hosts):
     # Wrong email on every submission short-circuits login_local's `and`
     # chain before verify_password, so failures are cheap and deterministic
     # without needing a real scrypt hash here.
-    app.state.pool = _FakePool({
+    app.state.control_pool = _FakePool({
         "id": 1,
         "email": "admin@example.com",
         "password_hash": "x",
@@ -301,7 +301,7 @@ def _callback_app(*, trusted_hosts):
         oidc_issuer="https://idp.example.com",
     )
     app.state.oauth = SimpleNamespace(pocketid=_RejectingOAuthClient())
-    app.state.pool = _FakePool(None)
+    app.state.control_pool = _FakePool(None)
     app.state.login_limiter = FailedAuthLimiter(max_failures=MAX_FAILURES, window_s=900)
     app.include_router(make_auth_router())
     return ProxyHeadersMiddleware(app, trusted_hosts=trusted_hosts)

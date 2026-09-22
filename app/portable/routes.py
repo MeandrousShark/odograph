@@ -81,7 +81,7 @@ def make_router() -> APIRouter:
 
     @router.get("/settings/export/data")
     async def export_data(request: Request, user: dict = Depends(require_user)):
-        pool = request.app.state.pool
+        pool = request.state.account_pool
         async with pool.connection() as conn:
             bundle = build_export_bundle(
                 vehicles=await _fetch_export_vehicles(conn),
@@ -167,7 +167,7 @@ def make_router() -> APIRouter:
             )
 
         is_dry_run = dry_run == "1"
-        pool = request.app.state.pool
+        pool = request.state.account_pool
         try:
             async with pool.connection() as conn:
                 async with conn.transaction():

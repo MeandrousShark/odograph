@@ -4,6 +4,7 @@ import asyncio
 from types import SimpleNamespace
 
 from app.page import render_page
+from app.account_context import AccountConnection, AccountPrincipal
 from app.ui import review
 
 
@@ -16,8 +17,8 @@ class _Connection:
     def __init__(self):
         self.queries = []
 
-    async def execute(self, query):
-        self.queries.append(query)
+    async def execute(self, query, params):
+        self.queries.append((query, params))
         return _Cursor()
 
 
@@ -37,7 +38,7 @@ class _Pool:
         self.conn = _Connection()
 
     def connection(self):
-        return _ConnectionContext(self.conn)
+        return _ConnectionContext(AccountConnection(self.conn, AccountPrincipal(41, True, 1)))
 
 
 class _Templates:
@@ -49,14 +50,14 @@ class _Templates:
         return context
 
 
-def test_render_page_queries_the_exact_global_unclassified_count_once():
+def test_render_page_queries_only_its_account_unclassified_count_once():
     pool = _Pool()
     templates = _Templates()
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(pool=pool, templates=templates)))
+    request = SimpleNamespace(state=SimpleNamespace(account_pool=pool), app=SimpleNamespace(state=SimpleNamespace(templates=templates)))
 
     context = asyncio.run(render_page(request, "dashboard.html", {"user": {"id": 1}}))
 
-    assert pool.conn.queries == ["SELECT count(*) FROM trips WHERE category = 'unclassified'"]
+    assert pool.conn.queries == [("SELECT count(*) FROM trips WHERE account_id = %s AND category = 'unclassified'", (41,))]
     assert context["review_count"] == 5
     assert templates.calls[0][1] == "dashboard.html"
 
@@ -64,7 +65,7 @@ def test_render_page_queries_the_exact_global_unclassified_count_once():
 def test_render_page_preserves_a_nondefault_status_code():
     pool = _Pool()
     templates = _Templates()
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(pool=pool, templates=templates)))
+    request = SimpleNamespace(state=SimpleNamespace(account_pool=pool), app=SimpleNamespace(state=SimpleNamespace(templates=templates)))
 
     asyncio.run(render_page(request, "account_security.html", {}, status_code=400))
 

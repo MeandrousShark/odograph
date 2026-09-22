@@ -7,6 +7,7 @@ from psycopg import errors
 from psycopg.rows import dict_row
 from starlette.responses import Response
 
+from app.account_context import account_id
 from app.auth import require_csrf, require_user
 from app.page import render_page
 from app.vehicles import list_vehicles
@@ -50,6 +51,9 @@ async def _fetch_review_card(
     the undone trip's own position as cursor, to bring that exact trip back
     to the card instead of the trip after it.
     """
+    where += " AND" if where else "WHERE"
+    where += " trips.account_id = %s"
+    params = [*params, account_id(conn)]
     extra_where, extra_params = "", []
     if cursor is not None:
         op = ">=" if inclusive else ">"
@@ -76,8 +80,8 @@ async def _fetch_review_card(
     path_geojson = path_snapped_geojson = None
     if trip["source"] == "detected":
         path_cur = await conn.execute(
-            "SELECT ST_AsGeoJSON(path), ST_AsGeoJSON(path_snapped) FROM trips WHERE id = %s",
-            (trip["id"],),
+            "SELECT ST_AsGeoJSON(path), ST_AsGeoJSON(path_snapped) FROM trips WHERE id = %s AND account_id = %s",
+            (trip["id"], account_id(conn)),
         )
         row = await path_cur.fetchone()
         if row:
@@ -92,10 +96,11 @@ def _review_filter_sql(
     request: Request, from_: str, to: str, vehicle: str, q: str = ""
 ) -> tuple[str, list]:
     """The unclassified-pinned filter every `/review` route shares."""
-    tz = request.app.state.config.display_tz
+    tz = request.state.config.display_tz
     from_dt, to_dt = parse_date_range(from_, to, tz)
     return _trip_filter_sql(
         "unclassified", from_dt, to_dt, _parse_vehicle_id(vehicle), q=q,
+        owner_id=request.state.principal.account_id,
     )
 
 
@@ -144,7 +149,7 @@ def register(router: APIRouter) -> None:
             q: str = Query(""),
         ):
             where, params = _review_filter_sql(request, from_, to, vehicle, q)
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 card = await _fetch_review_card(conn, where, params, cursor=None)
                 return await _render_review_card(
                     request, conn, "review.html", card, from_, to, vehicle, q,
@@ -166,7 +171,7 @@ def register(router: APIRouter) -> None:
             skipped trip can't reappear within this pass.
             """
             where, params = _review_filter_sql(request, from_, to, vehicle, q)
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 cursor = await _trip_position(conn, after)
                 card = await _fetch_review_card(conn, where, params, cursor)
                 return await _render_review_card(
@@ -198,7 +203,7 @@ def register(router: APIRouter) -> None:
             where, params = _review_filter_sql(request, from_, to, vehicle, q)
             notes_value = notes if isinstance(notes, str) else ""
             vehicle_value = vehicle_id if isinstance(vehicle_id, str) else ""
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 position = await _trip_position(conn, trip_id)
                 if position is None:
                     raise HTTPException(status_code=404, detail="No such trip")
@@ -206,9 +211,9 @@ def register(router: APIRouter) -> None:
                     cur = await conn.execute(
                         "UPDATE trips SET purpose = %s, notes = %s, vehicle_id = %s, "
                         "exclusion = %s, "
-                        "updated_at = now() WHERE id = %s",
+                        "updated_at = now() WHERE id = %s AND account_id = %s",
                         (purpose.strip() or None, notes_value.strip() or None,
-                         _parse_vehicle_form(vehicle_value), exclusion or None, trip_id),
+                         _parse_vehicle_form(vehicle_value), exclusion or None, trip_id, account_id(conn)),
                     )
                 except errors.ForeignKeyViolation:
                     raise HTTPException(status_code=400, detail="No such vehicle")
@@ -249,7 +254,7 @@ def register(router: APIRouter) -> None:
             where, params = _review_filter_sql(request, from_, to, vehicle, q)
             notes_value = notes if isinstance(notes, str) else ""
             vehicle_value = vehicle_id if isinstance(vehicle_id, str) else ""
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 position = await _trip_position(conn, trip_id)
                 if position is None:
                     raise HTTPException(status_code=404, detail="No such trip")
@@ -257,9 +262,9 @@ def register(router: APIRouter) -> None:
                     cur = await conn.execute(
                         "UPDATE trips SET category = %s, purpose = %s, notes = %s, "
                         "vehicle_id = %s, exclusion = %s, tag_source = 'human', updated_at = now() "
-                        "WHERE id = %s",
+                        "WHERE id = %s AND account_id = %s",
                         (category, purpose.strip() or None, notes_value.strip() or None,
-                         _parse_vehicle_form(vehicle_value), exclusion or None, trip_id),
+                         _parse_vehicle_form(vehicle_value), exclusion or None, trip_id, account_id(conn)),
                     )
                 except errors.ForeignKeyViolation:
                     raise HTTPException(status_code=400, detail="No such vehicle")
@@ -289,15 +294,15 @@ def register(router: APIRouter) -> None:
                 raise HTTPException(status_code=400, detail="Unknown exclusion")
             notes_value = notes if isinstance(notes, str) else ""
             vehicle_value = vehicle_id if isinstance(vehicle_id, str) else ""
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 try:
                     cur = await conn.execute(
                         "UPDATE trips SET exclusion = %s, purpose = %s, notes = %s, "
-                        "vehicle_id = %s, updated_at = now() WHERE id = %s",
+                        "vehicle_id = %s, updated_at = now() WHERE id = %s AND account_id = %s",
                         (
                             exclusion or None, purpose.strip() or None,
                             notes_value.strip() or None,
-                            _parse_vehicle_form(vehicle_value), trip_id,
+                            _parse_vehicle_form(vehicle_value), trip_id, account_id(conn),
                         ),
                     )
                 except errors.ForeignKeyViolation:
@@ -339,7 +344,7 @@ def register(router: APIRouter) -> None:
             if kind not in ("tag", "skip"):
                 raise HTTPException(status_code=400, detail="Unknown undo kind")
             where, params = _review_filter_sql(request, from_, to, vehicle, q)
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 position = await _trip_position(conn, trip_id)
                 if position is None:
                     raise HTTPException(status_code=404, detail="No such trip")
@@ -370,7 +375,7 @@ def register(router: APIRouter) -> None:
             Skip do, including stable id tie-breaking.
             """
             where, params = _review_filter_sql(request, from_, to, vehicle, q)
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 position = await _delete_trip_in(conn, trip_id)
                 card = await _fetch_review_card(conn, where, params, cursor=position)
                 return await _render_review_card(

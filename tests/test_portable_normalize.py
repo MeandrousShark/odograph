@@ -38,7 +38,7 @@ def _bundle(**overrides) -> dict:
         "trips": [],
         "expenses": [],
         "odometer_readings": [],
-        "settings": {"auto_assign_default_vehicle": False},
+        "settings": {"auto_assign_default_vehicle": False, "display_tz": "Asia/Tokyo"},
     }
     bundle.update(overrides)
     return bundle
@@ -344,8 +344,8 @@ def test_format_version_1_bundle_imports_trips_as_normal():
     assert normalized["trips"][0]["exclusion"] is None
 
 
-def test_format_version_neither_1_nor_2_is_rejected_with_a_useful_message():
-    bundle = _bundle(format_version=3)
+def test_unsupported_format_version_is_rejected_with_a_useful_message():
+    bundle = _bundle(format_version=4)
     normalized, issues = normalize_bundle(bundle)
     assert normalized is None
     assert any("format_version" in issue and "1" in issue and "2" in issue for issue in issues)

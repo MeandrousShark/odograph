@@ -22,7 +22,8 @@ from psycopg_pool import AsyncConnectionPool
 
 from app.email_digest import EmailDigestWorker
 from app.mailer import Mailer
-from conftest import reset_db
+from app.account_context import account_id
+from conftest import reset_account_db, seed_tracking_device
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -39,10 +40,17 @@ APP_URL = "https://miles.example.com"
 POOL_TIMEOUT_S = 3.0
 
 
-async def _reset_schema(pool) -> None:
-    await reset_db(pool)
+async def _reset_schema(raw_pool):
+    pool = await reset_account_db(raw_pool)
     async with pool.connection() as conn:
-        await conn.execute("UPDATE vehicles SET active = false WHERE name = 'My Car'")
+        await conn.execute("UPDATE vehicles SET active = false WHERE account_id=%s AND name = 'My Car'", (account_id(conn),))
+        await seed_tracking_device(conn, "phone", device_id=1)
+        await conn.execute(
+            "UPDATE account_settings SET display_tz=%s,email_to='you@example.com',"
+            "email_monthly_summary=true,email_filing_reminder=true WHERE account_id=%s",
+            (str(TZ), account_id(conn)),
+        )
+    return pool
 
 
 async def _insert_trip(
@@ -50,9 +58,9 @@ async def _insert_trip(
     distance_m: float = 1000.0, vehicle_id: int | None = None,
 ) -> None:
     await conn.execute(
-        "INSERT INTO trips (device, started_at, ended_at, distance_m, category, vehicle_id) "
-        "VALUES ('phone', %s, %s, %s, %s, %s)",
-        (started_at, started_at + timedelta(minutes=15), distance_m, category, vehicle_id),
+        "INSERT INTO trips (account_id, tracking_device_id, device, started_at, ended_at, distance_m, category, vehicle_id) "
+        "VALUES (%s, 1, 'phone', %s, %s, %s, %s, %s)",
+        (account_id(conn), started_at, started_at + timedelta(minutes=15), distance_m, category, vehicle_id),
     )
 
 
@@ -87,8 +95,8 @@ async def _with_single_connection_pool(scenario):
     )
     await pool.open(wait=True)
     try:
-        await _reset_schema(pool)
-        await scenario(pool)
+        account_pool = await _reset_schema(pool)
+        await scenario(account_pool)
     finally:
         await pool.close()
 
@@ -110,7 +118,8 @@ async def _monthly_summary_pool_size_one_scenario(pool):
     assert "Jun 2026" in calls[0].get_content()
     async with pool.connection() as conn:
         cur = await conn.execute(
-            "SELECT sent FROM email_deliveries WHERE kind = 'monthly_summary'"
+            "SELECT sent FROM email_deliveries WHERE account_id=%s AND kind = 'monthly_summary'",
+            (account_id(conn),),
         )
         assert await cur.fetchone() == (True,)
 
@@ -139,7 +148,8 @@ async def _filing_reminder_pool_size_one_scenario(pool):
     assert "2026" in calls[0]["Subject"]
     async with pool.connection() as conn:
         cur = await conn.execute(
-            "SELECT sent FROM email_deliveries WHERE kind = 'filing_reminder'"
+            "SELECT sent FROM email_deliveries WHERE account_id=%s AND kind = 'filing_reminder'",
+            (account_id(conn),),
         )
         assert await cur.fetchone() == (True,)
 
@@ -169,7 +179,8 @@ async def _both_kinds_pool_size_one_scenario(pool):
     assert len(calls) == 2
     async with pool.connection() as conn:
         cur = await conn.execute(
-            "SELECT kind, sent FROM email_deliveries ORDER BY kind"
+            "SELECT kind, sent FROM email_deliveries WHERE account_id=%s ORDER BY kind",
+            (account_id(conn),),
         )
         rows = await cur.fetchall()
         assert rows == [("filing_reminder", True), ("monthly_summary", True)]

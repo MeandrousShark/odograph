@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from types import SimpleNamespace
+from datetime import datetime, timezone
+from app.account_context import AccountConnection, AccountPrincipal
 
 import httpx
 from starlette.responses import PlainTextResponse
@@ -61,7 +63,7 @@ def _build_app(monkeypatch):
     for key in ("DEV_NO_AUTH", "OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET"):
         monkeypatch.delenv(key, raising=False)
     app = create_app(Config.from_env())
-    app.state.pool = _RaisingPool()
+    app.state.runtime_pool = _RaisingPool()
     return app
 
 
@@ -103,7 +105,7 @@ def test_geocode_worker_lookup_failure_never_logs_coordinate_or_api_key(caplog):
                 api_key="SECRET_GEOCODE_KEY", omit_country="United States of America"
             )
             worker = GeocodeWorker(
-                pool=None, http_client=client, provider=provider,
+                pool=_FakePool(), http_client=client, provider=provider,
                 min_interval_s=0, debounce_s=1, sweep_s=1,
             )
             with caplog.at_level(logging.WARNING, logger="app.geocode"):
@@ -116,14 +118,22 @@ def test_geocode_worker_lookup_failure_never_logs_coordinate_or_api_key(caplog):
     assert "HTTPStatusError" in caplog.text
 
 
+class _FakeCursor:
+    async def fetchall(self):
+        return [(1, datetime(2024, 1, 1, tzinfo=timezone.utc), None, None)]
+
+    async def fetchone(self):
+        return (1,)
+
+
 class _FakeConn:
     async def execute(self, *args, **kwargs):
-        return None
+        return _FakeCursor()
 
 
 class _FakeConnCtx:
     async def __aenter__(self):
-        return _FakeConn()
+        return AccountConnection(_FakeConn(), AccountPrincipal(41, True, 1))
 
     async def __aexit__(self, *exc_info):
         return False
@@ -190,7 +200,7 @@ def test_address_search_failure_never_logs_api_key_or_query_text(caplog):
                     PlainTextResponse("ok")
                 )
             ),
-        )))
+        )), state=SimpleNamespace(config=SimpleNamespace(geocode_provider=provider)))
         with caplog.at_level(logging.WARNING, logger="app.ui"):
             await SEARCH_PLACES(request, "1600 my secret street address", {"sub": "test"})
         await client.aclose()
@@ -223,8 +233,7 @@ def test_missing_trip_osrm_suggestion_failure_never_logs_coordinates(monkeypatch
         request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
             config=SimpleNamespace(osrm_url="http://osrm"),
             osrm_http_client=client,
-            pool=None,
-        )))
+        )), state=SimpleNamespace(config=SimpleNamespace(osrm_url="http://osrm"), account_pool=None))
         with caplog.at_level(logging.WARNING, logger="app.ui"):
             result = await ui_module._resolve_missing_trip_osrm_hint(request, "42")
         await client.aclose()

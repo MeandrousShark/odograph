@@ -12,9 +12,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import timezone
 from pathlib import Path
-from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -25,7 +23,8 @@ from app.db import make_pool
 from app.main import make_templates
 from app.retention import RetentionWorker
 from app.ui import make_router
-from conftest import reset_db
+from conftest import reset_account_db
+from auth_db_fixtures import auth_config
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -39,18 +38,13 @@ CSRF_RE = re.compile(r'X-CSRF-Token": "([^"]+)"')
 
 def _bare_app(pool, retention_worker=None) -> FastAPI:
     app = FastAPI()
-    app.state.pool = pool
+    app.state.control_pool = pool.runtime_pool
+    app.state.runtime_pool = pool.runtime_pool
+    app.state.dev_principal = pool.principal
+    app.state.make_detector_runner = lambda account_pool: None
     # Every field config_presence()/worker gating could touch, all empty/off
     # -- OSRM, the geocoder, ntfy, and SMTP all read as "not configured".
-    app.state.config = SimpleNamespace(
-        dev_no_auth=True, display_tz=timezone.utc,
-        geocode_provider=None, app_version="test", app_git_revision="test",
-        osrm_url="", ntfy_url="", ntfy_topic="", ntfy_token="",
-        ntfy_username="", ntfy_password="", email_enabled=False,
-        smtp_username="", smtp_password="", smtp_host="", smtp_port=587,
-        smtp_security="starttls", smtp_tls_insecure=False,
-        oidc_configured=False, initial_admin_signup=False, app_url="",
-    )
+    app.state.config = auth_config(TEST_DB, dev_no_auth=True, app_version="test", app_git_revision="test")
     app.state.templates = make_templates(app.state.config)
     if retention_worker is not None:
         app.state.retention_worker = retention_worker
@@ -60,10 +54,10 @@ def _bare_app(pool, retention_worker=None) -> FastAPI:
 
 
 async def _scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
 
         retention_worker = RetentionWorker(pool, retention_days=365)
         # Runs the same guarded path the real background loop uses
@@ -102,7 +96,7 @@ async def _scenario():
             no_csrf = await client.post("/settings/diagnostics/check")
             assert no_csrf.status_code == 403
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_settings_page_and_check_now_route_report_real_worker_and_db_state():

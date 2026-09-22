@@ -1,12 +1,8 @@
 from __future__ import annotations
 
-import logging
-import os
 from dataclasses import dataclass
 
-from app.validation import parse_finite_number
-
-log = logging.getLogger(__name__)
+from app.account_context import account_id
 
 METERS_PER_MILE = 1609.344
 
@@ -60,12 +56,11 @@ def deduction(
 
 
 async def load_rates(conn) -> dict[int, YearRate]:
-    """Rates from `mileage_rates`, overridden per-year by `MILEAGE_RATE_<YEAR>`
-    env vars (e.g. `MILEAGE_RATE_2026=0.725`) without touching the DB. An env
-    override sets a single flat rate for that year (no mid-year split).
-    """
+    """Load the account's effective rates, including any one-time legacy import."""
     cur = await conn.execute(
-        "SELECT year, rate_per_mi, rate_h2_per_mi, h2_start_month FROM mileage_rates"
+        "SELECT year, rate_per_mi, rate_h2_per_mi, h2_start_month FROM mileage_rates "
+        "WHERE account_id = %s",
+        (account_id(conn),),
     )
     rates: dict[int, YearRate] = {}
     for year, r1, r2, m in await cur.fetchall():
@@ -74,21 +69,4 @@ async def load_rates(conn) -> dict[int, YearRate]:
             rate_h2_per_mi=float(r2) if r2 is not None else None,
             h2_start_month=int(m) if m is not None else None,
         )
-    for key, value in os.environ.items():
-        if not key.startswith(ENV_PREFIX):
-            continue
-        try:
-            year = int(key[len(ENV_PREFIX):])
-            numeric = float(value)
-        except ValueError:
-            continue
-        # This is config load with no request to reject: an override that's
-        # non-finite (nan, inf) or non-positive is logged and skipped so any
-        # rate already on file for the year still applies, rather than
-        # crashing the process or installing a non-finite rate.
-        rate = parse_finite_number(numeric)
-        if rate is None or rate <= 0:
-            log.warning("ignoring invalid %s%s override: %r", ENV_PREFIX, year, value)
-            continue
-        rates[year] = YearRate(rate_per_mi=rate)
     return rates

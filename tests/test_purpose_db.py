@@ -8,10 +8,12 @@ from types import SimpleNamespace
 import pytest
 
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import fixture_device, personal_request
 from app.detector.runner import reprocess_places
 from app.main import make_templates
 from app.ui import _fetch_recent_purposes, make_router
-from conftest import reset_db
+from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -31,19 +33,19 @@ MANUAL = _endpoint("/trips/manual", "POST")
 
 def _request(pool):
     config = SimpleNamespace(display_tz=TZ, app_version="test")
-    return SimpleNamespace(
+    return personal_request(SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, templates=make_templates(config), config=config,
         )),
         session={"csrf": "test"},
-    )
+    ))
 
 
 async def _scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
 
         async with pool.connection() as conn:
             migration = await conn.execute(
@@ -52,9 +54,9 @@ async def _scenario():
             )
             assert await migration.fetchone() == ("text", "YES")
             cur = await conn.execute(
-                "INSERT INTO trips (device, source, started_at, ended_at, distance_m) "
-                "VALUES ('manual', 'manual', '2026-01-01T09:00:00Z', "
-                "'2026-01-01T09:30:00Z', 1000) RETURNING id"
+                "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m) "
+                "VALUES (%s, 'manual', 'manual', '2026-01-01T09:00:00Z', '2026-01-01T09:30:00Z', "
+                "1000) RETURNING id", (account_id(conn),)
             )
             trip_id = (await cur.fetchone())[0]
 
@@ -104,14 +106,14 @@ async def _scenario():
                 "WHERE purpose='Deliver documents'"
             )
             await conn.execute(
-                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, purpose, updated_at) "
-                "VALUES ('manual', 'manual', '2026-03-01T10:00:00Z', '2026-03-01T10:30:00Z', "
-                "1000, 'Client planning', '2026-03-02T00:00:00Z')"
+                "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, "
+                "purpose, updated_at) VALUES (%s, 'manual', 'manual', '2026-03-01T10:00:00Z', "
+                "'2026-03-01T10:30:00Z', 1000, 'Client planning', '2026-03-02T00:00:00Z')", (account_id(conn),)
             )
             recent = await _fetch_recent_purposes(conn)
             assert recent == ["Client planning", "Deliver documents"]
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_purpose_migration_crud_manual_entry_and_recent_reuse():
@@ -119,20 +121,20 @@ def test_purpose_migration_crud_manual_entry_and_recent_reuse():
 
 
 async def _purpose_edit_claims_human_ownership_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
 
         async with pool.connection() as conn:
             # A rule-owned detected trip -- no geometry needed since there
             # are no tag_rules or places in this scenario, and the point is
             # only what happens to an already-rule-tagged trip.
             cur = await conn.execute(
-                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
-                " category, tag_source) "
-                "VALUES ('A', 'detected', '2026-01-01T09:00:00Z', "
-                "'2026-01-01T09:30:00Z', 1000, 'business', 'rule') RETURNING id"
+                "INSERT INTO trips (account_id, tracking_device_id, device, source, started_at, "
+                "ended_at, distance_m,  category, tag_source) VALUES (%s, %s, 'A', 'detected', "
+                "'2026-01-01T09:00:00Z', '2026-01-01T09:30:00Z', 1000, 'business', 'rule') "
+                "RETURNING id", (account_id(conn), await fixture_device(conn, 'A'),)
             )
             trip_id = (await cur.fetchone())[0]
 
@@ -162,7 +164,7 @@ async def _purpose_edit_claims_human_ownership_scenario():
                 "even with no matching rule"
             )
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_purpose_edit_claims_human_ownership_and_survives_reprocess():

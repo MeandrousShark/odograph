@@ -24,10 +24,12 @@ from starlette.responses import RedirectResponse
 from app.auth import AuthRedirect
 from app.dashboard import week_bounds
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import configure_personal_app, fixture_device, personal_request
 from app.main import make_templates
 from app.ui import make_router
 from app.vehicles import create_vehicle
-from conftest import reset_db
+from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -60,13 +62,13 @@ def _request(pool, tz: ZoneInfo = UTC, missing_trip_gap_m: float = 1000.0):
     config = SimpleNamespace(
         display_tz=tz, missing_trip_gap_m=missing_trip_gap_m, app_version="test",
     )
-    return SimpleNamespace(
+    return personal_request(SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, templates=make_templates(config), config=config,
         )),
         session={"csrf": "test-csrf"},
         headers={},
-    )
+    ))
 
 
 async def _call_dashboard(pool, week: str = "", tz: ZoneInfo = UTC):
@@ -80,32 +82,42 @@ async def _insert_detected_trip(
     exclusion: str | None = None,
 ) -> int:
     cur = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
-        " point_count, detector_version, category, vehicle_id, exclusion) "
-        "VALUES (%s, 'detected', %s, %s, %s, 2, 2, %s, %s, %s) RETURNING id",
-        (device, started_at, ended_at, distance_m, category, vehicle_id, exclusion),
+        "INSERT INTO trips (account_id, tracking_device_id, device, source, started_at, ended_at, "
+        "distance_m,  point_count, detector_version, category, vehicle_id, exclusion) VALUES (%s, "
+        "%s, %s, 'detected', %s, %s, %s, 2, 2, %s, %s, %s) RETURNING id",
+        (
+            account_id(conn),
+            await fixture_device(conn, device),
+            device,
+            started_at,
+            ended_at,
+            distance_m,
+            category,
+            vehicle_id,
+            exclusion,
+        ),
     )
     return (await cur.fetchone())[0]
 
 
 async def _insert_expense(conn, vehicle_id: int, incurred_on: date, amount: str) -> int:
     cur = await conn.execute(
-        "INSERT INTO expenses (vehicle_id, incurred_on, category, amount, treatment) "
-        "VALUES (%s, %s, 'fuel', %s, 'fully_business') RETURNING id",
-        (vehicle_id, incurred_on, Decimal(amount)),
+        "INSERT INTO expenses (account_id, vehicle_id, incurred_on, category, amount, treatment) "
+        "VALUES (%s, %s, %s, 'fuel', %s, 'fully_business') RETURNING id",
+        (account_id(conn), vehicle_id, incurred_on, Decimal(amount),),
     )
     return (await cur.fetchone())[0]
 
 
 def _scenario(coro) -> None:
     async def run():
-        pool = make_pool(TEST_DB)
-        await pool.open(wait=True)
+        raw_pool = make_pool(TEST_DB)
+        await raw_pool.open(wait=True)
         try:
-            await reset_db(pool)
+            pool = await reset_account_db(raw_pool)
             await coro(pool)
         finally:
-            await pool.close()
+            await raw_pool.close()
 
     asyncio.run(run())
 
@@ -416,7 +428,7 @@ def test_global_review_count_is_independent_from_weekly_attention():
 
 def _bare_app(pool) -> FastAPI:
     app = FastAPI()
-    app.state.pool = pool
+    configure_personal_app(app, pool)
     app.state.config = SimpleNamespace(
         dev_no_auth=False, display_tz=UTC, missing_trip_gap_m=1000.0, app_version="test",
     )

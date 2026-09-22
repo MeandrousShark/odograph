@@ -15,9 +15,11 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import fixture_device, personal_request
 from app.main import make_templates
 from app.ui import make_router
-from conftest import reset_db
+from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -40,57 +42,56 @@ def _request(pool):
         display_tz=TZ, app_version="test",
         detector_params=SimpleNamespace(min_trip_distance_m=300.0),
     )
-    return SimpleNamespace(
+    return personal_request(SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, templates=make_templates(config), config=config,
         )),
         session={"csrf": "test"},
-    )
+    ))
 
 
 async def _insert_routed_manual(conn) -> int:
     row = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
-        "path, start_geom, end_geom, snap_status) VALUES ("
-        "'manual', 'manual', '2026-07-14T16:00:00Z', '2026-07-14T17:00:00Z', 3200, "
-        "ST_SetSRID(ST_GeomFromText('LINESTRING(-122.33 47.60, -122.20 47.70)'), 4326), "
-        "ST_SetSRID(ST_MakePoint(-122.33, 47.60), 4326)::geography, "
-        "ST_SetSRID(ST_MakePoint(-122.20, 47.70), 4326)::geography, NULL) RETURNING id"
+        "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, path, "
+        "start_geom, end_geom, snap_status) VALUES (%s, 'manual', 'manual', '2026-07-14T16:00:00Z',"
+        " '2026-07-14T17:00:00Z', 3200, ST_SetSRID(ST_GeomFromText('LINESTRING(-122.33 47.60, "
+        "-122.20 47.70)'), 4326), ST_SetSRID(ST_MakePoint(-122.33, 47.60), 4326)::geography, "
+        "ST_SetSRID(ST_MakePoint(-122.20, 47.70), 4326)::geography, NULL) RETURNING id", (account_id(conn),)
     )
     return (await row.fetchone())[0]
 
 
 async def _insert_plain_manual(conn) -> int:
     row = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, distance_m) "
-        "VALUES ('manual', 'manual', '2026-07-14T16:00:00Z', '2026-07-14T17:00:00Z', 3200) "
-        "RETURNING id"
+        "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m) VALUES "
+        "(%s, 'manual', 'manual', '2026-07-14T16:00:00Z', '2026-07-14T17:00:00Z', 3200) RETURNING "
+        "id", (account_id(conn),)
     )
     return (await row.fetchone())[0]
 
 
 async def _insert_detected(conn) -> int:
     row = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, start_geom, end_geom, "
-        "distance_m, point_count, path, has_gap, detector_version, snap_status) VALUES ("
-        "'phone', 'detected', '2026-07-14T18:00:00Z', '2026-07-14T19:00:00Z', "
-        "ST_SetSRID(ST_MakePoint(-122.3, 47.6), 4326)::geography, "
+        "INSERT INTO trips (account_id, tracking_device_id, device, source, started_at, ended_at, "
+        "start_geom, end_geom, distance_m, point_count, path, has_gap, detector_version, "
+        "snap_status) VALUES (%s, %s, 'phone', 'detected', '2026-07-14T18:00:00Z', "
+        "'2026-07-14T19:00:00Z', ST_SetSRID(ST_MakePoint(-122.3, 47.6), 4326)::geography, "
         "ST_SetSRID(ST_MakePoint(-122.2, 47.7), 4326)::geography, 3200, 44, "
         "ST_GeomFromText('LINESTRING(-122.3 47.6,-122.2 47.7)', 4326), true, 2, 'pending') "
-        "RETURNING id"
+        "RETURNING id", (account_id(conn), await fixture_device(conn, 'phone'),)
     )
     return (await row.fetchone())[0]
 
 
 def _run(coro_factory) -> None:
     async def run():
-        pool = make_pool(TEST_DB)
-        await pool.open(wait=True)
+        raw_pool = make_pool(TEST_DB)
+        await raw_pool.open(wait=True)
         try:
-            await reset_db(pool)
+            pool = await reset_account_db(raw_pool)
             await coro_factory(pool)
         finally:
-            await pool.close()
+            await raw_pool.close()
 
     asyncio.run(run())
 

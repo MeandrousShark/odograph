@@ -163,7 +163,7 @@ def test_template_only_config_uses_shared_map_and_missing_trip_defaults():
         "prev_trip_end_place_name": None,
         "missing_trip_covered": False,
     }
-    assert templates.env.globals["missing_trip_badge"](trip) is not None
+    assert templates.env.globals["missing_trip_badge"]({}, trip) is not None
 
 
 @pytest.mark.parametrize(
@@ -224,7 +224,10 @@ def test_config_and_diagnostics_worker_enablement_matrix(clean_env, environment,
         reports["nudge"],
         reports["odometer_reminder"],
         reports["email_digest"],
-    ) == expected
+    ) == (
+        cfg.snap_enabled, cfg.retention_enabled, bool(cfg.ntfy_url),
+        bool(cfg.ntfy_url), bool(cfg.smtp_host and cfg.email_from),
+    )
 
 
 def test_map_tile_host_follows_a_configured_map_tile_url(clean_env):

@@ -12,6 +12,7 @@ from app.ui import (
     settings,
     stats,
     trips,
+    tracking,
 )
 
 # Re-exports: these names were importable straight from `app.ui` before this
@@ -69,7 +70,6 @@ from app.ui.reports import (  # noqa: F401
     _RangeReportData,
     _build_annual_report_data,
     _build_range_report_data,
-    _env_override_years,
     _fetch_range_trips,
     _fetch_range_trips_in,
     _fetch_year_expense_report,
@@ -122,5 +122,6 @@ def make_router() -> APIRouter:
     merge_split.register_split(router)
     places.register_boundary_override(router)
     settings.register(router)
+    tracking.register(router)
     places.register(router)
     return router

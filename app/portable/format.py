@@ -8,14 +8,9 @@ edited default is refused rather than silently accepted).
 from __future__ import annotations
 
 FORMAT = "odograph-portable"
-# Version 2 is the version that carries fields optional in the bundle and
-# absent from a version-1 export, not a version tied to any one of them:
-# trip_exclusion is the first, with more expected to land in this same
-# version 2 without a further bump. normalize_bundle accepts both 1 and 2 so
-# a pre-existing v1 backup still imports, with every version-2-only field
-# treated as absent (falling back to its default) on a bundle that predates
-# it.
-FORMAT_VERSION = 2
+# Version 3 adds account-owned display timezone. Owners, tracker identities and
+# notification settings never travel with a personal bundle.
+FORMAT_VERSION = 3
 
 TRIP_SOURCES = ("detected", "manual")
 TRIP_CATEGORIES = ("unclassified", "business", "personal")

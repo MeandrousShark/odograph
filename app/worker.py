@@ -2,7 +2,7 @@
 
 Five workers grew independently and converged on two shapes:
 
-- `DetectorScheduler`, `SnapWorker`, `GeocodeWorker` each needed identical
+- `AccountWorker`, `SnapWorker`, `GeocodeWorker` each needed identical
   poke/debounce/sweep wake-up logic -- an external `poke()` resets a
   debounce deadline so a burst of pokes coalesces into one run shortly
   after the burst settles, while an independent periodic sweep guarantees
@@ -18,9 +18,10 @@ across their five copies. A subclass implements only `run_once()` -- the
 actual unit of work -- and passes its task name, sweep/interval cadence,
 and failure-log wording to the base constructor. `after_run_once()` is a
 no-op hook a subclass can override to react to its own `run_once()`
-result; `DetectorScheduler` uses it to poke its snap/geocode workers, but
-only after a run that actually happened (not one skipped for advisory-lock
-contention).
+result; `AccountWorker` (app/account_workers.py) uses it to call an
+optional `after_run` callback, which is how app/main.py pokes the
+detector's snap/geocode workers, but only after a sweep that actually did
+something (not one skipped for advisory-lock contention).
 
 Behavior-preserving refactor: no timing or wake-up semantics changed from
 the five pre-extraction copies. Each worker keeps emitting its own
@@ -167,9 +168,10 @@ class PokeSweepWorker(_LoopWorker):
     deadline; independently, a sweep fires every `sweep_s` to catch
     anything a crashed/skipped run left behind. Always runs once
     immediately on `start()`, before the first wait -- this both drains
-    anything left over from a previous process's lifetime and (for
-    `DetectorScheduler` specifically) applies a pending
-    `DETECTOR_VERSION` bump's full reprocess without waiting for a poke.
+    anything left over from a previous process's lifetime and (for the
+    detector's `AccountWorker` specifically, through `DetectorRunner.run_once()`)
+    applies a pending `DETECTOR_VERSION` bump's full reprocess without
+    waiting for a poke.
     """
 
     def __init__(

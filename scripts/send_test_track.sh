@@ -1,32 +1,24 @@
 #!/usr/bin/env bash
-# Posts a short synthetic stay -> drive -> stay GPS track to a running
-# instance's /ingest endpoint, under the fixed device id "test", so the
-# detector produces one real visible trip without walking around the block.
-# Run from the directory containing compose.yaml -- --cleanup shells out to
-# the compose CLI to remove the test device's rows afterward.
-#
-# Usage:
-#   scripts/send_test_track.sh [--base-url URL] [--password PASSWORD]
-#   scripts/send_test_track.sh --cleanup
-#
-# Env vars (flags win if both are given):
-#   BASE_URL          default http://127.0.0.1:8077
-#   INGEST_PASSWORD   required unless --password is given
-#   COMPOSE_CMD        override compose command autodetection, e.g. "podman-compose"
+# Send a synthetic stay-drive-stay track using an issued test-device login.
+# Create a dedicated device named "test" under Settings > Tracking first.
+# Its public username may be an argument; its secret is read silently or
+# supplied through ODOGRAPH_TRACKING_SECRET, never through process arguments.
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:8077}"
-PASSWORD="${INGEST_PASSWORD:-}"
+TRACKING_USERNAME="${ODOGRAPH_TRACKING_USERNAME:-}"
+TRACKING_SECRET="${ODOGRAPH_TRACKING_SECRET:-}"
 CLEANUP=0
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-    echo "usage: $0 [--base-url URL] [--password PASSWORD] | --cleanup" >&2
+    echo "usage: $0 [--base-url URL] --username ISSUED_USERNAME [--cleanup]" >&2
     exit "${1:-1}"
 }
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --base-url|--password)
+        --base-url|--username)
             if [ "$#" -lt 2 ]; then
                 echo "error: $1 requires a value" >&2
                 usage
@@ -34,15 +26,20 @@ while [ "$#" -gt 0 ]; do
             if [ "$1" = "--base-url" ]; then
                 BASE_URL="$2"
             else
-                PASSWORD="$2"
+                TRACKING_USERNAME="$2"
             fi
             shift 2
             ;;
         --cleanup) CLEANUP=1; shift ;;
         -h|--help) usage 0 ;;
-        *) echo "error: unrecognized argument: $1" >&2; usage ;;
+        *) echo "error: unrecognized argument" >&2; usage ;;
     esac
 done
+
+if [[ ! "$TRACKING_USERNAME" =~ ^odograph_[A-Za-z0-9_-]+$ ]]; then
+    echo "error: supply the issued username of your dedicated test device." >&2
+    exit 1
+fi
 
 detect_compose_cmd() {
     if [ -n "${COMPOSE_CMD:-}" ]; then
@@ -63,20 +60,23 @@ detect_compose_cmd() {
 
 if [ "$CLEANUP" -eq 1 ]; then
     compose_cmd="$(detect_compose_cmd)"
-    echo "Removing all trace of device 'test' via: $compose_cmd exec -T db psql ..."
-    # These four statements are the cleanup contract: tests/test_send_test_track_cleanup_db.py
-    # runs the identical SQL directly against a seeded DB to pin this logic
-    # against schema drift, so keep any change here mirrored there.
+    echo "Removing only the owned test stream identified by this issued username."
     $compose_cmd exec -T db psql -U mileage -d mileage -v ON_ERROR_STOP=1 \
-        -c "DELETE FROM trips WHERE device = 'test';" \
-        -c "DELETE FROM stays WHERE device = 'test';" \
-        -c "DELETE FROM points WHERE device = 'test';" \
-        -c "DELETE FROM raw_messages WHERE payload->>'tid' = 'test';"
+        -v "tracking_username=$TRACKING_USERNAME" \
+        < "$SCRIPT_DIR/sql/cleanup_test_device.sql"
     exit 0
 fi
 
-if [ -z "$PASSWORD" ]; then
-    echo "error: no ingest password given; set INGEST_PASSWORD or pass --password." >&2
+if [ -z "$TRACKING_SECRET" ]; then
+    if [ ! -t 0 ]; then
+        echo "error: use an interactive terminal or set ODOGRAPH_TRACKING_SECRET." >&2
+        exit 1
+    fi
+    read -r -s -p "Test device password: " TRACKING_SECRET
+    echo >&2
+fi
+if [[ ! "$TRACKING_SECRET" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "error: expected an issued device password." >&2
     exit 1
 fi
 
@@ -163,7 +163,7 @@ for p in points:
 PYEOF
 )"
 
-point_count="$(printf '%s\n' "$points_ndjson" | grep -c .)"
+point_count="$(printf '%s\n' "$points_ndjson" | wc -l | tr -d ' ')"
 echo "Sending $point_count points to ${BASE_URL%/}/ingest as device 'test'..."
 
 response_file="$(mktemp)"
@@ -173,17 +173,15 @@ i=0
 while IFS= read -r line; do
     [ -z "$line" ] && continue
     i=$((i + 1))
-    http_code="$(curl -sS -o "$response_file" -w '%{http_code}' \
-        -u "owntracks:${PASSWORD}" \
+    http_code="$(printf 'user = "%s:%s"\n' "$TRACKING_USERNAME" "$TRACKING_SECRET" | curl --config - -sS -o "$response_file" -w '%{http_code}' \
         -H 'Content-Type: application/json' \
         --data-binary "$line" \
         "${BASE_URL%/}/ingest")"
     if [ "$http_code" != "200" ]; then
         echo "error: ingest POST #$i failed with HTTP $http_code" >&2
-        cat "$response_file" >&2
         exit 1
     fi
 done <<< "$points_ndjson"
 
 echo "Sent $i points. Wait ~90 seconds for the detector's debounce, then check the trip list."
-echo "When done testing, run: $0 --cleanup"
+echo "When done testing, run: $0 --cleanup --username $TRACKING_USERNAME"

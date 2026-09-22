@@ -16,7 +16,8 @@ from psycopg.rows import dict_row
 from app.db import make_pool
 from app.geocode import GeoapifyProvider, GeocodeWorker
 from app.ui import TRIP_COLUMNS
-from conftest import reset_db
+from conftest import reset_account_db, seed_tracking_device
+from app.account_context import account_id
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -32,14 +33,14 @@ async def _insert_trip(
     start_place_id=None, end_place_id=None,
 ) -> int:
     cur = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
+        "INSERT INTO trips (account_id, tracking_device_id, device, source, started_at, ended_at, distance_m, "
         " point_count, detector_version, "
         " start_geom, end_geom, start_place_id, end_place_id) "
-        "VALUES (%s, 'detected', %s, %s, 1000, 2, 2, "
+        "VALUES (%s, %s, %s, 'detected', %s, %s, 1000, 2, 2, "
         " ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, "
         " ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s) RETURNING id",
         (
-            DEVICE, started_at, ended_at, lon, lat,
+            account_id(conn), 1, DEVICE, started_at, ended_at, lon, lat,
             end_lon if end_lon is not None else lon,
             end_lat if end_lat is not None else lat,
             start_place_id, end_place_id,
@@ -77,15 +78,17 @@ class _FakeResponse:
 
 
 async def _scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
+        async with pool.connection() as conn:
+            await seed_tracking_device(conn, DEVICE, device_id=1)
         async with pool.connection() as conn:
             await conn.execute(
-                "INSERT INTO places (name, kind, geom, radius_m) "
-                "VALUES ('Home', 'home', "
-                "ST_SetSRID(ST_MakePoint(-122.1000, 47.1000), 4326)::geography, 150)"
+                "INSERT INTO places (account_id, name, kind, geom, radius_m) "
+                "VALUES (%s, 'Home', 'home', "
+                "ST_SetSRID(ST_MakePoint(-122.1000, 47.1000), 4326)::geography, 150)", (account_id(conn),)
             )
             place_id_row = await conn.execute("SELECT id FROM places WHERE name = 'Home'")
             place_id = (await place_id_row.fetchone())[0]
@@ -105,8 +108,8 @@ async def _scenario():
                 47.5000, -122.5000,
             )
             await conn.execute(
-                "INSERT INTO geocode_cache (lat, lon, address) VALUES (%s, %s, %s)",
-                (47.5000, -122.5000, "Cached Ave"),
+                "INSERT INTO geocode_cache (account_id, lat, lon, address) VALUES (%s, %s, %s, %s)",
+                (account_id(conn), 47.5000, -122.5000, "Cached Ave"),
             )
             # 4: a cached NULL (a previous miss) -> also excluded, not retried.
             trip_cached_miss = await _insert_trip(
@@ -114,8 +117,8 @@ async def _scenario():
                 47.9000, -122.9000,
             )
             await conn.execute(
-                "INSERT INTO geocode_cache (lat, lon, address) VALUES (%s, %s, NULL)",
-                (47.9000, -122.9000),
+                "INSERT INTO geocode_cache (account_id, lat, lon, address) VALUES (%s, %s, %s, NULL)",
+                (account_id(conn), 47.9000, -122.9000),
             )
 
         provider = GeoapifyProvider(api_key="fake-key", omit_country="United States of America")
@@ -173,7 +176,7 @@ async def _scenario():
             trip3 = await cur.fetchone()
         assert trip3["start_address"] is None
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_geocode_discovery_and_trip_columns():

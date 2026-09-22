@@ -18,9 +18,11 @@ from fastapi import HTTPException
 from psycopg.rows import dict_row
 
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import personal_request
 from app.rates import METERS_PER_MILE
 from app.ui import MANUAL_ROUTE_UNAVAILABLE_NOTICE, make_router
-from conftest import reset_db
+from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -49,12 +51,12 @@ DEFAULT_FORM = {
 
 def _request(pool, *, osrm_url=OSRM_URL, http_client=None):
     config = SimpleNamespace(osrm_url=osrm_url, display_tz=TZ, app_version="test")
-    return SimpleNamespace(
+    return personal_request(SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, config=config, osrm_http_client=http_client,
         )),
         session={"csrf": "test"},
-    )
+    ))
 
 
 async def _add(request, **overrides):
@@ -65,9 +67,9 @@ async def _add(request, **overrides):
 
 async def _insert_place(conn, name, lat, lon) -> int:
     row = await conn.execute(
-        "INSERT INTO places (name, geom) VALUES "
-        "(%s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography) RETURNING id",
-        (name, lon, lat),
+        "INSERT INTO places (account_id, name, geom) VALUES (%s, %s, ST_SetSRID(ST_MakePoint(%s, "
+        "%s), 4326)::geography) RETURNING id",
+        (account_id(conn), name, lon, lat,),
     )
     return (await row.fetchone())[0]
 
@@ -112,13 +114,13 @@ def _ok_handler(distance):
 
 def _run(coro_factory) -> None:
     async def run():
-        pool = make_pool(TEST_DB)
-        await pool.open(wait=True)
+        raw_pool = make_pool(TEST_DB)
+        await raw_pool.open(wait=True)
         try:
-            await reset_db(pool)
+            pool = await reset_account_db(raw_pool)
             await coro_factory(pool)
         finally:
-            await pool.close()
+            await raw_pool.close()
 
     asyncio.run(run())
 

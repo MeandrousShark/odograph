@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Tracking: Odograph{% endblock %}
+{% block content %}
+<div class="settings-page">
+  <div class="settings-page-header page-title">
+    <div>
+      <p class="page-title-eyebrow"><a href="/settings">Settings</a></p>
+      <h2 class="page-title-heading">Tracking</h2>
+      <p class="page-title-subtitle">Connect your devices and manage their access.</p>
+    </div>
+  </div>
+
+  {% if issued %}
+  <section class="settings-section" aria-labelledby="setup-heading">
+    <h2 id="setup-heading">Connect this device</h2>
+    <p>Copy these values into OwnTracks using HTTP mode. The password is shown only here, once.
+      Save it before leaving this page. Replacing a password immediately stops the old one.</p>
+    <p><label>URL <input readonly value="{{ ingest_url }}" autocomplete="off" spellcheck="false"></label></p>
+    <p><label>User <input readonly value="{{ issued.username }}" autocomplete="off" spellcheck="false"></label></p>
+    <p><label>Password <input readonly value="{{ issued.secret }}" autocomplete="off" spellcheck="false"></label></p>
+    <p class="muted">Your device keeps its trip history when its password changes.
+      A tracker label can be reused by other devices without mixing their trips.</p>
+  </section>
+  {% endif %}
+
+  <section class="settings-section" aria-labelledby="add-device-heading">
+    <h2 id="add-device-heading">Add a device</h2>
+    <form method="post" action="/settings/tracking/devices">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <label>Device name <input name="label" required maxlength="100" placeholder="My phone"></label>
+      <button type="submit">Create device</button>
+    </form>
+  </section>
+
+  <section class="settings-section" aria-labelledby="devices-heading">
+    <h2 id="devices-heading">Your devices</h2>
+    {% for device in devices %}
+    <article class="settings-section">
+      <h3>{{ device.label }}</h3>
+      <p class="muted">{% if device.last_received_at %}Last received: {{ device.last_received_at | local_dt }}{% else %}No locations received yet.{% endif %}</p>
+      {% if device.has_legacy_alias %}
+      <p>This device uses the migrated shared login. Give it its own password to keep its history
+        and stop accepting its old tracker label through the shared login. Other legacy devices will keep working.</p>
+      <p>On iOS, let OwnTracks finish uploading its queue before converting.
+        Changing its username or URL clears queued locations.</p>
+      <form method="post" action="/settings/tracking/devices/{{ device.id }}/convert">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <button type="submit">Give this device its own password</button>
+      </form>
+      {% endif %}
+      {% for credential in credentials if credential.tracking_device_id == device.id %}
+      <p>On iOS, turn off phone networking before replacing this password. Change only the password
+        in OwnTracks while offline, then reconnect. This preserves its queue and avoids rejected uploads
+        with the old password. Keep the username and URL unchanged.</p>
+      {% if credential.revoked_at %}
+      <p class="muted">Access revoked.</p>
+      <form method="post" action="/settings/tracking/credentials/{{ credential.public_id }}/rotate">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <button type="submit">Create replacement password</button>
+      </form>
+      {% else %}
+      <p>User: <code>{{ credential.basic_username }}</code></p>
+      <form method="post" action="/settings/tracking/credentials/{{ credential.public_id }}/rotate">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <button type="submit">Replace password</button>
+      </form>
+      <form method="post" action="/settings/tracking/credentials/{{ credential.public_id }}/revoke">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <button type="submit">Revoke access</button>
+      </form>
+      {% endif %}
+      {% endfor %}
+    </article>
+    {% else %}
+    <p>No devices yet. Add your first device above.</p>
+    {% endfor %}
+  </section>
+
+  {% for credential in credentials if credential.kind == 'legacy' %}
+  <section class="settings-section" aria-labelledby="legacy-heading">
+    <h2 id="legacy-heading">Migrated shared login</h2>
+    <p>User: <code>{{ credential.basic_username }}</code></p>
+    {% if credential.revoked_at %}
+    <p>Revoked. The old configuration cannot restore this login.</p>
+    {% else %}
+    <p>Your existing devices can keep using this login until you move them to their own passwords.
+      Revoking it stops all remaining legacy uploads and keeps their recorded history.</p>
+    <form method="post" action="/settings/tracking/credentials/{{ credential.public_id }}/revoke">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <button type="submit">Revoke shared login</button>
+    </form>
+    {% endif %}
+  </section>
+  {% endfor %}
+</div>
+{% endblock %}

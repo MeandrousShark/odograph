@@ -17,9 +17,11 @@ import httpx
 import pytest
 
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import fixture_device, personal_request
 from app.main import make_templates
 from app.ui import make_router
-from conftest import reset_db
+from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -42,23 +44,32 @@ def _request(pool, osrm_url="", osrm_http_client=None):
     config = SimpleNamespace(
         display_tz=TZ, trips_page_size=25, osrm_url=osrm_url, app_version="test",
     )
-    return SimpleNamespace(
+    return personal_request(SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, templates=make_templates(config), config=config,
             osrm_http_client=osrm_http_client,
         )),
         session={"csrf": "test-csrf"},
-    )
+    ))
 
 
 async def _insert_detected_trip(conn, device, started_at, ended_at, lat, lon) -> int:
     cur = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
-        " point_count, detector_version, start_geom, end_geom) "
-        "VALUES (%s, 'detected', %s, %s, 1000, 2, 2, "
-        " ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, "
-        " ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography) RETURNING id",
-        (device, started_at, ended_at, lon, lat, lon, lat),
+        "INSERT INTO trips (account_id, tracking_device_id, device, source, started_at, ended_at, "
+        "distance_m,  point_count, detector_version, start_geom, end_geom) VALUES (%s, %s, %s, "
+        "'detected', %s, %s, 1000, 2, 2,  ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,  "
+        "ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography) RETURNING id",
+        (
+            account_id(conn),
+            await fixture_device(conn, device),
+            device,
+            started_at,
+            ended_at,
+            lon,
+            lat,
+            lon,
+            lat,
+        ),
     )
     return (await cur.fetchone())[0]
 
@@ -74,10 +85,10 @@ async def _call_page(request, **prefill):
 
 
 async def _scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             trip_a = await _insert_detected_trip(
                 conn, "IDX", T0, T0 + timedelta(minutes=10), 47.0000, -122.0000
@@ -129,7 +140,7 @@ async def _scenario():
         )
         assert response.context["manual_prefill"]["osrm_hint"] is None
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_index_manual_prefill_and_osrm_suggestion():

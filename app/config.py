@@ -151,7 +151,7 @@ class Config:
     @classmethod
     def from_env(cls) -> "Config":
         dev_no_auth = os.environ.get("DEV_NO_AUTH", "") == "1"
-        required = ["DATABASE_URL", "INGEST_PASSWORD", "SESSION_SECRET"]
+        required = ["DATABASE_URL", "SESSION_SECRET"]
         missing = [k for k in required if not os.environ.get(k)]
         if missing:
             raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
@@ -212,7 +212,7 @@ class Config:
             app_version=os.environ.get("APP_VERSION", "dev"),
             app_git_revision=os.environ.get("APP_GIT_REVISION", "unknown"),
             ingest_username=os.environ.get("INGEST_USERNAME", "owntracks"),
-            ingest_password=os.environ["INGEST_PASSWORD"],
+            ingest_password=os.environ.get("INGEST_PASSWORD", ""),
             session_secret=os.environ["SESSION_SECRET"],
             oidc_issuer=oidc_issuer,
             oidc_client_id=oidc_client_id,

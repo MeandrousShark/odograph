@@ -12,24 +12,23 @@
 - The lifespan's startup is wrapped in an AsyncExitStack, so a failure partway
   through startup still tears down every resource already opened/started.
 
-Most of these need only asyncio, no database -- the two DB-backed tests
-(a real advisory-lock-contended detector skip, and a real lifespan/pool
-teardown) are skipped unless TEST_DATABASE_URL is set, same convention as
-tests/test_runner_db.py.
+Most of these need only asyncio, no database -- the DB-backed tests (a
+real lifespan/pool teardown) are skipped unless TEST_DATABASE_URL is set,
+same convention as tests/test_runner_db.py.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
-import psycopg
 import pytest
 
 from app.config import Config
-from app.db import DETECTOR_ADVISORY_LOCK_KEY, make_pool
-from app.detector.core import Params
-from app.detector.runner import DetectorRunner, DetectorScheduler
+from app.db import make_pool
+from app.detector.runner import DetectorRunner
 from app.diagnose import worker_reports_from_config
 import app.main as main_module
 from app.main import create_app
@@ -42,7 +41,7 @@ TEST_DB = os.environ.get("TEST_DATABASE_URL")
 db_only = pytest.mark.skipif(
     not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests"
 )
-# db_only alone only skips when TEST_DATABASE_URL is unset; the three cases
+# db_only alone only skips when TEST_DATABASE_URL is unset; the two cases
 # below also carry pytest.mark.db directly, since this file's name has no
 # "_db" suffix for tests/conftest.py's automatic tier assignment to key off.
 
@@ -84,40 +83,6 @@ def test_run_guarded_still_records_a_normal_success_and_no_skip():
     asyncio.run(worker._run_guarded())
     assert worker.status.last_success_at is not None
     assert worker.status.last_skip_at is None
-
-
-async def _run_detector_scheduler_records_skip_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
-    holder = await psycopg.AsyncConnection.connect(TEST_DB)
-    try:
-        await reset_db(pool)
-
-        # Hold the detector's advisory lock in an uncommitted transaction on
-        # a second connection, mimicking a concurrent instance's in-flight
-        # run -- same technique as test_runner_db.py's lock tests.
-        await holder.execute(
-            "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
-        )
-
-        runner = DetectorRunner(pool, Params())
-        scheduler = DetectorScheduler(runner, debounce_s=60.0, sweep_s=900.0)
-        await scheduler._run_guarded()
-
-        assert scheduler.status.last_skip_at is not None
-        assert scheduler.status.last_success_at is None
-    finally:
-        await holder.close()
-        await pool.close()
-
-
-@db_only
-@pytest.mark.db
-def test_detector_scheduler_run_guarded_records_a_skip_when_advisory_lock_is_held():
-    """A real lock-contended detector run, driven through the scheduler
-    wrapper (not DetectorRunner.run_once() directly), must land as a skip
-    -- last_success_at untouched -- not a success."""
-    asyncio.run(_run_detector_scheduler_records_skip_scenario())
 
 
 # ---- 3. stop() re-raises a cancellation delivered to its caller ----------
@@ -241,7 +206,7 @@ def test_lifespan_and_diagnostics_agree_on_config_worker_predicates(
     for key, value in REQUIRED_ENV.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused/unused")
-    monkeypatch.setenv("DEV_NO_AUTH", "1")
+    monkeypatch.setenv("DEV_NO_AUTH", "0")
     for key in OPTIONAL_ENV_TO_CLEAR + (
         "RAW_MESSAGE_RETENTION_DAYS", "EMAIL_FROM", "EMAIL_TO",
     ):
@@ -253,14 +218,19 @@ def test_lifespan_and_diagnostics_agree_on_config_worker_predicates(
     pool = _FakeLifespanResource()
     monkeypatch.setattr(main_module, "make_pool", lambda url: pool)
 
-    async def _run_migrations(pool):
+    async def _run_migrations(pool, config=None):
         pass
 
     monkeypatch.setattr(main_module, "run_migrations", _run_migrations)
+    @asynccontextmanager
+    async def fake_role_pools(url):
+        yield SimpleNamespace(control=pool, runtime=pool)
+    monkeypatch.setattr(main_module, "application_role_pools", fake_role_pools)
+    monkeypatch.setattr(main_module, "AccountWorker", _FakeLifespanResource)
     monkeypatch.setattr(main_module.httpx, "AsyncClient", _FakeLifespanResource)
     for name in (
         "SnapWorker", "GeocodeWorker", "RetentionWorker", "NudgeWorker",
-        "OdometerReminderWorker", "EmailDigestWorker", "DetectorScheduler",
+        "OdometerReminderWorker", "EmailDigestWorker",
     ):
         monkeypatch.setattr(main_module, name, _FakeLifespanResource)
     monkeypatch.setattr(main_module, "DetectorRunner", _FakeLifespanResource)
@@ -333,7 +303,7 @@ def test_lifespan_closes_the_pool_when_run_migrations_fails(monkeypatch):
     class _MigrationBoom(Exception):
         pass
 
-    async def _raising_run_migrations(pool):
+    async def _raising_run_migrations(pool, config=None):
         raise _MigrationBoom("migrations boom")
 
     monkeypatch.setattr(main_module, "run_migrations", _raising_run_migrations)
@@ -371,22 +341,20 @@ def test_lifespan_stops_an_already_started_worker_when_a_later_worker_fails_to_s
     pools = _capture_pool(monkeypatch)
 
     retention_instances = []
-    real_retention_cls = main_module.RetentionWorker
-
-    class _CapturingRetentionWorker(real_retention_cls):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            retention_instances.append(self)
-
-    monkeypatch.setattr(main_module, "RetentionWorker", _CapturingRetentionWorker)
+    real_worker_cls = main_module.AccountWorker
 
     class _NudgeBoom(Exception):
         pass
 
-    def _raising_nudge_worker(*args, **kwargs):
-        raise _NudgeBoom("nudge worker boom")
+    class _FailingStartupWorker(real_worker_cls):
+        def __init__(self, *args, **kwargs):
+            if kwargs["label"] == "nudge-worker":
+                raise _NudgeBoom("nudge worker boom")
+            super().__init__(*args, **kwargs)
+            if kwargs["label"] == "retention-worker":
+                retention_instances.append(self)
 
-    monkeypatch.setattr(main_module, "NudgeWorker", _raising_nudge_worker)
+    monkeypatch.setattr(main_module, "AccountWorker", _FailingStartupWorker)
 
     async def scenario():
         async with app.router.lifespan_context(app):

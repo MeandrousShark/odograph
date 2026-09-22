@@ -27,10 +27,12 @@ import pytest
 from psycopg.rows import dict_row
 
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import fixture_device
 from app.detector.core import Params
 from app.detector.runner import DetectorRunner, reprocess_places
 from app.ui import TRIP_COLUMNS
-from conftest import reset_db
+from conftest import reset_account_db
 from tests.synth import Drive, Stationary, build_track
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -49,10 +51,20 @@ ROOT = Path(__file__).resolve().parent.parent
 async def _insert_points(conn, points) -> None:
     for p in points:
         await conn.execute(
-            "INSERT INTO points (device, recorded_at, received_at, geom, "
-            " accuracy_m, velocity_kmh) "
-            "VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s)",
-            (DEVICE, p.t, p.t, p.lon, p.lat, p.accuracy_m, p.velocity_kmh),
+            "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, received_at, "
+            "geom,  accuracy_m, velocity_kmh) VALUES (%s, %s, %s, %s, %s, "
+            "ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s)",
+            (
+                account_id(conn),
+                await fixture_device(conn, DEVICE),
+                DEVICE,
+                p.t,
+                p.t,
+                p.lon,
+                p.lat,
+                p.accuracy_m,
+                p.velocity_kmh,
+            ),
         )
 
 
@@ -84,10 +96,10 @@ async def _build_two_trip_device(conn) -> list[int]:
 
 
 async def _run_survives_windowed_reprocess_scenario() -> None:
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             await _build_two_trip_device(conn)
 
@@ -127,7 +139,7 @@ async def _run_survives_windowed_reprocess_scenario() -> None:
             )
             assert await _exclusion_of(conn, last_trip_id) == "not_my_vehicle"
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 @db_only
@@ -136,10 +148,10 @@ def test_exclusion_survives_windowed_reprocess_of_its_own_window():
 
 
 async def _run_survives_full_device_reprocess_scenario() -> None:
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             await _build_two_trip_device(conn)
 
@@ -157,7 +169,9 @@ async def _run_survives_full_device_reprocess_scenario() -> None:
                 (first_trip_id,),
             )
 
-        await runner.reprocess_device_now(DEVICE)
+        async with pool.connection() as conn:
+            device_id = await fixture_device(conn, DEVICE)
+        await runner.reprocess_device_now(device_id)
 
         async with pool.connection() as conn:
             trip_ids_after = await _detected_trip_ids_by_start(conn)
@@ -166,7 +180,7 @@ async def _run_survives_full_device_reprocess_scenario() -> None:
             )
             assert await _exclusion_of(conn, first_trip_id) == "not_deductible"
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 @db_only
@@ -175,10 +189,10 @@ def test_exclusion_survives_full_device_reprocess():
 
 
 async def _run_survives_autotag_pass_scenario() -> None:
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
 
         async with pool.connection() as conn:
             # A rule-owned detected trip with no geometry and no tag_rules
@@ -187,11 +201,10 @@ async def _run_survives_autotag_pass_scenario() -> None:
             # this exact row -- not a no-op that would prove nothing about
             # whether that UPDATE also happens to overwrite exclusion.
             cur = await conn.execute(
-                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
-                " category, tag_source, exclusion) "
-                "VALUES ('A', 'detected', '2026-01-01T09:00:00Z', "
-                "'2026-01-01T09:30:00Z', 1000, 'business', 'rule', 'not_deductible') "
-                "RETURNING id"
+                "INSERT INTO trips (account_id, tracking_device_id, device, source, started_at, "
+                "ended_at, distance_m,  category, tag_source, exclusion) VALUES (%s, %s, 'A', "
+                "'detected', '2026-01-01T09:00:00Z', '2026-01-01T09:30:00Z', 1000, 'business', "
+                "'rule', 'not_deductible') RETURNING id", (account_id(conn), await fixture_device(conn, 'A'),)
             )
             trip_id = (await cur.fetchone())[0]
 
@@ -210,7 +223,7 @@ async def _run_survives_autotag_pass_scenario() -> None:
         )
         assert exclusion == "not_deductible"
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 @db_only
@@ -219,21 +232,21 @@ def test_exclusion_survives_autotag_pass():
 
 
 async def _run_trip_columns_selects_exclusion_scenario() -> None:
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             cur = await conn.execute(
-                "INSERT INTO trips (device, source, started_at, ended_at, distance_m) "
-                "VALUES ('manual', 'manual', '2026-01-01T09:00:00Z', "
-                "'2026-01-01T09:30:00Z', 1000) RETURNING id"
+                "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m) "
+                "VALUES (%s, 'manual', 'manual', '2026-01-01T09:00:00Z', '2026-01-01T09:30:00Z', "
+                "1000) RETURNING id", (account_id(conn),)
             )
             no_exclusion_id = (await cur.fetchone())[0]
             cur = await conn.execute(
-                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, exclusion) "
-                "VALUES ('manual', 'manual', '2026-01-02T09:00:00Z', "
-                "'2026-01-02T09:30:00Z', 1000, 'not_my_vehicle') RETURNING id"
+                "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, "
+                "exclusion) VALUES (%s, 'manual', 'manual', '2026-01-02T09:00:00Z', "
+                "'2026-01-02T09:30:00Z', 1000, 'not_my_vehicle') RETURNING id", (account_id(conn),)
             )
             excluded_id = (await cur.fetchone())[0]
 
@@ -247,7 +260,7 @@ async def _run_trip_columns_selects_exclusion_scenario() -> None:
         assert no_exclusion_row["exclusion"] is None
         assert excluded_row["exclusion"] == "not_my_vehicle"
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 @db_only

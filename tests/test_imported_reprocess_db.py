@@ -20,7 +20,9 @@ from app.detector.core import Params
 from app.detector.runner import DetectorRunner
 from app.main import make_templates
 from app.ui import make_router
-from conftest import reset_db
+from conftest import reset_account_db, seed_tracking_device
+from app.account_context import account_id
+from personal_support import personal_request
 from tests.synth import Drive, Stationary, build_track
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -42,29 +44,30 @@ TRIP_DETAIL = _endpoint()
 
 def _request(pool):
     config = SimpleNamespace(display_tz=TZ, app_version="test", detector_params=Params())
-    return SimpleNamespace(
+    return personal_request(SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, templates=make_templates(config), config=config,
         )),
         session={"csrf": "test-csrf"},
-    )
+    ))
 
 
 async def _insert_points(conn, points) -> None:
+    device = await seed_tracking_device(conn, DEVICE)
     for p in points:
         await conn.execute(
-            "INSERT INTO points (device, recorded_at, received_at, geom, "
+            "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, received_at, geom, "
             " accuracy_m, velocity_kmh) "
-            "VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s)",
-            (DEVICE, p.t, p.t, p.lon, p.lat, p.accuracy_m, p.velocity_kmh),
+            "VALUES (%s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s)",
+            (account_id(conn), device, DEVICE, p.t, p.t, p.lon, p.lat, p.accuracy_m, p.velocity_kmh),
         )
 
 
 async def _scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
 
         track = build_track([
             Stationary(900), Drive(km=2), Stationary(1200), Drive(km=2), Stationary(900),
@@ -87,9 +90,9 @@ async def _scenario():
             # never count as a real "adjacent trip" for the merge button, even
             # though it's the nearest trip to trip_a in started_at order.
             await conn.execute(
-                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, imported) "
-                "VALUES (%s, 'detected', %s, %s, 1000, true)",
-                (DEVICE, trip_a[1] - timedelta(hours=1), trip_a[1] - timedelta(minutes=30)),
+                "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, imported) "
+                "VALUES (%s, %s, 'detected', %s, %s, 1000, true)",
+                (account_id(conn), DEVICE, trip_a[1] - timedelta(hours=1), trip_a[1] - timedelta(minutes=30)),
             )
 
         request = _request(pool)
@@ -108,7 +111,7 @@ async def _scenario():
         assert response.context["has_prev_trip"] is True
         assert response.context["has_next_trip"] is False
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_trip_detail_merge_probe_ignores_imported_neighbor():

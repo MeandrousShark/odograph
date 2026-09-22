@@ -9,9 +9,11 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import personal_request
 from app.main import make_templates
 from app.ui import make_router
-from conftest import reset_db
+from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -34,34 +36,31 @@ STATS = _endpoint()
 
 def _request(pool):
     config = SimpleNamespace(display_tz=UTC, app_version="test")
-    return SimpleNamespace(
+    return personal_request(SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, templates=make_templates(config), config=config,
         )),
         session={"csrf": "test-csrf"},
-    )
+    ))
 
 
 async def _scenario() -> None:
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             vehicle_id = (await (await conn.execute(
                 "SELECT id FROM vehicles WHERE is_default ORDER BY id LIMIT 1"
             )).fetchone())[0]
             await conn.execute(
-                "INSERT INTO trips "
-                "(device, source, started_at, ended_at, distance_m, category, vehicle_id, exclusion) "
-                "VALUES "
-                "('stats', 'manual', '2026-06-01T09:00:00Z', '2026-06-01T09:30:00Z', "
-                "1000, 'business', %s, NULL), "
-                "('stats', 'manual', '2026-06-02T09:00:00Z', '2026-06-02T09:30:00Z', "
-                "2000, 'business', %s, 'not_my_vehicle'), "
-                "('stats', 'manual', '2026-06-03T09:00:00Z', '2026-06-03T09:30:00Z', "
-                "3000, 'business', %s, 'not_deductible')",
-                (vehicle_id, vehicle_id, vehicle_id),
+                "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, "
+                "category, vehicle_id, exclusion) VALUES (%s, 'stats', 'manual', "
+                "'2026-06-01T09:00:00Z', '2026-06-01T09:30:00Z', 1000, 'business', %s, NULL), (41, "
+                "'stats', 'manual', '2026-06-02T09:00:00Z', '2026-06-02T09:30:00Z', 2000, "
+                "'business', %s, 'not_my_vehicle'), (41, 'stats', 'manual', '2026-06-03T09:00:00Z',"
+                " '2026-06-03T09:30:00Z', 3000, 'business', %s, 'not_deductible')",
+                (account_id(conn), vehicle_id, vehicle_id, vehicle_id,),
             )
 
         response = await STATS(_request(pool), USER, 2026, "", "", "")
@@ -83,7 +82,7 @@ async def _scenario() -> None:
         assert vehicle.nondeductible_m == 3000.0
         assert vehicle.total_m == 4000.0
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_stats_queries_apply_exclusion_before_category():

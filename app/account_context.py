@@ -1,11 +1,10 @@
 """Account context primitives for account-scoped database access.
 
-Nothing in the running application imports this module yet. It is the
-mechanism half of multi-account ownership: an immutable principal, the
+The application binds personal work to an immutable principal and the
 transaction-local database setting every row-level security policy reads,
-a control entry point for identity work that must run with no account
-context at all, and a privilege check that refuses a database role capable
-of defeating those policies.
+with a separate control entry point for identity work and a privilege check
+that refuses roles capable of defeating those policies. Personal queries
+also scope rows explicitly while live policy activation remains staged.
 
 Two properties are load-bearing and easy to get wrong.
 
@@ -35,7 +34,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import AsyncIterator
+from typing import AsyncIterator, Any
 
 from psycopg import AsyncConnection
 from psycopg.pq import TransactionStatus
@@ -105,6 +104,55 @@ class AccountPrincipal:
             raise ValueError("auth_version must fit a positive bigint")
 
 
+@dataclass(frozen=True, slots=True)
+class AccountConnection:
+    """A transaction and its immutable authenticated owner.
+
+    SQL must still filter by this owner. The wrapper makes accidentally
+    passing a control connection to a personal helper a visible error.
+    """
+
+    _connection: AsyncConnection
+    principal: AccountPrincipal
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._connection, name)
+
+    async def commit(self) -> None:
+        raise AccountContextError("the account connection owns the transaction")
+
+    async def rollback(self) -> None:
+        raise AccountContextError("the account connection owns the transaction")
+
+
+def account_id(conn: AccountConnection) -> int:
+    if not isinstance(conn, AccountConnection):
+        raise AccountContextError("personal data requires an account connection")
+    return conn.principal.account_id
+
+
+@dataclass(frozen=True, slots=True)
+class AccountPool:
+    """Bind a restricted runtime pool to one validated principal."""
+
+    runtime_pool: AsyncConnectionPool
+    principal: AccountPrincipal
+
+    @asynccontextmanager
+    async def connection(self, *, timeout=None) -> AsyncIterator[AccountConnection]:
+        async with _account_connection(self.runtime_pool, self.principal, timeout=timeout) as conn:
+            # A shared row lock blocks disablement/password version changes
+            # until this unit of work commits. Runtime cannot mutate accounts.
+            await conn.execute(
+                "SELECT public.assert_account_active(%s, %s)",
+                (self.principal.account_id, self.principal.auth_version),
+            )
+            yield AccountConnection(conn, self.principal)
+
+    def get_stats(self):
+        return self.runtime_pool.get_stats()
+
+
 async def apply_account_context(
     conn: AsyncConnection, principal: AccountPrincipal
 ) -> None:
@@ -166,7 +214,16 @@ async def current_account_context(conn: AsyncConnection) -> int | None:
 
 @asynccontextmanager
 async def account_connection(
-    pool: AsyncConnectionPool, principal: AccountPrincipal
+    pool: AsyncConnectionPool, principal: AccountPrincipal,
+) -> AsyncIterator[AsyncConnection]:
+    """Borrow an account transaction with a required explicit principal."""
+    async with _account_connection(pool, principal) as conn:
+        yield conn
+
+
+@asynccontextmanager
+async def _account_connection(
+    pool: AsyncConnectionPool, principal: AccountPrincipal, *, timeout=None,
 ) -> AsyncIterator[AsyncConnection]:
     """Borrow a connection, open a transaction, and scope it to one account.
 
@@ -185,7 +242,7 @@ async def account_connection(
         raise AccountDisabledError(
             f"account {principal.account_id} is not enabled"
         )
-    async with pool.connection() as conn:
+    async with pool.connection(**({"timeout": timeout} if timeout is not None else {})) as conn:
         async with conn.transaction():
             await apply_account_context(conn, principal)
             yield conn

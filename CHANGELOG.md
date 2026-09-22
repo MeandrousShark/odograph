@@ -21,6 +21,28 @@ reproduced here.
   PostGIS image. Existing installations moving from `postgis/postgis:16-3.4`
   must follow the [fresh-target database image migration procedure](docs/upgrading.md#upgrading-the-postgis-database-image)
   before starting the target stack.
+- Schema 26 assigns existing personal data, settings, and tracker progress to
+  the installation's established account, preserving its IDs and history.
+  Requests, workers, and portable operations use explicit account-bound
+  connections under restricted database roles whose exact permissions are
+  validated at startup. RLS policies are prepared with enforcement disabled,
+  and the installation remains single-account. The migration refuses a
+  populated database that has no account; follow the
+  [schema 26 upgrade notes](docs/upgrading.md#account-ownership-migration-schema-26).
+- Personal settings and mileage-rate overrides are imported once from the old
+  configuration and are then changed in Settings. Editing their environment
+  variables no longer overrides stored preferences.
+- Tracker labels become account-owned devices, and Settings > Tracking issues,
+  rotates, and revokes per-device credentials. `INGEST_USERNAME` and
+  `INGEST_PASSWORD` are imported once on upgrade as a legacy adapter; editing
+  them later does not rotate, restore, or recreate a credential.
+- Temporary ingest throttling answers 503 instead of 429, because OwnTracks
+  for iOS deletes a queued fix on any 4xx response.
+- Portable exports use format 3. Imports still accept format 1 and 2 bundles.
+- Schema-26 backups include protected database-role state, and the matching
+  restore reconstructs permissions before startup. Rolling back after the
+  migration requires restoring the verified pre-upgrade archive with the
+  previous exact image.
 
 ### Fixed
 
@@ -29,6 +51,14 @@ reproduced here.
   transaction.
 - Refuse to attach a newly created QA database container to an orphaned
   persistent volume; recover it with its original image or a verified backup.
+
+### Security
+
+- Ingest stores only `location`, `transition`, `waypoint`, and `waypoints`
+  messages. Other message types, including the configuration dump OwnTracks'
+  Publish Settings button sends (which contains the tracker's plaintext
+  password), are acknowledged and discarded instead of being stored in
+  `raw_messages`.
 
 ## [0.11.1] - 2026-09-20
 

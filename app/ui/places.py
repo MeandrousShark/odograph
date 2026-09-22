@@ -7,7 +7,9 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from psycopg import errors
 from psycopg.rows import dict_row
 
+from app.account_context import account_id
 from app.auth import require_csrf, require_user
+from app.db import DETECTOR_ADVISORY_LOCK_KEY
 from app.detector.runner import reprocess_places_in
 from app.places_desc import PLACE_KINDS
 from app.validation import parse_finite_number
@@ -22,7 +24,7 @@ async def _fetch_places_rows(conn) -> list[dict]:
     await cur.execute(
         "SELECT id, name, kind::text AS kind, "
         " ST_Y(geom::geometry) AS lat, ST_X(geom::geometry) AS lon, radius_m "
-        "FROM places ORDER BY name"
+        "FROM places WHERE account_id = %s ORDER BY name", (account_id(conn),)
     )
     return await cur.fetchall()
 
@@ -40,7 +42,8 @@ async def _fetch_rules_rows(conn, places: list[dict]) -> list[dict]:
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         "SELECT id, a_place, a_kind::text AS a_kind, b_place, b_kind::text AS b_kind, "
-        " category::text AS category FROM tag_rules ORDER BY id"
+        " category::text AS category FROM tag_rules WHERE account_id = %s ORDER BY id",
+        (account_id(conn),),
     )
     rows = await cur.fetchall()
     for row in rows:
@@ -53,7 +56,8 @@ async def _fetch_boundary_overrides_rows(conn) -> list[dict]:
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         "SELECT id, device, kind::text AS kind, range_start, range_end, point_id, created_at "
-        "FROM trip_boundary_overrides ORDER BY created_at DESC"
+        "FROM trip_boundary_overrides WHERE account_id = %s ORDER BY created_at DESC",
+        (account_id(conn),),
     )
     return await cur.fetchall()
 
@@ -68,12 +72,14 @@ def register_boundary_override(router: APIRouter) -> None:
             failed reprocess doesn't leave the override gone with the device's
             trips still reflecting it.
             """
-            runner = request.app.state.detector_runner
+            runner = request.state.detector_runner
             reprocessed = False
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
+                # Global lock precedes writes and the reprocess they trigger.
+                await conn.execute("SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,))
                 cur = await conn.execute(
-                    "DELETE FROM trip_boundary_overrides WHERE id = %s RETURNING device",
-                    (override_id,),
+                    "DELETE FROM trip_boundary_overrides WHERE id = %s AND account_id = %s RETURNING tracking_device_id",
+                    (override_id, account_id(conn)),
                 )
                 row = await cur.fetchone()
                 if row:
@@ -89,7 +95,7 @@ def register(router: APIRouter) -> None:
         async def search_places(
             request: Request, q: str = Query(""), user: dict = Depends(require_user)
         ):
-            cfg = request.app.state.config
+            cfg = request.state.config
             results = []
             q = q.strip()
             provider = cfg.geocode_provider
@@ -133,12 +139,14 @@ def register(router: APIRouter) -> None:
             if parsed_lat is None or parsed_lon is None:
                 raise HTTPException(status_code=400, detail="Invalid coordinates")
             lat, lon = parsed_lat, parsed_lon
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
+                # Global lock precedes writes and the reprocess they trigger.
+                await conn.execute("SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,))
                 try:
                     await conn.execute(
-                        "INSERT INTO places (name, kind, geom, radius_m) "
-                        "VALUES (%s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s)",
-                        (name, kind, lon, lat, radius_m),
+                        "INSERT INTO places (account_id, name, kind, geom, radius_m) "
+                        "VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s)",
+                        (account_id(conn), name, kind, lon, lat, radius_m),
                     )
                 except errors.UniqueViolation:
                     raise HTTPException(status_code=400, detail="A place with that name already exists")
@@ -173,13 +181,15 @@ def register(router: APIRouter) -> None:
             if parsed_lat is None or parsed_lon is None:
                 raise HTTPException(status_code=400, detail="Invalid coordinates")
             lat, lon = parsed_lat, parsed_lon
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
+                # Global lock precedes writes and the reprocess they trigger.
+                await conn.execute("SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,))
                 try:
                     await conn.execute(
                         "UPDATE places SET name = %s, kind = %s, "
                         " geom = ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, radius_m = %s "
-                        "WHERE id = %s",
-                        (name, kind, lon, lat, radius_m, place_id),
+                        "WHERE id = %s AND account_id = %s",
+                        (name, kind, lon, lat, radius_m, place_id, account_id(conn)),
                     )
                 except errors.UniqueViolation:
                     raise HTTPException(status_code=400, detail="A place with that name already exists")
@@ -188,8 +198,10 @@ def register(router: APIRouter) -> None:
 
         @router.post("/places/{place_id}/delete", dependencies=[Depends(require_csrf)])
         async def delete_place(request: Request, place_id: int, user: dict = Depends(require_user)):
-            async with request.app.state.pool.connection() as conn:
-                await conn.execute("DELETE FROM places WHERE id = %s", (place_id,))
+            async with request.state.account_pool.connection() as conn:
+                # Global lock precedes writes and the reprocess they trigger.
+                await conn.execute("SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,))
+                await conn.execute("DELETE FROM places WHERE id = %s AND account_id = %s", (place_id, account_id(conn)))
                 await reprocess_places_in(conn)
             return _redirect_back(request)
 
@@ -229,12 +241,14 @@ def register(router: APIRouter) -> None:
                     status_code=400, detail="At least one side must be a specific place or a kind"
                 )
 
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
+                # Global lock precedes writes and the reprocess they trigger.
+                await conn.execute("SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,))
                 try:
                     await conn.execute(
-                        "INSERT INTO tag_rules (a_place, a_kind, b_place, b_kind, category) "
-                        "VALUES (%s, %s, %s, %s, %s)",
-                        (a_place_id, a_kind_val, b_place_id, b_kind_val, category),
+                        "INSERT INTO tag_rules (account_id, a_place, a_kind, b_place, b_kind, category) "
+                        "VALUES (%s, %s, %s, %s, %s, %s)",
+                        (account_id(conn), a_place_id, a_kind_val, b_place_id, b_kind_val, category),
                     )
                 except errors.ForeignKeyViolation:
                     raise HTTPException(status_code=400, detail="No such place")
@@ -243,7 +257,9 @@ def register(router: APIRouter) -> None:
 
         @router.post("/rules/{rule_id}/delete", dependencies=[Depends(require_csrf)])
         async def delete_rule(request: Request, rule_id: int, user: dict = Depends(require_user)):
-            async with request.app.state.pool.connection() as conn:
-                await conn.execute("DELETE FROM tag_rules WHERE id = %s", (rule_id,))
+            async with request.state.account_pool.connection() as conn:
+                # Global lock precedes writes and the reprocess they trigger.
+                await conn.execute("SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,))
+                await conn.execute("DELETE FROM tag_rules WHERE id = %s AND account_id = %s", (rule_id, account_id(conn)))
                 await reprocess_places_in(conn)
             return _redirect_back(request)

@@ -402,5 +402,5 @@ def test_test_db_sh_cleanup_never_touches_a_devsite_labelled_container(tmp_path)
 
     assert result.returncode == 0, result.stderr
     text = log.read_text()
-    assert "rm -f disposable-container" in text
-    assert "rm -f devsite-container" not in text
+    removals = [line for line in text.splitlines() if line.startswith("rm ")]
+    assert removals == ["rm -f --volumes disposable-container"]

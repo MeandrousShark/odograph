@@ -52,47 +52,47 @@ def test_malformed_from_does_not_affect_valid_to():
 
 
 def test_filter_sql_no_filters():
-    where, params = _trip_filter_sql("", None, None)
-    assert where == ""
-    assert params == []
+    where, params = _trip_filter_sql("", None, None, owner_id=41)
+    assert where == "WHERE trips.account_id = %s"
+    assert params == [41]
 
 
 def test_filter_sql_category_only():
-    where, params = _trip_filter_sql("business", None, None)
-    assert where == "WHERE category = %s"
-    assert params == ["business"]
+    where, params = _trip_filter_sql("business", None, None, owner_id=41)
+    assert where == "WHERE trips.account_id = %s AND category = %s"
+    assert params == [41, "business"]
 
 
 def test_filter_sql_unknown_category_ignored():
-    where, params = _trip_filter_sql("bogus", None, None)
-    assert where == ""
-    assert params == []
+    where, params = _trip_filter_sql("bogus", None, None, owner_id=41)
+    assert where == "WHERE trips.account_id = %s"
+    assert params == [41]
 
 
 def test_filter_sql_full_range():
     from_dt, to_dt = parse_date_range("2026-06-01", "2026-06-30", TZ)
-    where, params = _trip_filter_sql("personal", from_dt, to_dt)
-    assert where == "WHERE category = %s AND started_at >= %s AND started_at < %s"
-    assert params == ["personal", from_dt, to_dt]
+    where, params = _trip_filter_sql("personal", from_dt, to_dt, owner_id=41)
+    assert where == "WHERE trips.account_id = %s AND category = %s AND started_at >= %s AND started_at < %s"
+    assert params == [41, "personal", from_dt, to_dt]
 
 
 def test_filter_sql_no_vehicle_by_default():
-    where, params = _trip_filter_sql("", None, None)
-    assert where == ""
-    assert params == []
+    where, params = _trip_filter_sql("", None, None, owner_id=41)
+    assert where == "WHERE trips.account_id = %s"
+    assert params == [41]
 
 
 def test_filter_sql_vehicle_only():
-    where, params = _trip_filter_sql("", None, None, vehicle_id=3)
-    assert where == "WHERE vehicle_id = %s"
-    assert params == [3]
+    where, params = _trip_filter_sql("", None, None, vehicle_id=3, owner_id=41)
+    assert where == "WHERE trips.account_id = %s AND vehicle_id = %s"
+    assert params == [41, 3]
 
 
 def test_filter_sql_vehicle_combines_with_category_and_range():
     from_dt, to_dt = parse_date_range("2026-06-01", "2026-06-30", TZ)
-    where, params = _trip_filter_sql("business", from_dt, to_dt, vehicle_id=3)
-    assert where == "WHERE category = %s AND vehicle_id = %s AND started_at >= %s AND started_at < %s"
-    assert params == ["business", 3, from_dt, to_dt]
+    where, params = _trip_filter_sql("business", from_dt, to_dt, vehicle_id=3, owner_id=41)
+    assert where == "WHERE trips.account_id = %s AND category = %s AND vehicle_id = %s AND started_at >= %s AND started_at < %s"
+    assert params == [41, "business", 3, from_dt, to_dt]
 
 
 def test_parse_vehicle_id_empty_and_malformed_are_none():
@@ -124,66 +124,66 @@ def test_parse_vehicle_id_recognizes_unassigned_sentinel():
 
 
 def test_filter_sql_unassigned_vehicle_is_is_null_with_no_param():
-    where, params = _trip_filter_sql("", None, None, vehicle_id=VEHICLE_FILTER_UNASSIGNED)
-    assert where == "WHERE vehicle_id IS NULL"
-    assert params == []
+    where, params = _trip_filter_sql("", None, None, vehicle_id=VEHICLE_FILTER_UNASSIGNED, owner_id=41)
+    assert where == "WHERE trips.account_id = %s AND vehicle_id IS NULL"
+    assert params == [41]
 
 
 def test_filter_sql_unassigned_vehicle_combines_with_category_and_range():
     from_dt, to_dt = parse_date_range("2026-06-01", "2026-06-30", TZ)
     where, params = _trip_filter_sql(
         "business", from_dt, to_dt, vehicle_id=VEHICLE_FILTER_UNASSIGNED,
-    )
+    owner_id=41)
     assert where == (
-        "WHERE category = %s AND vehicle_id IS NULL AND started_at >= %s AND started_at < %s"
+        "WHERE trips.account_id = %s AND category = %s AND vehicle_id IS NULL AND started_at >= %s AND started_at < %s"
     )
-    assert params == ["business", from_dt, to_dt]
+    assert params == [41, "business", from_dt, to_dt]
 
 
 def test_filter_sql_search_term_is_no_filter_by_default():
-    where, params = _trip_filter_sql("", None, None)
-    assert where == ""
-    assert params == []
+    where, params = _trip_filter_sql("", None, None, owner_id=41)
+    assert where == "WHERE trips.account_id = %s"
+    assert params == [41]
 
 
 def test_filter_sql_empty_and_whitespace_search_term_is_byte_identical_to_no_filter():
-    no_q_where, no_q_params = _trip_filter_sql("", None, None)
+    no_q_where, no_q_params = _trip_filter_sql("", None, None, owner_id=41)
     for term in ("", "   ", "\t\n"):
-        where, params = _trip_filter_sql("", None, None, q=term)
+        where, params = _trip_filter_sql("", None, None, q=term, owner_id=41)
         assert where == no_q_where
         assert params == no_q_params
 
 
 def test_filter_sql_search_term_matches_notes_purpose_places_and_addresses():
-    where, params = _trip_filter_sql("", None, None, q="zephyr")
+    where, params = _trip_filter_sql("", None, None, q="zephyr", owner_id=41)
     assert where == (
-        "WHERE (notes ILIKE %s ESCAPE '\\' OR purpose ILIKE %s ESCAPE '\\' OR "
-        "(SELECT name FROM places WHERE id = trips.start_place_id) ILIKE %s ESCAPE '\\' OR "
-        "(SELECT name FROM places WHERE id = trips.end_place_id) ILIKE %s ESCAPE '\\' OR "
+        "WHERE trips.account_id = %s AND (notes ILIKE %s ESCAPE '\\' OR purpose ILIKE %s ESCAPE '\\' OR "
+        "(SELECT name FROM places WHERE account_id = trips.account_id AND id = trips.start_place_id) ILIKE %s ESCAPE '\\' OR "
+        "(SELECT name FROM places WHERE account_id = trips.account_id AND id = trips.end_place_id) ILIKE %s ESCAPE '\\' OR "
         "start_label ILIKE %s ESCAPE '\\' OR end_label ILIKE %s ESCAPE '\\' OR "
         "(SELECT address FROM geocode_cache\n"
-        "     WHERE lat = ROUND(ST_Y(trips.start_geom::geometry)::numeric, 4)\n"
+        "     WHERE account_id = trips.account_id AND lat = ROUND(ST_Y(trips.start_geom::geometry)::numeric, 4)\n"
         "       AND lon = ROUND(ST_X(trips.start_geom::geometry)::numeric, 4)) "
         "ILIKE %s ESCAPE '\\' OR "
         "(SELECT address FROM geocode_cache\n"
-        "     WHERE lat = ROUND(ST_Y(trips.end_geom::geometry)::numeric, 4)\n"
+        "     WHERE account_id = trips.account_id AND lat = ROUND(ST_Y(trips.end_geom::geometry)::numeric, 4)\n"
         "       AND lon = ROUND(ST_X(trips.end_geom::geometry)::numeric, 4)) "
         "ILIKE %s ESCAPE '\\')"
     )
-    assert params == ["%zephyr%"] * 8
+    assert params == [41] + ["%zephyr%"] * 8
 
 
 def test_filter_sql_search_term_combines_with_category_vehicle_and_range():
     from_dt, to_dt = parse_date_range("2026-06-01", "2026-06-30", TZ)
     where, params = _trip_filter_sql(
         "business", from_dt, to_dt, vehicle_id=3, q="zephyr",
-    )
+    owner_id=41)
     assert where.startswith(
-        "WHERE category = %s AND vehicle_id = %s AND started_at >= %s "
+        "WHERE trips.account_id = %s AND category = %s AND vehicle_id = %s AND started_at >= %s "
         "AND started_at < %s AND (notes ILIKE %s ESCAPE '\\'"
     )
-    assert params[:4] == ["business", 3, from_dt, to_dt]
-    assert params[4:] == ["%zephyr%"] * 8
+    assert params[:5] == [41, "business", 3, from_dt, to_dt]
+    assert params[5:] == ["%zephyr%"] * 8
 
 
 def test_escape_ilike_term_escapes_percent_underscore_and_backslash():

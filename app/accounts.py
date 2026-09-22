@@ -11,7 +11,7 @@ def valid_email(email: str) -> bool:
     return bool(email and email.isascii())
 
 
-async def get_account(conn, account_id: int = 1) -> dict | None:
+async def get_account(conn, account_id: int) -> dict | None:
     # Runs on essentially every authenticated request via require_user, so
     # this must never select avatar_bytes -- see get_account_avatar for the
     # only query allowed to touch that column.
@@ -21,6 +21,18 @@ async def get_account(conn, account_id: int = 1) -> dict | None:
         "created_at, updated_at, avatar_mime, avatar_updated_at "
         "FROM accounts WHERE id = %s",
         (account_id,),
+    )
+    return await cur.fetchone()
+
+
+async def get_account_by_email(conn, email: str) -> dict | None:
+    """Identity lookup by normalized login email; never a personal-data owner fallback."""
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(
+        "SELECT id, email, password_hash, is_admin, is_enabled, auth_version, "
+        "created_at, updated_at, avatar_mime, avatar_updated_at "
+        "FROM accounts WHERE email = %s",
+        (normalize_email(email),),
     )
     return await cur.fetchone()
 
@@ -51,7 +63,8 @@ async def get_account_avatar(conn, account_id: int) -> dict | None:
 
 
 async def set_account_avatar(
-    conn, account_id: int, avatar_bytes: bytes, avatar_mime: str
+    conn, account_id: int, avatar_bytes: bytes, avatar_mime: str,
+    *, expected_auth_version: int | None = None,
 ) -> dict | None:
     """Stores a newly uploaded avatar, replacing any previous one. Its
     result is fed straight into _account_user and _render_account (app/
@@ -64,14 +77,15 @@ async def set_account_avatar(
     await cur.execute(
         "UPDATE accounts SET avatar_bytes = %s, avatar_mime = %s, "
         "avatar_updated_at = now() WHERE id = %s "
+        "AND (%s::bigint IS NULL OR (is_enabled AND auth_version = %s)) "
         "RETURNING id, email, password_hash, is_admin, is_enabled, auth_version, "
         "avatar_mime, avatar_updated_at",
-        (avatar_bytes, avatar_mime, account_id),
+        (avatar_bytes, avatar_mime, account_id, expected_auth_version, expected_auth_version),
     )
     return await cur.fetchone()
 
 
-async def clear_account_avatar(conn, account_id: int) -> dict | None:
+async def clear_account_avatar(conn, account_id: int, *, expected_auth_version: int | None = None) -> dict | None:
     """Clears all three avatar columns together, as
     migrations/024_account_avatar.sql's all-or-nothing CHECK requires.
     Succeeds harmlessly (still returns the account row) whether or not an
@@ -81,9 +95,10 @@ async def clear_account_avatar(conn, account_id: int) -> dict | None:
     await cur.execute(
         "UPDATE accounts SET avatar_bytes = NULL, avatar_mime = NULL, "
         "avatar_updated_at = NULL WHERE id = %s "
+        "AND (%s::bigint IS NULL OR (is_enabled AND auth_version = %s)) "
         "RETURNING id, email, password_hash, is_admin, is_enabled, auth_version, "
         "avatar_mime, avatar_updated_at",
-        (account_id,),
+        (account_id, expected_auth_version, expected_auth_version),
     )
     return await cur.fetchone()
 
@@ -93,20 +108,16 @@ async def account_exists(conn) -> bool:
     return bool((await cur.fetchone())[0])
 
 
-async def create_admin(conn, email: str, password_hash: str) -> dict:
-    # Not a hot path (signup and legacy-OIDC admin establishment run once per
-    # instance), so the row shape can match get_account/get_sole_account for
-    # consistency rather than trimming avatar_mime/avatar_updated_at here too.
-    # A freshly inserted account always has both NULL.
-    cur = conn.cursor(row_factory=dict_row)
-    await cur.execute(
-        "INSERT INTO accounts (email, password_hash, is_admin) "
-        "VALUES (%s, %s, true) "
-        "RETURNING id, email, password_hash, is_admin, is_enabled, auth_version, "
-        "created_at, updated_at, avatar_mime, avatar_updated_at",
-        (normalize_email(email), password_hash),
+async def create_admin(
+    conn, email: str, password_hash: str, *, display_timezone: str = "UTC"
+) -> dict:
+    """Create first-account identity and owned defaults in one guarded operation."""
+    cur = await conn.execute(
+        "SELECT public.bootstrap_first_account(%s, %s, %s)",
+        (normalize_email(email), password_hash, display_timezone),
     )
-    return await cur.fetchone()
+    owner = (await cur.fetchone())[0]
+    return await get_account(conn, owner)
 
 
 async def replace_password(
@@ -118,7 +129,7 @@ async def replace_password(
     )
     params: tuple = (password_hash, account_id)
     if expected_auth_version is not None:
-        query += " AND auth_version = %s"
+        query += " AND is_enabled AND auth_version = %s"
         params += (expected_auth_version,)
     # Its result is fed straight into _account_user (app/auth.py), which now
     # reads avatar_mime/avatar_updated_at -- both must be RETURNING here or

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from psycopg import errors
 from psycopg.rows import dict_row
 
-from app.auth import require_csrf, require_user
+from app.account_context import account_id
+from app.auth import require_admin, require_csrf, require_user
 from app.page import render_page
 from app.db import _fetch_schema_version
 from app.detector.runner import DETECTOR_VERSION
@@ -27,7 +29,6 @@ from app.vehicles import (
 
 from app.ui._common import _redirect_back
 from app.ui.places import _fetch_boundary_overrides_rows, _fetch_places_rows, _fetch_rules_rows
-from app.ui.reports import _env_override_years
 
 
 async def _fetch_rates_rows(conn) -> list[dict]:
@@ -35,12 +36,9 @@ async def _fetch_rates_rows(conn) -> list[dict]:
     await cur.execute(
         "SELECT year, rate_per_mi::float AS rate_per_mi, "
         " rate_h2_per_mi::float AS rate_h2_per_mi, h2_start_month "
-        "FROM mileage_rates ORDER BY year DESC"
+        "FROM mileage_rates WHERE account_id = %s ORDER BY year DESC", (account_id(conn),)
     )
     rows = await cur.fetchall()
-    env_years = _env_override_years()
-    for row in rows:
-        row["env_override"] = row["year"] in env_years
     return rows
 
 
@@ -57,7 +55,7 @@ async def _fetch_odometer_context(conn) -> list[dict]:
     reading_cur = conn.cursor(row_factory=dict_row)
     await reading_cur.execute(
         "SELECT id, vehicle_id, recorded_at, odometer_m, note "
-        "FROM odometer_readings ORDER BY recorded_at"
+        "FROM odometer_readings WHERE account_id = %s ORDER BY recorded_at", (account_id(conn),)
     )
     readings_by_vehicle: dict[int, list[dict]] = {}
     for row in await reading_cur.fetchall():
@@ -68,8 +66,8 @@ async def _fetch_odometer_context(conn) -> list[dict]:
     trip_cur = conn.cursor(row_factory=dict_row)
     await trip_cur.execute(
         f"SELECT vehicle_id, started_at, {DISPLAY_DISTANCE_SQL} AS display_distance_m "
-        "FROM trips WHERE vehicle_id IS NOT NULL "
-        "AND exclusion IS DISTINCT FROM 'not_my_vehicle'"
+        "FROM trips WHERE account_id = %s AND vehicle_id IS NOT NULL "
+        "AND exclusion IS DISTINCT FROM 'not_my_vehicle'", (account_id(conn),)
     )
     trips_by_vehicle: dict[int, list[tuple]] = {}
     for row in await trip_cur.fetchall():
@@ -114,9 +112,10 @@ async def _fetch_device_fixes(conn) -> list[dict]:
     """
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
-        "SELECT device, max(received_at) AS newest_received_at, "
+        "SELECT tracking_device_id, device, max(received_at) AS newest_received_at, "
         "max(recorded_at) AS newest_recorded_at, count(*) AS point_count "
-        "FROM points GROUP BY device ORDER BY device"
+        "FROM points WHERE account_id = %s GROUP BY tracking_device_id, device ORDER BY device, tracking_device_id",
+        (account_id(conn),),
     )
     return await cur.fetchall()
 
@@ -124,7 +123,7 @@ async def _fetch_device_fixes(conn) -> list[dict]:
 def register(router: APIRouter) -> None:
         @router.get("/settings")
         async def settings_page(request: Request, user: dict = Depends(require_user)):
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 db_rates = await _fetch_rates_rows(conn)
                 # include_inactive=True: unlike the trip-assignment pickers, the
                 # settings table is where a deactivated vehicle is managed, so it
@@ -137,17 +136,21 @@ def register(router: APIRouter) -> None:
                 boundary_overrides = await _fetch_boundary_overrides_rows(conn)
                 device_fixes = await _fetch_device_fixes(conn)
                 schema_version = await _fetch_schema_version(conn)
-            cfg = request.app.state.config
+            cfg = request.state.config
             # A second, independent report -- built from its own pool borrows,
             # same as every other fetch above -- rather than folding into the
             # small `diagnostics` dict below: that dict's exact shape is a
             # long-standing contract (tests/test_version_identity.py), and the
             # config-presence/worker/migration detail here is new, additive
             # content, not a replacement for it.
-            diagnostics_report = await build_report(cfg, request.app.state.pool, request.app.state)
+            diagnostics_report = (
+                await build_report(request.app.state.config, request.state.account_pool, request.app.state)
+                if user["is_admin"] else None
+            )
             return await render_page(
                 request, "settings.html",
                 {
+                    "preferences": request.state.account_settings,
                     "rates": db_rates, "vehicles": vehicles, "odometer": odometer,
                     "auto_assign_default_vehicle": auto_assign_default_vehicle,
                     "places": places, "rules": rules,
@@ -166,14 +169,57 @@ def register(router: APIRouter) -> None:
                 },
             )
 
+        @router.post("/settings/preferences", dependencies=[Depends(require_csrf)])
+        async def update_preferences(
+            request: Request,
+            display_timezone: str = Form(..., max_length=128),
+            ntfy_topic: str = Form("", max_length=200),
+            email_to: str = Form("", max_length=512),
+            nudge_weekly_hour: int = Form(18, ge=0, le=23),
+            odometer_reminder_requested: str = Form(""),
+            odometer_reminder_hour: int = Form(9, ge=0, le=23),
+            email_weekly_nudge: str = Form(""),
+            email_monthly_summary: str = Form(""),
+            email_filing_reminder: str = Form(""),
+            email_odometer_reminder: str = Form(""),
+            email_digest_hour: int = Form(9, ge=0, le=23),
+            email_filing_reminder_mmdd: str = Form("01-15", max_length=5),
+            user: dict = Depends(require_user),
+        ):
+            timezone_name = display_timezone.strip()
+            try:
+                ZoneInfo(timezone_name)
+            except (ValueError, ZoneInfoNotFoundError):
+                raise HTTPException(status_code=400, detail="Invalid time zone")
+            try:
+                month, day = map(int, email_filing_reminder_mmdd.split("-"))
+                date(2000, month, day)
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=400, detail="Invalid reminder month and day")
+            if any(char in email_to or char in ntfy_topic for char in "\r\n"):
+                raise HTTPException(status_code=400, detail="Invalid notification destination")
+            async with request.state.account_pool.connection() as conn:
+                await conn.execute(
+                    "UPDATE account_settings SET display_tz = %s, ntfy_topic = %s, email_to = %s, "
+                    "nudge_weekly_hour = %s, odometer_reminder_requested = %s, odometer_reminder_hour = %s, "
+                    "email_weekly_nudge = %s, email_monthly_summary = %s, email_filing_reminder = %s, "
+                    "email_odometer_reminder = %s, email_digest_hour = %s, email_filing_reminder_mmdd = %s, "
+                    "updated_at = now() WHERE account_id = %s",
+                    (timezone_name, ntfy_topic.strip(), email_to.strip(), nudge_weekly_hour,
+                     odometer_reminder_requested == "1", odometer_reminder_hour,
+                     email_weekly_nudge == "1", email_monthly_summary == "1", email_filing_reminder == "1",
+                     email_odometer_reminder == "1", email_digest_hour, f"{month:02d}-{day:02d}", account_id(conn)),
+                )
+            return _redirect_back(request)
+
         @router.post("/settings/diagnostics/check", dependencies=[Depends(require_csrf)])
-        async def check_diagnostics_connectivity(request: Request, user: dict = Depends(require_user)):
+        async def check_diagnostics_connectivity(request: Request, user: dict = Depends(require_admin)):
             """The D6 "check now" control: OSRM/geocoder/ntfy/SMTP reachability
             is probed only in direct response to this explicit POST, never on a
             timer or from a plain page load -- see app/diagnose.py's module
             docstring for why a background prober was rejected.
             """
-            cfg = request.app.state.config
+            cfg = request.state.config
             connectivity = await run_connectivity_checks(cfg)
             return request.app.state.templates.TemplateResponse(
                 request, "_diagnostics_connectivity.html", {"connectivity": connectivity},
@@ -192,7 +238,7 @@ def register(router: APIRouter) -> None:
             name = name.strip()
             if not name:
                 raise HTTPException(status_code=400, detail="Name required")
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 await create_vehicle(
                     conn, name, make.strip() or None, model.strip() or None,
                     plate.strip() or None, is_default=(is_default == "1"),
@@ -212,7 +258,7 @@ def register(router: APIRouter) -> None:
             name = name.strip()
             if not name:
                 raise HTTPException(status_code=400, detail="Name required")
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 await update_vehicle(
                     conn, vehicle_id, name, make.strip() or None,
                     model.strip() or None, plate.strip() or None,
@@ -223,7 +269,7 @@ def register(router: APIRouter) -> None:
         async def make_vehicle_default(
             request: Request, vehicle_id: int, user: dict = Depends(require_user)
         ):
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 await set_default_vehicle(conn, vehicle_id)
                 return await _render_vehicles_table(request, conn)
 
@@ -231,7 +277,7 @@ def register(router: APIRouter) -> None:
         async def deactivate_vehicle_route(
             request: Request, vehicle_id: int, user: dict = Depends(require_user)
         ):
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 await deactivate_vehicle(conn, vehicle_id)
                 return await _render_vehicles_table(request, conn)
 
@@ -243,7 +289,7 @@ def register(router: APIRouter) -> None:
         ):
             # An unchecked HTML checkbox submits nothing at all, so absence must
             # read as false -- there is no "unset" value to distinguish from off.
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 await set_auto_assign_default_vehicle(
                     conn, auto_assign_default_vehicle == "1"
                 )
@@ -263,7 +309,7 @@ def register(router: APIRouter) -> None:
             `add_manual_trip`, so a 100 mi entry stores 160934.4 m, one
             canonical-meters convention across the whole app.
             """
-            tz = request.app.state.config.display_tz
+            tz = request.state.config.display_tz
             try:
                 recorded_at = datetime.fromisoformat(f"{date}T{time}").replace(tzinfo=tz)
             except ValueError:
@@ -275,12 +321,12 @@ def register(router: APIRouter) -> None:
                 raise HTTPException(status_code=400, detail="Invalid odometer value")
             odometer_m = parsed_value * METERS_PER_MILE
 
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 try:
                     await conn.execute(
-                        "INSERT INTO odometer_readings (vehicle_id, recorded_at, odometer_m, note) "
-                        "VALUES (%s, %s, %s, %s)",
-                        (vehicle_id, recorded_at, odometer_m, note.strip() or None),
+                        "INSERT INTO odometer_readings (account_id, vehicle_id, recorded_at, odometer_m, note) "
+                        "VALUES (%s, %s, %s, %s, %s)",
+                        (account_id(conn), vehicle_id, recorded_at, odometer_m, note.strip() or None),
                     )
                 except errors.ForeignKeyViolation:
                     raise HTTPException(status_code=400, detail="No such vehicle")
@@ -292,8 +338,8 @@ def register(router: APIRouter) -> None:
         async def delete_odometer_reading(
             request: Request, reading_id: int, user: dict = Depends(require_user)
         ):
-            async with request.app.state.pool.connection() as conn:
-                await conn.execute("DELETE FROM odometer_readings WHERE id = %s", (reading_id,))
+            async with request.state.account_pool.connection() as conn:
+                await conn.execute("DELETE FROM odometer_readings WHERE id = %s AND account_id = %s", (reading_id, account_id(conn)))
                 return await _render_odometer_table(request, conn)
 
         @router.post("/settings/rates", dependencies=[Depends(require_csrf)])
@@ -330,15 +376,15 @@ def register(router: APIRouter) -> None:
                 if not (1 <= h2_start_month <= 12):
                     raise HTTPException(status_code=400, detail="Invalid mid-year start month")
                 h2_month = h2_start_month
-            async with request.app.state.pool.connection() as conn:
+            async with request.state.account_pool.connection() as conn:
                 await conn.execute(
-                    "INSERT INTO mileage_rates (year, rate_per_mi, rate_h2_per_mi, h2_start_month)"
-                    " VALUES (%s, %s, %s, %s)"
-                    " ON CONFLICT (year) DO UPDATE SET"
+                    "INSERT INTO mileage_rates (account_id, year, rate_per_mi, rate_h2_per_mi, h2_start_month)"
+                    " VALUES (%s, %s, %s, %s, %s)"
+                    " ON CONFLICT (account_id, year) DO UPDATE SET"
                     " rate_per_mi = EXCLUDED.rate_per_mi,"
                     " rate_h2_per_mi = EXCLUDED.rate_h2_per_mi,"
                     " h2_start_month = EXCLUDED.h2_start_month, updated_at = now()",
-                    (year, rate_per_mi, h2_rate, h2_month),
+                    (account_id(conn), year, rate_per_mi, h2_rate, h2_month),
                 )
                 db_rates = await _fetch_rates_rows(conn)
             return request.app.state.templates.TemplateResponse(

@@ -4,7 +4,8 @@ Follow the [README setup steps](../README.md#quick-start) for a new install,
 including your timezone and administrator setup. Use this reference when you
 want to enable an optional feature or change a default.
 
-Recreate the `app` service after changing `.env`. A plain restart does not
+Recreate the `app` service after changing operator settings in `.env`.
+Personal preferences are saved under **Settings** and take effect without a restart. A plain restart does not
 reload container environment variables:
 
 ```sh
@@ -20,9 +21,9 @@ for disabled.
 
 | Variable | Default | Purpose |
 |---|---:|---|
-| `POSTGRES_PASSWORD` | generated, required | URI-safe password used to initialize the Compose database and construct `DATABASE_URL`. Changing it does not change the role password in an existing database volume. |
-| `DATABASE_URL` | set by `compose.yaml` | PostgreSQL connection URL required by the application. Set it directly only outside the canonical Compose stack. |
-| `DISPLAY_TZ` | `UTC` in the app | IANA timezone used for display, report boundaries, reminder schedules, and manual trip input. The generated baseline asks the operator to choose it explicitly. |
+| `POSTGRES_PASSWORD` | generated, required | URI-safe privileged setup and backup password used to initialize the Compose database and construct `DATABASE_URL`. Changing it does not change the role password in an existing database volume. |
+| `DATABASE_URL` | set by `compose.yaml` | Privileged PostgreSQL URL used for migrations, managed-role setup, backup, and recovery. Normal requests and workers use generated restricted connections. Set it directly only outside the canonical Compose stack. |
+| `DISPLAY_TZ` | `UTC` in the app | Initial IANA timezone suggestion for first-account setup, and the one-time timezone import for an upgraded account. After setup, change the account timezone in Settings. |
 | `FORWARDED_ALLOW_IPS` | empty in the app, `*` in generated config | Immediate proxy IPs or CIDRs uvicorn may trust for forwarded client and scheme headers. The generated wildcard is safe only with the shipped loopback-bound port. See [Reverse proxy and TLS](reverse-proxy.md#trusting-forwarded-headers). |
 
 Compose fixes the database name and role to `mileage`. `COMPOSE_PROJECT_NAME`
@@ -30,93 +31,89 @@ is a standard Compose variable that namespaces containers, networks, and named
 volumes. It is useful for isolated restore drills, but it is not an Odograph
 application setting.
 
-## Database role mechanism proof
+## Account ownership and database roles
 
-The supported database baseline is PostgreSQL 16 with PostGIS. The account
-context and managed-role helpers are preparatory code, exercised against a
-small disposable schema. Application startup, normal installs, and existing
-business tables still use the current database configuration. Running this
-proof does not enable multi-user operation or protect the live application
-with row-level security.
+The supported baseline is PostgreSQL 16 with PostGIS. Startup now runs the
+ownership migration and validates the live `ownership-prepared-v1` security
+contract before opening restricted pools. The application remains a
+single-account installation: the singleton guard stays in place, new-account
+registration stays closed after setup, and invitations are not available.
+Account policies are created, but PostgreSQL row-level security is **disabled**
+in this stage. Personal queries explicitly filter their authenticated owner;
+this is not an activated multi-user service.
 
-The proof uses a fixed, versioned contract, not operator-selected table lists.
-It separates privileged setup and backup, identity/control access, scoped
-account access, and narrow account bootstrap. Runtime and control roles cannot
-own protected tables, bypass row security, create schema objects, truncate
-protected tables, or assume a more privileged role. The non-login bootstrap
-function owner receives only the access needed to create a new account and
-its fixed defaults.
+Startup uses `DATABASE_URL` briefly for migrations and managed setup. It
+creates `odograph_control` for identity work and `odograph_runtime` for account
+work, then closes the privileged setup connection. `odograph_migrate` owns the
+application objects; `odograph_bootstrap` owns narrow account/admission
+functions. Both owner roles are non-login roles. Runtime and control cannot
+own application tables, bypass row security, create schema objects, truncate
+protected tables, or assume an owner role.
 
-Contract `p0-v1` uses `odograph_control` and `odograph_runtime` for restricted
-logins. `odograph_migrate` owns fixture tables; `odograph_bootstrap` owns the
-provisioning functions. Both owner roles are `NOLOGIN` and `NOBYPASSRLS`.
-The proof is confined to `account_context_p0` and `odograph_internal`.
+Restricted login credentials are generated and stored in protected database
+state, included in full backups. Operators do not maintain extra passwords or
+connection URLs. Restarts reuse this state and validate its database identity,
+roles, grants, ownership, functions, and prepared policies. Unsafe grants,
+missing state, or the wrong security contract stop startup without falling
+back to privileged request handling. Keep full backups and encrypted instance
+configuration protected: the database archive includes managed credentials.
 
-### Managed setup and connection handoff
+The canonical Compose database permits this setup. An external PostgreSQL
+service must permit migrations and management of these fixed roles; a
+restricted connection URL alone cannot initialize the application. Reserve
+`odograph_control`, `odograph_runtime`, `odograph_migrate`, and
+`odograph_bootstrap` for one Odograph installation per PostgreSQL cluster.
+Use separate clusters for additional installations or restore drills; separate
+databases in the same cluster share these role names and passwords. Setup and
+restore refuse to change roles with dependencies, database grants, or
+database-specific settings in another database. Run a
+backup and the supported [upgrade procedure](upgrading.md) before upgrading an
+existing installation. Ambiguous legacy ownership fails closed and requires
+repair before migration.
 
-Setup takes the existing privileged `DATABASE_URL`. It generates restricted
-login credentials and stores them in protected database state included in a
-full backup. Operators do not choose extra passwords or maintain separate
-control/runtime URLs. Restart reuses the stored credentials; interrupted setup
-can be retried. The database state and encrypted instance-configuration backup
-must be protected like the rest of the full-server backup.
+First-account creation atomically installs the account and its fixed defaults.
+An empty instance admits no personal data or tracking writes before setup.
+Existing one-account data keeps its IDs and ownership, while legacy effective
+preferences and ingest credentials are imported once.
 
-The unwired pool factory closes its privileged setup connection before
-returning control/runtime pools. It verifies the actual database, login role,
-installation identity, and effective object permissions. Missing credentials,
-wrong identities, unsafe grants, or incomplete recovery fail without a
-privileged fallback. Credential values are excluded from representations,
-command arguments, and reported connection errors.
+Use the [backup and fresh-target restore commands](backups.md) to preserve
+managed-role metadata and restore the required cluster roles, ownership, and
+grants. A database archive alone does not contain cluster-wide role definitions.
 
-An external PostgreSQL service must permit the explicit privileged setup, or
-have a DBA prepare the same contract. Restricted application credentials cannot
-perform this setup. The full application integration and external DBA workflow
-will be documented before activation; no additional production setup is
-required for this proof.
+## Personal preferences
 
-### Account bootstrap boundary
+**Settings > Time zone and notifications** owns the timezone, notification destinations,
+notification choices, and local delivery hours. Mileage rates and default
+vehicle behavior are also account-owned settings. Display, report boundaries,
+manual trip and odometer input, and reminder schedules use the saved account
+timezone.
 
-Control can call a narrow function to create the first administrator and exact
-defaults in one transaction. A fixed guard serializes simultaneous attempts.
-Control cannot write the guard, select an existing owner for defaults, or
-create an account by writing identity tables directly. A separate protected
-preauthorization fixture proves the atomic new-account seam for later
-invitations; user-facing invitation flows are not implemented here.
-
-### Archive recovery contract
-
-A PostgreSQL archive contains database rows and policy references, but not
-cluster-wide role definitions or login passwords. Recovery recreates the
-contract's role identities before restoring the archive, reapplies the exact
-versioned permissions and policies, and synchronizes the restored managed
-credentials. Non-secret metadata identifies the security contract and object
-owner. Unexpected permissive policies and grants must be removed or rejected
-before restricted pools become available.
-
-The archive proof uses PostgreSQL 16 `pg_dump` and `pg_restore` from the
-supported container image and a separate fresh cluster. It verifies complete
-data, sequence values, ownership, grants, and account isolation through real
-restricted connections. Full backup uses the configured privileged setup and
-backup identity. A plain table owner cannot bypass forced row security;
-restricted or unsuitable backup identities must fail visibly.
-
-Normal [backup and restore commands](backups.md) retain their current behavior.
-Integrating this contract with the complete application schema and supported
-upgrade/restore paths is required before activation.
+On upgrade, the existing account receives the effective values of `DISPLAY_TZ`,
+`NTFY_TOPIC`, the personal `EMAIL_*` settings, reminder hours/switches, and
+valid `MILEAGE_RATE_<YEAR>` overrides exactly once. Subsequent `.env` edits do
+not overwrite them. On a fresh account, choose the timezone during setup and
+enable desired notifications in Settings; destinations and notification
+choices begin empty/off. Service hosts, transport credentials, sender address,
+detector parameters, and worker intervals remain operator configuration.
 
 ## Authentication and ingest
 
 | Variable | Default | Purpose |
 |---|---:|---|
-| `INGEST_USERNAME` | `owntracks` | HTTP Basic username accepted by `/ingest`. |
-| `INGEST_PASSWORD` | generated, required | HTTP Basic password shared by OwnTracks devices. |
+| `INGEST_USERNAME` | `owntracks` | One-time legacy shared-login import on upgrade; new devices use usernames issued in Settings > Tracking. |
+| `INGEST_PASSWORD` | generated baseline | One-time legacy shared-secret import on upgrade. Editing it later does not rotate or restore the saved credential. New devices use passwords issued in Tracking. |
 | `SESSION_SECRET` | generated, required | Signs browser session cookies. Replacing it signs out every browser. |
 | `INITIAL_ADMIN_SIGNUP` | `0` when absent | `1` permits creation of the first administrator only while no account exists. Generated fresh-install config sets it to `1`; the durable account row closes signup permanently. |
 | `LOGIN_AUTH_MAX_FAILURES` | `10` | Failed local credential checks allowed per client within the login window. |
 | `LOGIN_AUTH_WINDOW_S` | `900` | Local login, signup, password, and account-credential limiter window in seconds. |
-| `INGEST_AUTH_MAX_FAILURES` | `10` | Failed OwnTracks authentication attempts allowed per client within the ingest window. Correct credentials are never throttled. |
+| `INGEST_AUTH_MAX_FAILURES` | `10` | Failed OwnTracks authentication attempts allowed per client within the ingest window. Blocked clients receive `503` with `Retry-After` before credential verification or body reads, even when retrying with correct credentials. |
 | `INGEST_AUTH_WINDOW_S` | `900` | Ingest authentication limiter window in seconds. |
 | `INGEST_MAX_BODY_BYTES` | `65536` | Maximum OwnTracks request body. Oversized authenticated bodies are logged and dropped with a successful empty response so a phone does not retry-loop poison input. |
+
+Each application process also admits at most two concurrent ingest credential
+verifications. When both slots are busy, additional requests receive `503`
+with `Retry-After: 1` before verification or body reads. Cancelled requests keep
+their slot until verification finishes; a device can retry afterward.
 
 OIDC is optional. Set all three required provider values together, register
 `https://your-domain/auth/callback`, then link the identity from Account
@@ -129,7 +126,7 @@ Security while signed in locally.
 | `OIDC_CLIENT_SECRET` | unset | Provider client secret. |
 | `ALLOWED_EMAIL` | unset | Compatibility gate for the one-time claim of an upgraded OIDC-only installation. It does not authorize or link normal OIDC login. |
 | `ADMIN_TOKEN` | obsolete and ignored | Accepted in an old `.env` for upgrade compatibility. It enables no route and its value is never reported. Remove it when convenient. |
-| `DEV_NO_AUTH` | `0` | Development only. `1` disables UI authentication. Never enable it on a deployed instance. |
+| `DEV_NO_AUTH` | `0` | Development only. `1` binds a real synthetic account; it refuses an existing non-synthetic account. Never enable it on a deployed instance. |
 
 ## Detector behavior
 
@@ -159,7 +156,7 @@ points.
 | `HSTS_MAX_AGE` | `0` | Adds an HSTS header on requests already seen as HTTPS. `0` disables it. Prefer setting HSTS at the reverse proxy. |
 | `PORTABLE_IMPORT_MAX_BYTES` | `52428800` | Maximum uploaded portable JSON document size in bytes. |
 | `ACCOUNT_AVATAR_MAX_BYTES` | `512000` | Configurable maximum uploaded account avatar size in bytes. Images are also capped at 16,777,216 total decoded pixels and 8192 pixels per side. |
-| `MILEAGE_RATE_<YEAR>` | database rate | Positive dollars-per-mile override for one year, for example `MILEAGE_RATE_2026=0.725`. It replaces any midyear split for that year. Invalid values are ignored with a warning. |
+| `MILEAGE_RATE_<YEAR>` | database rate | Legacy one-time upgrade input for the existing account. A valid positive value replaces that year's midyear split during import; later edits have no effect. Manage saved rates in Settings. |
 
 ## Retention
 
@@ -201,12 +198,13 @@ Prepare a regional dataset before setting these values. See
 
 ### ntfy
 
-Set both `NTFY_URL` and `NTFY_TOPIC` to enable ntfy reminders.
+Set `NTFY_URL` for the shared transport, then save your topic and reminder
+choices in Settings. `NTFY_TOPIC` is only a legacy upgrade input.
 
 | Variable | Default | Purpose |
 |---|---:|---|
 | `NTFY_URL` | unset | ntfy server base URL. |
-| `NTFY_TOPIC` | unset | Destination topic. |
+| `NTFY_TOPIC` | unset | Legacy one-time destination import; manage the saved topic in Settings. |
 | `NTFY_TOKEN` | unset | Optional bearer token. |
 | `NTFY_USERNAME` | unset | Optional Basic-auth username. |
 | `NTFY_PASSWORD` | unset | Optional Basic-auth password. Username/password take precedence over a token when both are set. |
@@ -214,8 +212,9 @@ Set both `NTFY_URL` and `NTFY_TOPIC` to enable ntfy reminders.
 
 ### Email
 
-Set `SMTP_HOST`, `EMAIL_FROM`, and `EMAIL_TO` together to enable the email
-worker.
+Set `SMTP_HOST` and `EMAIL_FROM` for the shared transport, then save your
+recipient and delivery choices in Settings. The personal values below are
+legacy one-time upgrade inputs, not live overrides.
 
 | Variable | Default | Purpose |
 |---|---:|---|
@@ -234,7 +233,10 @@ worker.
 
 ## Worker scheduling
 
-Hours use `DISPLAY_TZ`. Interval and debounce values are seconds.
+Personal hours use the saved account timezone. The reminder hour/switch
+variables below are legacy one-time upgrade inputs; edit them in Settings
+after migration. Interval and debounce values remain live operator settings
+and use seconds.
 
 | Variable | Default | Purpose |
 |---|---:|---|

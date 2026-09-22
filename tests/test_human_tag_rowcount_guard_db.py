@@ -23,9 +23,11 @@ import psycopg
 from fastapi import HTTPException
 
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import personal_request
 from app.main import make_templates
 from app.ui import _apply_human_tag, make_router
-from conftest import reset_db
+from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -47,20 +49,20 @@ REVIEW_TAG = _endpoint("/review/{trip_id}/tag", "POST")
 
 def _request(pool):
     config = SimpleNamespace(display_tz=TZ, app_version="test")
-    return SimpleNamespace(
+    return personal_request(SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, templates=make_templates(config), config=config,
         )),
         session={"csrf": "test"},
         headers={},
-    )
+    ))
 
 
 async def _insert_trip(conn, started_at: datetime) -> int:
     cur = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, distance_m, category) "
-        "VALUES ('phone', 'manual', %s, %s, 1000, 'unclassified') RETURNING id",
-        (started_at, started_at + timedelta(minutes=15)),
+        "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, category)"
+        " VALUES (%s, 'phone', 'manual', %s, %s, 1000, 'unclassified') RETURNING id",
+        (account_id(conn), started_at, started_at + timedelta(minutes=15),),
     )
     return (await cur.fetchone())[0]
 
@@ -70,10 +72,10 @@ async def _apply_human_tag_guard_scenario():
     is gone, both `_apply_human_tag` branches must 404 rather than silently
     return. Without the rowcount guard this raises nothing at all.
     """
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             trip_id = await _insert_trip(conn, BASE)
             await conn.execute("DELETE FROM trips WHERE id = %s", (trip_id,))
@@ -88,7 +90,7 @@ async def _apply_human_tag_guard_scenario():
                 assert exc.value.status_code == 404
                 assert exc.value.detail == "No such trip"
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_apply_human_tag_guards_both_branches_against_vanished_row():
@@ -119,10 +121,10 @@ async def _run_blocked_and_release(pool, trip_id, coro_factory):
 
 
 async def _review_tag_race_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             trip_id = await _insert_trip(conn, BASE)
 
@@ -138,7 +140,7 @@ async def _review_tag_race_scenario():
         assert exc.value.status_code == 404
         assert exc.value.detail == "No such trip"
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_review_tag_trip_returns_404_not_silent_success_under_delete_race():
@@ -150,10 +152,10 @@ def test_review_tag_trip_returns_404_not_silent_success_under_delete_race():
 
 
 async def _tag_trip_race_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             trip_id = await _insert_trip(conn, BASE)
 
@@ -166,7 +168,7 @@ async def _tag_trip_race_scenario():
             await asyncio.wait_for(task, timeout=5)
         assert exc.value.status_code == 404
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_tag_trip_returns_404_not_silent_success_under_delete_race():
@@ -175,10 +177,10 @@ def test_tag_trip_returns_404_not_silent_success_under_delete_race():
 
 
 async def _happy_path_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             tag_trip_id = await _insert_trip(conn, BASE)
             review_trip_id = await _insert_trip(conn, BASE + timedelta(hours=1))
@@ -205,7 +207,7 @@ async def _happy_path_scenario():
             )
             assert await cur.fetchone() == ("personal", "human")
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_tag_and_review_tag_still_succeed_on_a_live_trip():

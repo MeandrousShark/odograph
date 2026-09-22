@@ -301,7 +301,7 @@ def test_settings_tables_are_full_width_padded_and_scroll_inside_section_wrapper
 def test_diagnostics_workers_table_scrolls_inside_its_own_wrapper():
     body = _templates().env.get_template("settings.html").render(
         boundary_overrides=[], rates=[], vehicles=[], odometer=[], places=[],
-        rules=[], geocode_enabled=False, user={"name": "Tester"}, csrf_token="test",
+        rules=[], geocode_enabled=False, user={"name": "Tester", "is_admin": True}, csrf_token="test",
         diagnostics={"app_version": "test", "git_revision": "test",
                      "schema_version": "1", "detector_version": 1},
         diagnostics_report={

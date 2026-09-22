@@ -34,7 +34,8 @@ from app.detector.runner import (
 )
 from app.ui import _validate_split_distance
 from app.vehicles import deactivate_vehicle, list_vehicles, set_auto_assign_default_vehicle
-from conftest import reset_db
+from conftest import reset_account_db, seed_tracking_device
+from app.account_context import account_id
 from tests.synth import Drive, Stationary, build_track
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -45,15 +46,35 @@ pytestmark = pytest.mark.skipif(
 DEVICE = "TESTDEV"
 
 
+async def _reset_fixture(raw_pool):
+    pool = await reset_account_db(raw_pool)
+    async with pool.connection() as conn:
+        await seed_tracking_device(conn, DEVICE)
+    return pool
+
+
+async def _stream(conn):
+    cur = await conn.execute(
+        "SELECT id FROM tracking_devices WHERE account_id=%s AND label=%s",
+        (account_id(conn), DEVICE),
+    )
+    return (await cur.fetchone())[0]
+
+
+async def _stream_id(pool):
+    async with pool.connection() as conn:
+        return await _stream(conn)
+
+
 async def _insert_points(conn, points) -> None:
     # received_at = recorded_at (i.e. "already ingested long ago") so that
     # later bumping one point's received_at is what marks the dirty window.
     for p in points:
         await conn.execute(
-            "INSERT INTO points (device, recorded_at, received_at, geom, "
+            "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, received_at, geom, "
             " accuracy_m, velocity_kmh) "
-            "VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s)",
-            (DEVICE, p.t, p.t, p.lon, p.lat, p.accuracy_m, p.velocity_kmh),
+            "VALUES (%s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s)",
+            (account_id(conn), await _stream(conn), DEVICE, p.t, p.t, p.lon, p.lat, p.accuracy_m, p.velocity_kmh),
         )
 
 
@@ -91,10 +112,10 @@ async def _snap_rows(conn) -> list[tuple]:
 
 
 async def _run_unchanged_full_reprocess_preserves_snap_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await _reset_fixture(raw_pool)
         pts = build_track([
             Stationary(900), Drive(km=2), Stationary(1200),
             Drive(km=2), Stationary(900),
@@ -110,13 +131,13 @@ async def _run_unchanged_full_reprocess_preserves_snap_scenario():
             await _mark_terminally_snapped(conn, trip_ids)
             before = await _snap_rows(conn)
 
-        await runner.reprocess_device_now(DEVICE)
+        await runner.reprocess_device_now(await _stream_id(pool))
 
         async with pool.connection() as conn:
             after = await _snap_rows(conn)
         assert after == before
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_unchanged_matched_trips_preserve_terminal_snap_across_full_reprocess():
@@ -124,10 +145,10 @@ def test_unchanged_matched_trips_preserve_terminal_snap_across_full_reprocess():
 
 
 async def _run_legacy_raw_path_preserves_snap_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await _reset_fixture(raw_pool)
         pts = build_track([
             Stationary(900), Drive(km=3), Stationary(900),
         ])
@@ -152,7 +173,7 @@ async def _run_legacy_raw_path_preserves_snap_scenario():
             )
             legacy_path, *snap_before = await cur.fetchone()
 
-        await runner.reprocess_device_now(DEVICE)
+        await runner.reprocess_device_now(await _stream_id(pool))
 
         async with pool.connection() as conn:
             cur = await conn.execute(
@@ -164,7 +185,7 @@ async def _run_legacy_raw_path_preserves_snap_scenario():
         assert corrected_path != legacy_path
         assert snap_after == snap_before
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_legacy_raw_path_is_rewritten_without_invalidating_unchanged_snap_inputs():
@@ -172,10 +193,10 @@ def test_legacy_raw_path_is_rewritten_without_invalidating_unchanged_snap_inputs
 
 
 async def _run_incremental_reprocess_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await _reset_fixture(raw_pool)
 
         # stay A -> drive -> stay B -> drive -> stay C: two detectable trips.
         pts = build_track([
@@ -238,7 +259,7 @@ async def _run_incremental_reprocess_scenario():
             )
             assert await cur.fetchone() == ("Client meeting", "keep separate")
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_incremental_reprocess_keeps_arrival_boundary_point():
@@ -246,10 +267,10 @@ def test_incremental_reprocess_keeps_arrival_boundary_point():
 
 
 async def _run_reprocess_detaches_linked_expense_scenario(caplog) -> None:
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await _reset_fixture(raw_pool)
         async with pool.connection() as conn:
             await _insert_points(conn, build_track([
                 Stationary(1200), Drive(km=3), Stationary(1200),
@@ -265,15 +286,15 @@ async def _run_reprocess_detaches_linked_expense_scenario(caplog) -> None:
             trip_id = (await cur.fetchone())[0]
             await conn.execute(
                 "INSERT INTO expenses "
-                "(vehicle_id, incurred_on, category, amount, treatment, notes, trip_id) "
-                "VALUES (1, '2026-08-01', 'fuel', 22.18, 'fully_business', "
+                "(account_id, vehicle_id, incurred_on, category, amount, treatment, notes, trip_id) "
+                "VALUES (%s, 1, '2026-08-01', 'fuel', 22.18, 'fully_business', "
                 "'detector reprocess', %s)",
-                (trip_id,),
+                (account_id(conn), trip_id),
             )
             await conn.execute("DELETE FROM points WHERE device = %s", (DEVICE,))
 
         caplog.set_level(logging.WARNING, logger=runner_module.__name__)
-        await runner.reprocess_device_now(DEVICE)
+        await runner.reprocess_device_now(await _stream_id(pool))
 
         async with pool.connection() as conn:
             cur = await conn.execute("SELECT count(*) FROM trips WHERE id = %s", (trip_id,))
@@ -289,7 +310,7 @@ async def _run_reprocess_detaches_linked_expense_scenario(caplog) -> None:
         assert f"deleting trip {trip_id}" in caplog.text
         assert "expenses detached" in caplog.text
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_detector_reprocess_detaches_linked_expenses_and_logs_warning(caplog):
@@ -297,11 +318,11 @@ def test_detector_reprocess_detaches_linked_expenses_and_logs_warning(caplog):
 
 
 async def _run_reprocess_places_lock_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     holder = await psycopg.AsyncConnection.connect(TEST_DB, autocommit=True)
     try:
-        await reset_db(pool)
+        pool = await _reset_fixture(raw_pool)
 
         # Hold the detector's advisory lock on a separate session, mimicking an
         # in-flight detector run. reprocess_places must block on it, not barge
@@ -325,7 +346,7 @@ async def _run_reprocess_places_lock_scenario():
         assert task.done() and task.exception() is None
     finally:
         await holder.close()
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_reprocess_places_waits_for_detector_lock():
@@ -333,10 +354,10 @@ def test_reprocess_places_waits_for_detector_lock():
 
 
 async def _run_lock_released_on_sql_error_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await _reset_fixture(raw_pool)
         pts = build_track([Stationary(900), Drive(km=2), Stationary(900)])
         async with pool.connection() as conn:
             await _insert_points(conn, pts)
@@ -383,7 +404,7 @@ async def _run_lock_released_on_sql_error_scenario():
         runner._process_device = real_process_device
         assert await runner.run_once() is True
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_advisory_lock_not_leaked_on_sql_error_mid_run():
@@ -396,10 +417,10 @@ def test_advisory_lock_not_leaked_on_sql_error_mid_run():
 # --- merge/split overrides, via the DB-backed runner ------
 
 async def _run_merge_via_override_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await _reset_fixture(raw_pool)
         pts = build_track([
             Stationary(900), Drive(km=2), Stationary(1200), Drive(km=2), Stationary(900),
         ])
@@ -422,12 +443,12 @@ async def _run_merge_via_override_scenario():
             )
             middle_start, middle_end = (await cur.fetchall())[1]
             await conn.execute(
-                "INSERT INTO trip_boundary_overrides (device, kind, range_start, range_end) "
-                "VALUES (%s, 'suppress', %s, %s)",
-                (DEVICE, middle_start, middle_end),
+                "INSERT INTO trip_boundary_overrides (account_id, tracking_device_id, device, kind, range_start, range_end) "
+                "VALUES (%s, %s, %s, 'suppress', %s, %s)",
+                (account_id(conn), await _stream(conn), DEVICE, middle_start, middle_end),
             )
 
-        await runner.reprocess_device_now(DEVICE)
+        await runner.reprocess_device_now(await _stream_id(pool))
 
         async with pool.connection() as conn:
             after = await _trip_counts(conn)
@@ -437,7 +458,7 @@ async def _run_merge_via_override_scenario():
         assert live == pc
         assert snap_after == [(tid, "pending", None, None, None)]
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_suppress_override_merges_via_reprocess_device_now():
@@ -447,10 +468,10 @@ def test_suppress_override_merges_via_reprocess_device_now():
 
 
 async def _run_split_via_override_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await _reset_fixture(raw_pool)
         pts = build_track([Stationary(1200), Drive(km=5, speed_kmh=50), Stationary(1800)])
         async with pool.connection() as conn:
             await _insert_points(conn, pts)
@@ -476,11 +497,11 @@ async def _run_split_via_override_scenario():
 
         async with pool.connection() as conn:
             await conn.execute(
-                "INSERT INTO trip_boundary_overrides (device, kind, point_id) VALUES (%s, 'force', %s)",
-                (DEVICE, split_id),
+                "INSERT INTO trip_boundary_overrides (account_id, tracking_device_id, device, kind, point_id) VALUES (%s, %s, %s, 'force', %s)",
+                (account_id(conn), await _stream(conn), DEVICE, split_id),
             )
 
-        await runner.reprocess_device_now(DEVICE)
+        await runner.reprocess_device_now(await _stream_id(pool))
 
         async with pool.connection() as conn:
             after = await _trip_counts(conn)
@@ -509,7 +530,7 @@ async def _run_split_via_override_scenario():
             (after[1][0], "pending", None, None, None),
         ]
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_force_override_splits_via_reprocess_device_now():
@@ -520,10 +541,10 @@ def test_force_override_splits_via_reprocess_device_now():
 
 
 async def _run_merge_survives_incremental_reprocess_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await _reset_fixture(raw_pool)
         pts = build_track([
             Stationary(900), Drive(km=2), Stationary(1200), Drive(km=2), Stationary(900),
         ])
@@ -542,11 +563,11 @@ async def _run_merge_survives_incremental_reprocess_scenario():
             )
             middle_start, middle_end = (await cur.fetchall())[1]
             await conn.execute(
-                "INSERT INTO trip_boundary_overrides (device, kind, range_start, range_end) "
-                "VALUES (%s, 'suppress', %s, %s)",
-                (DEVICE, middle_start, middle_end),
+                "INSERT INTO trip_boundary_overrides (account_id, tracking_device_id, device, kind, range_start, range_end) "
+                "VALUES (%s, %s, %s, 'suppress', %s, %s)",
+                (account_id(conn), await _stream(conn), DEVICE, middle_start, middle_end),
             )
-        await runner.reprocess_device_now(DEVICE)
+        await runner.reprocess_device_now(await _stream_id(pool))
         async with pool.connection() as conn:
             merged = await _trip_counts(conn)
         assert len(merged) == 1, f"expected the override to merge into one trip, got {merged}"
@@ -561,9 +582,9 @@ async def _run_merge_survives_incremental_reprocess_scenario():
         late_t = middle_start + timedelta(seconds=5)
         async with pool.connection() as conn:
             await conn.execute(
-                "INSERT INTO points (device, recorded_at, received_at, geom, accuracy_m, velocity_kmh) "
-                "VALUES (%s, %s, now(), ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s)",
-                (DEVICE, late_t, mid_stay_pts[0].lon, mid_stay_pts[0].lat, 10.0, 0.0),
+                "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, received_at, geom, accuracy_m, velocity_kmh) "
+                "VALUES (%s, %s, %s, %s, now(), ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s)",
+                (account_id(conn), await _stream(conn), DEVICE, late_t, mid_stay_pts[0].lon, mid_stay_pts[0].lat, 10.0, 0.0),
             )
         assert await runner.run_once() is True
 
@@ -573,7 +594,7 @@ async def _run_merge_survives_incremental_reprocess_scenario():
             f"merge should survive a normal incremental reprocess touching its span, got {after}"
         )
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_merge_survives_incremental_reprocess():
@@ -585,10 +606,10 @@ def test_merge_survives_incremental_reprocess():
 
 
 async def _run_split_survives_incremental_reprocess_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await _reset_fixture(raw_pool)
         pts = build_track([Stationary(1200), Drive(km=5, speed_kmh=50), Stationary(1800)])
         async with pool.connection() as conn:
             await _insert_points(conn, pts)
@@ -611,10 +632,10 @@ async def _run_split_survives_incremental_reprocess_scenario():
 
         async with pool.connection() as conn:
             await conn.execute(
-                "INSERT INTO trip_boundary_overrides (device, kind, point_id) VALUES (%s, 'force', %s)",
-                (DEVICE, split_id),
+                "INSERT INTO trip_boundary_overrides (account_id, tracking_device_id, device, kind, point_id) VALUES (%s, %s, %s, 'force', %s)",
+                (account_id(conn), await _stream(conn), DEVICE, split_id),
             )
-        await runner.reprocess_device_now(DEVICE)
+        await runner.reprocess_device_now(await _stream_id(pool))
         async with pool.connection() as conn:
             split = await _trip_counts(conn)
         assert len(split) == 2, f"expected the override to split into two trips, got {split}"
@@ -627,9 +648,9 @@ async def _run_split_survives_incremental_reprocess_scenario():
         # point that could otherwise perturb what "the point before it" is.
         async with pool.connection() as conn:
             await conn.execute(
-                "INSERT INTO points (device, recorded_at, received_at, geom, accuracy_m, velocity_kmh) "
-                "VALUES (%s, %s, now(), ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s)",
-                (DEVICE, pts[0].t + timedelta(seconds=5), pts[0].lon, pts[0].lat, 10.0, 0.0),
+                "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, received_at, geom, accuracy_m, velocity_kmh) "
+                "VALUES (%s, %s, %s, %s, now(), ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s)",
+                (account_id(conn), await _stream(conn), DEVICE, pts[0].t + timedelta(seconds=5), pts[0].lon, pts[0].lat, 10.0, 0.0),
             )
         assert await runner.run_once() is True
 
@@ -639,7 +660,7 @@ async def _run_split_survives_incremental_reprocess_scenario():
             f"split should survive a normal incremental reprocess, got {after}"
         )
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_split_survives_incremental_reprocess():
@@ -650,10 +671,10 @@ def test_split_survives_incremental_reprocess():
 
 
 async def _run_split_distance_validation_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await _reset_fixture(raw_pool)
         pts = build_track([Stationary(1200), Drive(km=5, speed_kmh=50), Stationary(1800)])
         async with pool.connection() as conn:
             await _insert_points(conn, pts)
@@ -672,7 +693,7 @@ async def _run_split_distance_validation_scenario():
         assert first_m >= Params().min_trip_distance_m
         assert second_m >= Params().min_trip_distance_m
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_split_distance_validation_rejects_short_half():
@@ -684,10 +705,10 @@ async def _vehicle_id(conn) -> int:
 
 
 async def _run_auto_assign_on_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await _reset_fixture(raw_pool)
         async with pool.connection() as conn:
             default_id = await _vehicle_id(conn)
             await set_auto_assign_default_vehicle(conn, True)
@@ -704,7 +725,7 @@ async def _run_auto_assign_on_scenario():
             rows = await cur.fetchall()
         assert rows == [(default_id,)]
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_detector_insert_assigns_default_vehicle_when_auto_assign_is_on():
@@ -712,10 +733,10 @@ def test_detector_insert_assigns_default_vehicle_when_auto_assign_is_on():
 
 
 async def _run_auto_assign_off_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await _reset_fixture(raw_pool)
         pts = build_track([Stationary(900), Drive(km=2), Stationary(900)])
         async with pool.connection() as conn:
             await _insert_points(conn, pts)
@@ -729,7 +750,7 @@ async def _run_auto_assign_off_scenario():
             rows = await cur.fetchall()
         assert rows == [(None,)]
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_detector_insert_leaves_vehicle_null_when_auto_assign_is_off():
@@ -739,10 +760,10 @@ def test_detector_insert_leaves_vehicle_null_when_auto_assign_is_off():
 
 
 async def _run_auto_assign_default_deactivated_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await _reset_fixture(raw_pool)
         async with pool.connection() as conn:
             default_id = await _vehicle_id(conn)
             await set_auto_assign_default_vehicle(conn, True)
@@ -760,7 +781,7 @@ async def _run_auto_assign_default_deactivated_scenario():
             rows = await cur.fetchall()
         assert rows == [(None,)]
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_detector_insert_leaves_vehicle_null_when_default_is_deactivated():
@@ -776,16 +797,16 @@ T0 = datetime(2026, 7, 1, 8, 0, 0, tzinfo=timezone.utc)
 
 
 async def _run_reprocess_places_imported_guard_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await _reset_fixture(raw_pool)
         async with pool.connection() as conn:
             cur = await conn.execute(
-                "INSERT INTO places (name, kind, geom) VALUES "
-                "('Home', 'home', ST_SetSRID(ST_MakePoint(-122.33, 47.60), 4326)::geography), "
-                "('Work', 'work', ST_SetSRID(ST_MakePoint(-122.30, 47.62), 4326)::geography) "
-                "RETURNING id"
+                "INSERT INTO places (account_id, name, kind, geom) VALUES "
+                "(%s, 'Home', 'home', ST_SetSRID(ST_MakePoint(-122.33, 47.60), 4326)::geography), "
+                "(%s, 'Work', 'work', ST_SetSRID(ST_MakePoint(-122.30, 47.62), 4326)::geography) "
+                "RETURNING id", (account_id(conn), account_id(conn)),
             )
             home_id, work_id = [r[0] for r in await cur.fetchall()]
 
@@ -796,11 +817,11 @@ async def _run_reprocess_places_imported_guard_scenario():
             # resolution subselects would otherwise match nothing) and cascade
             # into reverting its tag.
             cur = await conn.execute(
-                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
+                "INSERT INTO trips (account_id, tracking_device_id, device, source, started_at, ended_at, distance_m, "
                 " imported, start_place_id, end_place_id, category, tag_source) "
-                "VALUES (%s, 'detected', %s, %s, 1000, true, %s, %s, 'personal', 'rule') "
+                "VALUES (%s, %s, %s, 'detected', %s, %s, 1000, true, %s, %s, 'personal', 'rule') "
                 "RETURNING id",
-                (DEVICE, T0, T0 + timedelta(minutes=20), home_id, work_id),
+                (account_id(conn), None, DEVICE, T0, T0 + timedelta(minutes=20), home_id, work_id),
             )
             imported_id = (await cur.fetchone())[0]
 
@@ -810,13 +831,13 @@ async def _run_reprocess_places_imported_guard_scenario():
             # not stop this one from being resolved and autotagged exactly
             # as before.
             cur = await conn.execute(
-                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
+                "INSERT INTO trips (account_id, tracking_device_id, device, source, started_at, ended_at, distance_m, "
                 " start_geom, end_geom) "
-                "VALUES (%s, 'detected', %s, %s, 1000, "
+                "VALUES (%s, %s, %s, 'detected', %s, %s, 1000, "
                 " ST_SetSRID(ST_MakePoint(-122.33, 47.60), 4326)::geography, "
                 " ST_SetSRID(ST_MakePoint(-122.30, 47.62), 4326)::geography) "
                 "RETURNING id",
-                (DEVICE, T0 + timedelta(hours=1), T0 + timedelta(hours=1, minutes=20)),
+                (account_id(conn), await _stream(conn), DEVICE, T0 + timedelta(hours=1), T0 + timedelta(hours=1, minutes=20)),
             )
             live_id = (await cur.fetchone())[0]
 
@@ -841,7 +862,7 @@ async def _run_reprocess_places_imported_guard_scenario():
                 "a normal detected trip must still be resolved and autotagged"
             )
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_reprocess_places_skips_imported_trips_but_still_resolves_live_ones():
@@ -857,30 +878,32 @@ def test_reprocess_places_skips_imported_trips_but_still_resolves_live_ones():
 
 
 async def _run_reprocess_places_human_tag_survives_matching_rule_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await _reset_fixture(raw_pool)
         async with pool.connection() as conn:
             await conn.execute(
-                "INSERT INTO places (name, kind, geom) VALUES "
-                "('Home', 'home', ST_SetSRID(ST_MakePoint(-122.33, 47.60), 4326)::geography), "
-                "('Work', 'work', ST_SetSRID(ST_MakePoint(-122.30, 47.62), 4326)::geography)"
+                "INSERT INTO places (account_id, name, kind, geom) VALUES "
+                "(%s, 'Home', 'home', ST_SetSRID(ST_MakePoint(-122.33, 47.60), 4326)::geography), "
+                "(%s, 'Work', 'work', ST_SetSRID(ST_MakePoint(-122.30, 47.62), 4326)::geography)",
+                (account_id(conn), account_id(conn)),
             )
             await conn.execute(
-                "INSERT INTO tag_rules (a_kind, b_kind, category) VALUES ('home', 'work', 'business')"
+                "INSERT INTO tag_rules (account_id, a_kind, b_kind, category) VALUES (%s, 'home', 'work', 'business')",
+                (account_id(conn),)
             )
             # A human-classified trip whose endpoints resolve to exactly this
             # rule's places, so plan_autotags would reclassify it to
             # 'business'/'rule' if the human tag weren't protected.
             cur = await conn.execute(
-                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
+                "INSERT INTO trips (account_id, tracking_device_id, device, source, started_at, ended_at, distance_m, "
                 " start_geom, end_geom, category, tag_source) "
-                "VALUES (%s, 'detected', %s, %s, 1000, "
+                "VALUES (%s, %s, %s, 'detected', %s, %s, 1000, "
                 " ST_SetSRID(ST_MakePoint(-122.33, 47.60), 4326)::geography, "
                 " ST_SetSRID(ST_MakePoint(-122.30, 47.62), 4326)::geography, "
                 " 'personal', 'human') RETURNING id",
-                (DEVICE, T0, T0 + timedelta(minutes=20)),
+                (account_id(conn), await _stream(conn), DEVICE, T0, T0 + timedelta(minutes=20)),
             )
             trip_id = (await cur.fetchone())[0]
 
@@ -895,7 +918,7 @@ async def _run_reprocess_places_human_tag_survives_matching_rule_scenario():
                 "even when a rule matches"
             )
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_reprocess_places_never_overwrites_human_tag_even_with_matching_rule():
@@ -907,16 +930,16 @@ def test_reprocess_places_never_overwrites_human_tag_even_with_matching_rule():
 
 
 async def _run_apply_loop_sql_guard_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await _reset_fixture(raw_pool)
         async with pool.connection() as conn:
             cur = await conn.execute(
-                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
+                "INSERT INTO trips (account_id, tracking_device_id, device, source, started_at, ended_at, distance_m, "
                 " category, tag_source) "
-                "VALUES (%s, 'detected', %s, %s, 1000, 'personal', 'human') RETURNING id",
-                (DEVICE, T0, T0 + timedelta(minutes=20)),
+                "VALUES (%s, %s, %s, 'detected', %s, %s, 1000, 'personal', 'human') RETURNING id",
+                (account_id(conn), await _stream(conn), DEVICE, T0, T0 + timedelta(minutes=20)),
             )
             trip_id = (await cur.fetchone())[0]
 
@@ -943,7 +966,7 @@ async def _run_apply_loop_sql_guard_scenario():
                 "on its own, independent of plan_autotags' own filtering"
             )
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_resolve_and_autotag_apply_loop_sql_guard_blocks_stale_rule_result():

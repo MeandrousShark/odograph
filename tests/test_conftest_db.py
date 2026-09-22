@@ -172,7 +172,7 @@ async def _recovers_from_a_dirty_container_scenario() -> None:
             )
             assert (await cur.fetchone())[0] == expected_version
             cur = await conn.execute("SELECT name FROM vehicles")
-            assert [row[0] for row in await cur.fetchall()] == ["My Car"]
+            assert await cur.fetchall() == []  # defaults are created atomically at account setup
     finally:
         await pool.close()
 

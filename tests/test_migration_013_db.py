@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from app.db import make_pool, run_migrations
-from conftest import full_schema_reset
+from conftest import full_schema_reset, bootstrap_test_account
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -21,6 +21,7 @@ async def _scenario() -> None:
     await pool.open(wait=True)
     try:
         await full_schema_reset(pool)
+        await bootstrap_test_account(pool)
 
         async with pool.connection() as conn:
             await conn.execute("DELETE FROM schema_migrations WHERE version = 13")
@@ -33,7 +34,7 @@ async def _scenario() -> None:
             ]
             for row in rows:
                 await conn.execute(
-                    "INSERT INTO geocode_cache (lat, lon, address) VALUES (%s, %s, %s)",
+                    "INSERT INTO geocode_cache (account_id, lat, lon, address) VALUES (41, %s, %s, %s)",
                     row,
                 )
 

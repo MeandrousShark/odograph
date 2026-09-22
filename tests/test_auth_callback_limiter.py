@@ -77,6 +77,8 @@ class _NoAccountCursor:
         return self
 
     async def fetchone(self):
+        if "current_setting" in self.query:
+            return (None,)
         if "SELECT EXISTS" in self.query:
             return (False,)
         return None
@@ -116,7 +118,7 @@ def _app(oauth_client, *, allowed_email: str = ""):
         oidc_issuer="https://idp.example.com",
     )
     app.state.oauth = SimpleNamespace(pocketid=oauth_client)
-    app.state.pool = _NoAccountPool()
+    app.state.control_pool = _NoAccountPool()
     app.state.login_limiter = FailedAuthLimiter(max_failures=MAX_FAILURES, window_s=900)
 
     # Test-only routes to plant and inspect session content around the

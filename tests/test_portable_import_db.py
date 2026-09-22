@@ -34,7 +34,8 @@ from app.portable import make_router as make_portable_router
 from app.rates import YearRate, deduction
 from app.ui import make_router as make_ui_router
 from app.vehicles import create_vehicle
-from conftest import reset_db
+from conftest import reset_db, reset_account_db
+from personal_support import configure_personal_app, fixture_device
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -52,6 +53,7 @@ def _bare_app(pool, *, dev_no_auth: bool = True, portable_import_max_bytes: int 
         geocode_provider=None, app_version="test", app_git_revision="test",
         portable_import_max_bytes=portable_import_max_bytes,
     )
+    configure_personal_app(app, pool)
     app.state.templates = make_templates(app.state.config)
     app.add_middleware(SessionMiddleware, secret_key="test-secret", same_site="lax", https_only=False)
 
@@ -69,8 +71,8 @@ def _scenario(coro_factory) -> None:
         pool = make_pool(TEST_DB)
         await pool.open(wait=True)
         try:
-            await reset_db(pool)
-            await coro_factory(pool)
+            owned = await reset_account_db(pool)
+            await coro_factory(owned)
         finally:
             await pool.close()
 
@@ -105,7 +107,7 @@ def _minimal_bundle(schema_version: int) -> dict:
     # default even though most of them don't otherwise care about vehicles.
     return {
         "format": "odograph-portable",
-        "format_version": 1,
+        "format_version": 1 if schema_version == 21 else 2 if schema_version <= 25 else 3,
         "schema_version": schema_version,
         "exported_at": "2026-08-05T00:00:00+00:00",
         "vehicles": [{
@@ -114,7 +116,7 @@ def _minimal_bundle(schema_version: int) -> dict:
         }],
         "places": [], "tag_rules": [], "mileage_rates": [],
         "trips": [], "expenses": [], "odometer_readings": [],
-        "settings": {"auto_assign_default_vehicle": False},
+        "settings": {"auto_assign_default_vehicle": False, "display_tz": "UTC"},
     }
 
 
@@ -236,56 +238,57 @@ def _business_deduction_total(bundle: dict) -> float:
 async def _populate_source(pool) -> None:
     async with pool.connection() as conn:
         truck_id = await create_vehicle(conn, "Truck", make="Ford", model="F150")
+        device_id = await fixture_device(conn, "phone1")
 
         office_cur = await conn.execute(
-            "INSERT INTO places (name, kind, geom, radius_m) "
-            "VALUES ('Office', 'work', ST_SetSRID(ST_MakePoint(-122.30, 47.60), 4326)::geography, 100) "
+            "INSERT INTO places (account_id, name, kind, geom, radius_m) "
+            "VALUES (41, 'Office', 'work', ST_SetSRID(ST_MakePoint(-122.30, 47.60), 4326)::geography, 100) "
             "RETURNING id",
         )
         office_id = (await office_cur.fetchone())[0]
         depot_cur = await conn.execute(
-            "INSERT INTO places (name, kind, geom, radius_m) "
-            "VALUES ('Depot', 'other', ST_SetSRID(ST_MakePoint(-122.35, 47.65), 4326)::geography, 200) "
+            "INSERT INTO places (account_id, name, kind, geom, radius_m) "
+            "VALUES (41, 'Depot', 'other', ST_SetSRID(ST_MakePoint(-122.35, 47.65), 4326)::geography, 200) "
             "RETURNING id",
         )
         depot_id = (await depot_cur.fetchone())[0]
 
         # A custom rule alongside the two seeded defaults.
         await conn.execute(
-            "INSERT INTO tag_rules (a_place, b_kind, category) VALUES (%s, 'other', 'business')",
+            "INSERT INTO tag_rules (account_id, a_place, b_kind, category) VALUES (41, %s, 'other', 'business')",
             (office_id,),
         )
 
         first_trip = await conn.execute(
-            "INSERT INTO trips (device, source, started_at, ended_at, distance_m, category, "
+            "INSERT INTO trips (account_id, tracking_device_id, device, source, started_at, ended_at, distance_m, category, "
             " purpose, notes, vehicle_id, start_place_id, end_place_id, tag_source) "
-            "VALUES ('phone1', 'detected', '2026-06-15T15:00:00+00:00', "
+            "VALUES (41, %s, 'phone1', 'detected', '2026-06-15T15:00:00+00:00', "
             " '2026-06-15T15:30:00+00:00', 16093.44, 'business', 'Client visit', 'parked on 3rd', "
             " %s, %s, %s, 'human') RETURNING id",
-            (truck_id, office_id, depot_id),
+            (device_id, truck_id, office_id, depot_id),
         )
         first_trip_id = (await first_trip.fetchone())[0]
         await conn.execute(
-            "INSERT INTO trips (device, source, started_at, ended_at, distance_m, category, vehicle_id) "
-            "VALUES ('manual', 'manual', '2026-06-16T12:00:00+00:00', "
+            "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, category, vehicle_id) "
+            "VALUES (41, 'manual', 'manual', '2026-06-16T12:00:00+00:00', "
             " '2026-06-16T12:20:00+00:00', 8046.72, 'personal', %s)",
             (truck_id,),
         )
         await conn.execute(
-            "INSERT INTO expenses (vehicle_id, incurred_on, category, amount, treatment, notes, trip_id) "
-            "VALUES (%s, '2026-06-01', 'fuel', 45.67, 'business_use_allocated', 'receipt 1', %s)",
+            "INSERT INTO expenses (account_id, vehicle_id, incurred_on, category, amount, treatment, notes, trip_id) "
+            "VALUES (41, %s, '2026-06-01', 'fuel', 45.67, 'business_use_allocated', 'receipt 1', %s)",
             (truck_id, first_trip_id),
         )
         await conn.execute(
-            "INSERT INTO odometer_readings (vehicle_id, recorded_at, odometer_m, note) "
-            "VALUES (%s, '2026-01-01T00:00:00+00:00', 160934.4, 'new year')",
+            "INSERT INTO odometer_readings (account_id, vehicle_id, recorded_at, odometer_m, note) "
+            "VALUES (41, %s, '2026-01-01T00:00:00+00:00', 160934.4, 'new year')",
             (truck_id,),
         )
         await conn.execute(
-            "INSERT INTO mileage_rates (year, rate_per_mi) VALUES (2024, 0.6550)"
+            "INSERT INTO mileage_rates (account_id, year, rate_per_mi) VALUES (41, 2024, 0.6550)"
         )
         await conn.execute(
-            "UPDATE app_settings SET auto_assign_default_vehicle = true WHERE id = 1"
+            "UPDATE account_settings SET auto_assign_default_vehicle = true WHERE account_id = 41"
         )
 
 
@@ -297,7 +300,7 @@ def test_round_trip_preserves_ledger_content_and_report_totals():
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             source_bundle = await _export(client)
 
-        await reset_db(pool)
+        await reset_account_db(pool.runtime_pool)
 
         transport = httpx.ASGITransport(app=_bare_app(pool))
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -629,7 +632,7 @@ def test_detector_run_after_import_does_not_delete_imported_trips():
     """
     async def run(pool):
         bundle = {
-            "format": "odograph-portable", "format_version": 1, "schema_version": 25,
+            "format": "odograph-portable", "format_version": 2, "schema_version": 25,
             "exported_at": "2026-08-05T00:00:00+00:00",
             "vehicles": [{
                 "$id": 1, "name": "Car", "make": None, "model": None, "plate": None,
@@ -657,7 +660,7 @@ def test_detector_run_after_import_does_not_delete_imported_trips():
                 },
             ],
             "expenses": [], "odometer_readings": [],
-            "settings": {"auto_assign_default_vehicle": False},
+            "settings": {"auto_assign_default_vehicle": False, "display_tz": "UTC"},
         }
 
         transport = httpx.ASGITransport(app=_bare_app(pool))
@@ -679,11 +682,12 @@ def test_detector_run_after_import_does_not_delete_imported_trips():
             rows.append((base + timedelta(minutes=75 + i * 5), 47.64, -122.30))
 
         async with pool.connection() as conn:
+            device_id = await fixture_device(conn, "phone1")
             for t, lat, lon in rows:
                 await conn.execute(
-                    "INSERT INTO points (device, recorded_at, geom, accuracy_m) "
-                    "VALUES ('phone1', %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, 5)",
-                    (t, lon, lat),
+                    "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, geom, accuracy_m) "
+                    "VALUES (41, %s, 'phone1', %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, 5)",
+                    (device_id, t, lon, lat),
                 )
 
         runner = DetectorRunner(pool, Params())
@@ -715,7 +719,7 @@ def test_detector_run_after_import_does_not_delete_imported_trips():
 
 def _two_imported_detected_trips_bundle() -> dict:
     return {
-        "format": "odograph-portable", "format_version": 1, "schema_version": 25,
+        "format": "odograph-portable", "format_version": 2, "schema_version": 25,
         "exported_at": "2026-08-05T00:00:00+00:00",
         "vehicles": [{
             "$id": 1, "name": "Car", "make": None, "model": None, "plate": None,
@@ -741,7 +745,7 @@ def _two_imported_detected_trips_bundle() -> dict:
             },
         ],
         "expenses": [], "odometer_readings": [],
-        "settings": {"auto_assign_default_vehicle": False},
+        "settings": {"auto_assign_default_vehicle": False, "display_tz": "UTC"},
     }
 
 
@@ -831,8 +835,8 @@ def test_import_into_non_clean_target_is_refused_and_leaves_target_unchanged():
     async def run(pool):
         async with pool.connection() as conn:
             await conn.execute(
-                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, category) "
-                "VALUES ('manual', 'manual', '2026-01-01T00:00:00+00:00', "
+                "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, category) "
+                "VALUES (41, 'manual', 'manual', '2026-01-01T00:00:00+00:00', "
                 " '2026-01-01T00:30:00+00:00', 1000, 'unclassified')"
             )
             before = await _row_counts(conn)
@@ -863,10 +867,11 @@ def test_import_into_target_with_leftover_points_is_refused():
     """
     async def run(pool):
         async with pool.connection() as conn:
+            device_id = await fixture_device(conn, "phone1")
             await conn.execute(
-                "INSERT INTO points (device, recorded_at, geom, accuracy_m) "
-                "VALUES ('phone1', '2026-01-01T00:00:00+00:00', "
-                " ST_SetSRID(ST_MakePoint(-122.3, 47.6), 4326)::geography, 5)"
+                "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, geom, accuracy_m) "
+                "VALUES (41, %s, 'phone1', '2026-01-01T00:00:00+00:00', "
+                " ST_SetSRID(ST_MakePoint(-122.3, 47.6), 4326)::geography, 5)", (device_id,)
             )
 
         transport = httpx.ASGITransport(app=_bare_app(pool))
@@ -1103,7 +1108,7 @@ def test_dry_run_produces_same_summary_and_leaves_target_unchanged():
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             bundle = await _export(client)
 
-        await reset_db(pool)
+        await reset_account_db(pool.runtime_pool)
 
         transport = httpx.ASGITransport(app=_bare_app(pool))
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -1259,5 +1264,89 @@ def test_seeded_constants_match_a_freshly_migrated_database():
                 sorted(rules, key=_tag_rule_sort_key)
                 == sorted(expected_rules, key=_tag_rule_sort_key)
             )
+
+    _scenario(run)
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("mutation,label", [
+    (
+        "INSERT INTO mileage_rates (account_id, year, rate_per_mi) VALUES (41, 2024, 0.6700)",
+        "an extra year the bundle does not carry",
+    ),
+    (
+        "UPDATE mileage_rates SET rate_per_mi = 0.9100 WHERE account_id = 41 AND year = 2026",
+        "an edited canonical year",
+    ),
+])
+def test_import_into_target_with_edited_rates_is_refused_and_keeps_them(mutation, label):
+    """`_apply_import` deletes the account's rates before reinserting the
+    bundle's, so a year the target holds and the bundle lacks would vanish.
+    An edited rate is exactly as much operator data as an edited vehicle or
+    tag rule, and must refuse the import the same way rather than disappear.
+    The one-time `MILEAGE_RATE_<YEAR>` upgrade import lands here too.
+    """
+    async def run(pool):
+        async with pool.connection() as conn:
+            await conn.execute(mutation)
+            cur = await conn.execute(
+                "SELECT year, rate_per_mi FROM mileage_rates WHERE account_id = 41 ORDER BY year"
+            )
+            before = await cur.fetchall()
+
+        transport = httpx.ASGITransport(app=_bare_app(pool))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            csrf = await _csrf(client)
+            response = await _import(client, csrf, _minimal_bundle(26))
+
+        assert response.status_code == 409
+        body = response.json()
+        assert body["error"] == "target_not_clean"
+        assert "mileage_rates" in body["conflicts"], body["conflicts"]
+
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT year, rate_per_mi FROM mileage_rates WHERE account_id = 41 ORDER BY year"
+            )
+            assert await cur.fetchall() == before
+
+    _scenario(run)
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("mutation,label", [
+    (
+        "UPDATE mileage_rates SET rate_per_mi = round(rate_per_mi, 2) "
+        "WHERE account_id = 41 AND rate_per_mi = 0.7000",
+        "a stored 0.70 still matches a seeded 0.7000",
+    ),
+    (
+        "DELETE FROM mileage_rates WHERE account_id = 41",
+        "an account holding no rates at all loses nothing to the delete",
+    ),
+    (
+        "DELETE FROM mileage_rates WHERE account_id = 41 AND year = 2026",
+        "a canonical year the account is simply missing",
+    ),
+])
+def test_rates_the_delete_cannot_destroy_do_not_block_an_import(mutation, label):
+    """The rates check is one-directional on purpose.
+
+    What must refuse an import is a row the account holds and the canonical
+    set does not. A canonical row the account is *missing* destroys nothing,
+    and treating it as a conflict would refuse imports for any account
+    provisioned outside `bootstrap_first_account`, or after a future
+    reference year that existing accounts have not been given.
+    """
+    async def run(pool):
+        async with pool.connection() as conn:
+            await conn.execute(mutation)
+
+        transport = httpx.ASGITransport(app=_bare_app(pool))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            csrf = await _csrf(client)
+            response = await _import(client, csrf, _minimal_bundle(26))
+
+        assert response.status_code == 200, response.text
 
     _scenario(run)

@@ -253,9 +253,23 @@ expenses. **Set default** changes the default vehicle. **Deactivate** removes
 a vehicle from pickers for new assignments but keeps it on existing trips.
 Turn on **Assign the default vehicle to newly detected trips** if appropriate.
 
-An OwnTracks device's Tracker ID (`tid`) identifies that device in Odograph.
-Give each phone a distinct Tracker ID. A different ID starts a separate device
-history, while vehicle assignment remains a separate choice on each trip.
+Open **Settings > Tracking** to create a device and copy its one-time
+username/password into OwnTracks. Each credential selects a stable device;
+Tracker ID (`tid`) is a label and can change without starting a new history.
+Separate devices can reuse a label. **Replace password** keeps the history
+and invalidates the old password; **Revoke access** stops future uploads.
+Upgraded shared logins can be converted one device at a time as described in
+the [OwnTracks guide](owntracks.md#device-identity-and-upgraded-installations).
+Vehicle assignment remains a separate choice on each trip.
+
+### Personal preferences
+
+In **Settings > Time zone and notifications**, choose the timezone used for display,
+report boundaries, manual entries, and reminder schedules. Save your ntfy topic
+or email recipient, then choose which reminders to receive and their local
+hours. Delivery also requires the operator to configure the corresponding
+ntfy or SMTP transport. These saved preferences take effect without restarting
+the app; editing old environment values does not replace them.
 
 ## Recordkeeping
 

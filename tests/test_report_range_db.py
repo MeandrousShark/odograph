@@ -19,11 +19,13 @@ from fastapi import HTTPException
 from openpyxl import load_workbook
 
 from app.db import make_pool
+from app.account_context import account_id
+from personal_support import personal_request
 from app.export import HEADERS
 from app.main import make_templates
 from app.ui import make_router
 import app.ui.reports as ui
-from conftest import reset_db
+from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -41,16 +43,19 @@ def _endpoint(path: str):
 
 def _request(pool):
     config = SimpleNamespace(display_tz=TZ, app_version="test")
-    return SimpleNamespace(
+    return personal_request(SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             pool=pool, config=config, templates=make_templates(config),
         )),
         session={"csrf": "token"},
-    )
+    ))
 
 
 async def _create_vehicle(conn, name: str) -> int:
-    cur = await conn.execute("INSERT INTO vehicles (name) VALUES (%s) RETURNING id", (name,))
+    cur = await conn.execute('INSERT INTO vehicles (account_id, name) VALUES (%s, %s) RETURNING id', (
+                                                                                                         account_id(conn),
+                                                                                                         name,
+                                                                                                     ))
     return (await cur.fetchone())[0]
 
 
@@ -58,17 +63,24 @@ async def _insert_trip(
     conn, vehicle_id: int, started_at: datetime, distance_m: float, category: str = "business",
 ) -> None:
     await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, distance_m, vehicle_id, category) "
-        "VALUES ('manual', 'manual', %s, %s, %s, %s, %s)",
-        (started_at, started_at + timedelta(minutes=15), distance_m, vehicle_id, category),
+        "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, "
+        "vehicle_id, category) VALUES (%s, 'manual', 'manual', %s, %s, %s, %s, %s)",
+        (
+            account_id(conn),
+            started_at,
+            started_at + timedelta(minutes=15),
+            distance_m,
+            vehicle_id,
+            category,
+        ),
     )
 
 
 async def _range_page_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             truck_id = await _create_vehicle(conn, "Truck")
             # March 31 and July 1 are outside the Apr 1 - Jun 30 range under
@@ -120,7 +132,7 @@ async def _range_page_scenario():
         assert expected.business_m == pytest.approx(50 * 1609.344)
         assert expected.total_deduction == pytest.approx(36.25)
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_range_report_page_200_matches_pure_fold_totals():
@@ -128,10 +140,10 @@ def test_range_report_page_200_matches_pure_fold_totals():
 
 
 async def _range_page_invalid_params_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         request = _request(pool)
         page = _endpoint("/report/range")
 
@@ -151,7 +163,7 @@ async def _range_page_invalid_params_scenario():
             await page(request, from_="2025-12-15", to="2026-01-15", user=USER)
         assert cross_year.value.status_code == 400
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_range_report_page_400_for_each_invalid_param_case():
@@ -159,10 +171,10 @@ def test_range_report_page_400_for_each_invalid_param_case():
 
 
 async def _range_export_invalid_params_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         request = _request(pool)
         export = _endpoint("/report/range/export")
 
@@ -178,7 +190,7 @@ async def _range_export_invalid_params_scenario():
             await export(request, from_="2025-12-15", to="2026-01-15", user=USER)
         assert cross_year.value.status_code == 400
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_range_report_export_400_for_each_invalid_param_case():
@@ -186,10 +198,10 @@ def test_range_report_export_400_for_each_invalid_param_case():
 
 
 async def _range_export_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             truck_id = await _create_vehicle(conn, "Truck")
             await _insert_trip(
@@ -215,7 +227,7 @@ async def _range_export_scenario():
         ]
         assert dates == ["2026-04-15"]  # the July trip is filtered out of the Trips sheet
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_range_report_export_media_type_filename_and_row_filtering():
@@ -223,10 +235,10 @@ def test_range_report_export_media_type_filename_and_row_filtering():
 
 
 async def _range_export_endpoint_label_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
             truck_id = await _create_vehicle(conn, "Truck")
             # A route_mode=none manual trip: source manual, no place id or
@@ -236,14 +248,18 @@ async def _range_export_endpoint_label_scenario():
             # start_place_name/end_place_name for a real row selected by the
             # real query, not just a hand-built trip dict.
             await conn.execute(
-                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
-                "vehicle_id, category, start_label, end_label) "
-                "VALUES ('manual', 'manual', %s, %s, %s, %s, %s, %s, %s)",
+                "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, "
+                "vehicle_id, category, start_label, end_label) VALUES (%s, 'manual', 'manual', %s, "
+                "%s, %s, %s, %s, %s, %s)",
                 (
+                    account_id(conn),
                     datetime(2026, 4, 15, 19, tzinfo=timezone.utc),
                     datetime(2026, 4, 15, 19, 15, tzinfo=timezone.utc),
-                    20 * 1609.344, truck_id, "business",
-                    "Grandma's house", "Trailhead parking",
+                    20 * 1609.344,
+                    truck_id,
+                    "business",
+                    "Grandma's house",
+                    "Trailhead parking",
                 ),
             )
 
@@ -256,7 +272,7 @@ async def _range_export_endpoint_label_scenario():
         assert trips_ws.cell(2, HEADERS.index("Start location") + 1).value == "Grandma's house"
         assert trips_ws.cell(2, HEADERS.index("End location") + 1).value == "Trailhead parking"
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_range_report_export_resolves_endpoint_labels_through_trip_columns():
@@ -280,10 +296,10 @@ class _FrozenDatetime(datetime):
 
 
 async def _report_page_year_boundary_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
         request = _request(pool)
         page = _endpoint("/report/{year}")
 
@@ -304,7 +320,7 @@ async def _report_page_year_boundary_scenario():
         assert '<a href="/report/2026">2026 →</a>' in past_body
         assert 'aria-disabled="true"' not in past_body
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_report_page_next_year_guard_uses_display_timezone_at_new_years_eve_boundary(monkeypatch):

@@ -7,6 +7,7 @@ import secrets
 import time
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from authlib.integrations.base_client import OAuthError
 from authlib.integrations.starlette_client import OAuth
@@ -21,12 +22,14 @@ from app.accounts import (
     create_admin,
     get_account,
     get_account_avatar,
-    get_sole_account,
+    get_account_by_email,
     normalize_email,
     replace_password,
     set_account_avatar,
     valid_email,
 )
+from app.account_context import AccountPool, AccountPrincipal, control_connection
+from app.account_settings import config_for_account, load_account_settings
 from app.avatar_images import (
     MAX_AVATAR_PIXELS,
     MAX_AVATAR_SIDE,
@@ -43,6 +46,7 @@ from app.oidc_identities import (
     create_identity_link,
     establish_legacy_admin_identity,
     get_identity_for_account,
+    identity_login_available,
     normalize_issuer,
     resolve_identity_account,
     touch_identity_last_used,
@@ -141,7 +145,7 @@ def _avatar_upload_exceeds_limit(request: Request) -> bool:
 
     This must run before request.form() so Starlette cannot spool a declared
     oversized multipart body before the account page renders its error. The
-    route calls it after require_admin has run, preserving authentication while
+    route calls it after require_user has run, preserving authentication while
     still allowing the route to use _render_account for the response. A
     missing Content-Length falls through to read_capped_upload below.
     """
@@ -196,7 +200,7 @@ def _set_account_session(request: Request, account: dict) -> None:
 
 
 def _positive_session_int(value) -> bool:
-    return type(value) is int and value > 0
+    return type(value) is int and 1 <= value <= 2**63 - 1
 
 
 def _safe_oidc_metadata(userinfo: Mapping) -> tuple[str | None, str | None]:
@@ -258,7 +262,7 @@ def _legacy_gate(request: Request) -> bool:
 async def _legacy_oidc_available(request: Request) -> bool:
     if not _legacy_gate(request):
         return False
-    async with request.app.state.pool.connection() as conn:
+    async with control_connection(request.app.state.control_pool) as conn:
         return not await account_exists(conn)
 
 
@@ -266,29 +270,35 @@ async def _oidc_login_available(request: Request) -> bool:
     cfg = request.app.state.config
     if cfg.dev_no_auth or request.app.state.oauth is None:
         return False
-    async with request.app.state.pool.connection() as conn:
-        account = await get_sole_account(conn)
-        if account is not None:
-            identity = await get_identity_for_account(
-                conn, account["id"], cfg.oidc_issuer
-            )
-            return identity is not None
+    async with control_connection(request.app.state.control_pool) as conn:
+        if await account_exists(conn):
+            return await identity_login_available(conn, cfg.oidc_issuer)
     return not getattr(cfg, "initial_admin_signup", False)
+
+
+async def _bind_account(request: Request, account: dict) -> dict:
+    principal = AccountPrincipal(account["id"], account["is_enabled"], account["auth_version"])
+    pool = AccountPool(request.app.state.runtime_pool, principal)
+    async with pool.connection() as conn:
+        settings = await load_account_settings(conn)
+    request.state.principal = principal
+    request.state.account_pool = pool
+    request.state.detector_runner = request.app.state.make_detector_runner(pool)
+    request.state.config = config_for_account(request.app.state.config, settings)
+    request.state.account_settings = settings
+    _ensure_csrf(request)
+    return _account_user(account)
 
 
 async def require_user(request: Request) -> dict:
     cfg = request.app.state.config
     if cfg.dev_no_auth:
-        _ensure_csrf(request)
-        return {
-            "id": None,
-            "name": "dev (auth disabled)",
-            "email": None,
-            "is_admin": True,
-            "legacy_oidc": False,
-            "has_avatar": False,
-            "avatar_version": 0,
-        }
+        principal = request.app.state.dev_principal
+        async with control_connection(request.app.state.control_pool) as conn:
+            account = await get_account(conn, principal.account_id)
+        if account is None or not account["is_enabled"]:
+            raise AuthRedirect()
+        return await _bind_account(request, account)
 
     has_account_id = "account_id" in request.session
     has_auth_version = "auth_version" in request.session
@@ -303,17 +313,23 @@ async def require_user(request: Request) -> dict:
         ):
             request.session.clear()
             raise AuthRedirect()
-        async with request.app.state.pool.connection() as conn:
+        async with control_connection(request.app.state.control_pool) as conn:
             account = await get_account(conn, account_id)
         if (
             account is not None
             and account["is_enabled"]
             and session_version == account["auth_version"]
         ):
-            return _account_user(account)
+            return await _bind_account(request, account)
         request.session.clear()
         raise AuthRedirect()
 
+    raise AuthRedirect()
+
+
+async def require_legacy_establishment(request: Request) -> dict:
+    """An accountless OIDC session can establish identity, never read a ledger."""
+    cfg = request.app.state.config
     has_legacy = "legacy_oidc" in request.session
     legacy = request.session.get("legacy_oidc")
     if has_legacy and not _valid_legacy_oidc_session(legacy, cfg.oidc_issuer):
@@ -460,9 +476,13 @@ async def _verified_account(
     """
     limiter: FailedAuthLimiter = request.app.state.login_limiter
     ip = client_ip(request)
-    async with request.app.state.pool.connection() as conn:
+    async with control_connection(request.app.state.control_pool) as conn:
         account = await get_account(conn, user["id"])
-    if account is None:
+    if (
+        account is None
+        or not account["is_enabled"]
+        or account["auth_version"] != request.state.principal.auth_version
+    ):
         request.session.clear()
         raise AuthRedirect()
     if limiter.blocked(ip):
@@ -487,27 +507,22 @@ def make_router() -> APIRouter:
         request: Request, *, error: str | None, status_code: int = 200
     ):
         cfg = request.app.state.config
-        async with request.app.state.pool.connection() as conn:
-            account = await get_sole_account(conn)
-            linked_identity = None
-            if account is not None and request.app.state.oauth is not None:
-                linked_identity = await get_identity_for_account(
-                    conn, account["id"], cfg.oidc_issuer
-                )
-        signup_available = _signup_gate(cfg) and account is None
-        legacy_oidc_available = _legacy_gate(request) and account is None
-        oidc_login_available = bool(
-            account is not None
-            and linked_identity is not None
-            and not cfg.dev_no_auth
-        )
+        async with control_connection(request.app.state.control_pool) as conn:
+            has_account = await account_exists(conn)
+            linked_identity = (
+                await identity_login_available(conn, cfg.oidc_issuer)
+                if has_account and request.app.state.oauth is not None else False
+            )
+        signup_available = _signup_gate(cfg) and not has_account
+        legacy_oidc_available = _legacy_gate(request) and not has_account
+        oidc_login_available = bool(linked_identity and not cfg.dev_no_auth)
         return request.app.state.templates.TemplateResponse(
             request,
             "login.html",
             {
                 "user": None,
                 "csrf": _ensure_csrf(request),
-                "account_exists": account is not None,
+                "account_exists": has_account,
                 "signup_available": signup_available,
                 "legacy_oidc_available": legacy_oidc_available,
                 "oidc_login_available": oidc_login_available,
@@ -522,7 +537,8 @@ def make_router() -> APIRouter:
         return request.app.state.templates.TemplateResponse(
             request,
             "signup.html",
-            {"user": None, "csrf": _ensure_csrf(request), "error": error},
+            {"user": None, "csrf": _ensure_csrf(request), "error": error,
+             "display_timezone": str(request.app.state.config.display_tz)},
             status_code=status_code,
         )
 
@@ -542,7 +558,7 @@ def make_router() -> APIRouter:
         )
         linked_identity = None
         if oidc_configured:
-            async with request.app.state.pool.connection() as conn:
+            async with control_connection(request.app.state.control_pool) as conn:
                 identity = await get_identity_for_account(
                     conn,
                     account["id"],
@@ -602,11 +618,8 @@ def make_router() -> APIRouter:
             "csrf": _ensure_csrf(request),
             "email": email,
             "error": error,
+            "display_timezone": str(request.app.state.config.display_tz),
         }
-        if include_review_count:
-            return await render_page(
-                request, "establish_account.html", context, status_code=status_code
-            )
         return request.app.state.templates.TemplateResponse(
             request, "establish_account.html", context, status_code=status_code
         )
@@ -648,8 +661,8 @@ def make_router() -> APIRouter:
                 status_code=429,
             )
 
-        async with request.app.state.pool.connection() as conn:
-            account = await get_sole_account(conn)
+        async with control_connection(request.app.state.control_pool) as conn:
+            account = await get_account_by_email(conn, normalize_email(email))
 
         email_norm = normalize_email(email)
         ok = (
@@ -684,6 +697,7 @@ def make_router() -> APIRouter:
         password: str = Form(...),
         password_confirm: str = Form(...),
         csrf_token: str = Form(...),
+        display_timezone: str = Form(""),
     ):
         if not await _signup_available(request):
             raise HTTPException(status_code=404)
@@ -700,6 +714,11 @@ def make_router() -> APIRouter:
 
         email_norm = normalize_email(email)
         error = _new_credential_error(email_norm, password, password_confirm)
+        timezone_name = display_timezone.strip() or str(request.app.state.config.display_tz)
+        try:
+            ZoneInfo(timezone_name)
+        except (ValueError, ZoneInfoNotFoundError):
+            error = "Choose a valid time zone, such as America/Los_Angeles or UTC."
         if error:
             limiter.record_failure(ip)
             return await _render_signup(
@@ -708,8 +727,10 @@ def make_router() -> APIRouter:
 
         password_hash = await asyncio.to_thread(hash_password, password)
         try:
-            async with request.app.state.pool.connection() as conn:
-                account = await create_admin(conn, email_norm, password_hash)
+            async with control_connection(request.app.state.control_pool) as conn:
+                account = await create_admin(
+                    conn, email_norm, password_hash, display_timezone=timezone_name
+                )
         except (errors.UniqueViolation, errors.CheckViolation):
             return await _render_signup(
                 request,
@@ -752,7 +773,7 @@ def make_router() -> APIRouter:
                 limiter.record_failure(ip)
                 raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
             try:
-                link_user = await require_admin(request)
+                link_user = await require_user(request)
             except (AuthRedirect, HTTPException):
                 limiter.record_failure(ip)
                 raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
@@ -786,7 +807,7 @@ def make_router() -> APIRouter:
         issuer = normalize_issuer(cfg.oidc_issuer)
 
         if link_attempt is not None:
-            async with request.app.state.pool.connection() as conn:
+            async with control_connection(request.app.state.control_pool) as conn:
                 linked = await create_identity_link(
                     conn,
                     link_attempt["account_id"],
@@ -801,7 +822,7 @@ def make_router() -> APIRouter:
             request.session["account_notice"] = "Sign-in provider linked."
             return RedirectResponse("/settings/account", status_code=303)
 
-        async with request.app.state.pool.connection() as conn:
+        async with control_connection(request.app.state.control_pool) as conn:
             account = await resolve_identity_account(conn, issuer, subject)
             if account is not None:
                 await touch_identity_last_used(
@@ -815,7 +836,7 @@ def make_router() -> APIRouter:
             _set_account_session(request, account)
             return RedirectResponse("/", status_code=303)
 
-        async with request.app.state.pool.connection() as conn:
+        async with control_connection(request.app.state.control_pool) as conn:
             has_account = await account_exists(conn)
         if has_account:
             limiter.record_failure(ip)
@@ -845,7 +866,7 @@ def make_router() -> APIRouter:
 
     @router.get("/account/establish")
     async def establish_account_page(
-        request: Request, user: dict = Depends(require_user)
+        request: Request, user: dict = Depends(require_legacy_establishment)
     ):
         if not user["legacy_oidc"]:
             raise HTTPException(status_code=404)
@@ -858,7 +879,8 @@ def make_router() -> APIRouter:
         password: str = Form(...),
         password_confirm: str = Form(...),
         csrf_token: str = Form(...),
-        user: dict = Depends(require_user),
+        display_timezone: str = Form(""),
+        user: dict = Depends(require_legacy_establishment),
     ):
         if not user["legacy_oidc"]:
             raise HTTPException(status_code=404)
@@ -875,6 +897,11 @@ def make_router() -> APIRouter:
 
         email_norm = normalize_email(email)
         error = _new_credential_error(email_norm, password, password_confirm)
+        timezone_name = display_timezone.strip() or str(request.app.state.config.display_tz)
+        try:
+            ZoneInfo(timezone_name)
+        except (ValueError, ZoneInfoNotFoundError):
+            error = "Choose a valid time zone, such as America/Los_Angeles or UTC."
         if error:
             limiter.record_failure(ip)
             return await _render_establish(
@@ -889,11 +916,12 @@ def make_router() -> APIRouter:
             raise AuthRedirect()
         password_hash = await asyncio.to_thread(hash_password, password)
         try:
-            async with request.app.state.pool.connection() as conn:
+            async with control_connection(request.app.state.control_pool) as conn:
                 account, _identity = await establish_legacy_admin_identity(
                     conn,
                     email=email_norm,
                     password_hash=password_hash,
+                    display_timezone=timezone_name,
                     issuer=legacy["issuer"],
                     subject=legacy["subject"],
                     provider_email=(
@@ -932,7 +960,7 @@ def make_router() -> APIRouter:
         request: Request,
         current_password: str = Form(...),
         csrf_token: str = Form(...),
-        user: dict = Depends(require_admin),
+        user: dict = Depends(require_user),
     ):
         _require_oidc_enabled(request)
         check_form_csrf(request, csrf_token)
@@ -942,7 +970,7 @@ def make_router() -> APIRouter:
             )
         except _AccountActionRejected as rejected:
             return await _render_rejection(request, user, rejected)
-        async with request.app.state.pool.connection() as conn:
+        async with control_connection(request.app.state.control_pool) as conn:
             existing = await get_identity_for_account(
                 conn, account["id"], request.app.state.config.oidc_issuer
             )
@@ -964,7 +992,7 @@ def make_router() -> APIRouter:
         current_password: str = Form(...),
         csrf_token: str = Form(...),
         confirm_unlink: str | None = Form(None),
-        user: dict = Depends(require_admin),
+        user: dict = Depends(require_user),
     ):
         _require_oidc_enabled(request)
         check_form_csrf(request, csrf_token)
@@ -980,7 +1008,7 @@ def make_router() -> APIRouter:
             )
         except _AccountActionRejected as rejected:
             return await _render_rejection(request, user, rejected)
-        async with request.app.state.pool.connection() as conn:
+        async with control_connection(request.app.state.control_pool) as conn:
             identity = await get_identity_for_account(
                 conn, account["id"], request.app.state.config.oidc_issuer
             )
@@ -991,7 +1019,7 @@ def make_router() -> APIRouter:
                     account["id"],
                     identity["issuer"],
                     identity["subject"],
-                    expected_auth_version=account["auth_version"],
+                    expected_auth_version=request.state.principal.auth_version,
                 )
         if updated is None:
             return await _render_account(
@@ -1006,9 +1034,9 @@ def make_router() -> APIRouter:
 
     @router.get("/settings/account")
     async def account_security(
-        request: Request, user: dict = Depends(require_admin)
+        request: Request, user: dict = Depends(require_user)
     ):
-        async with request.app.state.pool.connection() as conn:
+        async with control_connection(request.app.state.control_pool) as conn:
             account = await get_account(conn, user["id"])
         if account is None:
             raise AuthRedirect()
@@ -1016,11 +1044,7 @@ def make_router() -> APIRouter:
 
     @router.get("/account/avatar")
     async def account_avatar(request: Request, user: dict = Depends(require_user)):
-        # dev_no_auth's hand-built user (see require_user above) has no
-        # backing account row at all, so there's nothing to look up.
-        if user["id"] is None:
-            raise HTTPException(status_code=404)
-        async with request.app.state.pool.connection() as conn:
+        async with control_connection(request.app.state.control_pool) as conn:
             avatar = await get_account_avatar(conn, user["id"])
         if avatar is None or avatar["avatar_mime"] is None:
             raise HTTPException(status_code=404)
@@ -1057,10 +1081,10 @@ def make_router() -> APIRouter:
         )
 
     @router.post("/settings/account/avatar")
-    async def upload_avatar(request: Request, user: dict = Depends(require_admin)):
+    async def upload_avatar(request: Request, user: dict = Depends(require_user)):
         cfg = request.app.state.config
         if _avatar_upload_exceeds_limit(request):
-            async with request.app.state.pool.connection() as conn:
+            async with control_connection(request.app.state.control_pool) as conn:
                 account = await get_account(conn, user["id"])
             if account is None:
                 request.session.clear()
@@ -1082,7 +1106,7 @@ def make_router() -> APIRouter:
         csrf_token = raw_csrf_token if isinstance(raw_csrf_token, str) else ""
         check_form_csrf(request, csrf_token)
 
-        async with request.app.state.pool.connection() as conn:
+        async with control_connection(request.app.state.control_pool) as conn:
             account = await get_account(conn, user["id"])
         if account is None:
             request.session.clear()
@@ -1132,8 +1156,11 @@ def make_router() -> APIRouter:
         # doesn't change how this account authenticates, so there's nothing
         # to re-verify, and neither route bumps auth_version or signs out
         # other sessions.
-        async with request.app.state.pool.connection() as conn:
-            updated = await set_account_avatar(conn, account["id"], raw, avatar_mime)
+        async with control_connection(request.app.state.control_pool) as conn:
+            updated = await set_account_avatar(
+                conn, account["id"], raw, avatar_mime,
+                expected_auth_version=request.state.principal.auth_version,
+            )
         if updated is None:
             request.session.clear()
             raise AuthRedirect()
@@ -1146,7 +1173,7 @@ def make_router() -> APIRouter:
         request: Request,
         csrf_token: str = Form(...),
         confirm_remove: str | None = Form(None),
-        user: dict = Depends(require_admin),
+        user: dict = Depends(require_user),
     ):
         check_form_csrf(request, csrf_token)
         if confirm_remove != "yes":
@@ -1155,8 +1182,11 @@ def make_router() -> APIRouter:
         # either, for the same reason. Succeeds harmlessly whether or not an
         # avatar was set (clear_account_avatar clears all three columns
         # together either way).
-        async with request.app.state.pool.connection() as conn:
-            updated = await clear_account_avatar(conn, user["id"])
+        async with control_connection(request.app.state.control_pool) as conn:
+            updated = await clear_account_avatar(
+                conn, user["id"],
+                expected_auth_version=request.state.principal.auth_version,
+            )
         if updated is None:
             request.session.clear()
             raise AuthRedirect()
@@ -1171,7 +1201,7 @@ def make_router() -> APIRouter:
         password: str = Form(...),
         password_confirm: str = Form(...),
         csrf_token: str = Form(...),
-        user: dict = Depends(require_admin),
+        user: dict = Depends(require_user),
     ):
         check_form_csrf(request, csrf_token)
         try:
@@ -1188,12 +1218,12 @@ def make_router() -> APIRouter:
             )
 
         password_hash = await asyncio.to_thread(hash_password, password)
-        async with request.app.state.pool.connection() as conn:
+        async with control_connection(request.app.state.control_pool) as conn:
             updated = await replace_password(
                 conn,
                 account["id"],
                 password_hash,
-                expected_auth_version=account["auth_version"],
+                expected_auth_version=request.state.principal.auth_version,
             )
         if updated is None:
             request.session.clear()
@@ -1210,7 +1240,11 @@ def make_router() -> APIRouter:
     @router.post("/logout", dependencies=[Depends(require_csrf)])
     async def logout(request: Request):
         request.session.clear()
-        return Response(status_code=204, headers={"HX-Redirect": "/login"})
+        # The query marker (read by base.html's inline script, never by the
+        # server) is how a real sign-out still clears the shared cross-tab
+        # account marker, so every other signed-in tab still hides and
+        # reloads -- merely landing on /login some other way must not.
+        return Response(status_code=204, headers={"HX-Redirect": "/login?signed_out=1"})
 
     return router
 
@@ -1218,7 +1252,7 @@ def make_router() -> APIRouter:
 async def _signup_available(request: Request) -> bool:
     if not _signup_gate(request.app.state.config):
         return False
-    async with request.app.state.pool.connection() as conn:
+    async with control_connection(request.app.state.control_pool) as conn:
         return not await account_exists(conn)
 
 

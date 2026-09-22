@@ -19,7 +19,8 @@ import pytest
 
 from app.db import make_pool
 from app.snap import SnapWorker
-from conftest import reset_db
+from conftest import reset_account_db, seed_tracking_device
+from app.account_context import account_id
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -32,27 +33,29 @@ T0 = datetime(2026, 7, 1, 8, 0, 0, tzinfo=timezone.utc)
 
 async def _insert_trip(conn, started_at, ended_at, point_count) -> int:
     cur = await conn.execute(
-        "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
+        "INSERT INTO trips (account_id, tracking_device_id, device, source, started_at, ended_at, distance_m, "
         " point_count, detector_version, snap_status) "
-        "VALUES (%s, 'detected', %s, %s, 1000, %s, 2, 'pending') RETURNING id",
-        (DEVICE, started_at, ended_at, point_count),
+        "VALUES (%s, %s, %s, 'detected', %s, %s, 1000, %s, 2, 'pending') RETURNING id",
+        (account_id(conn), 1, DEVICE, started_at, ended_at, point_count),
     )
     return (await cur.fetchone())[0]
 
 
 async def _insert_point(conn, t, trip_id, accuracy=10.0, lat=47.60, lon=-122.33) -> None:
     await conn.execute(
-        "INSERT INTO points (device, recorded_at, received_at, geom, accuracy_m, trip_id) "
-        "VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s)",
-        (DEVICE, t, t, lon, lat, accuracy, trip_id),
+        "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, received_at, geom, accuracy_m, trip_id) "
+        "VALUES (%s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s)",
+        (account_id(conn), 1, DEVICE, t, t, lon, lat, accuracy, trip_id),
     )
 
 
 async def _scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
+        async with pool.connection() as conn:
+            await seed_tracking_device(conn, DEVICE, device_id=1)
         times = [T0 + timedelta(seconds=15 * i) for i in range(9)]
         shared = times[4]  # the single-fix destination stay of trip1 / origin of trip2
 
@@ -90,7 +93,7 @@ async def _scenario():
         )
         assert [p.t for p in p2] == times[4:9], "trip2 point set changed unexpectedly"
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_snapworker_recovers_stolen_boundary_point():
@@ -98,10 +101,12 @@ def test_snapworker_recovers_stolen_boundary_point():
 
 
 async def _unsnappable_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
+        async with pool.connection() as conn:
+            await seed_tracking_device(conn, DEVICE, device_id=1)
         async with pool.connection() as conn:
             trip = await _insert_trip(conn, T0, T0 + timedelta(seconds=60), point_count=1)
             await _insert_point(conn, T0, trip)  # only one usable point
@@ -118,7 +123,7 @@ async def _unsnappable_scenario():
             "a <2-point trip must terminate as 'failed', not stay 'pending' forever"
         )
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_snapworker_marks_unsnappable_trip_failed():
@@ -126,10 +131,12 @@ def test_snapworker_marks_unsnappable_trip_failed():
 
 
 async def _tidy_disabled_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
+        async with pool.connection() as conn:
+            await seed_tracking_device(conn, DEVICE, device_id=1)
         async with pool.connection() as conn:
             trip = await _insert_trip(conn, T0, T0 + timedelta(seconds=15), point_count=2)
             await _insert_point(conn, T0, trip)
@@ -153,7 +160,7 @@ async def _tidy_disabled_scenario():
             "low_confidence despite ~0.98 real matching confidence"
         )
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_snapworker_requests_osrm_match_with_tidy_disabled():
@@ -199,10 +206,12 @@ class _RewritingHTTPClient:
 
 
 async def _stale_result_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
+        async with pool.connection() as conn:
+            await seed_tracking_device(conn, DEVICE, device_id=1)
         async with pool.connection() as conn:
             trip = await _insert_trip(conn, T0, T0 + timedelta(seconds=15), point_count=2)
             await _insert_point(conn, T0, trip)
@@ -230,7 +239,7 @@ async def _stale_result_scenario():
             "so the next sweep re-snaps against the current geometry"
         )
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_snapworker_discards_stale_result_after_concurrent_rewrite():
@@ -241,10 +250,12 @@ async def _no_rewrite_scenario():
     """Control for the stale-result test above: with no intervening
     rewrite, the same OSRM response must land normally.
     """
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
+        async with pool.connection() as conn:
+            await seed_tracking_device(conn, DEVICE, device_id=1)
         async with pool.connection() as conn:
             trip = await _insert_trip(conn, T0, T0 + timedelta(seconds=15), point_count=2)
             await _insert_point(conn, T0, trip)
@@ -284,7 +295,7 @@ async def _no_rewrite_scenario():
         assert distance_snapped_m == 1234.5
         assert status == "ok"
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_snapworker_applies_result_when_no_concurrent_rewrite():
@@ -324,10 +335,12 @@ class _RaceProbeWorker(SnapWorker):
 
 
 async def _rewrite_during_point_load_scenario():
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
+        async with pool.connection() as conn:
+            await seed_tracking_device(conn, DEVICE, device_id=1)
         async with pool.connection() as conn:
             trip = await _insert_trip(conn, T0, T0 + timedelta(seconds=15), point_count=2)
             await _insert_point(conn, T0, trip)
@@ -377,7 +390,7 @@ async def _rewrite_during_point_load_scenario():
             "so the next sweep re-snaps against the current geometry"
         )
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_snapworker_discards_stale_result_when_rewrite_lands_during_point_load():
@@ -392,23 +405,25 @@ async def _manual_trip_immunity_scenario():
     to ever carry a real `path`, so this pins down that having road-like
     geometry still doesn't make it eligible for snapping.
     """
-    pool = make_pool(TEST_DB)
-    await pool.open(wait=True)
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
     try:
-        await reset_db(pool)
+        pool = await reset_account_db(raw_pool)
+        async with pool.connection() as conn:
+            await seed_tracking_device(conn, DEVICE, device_id=1)
         async with pool.connection() as conn:
             detected_id = await _insert_trip(conn, T0, T0 + timedelta(seconds=15), point_count=2)
             await _insert_point(conn, T0, detected_id)
             await _insert_point(conn, T0 + timedelta(seconds=15), detected_id)
 
             manual_row = await conn.execute(
-                "INSERT INTO trips (device, source, started_at, ended_at, distance_m, "
+                "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m, "
                 "path, start_geom, end_geom, snap_status) VALUES ("
-                "'manual', 'manual', %s, %s, 1200, "
+                "%s, 'manual', 'manual', %s, %s, 1200, "
                 "ST_SetSRID(ST_GeomFromText('LINESTRING(-122.33 47.60, -122.20 47.70)'), 4326), "
                 "ST_SetSRID(ST_MakePoint(-122.33, 47.60), 4326)::geography, "
                 "ST_SetSRID(ST_MakePoint(-122.20, 47.70), 4326)::geography, NULL) RETURNING id",
-                (T0, T0 + timedelta(minutes=20)),
+                (account_id(conn), T0, T0 + timedelta(minutes=20)),
             )
             manual_id = (await manual_row.fetchone())[0]
 
@@ -444,7 +459,7 @@ async def _manual_trip_immunity_scenario():
         assert manual_status is None, "a manual trip's snap_status must never be drained to a terminal value"
         assert manual_has_path is True, "its own stored path must be left untouched"
     finally:
-        await pool.close()
+        await raw_pool.close()
 
 
 def test_snapworker_never_drains_manual_trips_including_routed_ones():
