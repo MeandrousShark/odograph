@@ -102,7 +102,7 @@ def test_rejected_request_shows_the_server_detail_as_text():
         {"type": "htmx:responseError", "status": 400, "body": json.dumps({"detail": detail})},
     ])
 
-    assert seen == {"hidden": False, "message": "That did not work: " + detail}
+    assert seen == {"hidden": False, "message": "Error: " + detail}
 
 
 def test_validation_list_and_non_json_failures_use_generic_messages():
@@ -112,9 +112,9 @@ def test_validation_list_and_non_json_failures_use_generic_messages():
         {"type": "htmx:responseError", "status": 504, "body": "<html>Gateway Timeout</html>"},
     ])
 
-    assert invalid["message"] == "That did not work: Some of the submitted values are invalid."
+    assert invalid["message"] == "Error: Some of the submitted values are invalid."
     assert gateway["message"] == (
-        "That did not work (HTTP 504). Reload the page and try again."
+        "Error (HTTP 504). Reload the page and try again."
     )
 
 

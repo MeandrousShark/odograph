@@ -323,8 +323,8 @@
         var xhr = event.detail.xhr;
         var detail = reason(xhr);
         show(detail
-          ? "That did not work: " + detail
-          : "That did not work (HTTP " + xhr.status + "). Reload the page and try again.");
+          ? "Error: " + detail
+          : "Error (HTTP " + xhr.status + "). Reload the page and try again.");
       });
       document.addEventListener("htmx:sendError", function () {
         show("Odograph could not be reached. Check the connection and try again.");
