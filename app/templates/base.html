@@ -294,6 +294,49 @@
       });
     })();
   </script>
+  <div id="request-error" class="notice notice-danger request-error" role="alert" hidden>
+    <p id="request-error-message"></p>
+    <button type="button" class="control control-secondary" data-request-error-dismiss>Dismiss</button>
+  </div>
+  <script nonce="{{ csp_nonce }}">
+    // htmx 1.9 does not swap 4xx/5xx responses, so without this a rejected
+    // or failed request leaves the page looking as if nothing happened.
+    // Superseded requests that a page marks non-errors in htmx:beforeSwap
+    // never reach htmx:responseError. The server's reason is shown as text,
+    // never HTML.
+    (function () {
+      var box = document.getElementById("request-error");
+      var text = document.getElementById("request-error-message");
+      function show(message) {
+        text.textContent = message;
+        box.hidden = false;
+      }
+      function reason(xhr) {
+        try {
+          var detail = JSON.parse(xhr.responseText).detail;
+          if (typeof detail === "string" && detail.length <= 300) return detail;
+          if (Array.isArray(detail)) return "Some of the submitted values are invalid.";
+        } catch (_) {}
+        return null;
+      }
+      document.addEventListener("htmx:responseError", function (event) {
+        var xhr = event.detail.xhr;
+        var detail = reason(xhr);
+        show(detail
+          ? "That did not work: " + detail
+          : "That did not work (HTTP " + xhr.status + "). Reload the page and try again.");
+      });
+      document.addEventListener("htmx:sendError", function () {
+        show("Odograph could not be reached. Check the connection and try again.");
+      });
+      document.addEventListener("htmx:beforeRequest", function () {
+        box.hidden = true;
+      });
+      document.addEventListener("click", function (event) {
+        if (event.target.closest("[data-request-error-dismiss]")) box.hidden = true;
+      });
+    })();
+  </script>
   {% block content %}{% endblock %}
   {% if user %}
   <footer>

@@ -724,12 +724,43 @@ def test_advanced_tools_disclosure_contains_merge_split_and_place_naming_control
     assert 'id="merge-prev"' in tools
     assert 'id="merge-next"' in tools
     assert 'id="split-toggle"' in tools
-    assert 'id="split-confirm"' in tools
+    assert 'aria-controls="split-panel"' in tools
     assert 'id="name-start"' in tools
     assert 'id="name-end"' in tools
     assert tools.index('id="merge-prev"') < tools.index('id="merge-next"') < tools.index(
         'id="split-toggle"'
     ) < tools.index('id="name-start"')
+
+
+def test_split_panel_sits_under_the_map_and_posts_a_plain_point_field():
+    """B26: the old Confirm button sent the point through `hx-vals='js:...'`,
+    which needs eval. The page CSP blocks eval, so htmx built no request and
+    split silently did nothing. The point is now an ordinary form field."""
+    body = _render_detail(_trip(source="detected"))
+
+    assert body.index('<div id="map" class="trip-detail-map">') < body.index(
+        'id="split-panel"'
+    ) < body.index('<details class="advanced-tools">')
+    panel = body.split('id="split-panel"', 1)[1].split("</section>", 1)[0]
+    assert " hidden>" in panel.split("\n", 1)[0]
+    assert "Tap or click the route on the map" in panel
+    assert 'hx-post="/trips/42/split"' in panel
+    assert '<input type="hidden" name="point_id" id="split-point-id" value="">' in panel
+    assert 'hx-disabled-elt="#split-submit, #split-cancel"' in panel
+    assert 'id="split-submit" class="control control-primary" disabled>Confirm split</button>' in panel
+    assert 'role="status" aria-live="polite"' in panel
+    assert "hx-vals" not in panel
+    assert "hx-confirm" not in panel
+
+
+def test_split_panel_is_absent_without_a_splittable_map():
+    imported = _render_detail(_trip(source="detected", imported=True))
+    manual = _render_detail(_trip(source="manual", has_route_geometry=True))
+    no_endpoints = _render_detail(_trip(source="detected", end_lat=None, end_lon=None))
+
+    for body in (imported, manual, no_endpoints):
+        assert 'id="split-panel"' not in body
+        assert 'id="split-toggle"' not in body
 
 
 def test_imported_detected_trip_detail_has_no_advanced_tools():

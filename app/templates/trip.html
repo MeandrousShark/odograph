@@ -75,6 +75,26 @@
     {% endif %}
   </section>
 
+  {% if trip.source == 'detected' and not trip.imported and show_map and has_route_endpoints %}
+  {# Kept directly under the map rather than inside Advanced trip tools, so
+     picking a point and confirming it happen in one place. The point travels
+     as a plain form field: an `hx-vals='js:...'` expression needs eval, which
+     the page's script-src CSP blocks, and htmx then sends nothing at all. #}
+  <section id="split-panel" class="notice split-panel" aria-labelledby="split-panel-heading" hidden>
+    <h3 id="split-panel-heading">Split this trip</h3>
+    <p id="split-instructions">Tap or click the route on the map where the first trip ended. Each part must be at least {{ min_trip_distance_m | round | int }} m long.</p>
+    <form id="split-form" hx-post="/trips/{{ trip.id }}/split" hx-swap="none"
+          hx-disabled-elt="#split-submit, #split-cancel">
+      <input type="hidden" name="point_id" id="split-point-id" value="">
+      <p id="split-status" class="split-status" role="status" aria-live="polite"></p>
+      <div class="split-actions">
+        <button type="submit" id="split-submit" class="control control-primary" disabled>Confirm split</button>
+        <button type="button" id="split-cancel" class="control control-secondary">Cancel</button>
+      </div>
+    </form>
+  </section>
+  {% endif %}
+
   <div class="trip-detail-fields">
     <div class="trip-detail-row">
       <div class="trip-detail-field">
@@ -257,8 +277,9 @@ document.addEventListener('change', function (event) {
       </form>
     </details>
     {% endif %}
-    <button type="button" id="split-toggle">Split trip</button>
-    <div id="split-confirm" style="display:none"></div>
+    {% if has_route_endpoints %}
+    <button type="button" id="split-toggle" aria-controls="split-panel" aria-expanded="false">Split trip</button>
+    {% endif %}
   </div>
 
   <div class="place-naming">
@@ -372,13 +393,17 @@ document.addEventListener('change', function (event) {
   // Split mode: a third, exclusive click-mode alongside the place-naming
   // one below. While armed, clicking the map picks the nearest *real* GPS
   // point (never the raw click coordinate, since the split anchor must be an
-  // actual points.id) and shows a confirmation before submitting.
+  // actual points.id), marks it, and enables the panel's Confirm button.
   let splitMode = false;
   let tripPoints = null;
   let tripCumDist = null;
-  window.__splitPointId = null;
+  let splitMarker = null;
   const splitToggle = document.getElementById('split-toggle');
-  const splitConfirm = document.getElementById('split-confirm');
+  const splitPanel = document.getElementById('split-panel');
+  const splitForm = document.getElementById('split-form');
+  const splitPointId = document.getElementById('split-point-id');
+  const splitSubmit = document.getElementById('split-submit');
+  const splitStatus = document.getElementById('split-status');
 
   function haversineM(lat1, lon1, lat2, lon2) {
     const R = 6371000, toRad = d => d * Math.PI / 180;
@@ -398,16 +423,51 @@ document.addEventListener('change', function (event) {
     return out;
   }
 
-  splitToggle?.addEventListener('click', async () => {
-    splitMode = !splitMode;
-    splitToggle.textContent = splitMode ? 'Cancel split' : 'Split trip';
-    splitConfirm.style.display = 'none';
-    splitConfirm.innerHTML = '';
-    window.__splitPointId = null;
-    if (splitMode && !tripPoints) {
+  function clearSplitChoice(message) {
+    splitPointId.value = '';
+    splitSubmit.disabled = true;
+    splitStatus.textContent = message || '';
+    if (splitMarker) { splitMarker.remove(); splitMarker = null; }
+  }
+
+  async function setSplitMode(on) {
+    splitMode = on;
+    if (!splitToggle || !splitPanel) return;
+    splitToggle.textContent = on ? 'Cancel split' : 'Split trip';
+    splitToggle.setAttribute('aria-expanded', on ? 'true' : 'false');
+    splitPanel.hidden = !on;
+    clearSplitChoice('');
+    if (!on) return;
+    mapEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (tripPoints) return;
+    splitStatus.textContent = 'Loading the route points...';
+    try {
       const resp = await fetch(window.location.pathname + '/points');
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
       tripPoints = await resp.json();
       tripCumDist = cumulativeDistances(tripPoints);
+      if (splitMode) splitStatus.textContent = '';
+    } catch (err) {
+      tripPoints = null;
+      if (splitMode) {
+        splitStatus.textContent = 'The route points could not be loaded. Reload the page and try again.';
+      }
+    }
+  }
+
+  splitToggle?.addEventListener('click', () => setSplitMode(!splitMode));
+  document.getElementById('split-cancel')?.addEventListener('click', () => {
+    setSplitMode(false);
+    splitToggle?.focus();
+  });
+  splitForm?.addEventListener('htmx:beforeRequest', () => {
+    splitStatus.textContent = 'Splitting the trip and re-detecting trips. This can take a moment...';
+  });
+  splitForm?.addEventListener('htmx:afterRequest', (event) => {
+    // Success leaves via HX-Redirect; the shared error banner reports why a
+    // failure happened, so this only restores the chosen-point prompt.
+    if (!event.detail.successful) {
+      splitStatus.textContent = 'The split did not complete. Pick a point and try again.';
     }
   });
 
@@ -417,7 +477,11 @@ document.addEventListener('change', function (event) {
   // click does nothing rather than guessing).
   map.on('click', function (e) {
     if (splitMode) {
-      if (!tripPoints || tripPoints.length < 3) return;
+      if (!tripPoints) return;
+      if (tripPoints.length < 3) {
+        clearSplitChoice('This trip has too few recorded points to split.');
+        return;
+      }
       let nearest = null, nearestDist = Infinity;
       for (const p of tripPoints) {
         const d = haversineM(e.latlng.lat, e.latlng.lng, p.lat, p.lon);
@@ -425,26 +489,25 @@ document.addEventListener('change', function (event) {
       }
       const first = tripPoints[0], last = tripPoints[tripPoints.length - 1];
       if (!nearest || nearest.id === first.id || nearest.id === last.id) {
-        splitConfirm.style.display = 'block';
-        splitConfirm.textContent = 'That point is already this trip\'s boundary. Pick a point further along the route.';
+        clearSplitChoice('That point is already this trip\'s boundary. Pick a point further along the route.');
         return;
       }
       const idx = tripPoints.indexOf(nearest);
       const fromStart = tripCumDist[idx];
       const fromEnd = tripCumDist[tripCumDist.length - 1] - fromStart;
       if (fromStart < minTripDistanceM || fromEnd < minTripDistanceM) {
-        splitConfirm.style.display = 'block';
-        splitConfirm.textContent = `That point is too close to the start or end of the trip ` +
-          `(each half must be at least ${Math.round(minTripDistanceM)}m). Pick a point further along the route.`;
+        clearSplitChoice(`That point is too close to the start or end of the trip ` +
+          `(each part must be at least ${Math.round(minTripDistanceM)} m). Pick a point further along the route.`);
         return;
       }
-      window.__splitPointId = nearest.id;
-      splitConfirm.style.display = 'block';
-      splitConfirm.innerHTML = `Split at ${new Date(nearest.t).toLocaleTimeString()}? ` +
-        '<button type="button" hx-post="' + window.location.pathname + '/split" ' +
-        'hx-vals=\'js:{"point_id": window.__splitPointId}\' ' +
-        'hx-confirm="Split this trip here? Both halves keep their own GPS data.">Confirm split</button>';
-      htmx.process(splitConfirm);
+      clearSplitChoice(`Split at ${new Date(nearest.t).toLocaleTimeString()}: ` +
+        `${(fromStart / 1609.344).toFixed(1)} mi before, ${(fromEnd / 1609.344).toFixed(1)} mi after. ` +
+        'Both parts keep their own GPS data.');
+      splitPointId.value = String(nearest.id);
+      splitSubmit.disabled = false;
+      splitMarker = L.circleMarker([nearest.lat, nearest.lon],
+        { radius: 8, color: routeColor, weight: 3, fillOpacity: 0.9 }).addTo(map);
+      splitPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       return;
     }
     const startOpen = document.getElementById('name-start')?.open;
