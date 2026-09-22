@@ -320,9 +320,10 @@ Odograph is self-hosted open-source software, not a hosted service. Only the
 latest release is supported, by one maintainer, on a best-effort basis. There
 is no service-level agreement or guaranteed response time.
 
-Open a GitHub issue for bugs and feature requests. See
-[SECURITY.md](SECURITY.md) for security reporting and supported versions, and
-[CONTRIBUTING.md](CONTRIBUTING.md) for project scope.
+Check [Known issues](docs/known-issues.md) for confirmed problems in
+published releases and their workarounds. Open a GitHub issue for bugs and
+feature requests. See [SECURITY.md](SECURITY.md) for security reporting and
+supported versions, and [CONTRIBUTING.md](CONTRIBUTING.md) for project scope.
 
 ## AI assistance
 
