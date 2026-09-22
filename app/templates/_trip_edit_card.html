@@ -1,6 +1,7 @@
 {% from "_purpose_field.html" import purpose_field %}
 {% from "_field_error.html" import field_error %}
 {% from "_category_segmented.html" import category_segmented %}
+{% from "_icons.html" import icon with context %}
 {# `trip-archive-item` carries no CSS: it's the bare marker trips.html's
    selection script queries for, shared with _trip_archive_row.html, so a
    row being edited in place stays part of Select all / is-selected
@@ -10,6 +11,25 @@
 <article id="trip-{{ trip.id }}" class="card trip-card trip-edit-card trip-archive-item">
   <form hx-post="/trips/{{ trip.id }}/edit" hx-target="#trip-{{ trip.id }}" hx-swap="outerHTML">
     {% if dashboard_week %}<input type="hidden" name="dashboard_week" value="{{ dashboard_week }}">{% endif %}
+    {# The card replaces the trip's row in place, so it repeats the row's
+       identifying summary (stored values, not unsaved form input) above the
+       form. Without it a detected trip's editor showed nothing that said
+       which trip was open, and it read as belonging to the row above. #}
+    {% set full_start = describe_endpoint(trip.start_place_name, trip.start_lat, trip.start_lon, trip.get('start_address')) %}
+    {% set full_end = describe_endpoint(trip.end_place_name, trip.end_lat, trip.end_lon, trip.get('end_address')) %}
+    {% set compact_start = describe_compact_endpoint(trip.start_place_name, trip.start_lat, trip.start_lon, trip.get('start_address')) %}
+    {% set compact_end = describe_compact_endpoint(trip.end_place_name, trip.end_lat, trip.end_lon, trip.get('end_address')) %}
+    <div class="trip-edit-identity">
+      <p class="trip-edit-when">
+        <strong>{{ trip.started_at | local_date }}</strong>
+        <span><time datetime="{{ trip.started_at.isoformat() }}">{{ trip.started_at | local_time }}</time> to <time datetime="{{ trip.ended_at.isoformat() }}">{{ trip.ended_at | local_time }}</time></span>
+        <span class="trip-edit-distance">{{ trip.display_distance_m | mi }} mi</span>
+      </p>
+      <p class="trip-edit-route trip-route" title="{{ full_start }} to {{ full_end }}"
+         aria-label="Route: {{ full_start }} to {{ full_end }}">
+        <span>{{ compact_start }}</span>{{ icon('arrow-right') }}<span>{{ compact_end }}</span>
+      </p>
+    </div>
     <div class="trip-edit-heading">
       <h3>Edit {{ 'manual' if trip.source == 'manual' else 'detected' }} trip</h3>
       {% if errors %}

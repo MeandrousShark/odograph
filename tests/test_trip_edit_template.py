@@ -195,3 +195,58 @@ def test_label_field_error_renders_next_to_its_own_input_only():
     end_block = body.split("End location name", 1)[1].split("</label>", 1)[0]
     assert "aria-invalid" not in end_block
     assert "field-error" not in end_block
+
+
+def _identity(body: str) -> str:
+    return body.split('<div class="trip-edit-identity">', 1)[1].split(
+        '<div class="trip-edit-heading">', 1
+    )[0]
+
+
+def test_detected_edit_card_repeats_the_rows_identifying_summary_above_the_form():
+    """B25: the card replaces the row in place, so without this summary a
+    detected trip's editor showed nothing identifying and was mistaken for
+    the row above it."""
+    body = _render()
+    identity = _identity(body)
+
+    assert body.index('<div class="trip-edit-identity">') < body.index("<h3>Edit detected trip</h3>")
+    assert "<strong>Wed Jul 1</strong>" in identity
+    assert '<time datetime="2026-07-01T09:00:00+00:00">02:00</time> to' in identity
+    assert '<time datetime="2026-07-01T09:20:00+00:00">02:20</time>' in identity
+    assert '<span class="trip-edit-distance">1.0 mi</span>' in identity
+    assert 'aria-label="Route: 123 Main St, Seattle, WA 98101 to Home"' in identity
+    assert "<span>123 Main St</span>" in identity
+    assert "<span>Home</span>" in identity
+
+
+def test_edit_card_summary_shows_stored_values_not_submitted_ones():
+    """A validation redisplay keeps the typed values in the form, but the
+    summary still names the trip as saved."""
+    body = _render(
+        source="manual", errors={"date": "Enter a valid date."},
+        start_place_id=None, end_place_id=None,
+    )
+    identity = _identity(body)
+
+    assert "<strong>Wed Jul 1</strong>" in identity
+    assert "2026-07-14" not in identity
+    assert "23:30" not in identity
+    assert "8.4" not in identity
+    assert 'value="2026-07-14"' in body
+    assert body.index('<div class="trip-edit-identity">') < body.index("<h3>Edit manual trip</h3>")
+
+
+def test_dashboard_and_archive_edit_cards_share_the_summary():
+    dashboard = _render(dashboard_week="2026-06-29")
+    archive = _render()
+
+    assert _identity(dashboard) == _identity(archive)
+    assert 'name="dashboard_week" value="2026-06-29"' in dashboard
+
+
+def test_edit_card_summary_escapes_place_names():
+    identity = _identity(_render(end_place_name="Bob's <Garage>"))
+
+    assert "Bob&#39;s &lt;Garage&gt;" in identity
+    assert "<Garage>" not in identity
