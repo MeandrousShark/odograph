@@ -59,6 +59,9 @@ reproduced here.
   Publish Settings button sends (which contains the tracker's plaintext
   password), are acknowledged and discarded instead of being stored in
   `raw_messages`.
+- Schema 27 deletes the `dump` and `configuration` messages that earlier
+  releases stored in `raw_messages`. Backups made before upgrading can still
+  contain them; see [Backups](docs/backups.md#what-the-archive-covers-and-what-it-doesnt).
 
 ## [0.11.2] - 2026-09-23
 

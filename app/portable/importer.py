@@ -27,7 +27,8 @@ log = logging.getLogger(__name__)
 # Keep the tuples explicit so a future migration never becomes cross-schema
 # compatible merely because its version is adjacent.
 _COMPATIBLE_SCHEMA_TRANSITIONS = {
-    (1, 21, 26), (2, 22, 26), (2, 23, 26), (2, 24, 26), (2, 25, 26), (3, 26, 26),
+    (1, 21, 27), (2, 22, 27), (2, 23, 27), (2, 24, 27), (2, 25, 27), (3, 26, 27),
+    (3, 27, 27),
 }
 
 

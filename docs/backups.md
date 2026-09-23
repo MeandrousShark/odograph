@@ -22,6 +22,14 @@ overrides, caches, and worker delivery ledgers. It also includes the protected
 `odograph_service` schema containing the application's database credential
 state. Treat the entire archive as sensitive and encrypt off-host copies.
 
+Archives made before schema 27 can also contain the configuration message
+that OwnTracks' Publish Settings button sends, which includes the tracker's
+plaintext password. Schema 27 deletes those stored messages, and a restored
+older archive loses them again when the application next starts, but the
+archive file itself keeps them. Protect older archives accordingly, or
+replace the tracking credential in Tracking settings if one may have been
+exposed.
+
 The dump has no table-level allowlist. That means a future schema change cannot
 silently add an application table that the backup leaves out.
 The script requires the instance database identity with unrestricted backup

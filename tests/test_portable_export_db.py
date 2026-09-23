@@ -73,7 +73,7 @@ def test_export_on_a_freshly_migrated_instance_reflects_seed_state():
         bundle = await _export(pool)
         assert bundle["format"] == FORMAT
         assert bundle["format_version"] == FORMAT_VERSION
-        assert bundle["schema_version"] == 26
+        assert bundle["schema_version"] == 27
         assert len(bundle["vehicles"]) == 1
         assert bundle["vehicles"][0]["name"] == "My Car"
         assert bundle["vehicles"][0]["is_default"] is True
