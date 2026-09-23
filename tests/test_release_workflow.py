@@ -39,7 +39,7 @@ def test_release_is_tag_only_repo_scoped_and_serialized_per_tag():
 
     source = WORKFLOW.read_text()
     assert "ghcr.io/meandrousshark/odograph:" not in source.lower()
-    assert source.count("ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6") == 3
+    assert source.count("ghcr.io/meandrousshark/odograph-postgis@sha256:b352024dd6f9ca2ba0f1e7125dcfdcf78b824f2cbe86edf89559e1ddf4d80241") == 3
     assert ":latest" not in source
 
 
@@ -50,7 +50,7 @@ def test_release_test_gate_runs_full_postgis_suite_and_pip_audit():
     assert test["env"]["TEST_DATABASE_URL"].startswith("postgresql://")
     postgres = test["services"]["postgres"]
     assert postgres["image"] == (
-        "ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6"
+        "ghcr.io/meandrousshark/odograph-postgis@sha256:b352024dd6f9ca2ba0f1e7125dcfdcf78b824f2cbe86edf89559e1ddf4d80241"
     )
     assert "pg_isready" in postgres["options"]
 
@@ -141,7 +141,7 @@ def test_each_architecture_is_built_from_tagged_tree_and_scanned_by_digest():
         assert postgis_scan["uses"] == "aquasecurity/trivy-action@v0.36.0"
         assert postgis_scan["env"] == {"TRIVY_PLATFORM": platform}
         assert postgis_scan["with"] == {
-            "image-ref": "ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6",
+            "image-ref": "ghcr.io/meandrousshark/odograph-postgis@sha256:b352024dd6f9ca2ba0f1e7125dcfdcf78b824f2cbe86edf89559e1ddf4d80241",
             "format": "table",
             "exit-code": "1",
             "ignore-unfixed": "true",

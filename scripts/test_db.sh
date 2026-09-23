@@ -7,7 +7,7 @@
 #   scripts/test_db.sh cleanup TASK_ID
 set -euo pipefail
 
-IMAGE="${TEST_DB_IMAGE:-ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6}"
+IMAGE="${TEST_DB_IMAGE:-ghcr.io/meandrousshark/odograph-postgis@sha256:b352024dd6f9ca2ba0f1e7125dcfdcf78b824f2cbe86edf89559e1ddf4d80241}"
 OWNER_LABEL="io.odograph.test-db"
 TASK_LABEL="io.odograph.test-db-task"
 
