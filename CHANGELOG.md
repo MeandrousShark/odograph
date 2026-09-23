@@ -9,6 +9,24 @@ reproduced here.
 
 ## [Unreleased]
 
+### Changed
+
+- The inline trip editor on the Dashboard and Trips list now shows the trip's
+  date, time, route and distance above the form, so it is clear which trip is
+  being edited.
+
+### Fixed
+
+- Split trip works again. Confirm split no longer relies on an
+  expression the Content Security Policy blocks, which previously stopped the
+  request from being sent in v0.6.0 through v0.11.1. Split mode now explains
+  how to pick a point, keeps the map and confirmation together, marks the
+  chosen point and shows progress. See [Known issues](docs/known-issues.md).
+- Failed requests now show the reason in a banner instead of leaving the page
+  unchanged.
+- On desktop, the current-page bar under Settings and Account Settings now sits
+  on the header line and spans the control, matching the other pages.
+
 ## [0.11.1] - 2026-09-20
 
 ### Fixed
