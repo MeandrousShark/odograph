@@ -490,6 +490,12 @@ textarea:focus-visible, summary:focus-visible {
   header { align-items: end; padding-bottom: var(--space-1); }
   header h1 { display: flex; min-height: var(--control-height); align-items: center; }
   header nav a::after { bottom: calc(-1 * var(--space-1)); }
+  /* Settings and account settings are header controls, not nav links: the
+     bar is placed inside their 1px border and wider padding, so offset both
+     to land on the nav links' line and span the content as theirs do. */
+  .header-control[aria-current="page"]::after {
+    right: var(--space-2); bottom: calc(-1 * var(--space-1) - 1px); left: var(--space-2);
+  }
 }
 
 @media (min-width: 761px) and (max-width: 1024px) {
