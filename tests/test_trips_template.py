@@ -1615,15 +1615,16 @@ def test_every_script_element_carries_the_nonce_or_is_a_same_origin_asset():
     for tag in tags:
         assert "src=" in tag or 'nonce="test-nonce-xyz"' in tag, tag
 
-    # Exactly the known set of inline script blocks: base.html's four plus
-    # trips.html's archive-controller and selection blocks.
-    assert body.count('<script nonce="test-nonce-xyz">') == 6
+    # Exactly the known set of inline script blocks: base.html's five
+    # (including the shared request-error banner) plus trips.html's
+    # archive-controller and selection blocks.
+    assert body.count('<script nonce="test-nonce-xyz">') == 7
 
     manual = _render_manual(csp_nonce="test-nonce-xyz")
     manual_tags = re.findall(r"<script\b[^>]*>", manual)
     for tag in manual_tags:
         assert "src=" in tag or 'nonce="test-nonce-xyz"' in tag, tag
-    assert manual.count('<script nonce="test-nonce-xyz">') == 5
+    assert manual.count('<script nonce="test-nonce-xyz">') == 6
 
 
 def test_route_picker_map_click_normalizes_longitude_before_use():

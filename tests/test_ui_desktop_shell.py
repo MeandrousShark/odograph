@@ -190,6 +190,20 @@ def test_desktop_header_uses_compact_nocturne_rule_and_active_accent_indicator()
     assert "var(--control-height)" in CSS
 
 
+def test_header_control_indicator_lands_on_the_nav_link_line_at_desktop_widths():
+    # B24: Settings and account settings are header controls with a 1px
+    # border and --space-2 padding, while nav links have neither. The shared
+    # base rule placed both bars at -space-3, and only the nav links were
+    # raised at desktop widths, so these two bars hung below the header rule.
+    desktop = CSS.split("@media (min-width: 761px) {", 1)[1].split("\n}\n", 1)[0]
+    assert "header nav a::after { bottom: calc(-1 * var(--space-1)); }" in desktop
+    control = desktop.split('.header-control[aria-current="page"]::after {', 1)[1].split("}", 1)[0]
+    assert "bottom: calc(-1 * var(--space-1) - 1px);" in control
+    assert "right: var(--space-2);" in control
+    assert "left: var(--space-2);" in control
+    assert "padding: 0 var(--space-2); border: 1px solid transparent;" in CSS
+
+
 def test_account_identity_link_keeps_box_metrics_and_gets_accent_treatment():
     assert (
         ".account-identity { display: inline-flex; min-width: 0; min-height: var(--control-height); "
