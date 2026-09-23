@@ -51,6 +51,8 @@ reproduced here.
   transaction.
 - Refuse to attach a newly created QA database container to an orphaned
   persistent volume; recover it with its original image or a verified backup.
+- On desktop, the current-page bar under Settings and Account Settings now sits
+  on the header line and spans the control, matching the other pages.
 
 ### Security
 
