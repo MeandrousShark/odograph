@@ -503,7 +503,7 @@ document.addEventListener('click', function (event) {
     <tbody>
       {% for d in device_fixes %}
       <tr>
-        <td>{{ d.device }}</td>
+        <td>{{ d.device_label }} <span class="muted">({{ d.latest_tid }})</span></td>
         <td>{{ d.newest_received_at | local_dt }}</td>
         <td>{{ d.newest_recorded_at | local_dt }}</td>
         <td class="num">{{ d.point_count }}</td>
