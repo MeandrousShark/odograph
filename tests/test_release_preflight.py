@@ -168,7 +168,7 @@ def test_preflight_runs_full_policy_and_native_local_image_matrix():
     quality_steps = steps_by_name(quality)
 
     assert quality["services"]["postgres"]["image"] == (
-        "ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6"
+        "ghcr.io/meandrousshark/odograph-postgis@sha256:b352024dd6f9ca2ba0f1e7125dcfdcf78b824f2cbe86edf89559e1ddf4d80241"
     )
     assert quality_steps["Install pinned Gitleaks"]["env"]["GITLEAKS_VERSION"] == "8.30.1"
     assert "python -m pytest -q" in quality_steps["Run full locked test suite"]["run"]
@@ -202,7 +202,7 @@ def test_preflight_runs_full_policy_and_native_local_image_matrix():
     assert postgis_scan["uses"] == "aquasecurity/trivy-action@v0.36.0"
     assert postgis_scan["env"]["TRIVY_PLATFORM"] == "${{ matrix.platform }}"
     assert postgis_scan["with"] == {
-        "image-ref": "ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6",
+        "image-ref": "ghcr.io/meandrousshark/odograph-postgis@sha256:b352024dd6f9ca2ba0f1e7125dcfdcf78b824f2cbe86edf89559e1ddf4d80241",
         "format": "table",
         "output": "evidence/trivy-${{ matrix.architecture }}-postgis.txt",
         "exit-code": "1",
@@ -215,7 +215,7 @@ def test_preflight_runs_full_policy_and_native_local_image_matrix():
     smoke = steps["Smoke-test native application image"]
     assert smoke["env"]["ARCHITECTURE"] == "${{ matrix.architecture }}"
     assert smoke["env"]["POSTGIS_IMAGE"] == (
-        "ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6"
+        "ghcr.io/meandrousshark/odograph-postgis@sha256:b352024dd6f9ca2ba0f1e7125dcfdcf78b824f2cbe86edf89559e1ddf4d80241"
     )
     assert '"linux/${ARCHITECTURE}"' in smoke["run"]
 

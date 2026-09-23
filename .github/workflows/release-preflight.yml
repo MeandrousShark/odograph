@@ -137,7 +137,7 @@ jobs:
       TEST_DATABASE_URL: postgresql://mileage:testpw@127.0.0.1:5432/mileage
     services:
       postgres:
-        image: ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6
+        image: ghcr.io/meandrousshark/odograph-postgis@sha256:b352024dd6f9ca2ba0f1e7125dcfdcf78b824f2cbe86edf89559e1ddf4d80241
         env:
           POSTGRES_DB: mileage
           POSTGRES_USER: mileage
@@ -328,7 +328,7 @@ jobs:
         env:
           TRIVY_PLATFORM: ${{ matrix.platform }}
         with:
-          image-ref: ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6
+          image-ref: ghcr.io/meandrousshark/odograph-postgis@sha256:b352024dd6f9ca2ba0f1e7125dcfdcf78b824f2cbe86edf89559e1ddf4d80241
           format: table
           output: evidence/trivy-${{ matrix.architecture }}-postgis.txt
           exit-code: "1"
@@ -353,7 +353,7 @@ jobs:
       - name: Smoke-test native application image
         env:
           ARCHITECTURE: ${{ matrix.architecture }}
-          POSTGIS_IMAGE: ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6
+          POSTGIS_IMAGE: ghcr.io/meandrousshark/odograph-postgis@sha256:b352024dd6f9ca2ba0f1e7125dcfdcf78b824f2cbe86edf89559e1ddf4d80241
           REVISION: ${{ needs.prepare.outputs.revision }}
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
@@ -535,7 +535,7 @@ jobs:
           ARCHITECTURE: ${{ matrix.architecture }}
           DIGEST: ${{ needs.resolve-published.outputs[matrix.digest-output] }}
           IMAGE: ${{ needs.prepare.outputs.image }}
-          POSTGIS_IMAGE: ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6
+          POSTGIS_IMAGE: ghcr.io/meandrousshark/odograph-postgis@sha256:b352024dd6f9ca2ba0f1e7125dcfdcf78b824f2cbe86edf89559e1ddf4d80241
           REVISION: ${{ needs.prepare.outputs.revision }}
           SOURCE: https://github.com/${{ github.repository }}
           VERSION: ${{ needs.prepare.outputs.version }}

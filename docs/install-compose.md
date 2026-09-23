@@ -126,7 +126,7 @@ name the resources that include the persistent `dbdata` volume.
 
 This checkout's `compose.yaml` uses the signed native PostgreSQL 16.15/PostGIS
 3.6.4 image
-`ghcr.io/meandrousshark/odograph-postgis@sha256:89e58d40e04e390d3418f99890dff103972476a5a9d21c70bda4d210cae7a2f6` for
+`ghcr.io/meandrousshark/odograph-postgis@sha256:b352024dd6f9ca2ba0f1e7125dcfdcf78b824f2cbe86edf89559e1ddf4d80241` for
 Linux AMD64 and ARM64. When a target release uses it, an installation that
 still uses `postgis/postgis:16-3.4` must follow
 [Upgrading the PostGIS database image](upgrading.md#upgrading-the-postgis-database-image)
