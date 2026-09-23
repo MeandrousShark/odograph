@@ -20,33 +20,20 @@ import logging
 
 from psycopg_pool import AsyncConnectionPool
 
-from app.worker import IntervalWorker
 from app.account_context import account_id
 
 log = logging.getLogger(__name__)
 
-# No poke/debounce here, since nothing else in the app needs to react to this
-# job, unlike the detector, which pokes SnapWorker and GeocodeWorker after
-# each sweep that does something (app/main.py's after_detection). A plain
-# daily wake keeps the growth of a slow, low-priority prune bounded without
-# a dedicated cadence env var.
-RUN_INTERVAL_S = 24 * 60 * 60.0
 
-
-class RetentionWorker(IntervalWorker):
-    """Daily loop that deletes `raw_messages` rows older than the configured
-    retention window. `IntervalWorker` (app/worker.py) supplies the
-    run/sleep/repeat loop, `start`/`stop`, and guarded-run wrapper, with no
-    debounce/sweep distinction, since nothing pokes this worker early.
+class RetentionWorker:
+    """Deletes `raw_messages` rows older than the configured retention
+    window. `run_once()` is the only method `AccountWorker`
+    (app/account_workers.py) calls -- it builds a fresh `RetentionWorker`
+    per account on its own daily-cadence sweep; this class supplies no
+    loop, `start`/`stop`, or guarded-run wrapper of its own.
     """
 
     def __init__(self, pool: AsyncConnectionPool, retention_days: float):
-        super().__init__(
-            task_name="retention-worker",
-            log=log,
-            failure_message="retention worker run failed; will retry on next daily wake",
-            interval_s=RUN_INTERVAL_S,
-        )
         self.pool = pool
         self.retention_days = retention_days
 

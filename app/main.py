@@ -324,13 +324,11 @@ def create_app(config: Config | None = None) -> FastAPI:
                 return worker
 
             snap_worker = await start_worker("snap_worker", lambda pool, c: SnapWorker(
-                pool, http_client, c.osrm_url, c.osrm_min_confidence, c.osrm_max_coords,
-                c.snap_debounce_s, c.snap_sweep_s), cfg.snap_debounce_s, cfg.snap_sweep_s,
-                enabled=cfg.snap_enabled)
+                pool, http_client, c.osrm_url, c.osrm_min_confidence, c.osrm_max_coords),
+                cfg.snap_debounce_s, cfg.snap_sweep_s, enabled=cfg.snap_enabled)
             geocode_worker = await start_worker("geocode_worker", lambda pool, c: GeocodeWorker(
-                pool, geocode_http, provider, c.geocode_min_interval_s, c.geocode_debounce_s,
-                c.geocode_sweep_s), cfg.geocode_debounce_s, cfg.geocode_sweep_s,
-                enabled=provider is not None)
+                pool, geocode_http, provider, c.geocode_min_interval_s),
+                cfg.geocode_debounce_s, cfg.geocode_sweep_s, enabled=provider is not None)
             await start_worker("retention_worker", lambda pool, c: RetentionWorker(
                 pool, c.raw_message_retention_days), 1, 86400, enabled=cfg.retention_enabled)
             await start_worker("nudge_worker", lambda pool, c: NudgeWorker(

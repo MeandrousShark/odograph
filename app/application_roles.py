@@ -66,6 +66,15 @@ class _RolesUsedElsewhere(RoleSetupError):
     pass
 
 
+class _ContractMismatch(RoleSetupError):
+    """A named security-contract drift. The message is always safe to log."""
+
+
+def _require_contract(ok: bool, cause: str) -> None:
+    if not ok:
+        raise _ContractMismatch(f"application database security contract mismatch: {cause}")
+
+
 async def _check_role_database_ownership(conn) -> None:
     """Fixed cluster identities may belong to only this installation."""
     cur = await conn.execute(
@@ -212,10 +221,13 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
         "WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','f') "
         "AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid=c.oid AND d.deptype='e')")
     rows = await cur.fetchall()
-    _require({row[0] for row in rows} == set(TABLES))
-    _require(all(row[1:] == (MIGRATE_ROLE, False, False) for row in rows))
+    found_tables = {row[0] for row in rows}
+    _require_contract(found_tables == set(TABLES),
+        f"relation set: unexpected {sorted(found_tables - set(TABLES))} missing {sorted(set(TABLES) - found_tables)}")
+    bad_relations = [row[0] for row in rows if row[1:] != (MIGRATE_ROLE, False, False)]
+    _require_contract(not bad_relations, f"relation ownership or RLS flags: {bad_relations}")
     cur = await conn.execute(
-        "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace "
+        "SELECT p.oid::regprocedure::text FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace "
         "WHERE p.prosecdef AND p.oid <> ALL(%s::regprocedure[]) "
         "AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid='pg_proc'::regclass "
         "AND d.objid=p.oid AND d.deptype='e') "
@@ -224,81 +236,101 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
         "AND has_function_privilege(role_name,p.oid,'EXECUTE'))",
         (list(FUNCTIONS), [CONTROL_ROLE, RUNTIME_ROLE]),
     )
-    _require((await cur.fetchone())[0] == 0)
+    extra_functions = [row[0] for row in await cur.fetchall()]
+    _require_contract(not extra_functions, f"extra security-definer function: {extra_functions}")
     cur = await conn.execute("SELECT contract_version,owner_role,installation_id FROM odograph_service.recovery_metadata WHERE id=1")
-    _require(await cur.fetchone() == (state.contract_version, MIGRATE_ROLE, state.installation_id))
+    _require_contract(await cur.fetchone() == (state.contract_version, MIGRATE_ROLE, state.installation_id), "recovery metadata")
     cur = await conn.execute(
         "SELECT rolname,rolsuper,rolbypassrls,rolcreatedb,rolcreaterole,rolreplication,rolcanlogin "
         "FROM pg_roles WHERE rolname=ANY(%s)", (list(ALL_ROLES),))
     rows = await cur.fetchall()
-    _require(len(rows) == len(ALL_ROLES))
-    _require(all(list(row[1:]) == [False]*5 + [row[0] in (CONTROL_ROLE, RUNTIME_ROLE)] for row in rows))
+    found_roles = {row[0] for row in rows}
+    _require_contract(found_roles == set(ALL_ROLES),
+        f"role attributes: missing {sorted(set(ALL_ROLES) - found_roles)}")
+    bad_roles = [row[0] for row in rows if list(row[1:]) != [False]*5 + [row[0] in (CONTROL_ROLE, RUNTIME_ROLE)]]
+    _require_contract(not bad_roles, f"role attributes: {bad_roles}")
     cur = await conn.execute(
-        "SELECT count(*) FROM pg_auth_members WHERE member IN (SELECT oid FROM pg_roles WHERE rolname=ANY(%s)) "
-        "OR roleid IN (SELECT oid FROM pg_roles WHERE rolname=ANY(%s))", (list(ALL_ROLES), list(ALL_ROLES)))
-    _require((await cur.fetchone())[0] == 0)
+        "SELECT rolname FROM pg_roles WHERE rolname=ANY(%s) AND (oid IN (SELECT member FROM pg_auth_members) "
+        "OR oid IN (SELECT roleid FROM pg_auth_members))", (list(ALL_ROLES),))
+    memberships = [row[0] for row in await cur.fetchall()]
+    _require_contract(not memberships, f"role membership: {memberships}")
     cur = await conn.execute(
-        "SELECT count(*) FROM pg_db_role_setting WHERE setrole IN "
-        "(SELECT oid FROM pg_roles WHERE rolname=ANY(%s))", (list(ALL_ROLES),))
-    _require((await cur.fetchone())[0] == 0)
+        "SELECT r.rolname FROM pg_db_role_setting s JOIN pg_roles r ON r.oid=s.setrole WHERE r.rolname=ANY(%s)",
+        (list(ALL_ROLES),))
+    overrides = [row[0] for row in await cur.fetchall()]
+    _require_contract(not overrides, f"role attributes: per-database overrides for {overrides}")
     cur = await conn.execute(
         "WITH objects AS ("
-        " SELECT c.relowner AS owner,c.relacl AS acl FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
+        " SELECT c.relname AS name,c.relowner AS owner,c.relacl AS acl FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
         " WHERE (n.nspname='public' AND c.relname=ANY(%s)) OR n.nspname='odograph_service'"
-        " UNION ALL SELECT c.relowner,a.attacl FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid "
+        " UNION ALL SELECT c.relname||'.'||a.attname,c.relowner,a.attacl FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid "
         " JOIN pg_namespace n ON n.oid=c.relnamespace WHERE (n.nspname='public' AND c.relname=ANY(%s)) OR n.nspname='odograph_service')"
-        " SELECT count(*) FROM objects o CROSS JOIN LATERAL aclexplode(o.acl) x"
+        " SELECT DISTINCT o.name FROM objects o CROSS JOIN LATERAL aclexplode(o.acl) x"
         " WHERE x.grantee=0 OR x.grantee NOT IN (SELECT oid FROM pg_roles WHERE rolname=ANY(%s))"
         " OR (x.is_grantable AND x.grantee<>o.owner)", (list(TABLES), list(TABLES), list(ALL_ROLES)))
-    _require((await cur.fetchone())[0] == 0)
+    extra_grants = [row[0] for row in await cur.fetchall()]
+    _require_contract(not extra_grants, f"table/column/sequence/function privilege: unexpected grant on {extra_grants}")
     cur = await conn.execute("SELECT tablename,policyname,roles,cmd,qual,with_check,permissive FROM pg_policies WHERE schemaname='public'")
     rows = await cur.fetchall()
     expected = _policy_contract()
-    _require({(row[0], row[1]) for row in rows} == set(expected))
+    found_policies = {(row[0], row[1]) for row in rows}
+    _require_contract(found_policies == set(expected),
+        f"policy set: unexpected {sorted(found_policies - set(expected))} missing {sorted(set(expected) - found_policies)}")
     for table, name, roles, command, using, check, permissive in rows:
         role, expected_command, expected_using, expected_check = expected[table, name]
-        _require(roles == [role] and command == expected_command and permissive == "PERMISSIVE")
-        _require(_policy_expression(using) == _policy_expression(expected_using))
-        _require(_policy_expression(check) == _policy_expression(expected_check))
+        _require_contract(roles == [role] and command == expected_command and permissive == "PERMISSIVE",
+            f"policy set: {table}.{name}")
+        _require_contract(_policy_expression(using) == _policy_expression(expected_using),
+            f"policy set: {table}.{name} using expression")
+        _require_contract(_policy_expression(check) == _policy_expression(expected_check),
+            f"policy set: {table}.{name} check expression")
     for role in (CONTROL_ROLE, RUNTIME_ROLE, BOOTSTRAP_ROLE):
         cur = await conn.execute("SELECT has_database_privilege(%s,current_database(),'CREATE'),has_schema_privilege(%s,'public','CREATE')", (role, role))
-        _require(await cur.fetchone() == (False, False))
+        _require_contract(await cur.fetchone() == (False, False), f"database or schema privilege: {role}")
         for table in TABLES:
             rights = _table_rights(role, table)
             cur = await conn.execute(
                 "SELECT privilege,has_table_privilege(%s,%s,privilege) FROM unnest(%s::text[]) privilege",
                 (role, "public." + table, list(PRIVILEGES)))
-            _require(all(allowed == (privilege in rights) for privilege, allowed in await cur.fetchall()))
+            bad_privileges = [privilege for privilege, allowed in await cur.fetchall() if allowed != (privilege in rights)]
+            _require_contract(not bad_privileges, f"table privilege: {role} public.{table} {bad_privileges}")
             cur = await conn.execute(
                 "SELECT a.attname,p.privilege,has_column_privilege(%s,a.attrelid,a.attnum,p.privilege) "
                 "FROM pg_attribute a CROSS JOIN unnest(ARRAY['SELECT','INSERT','UPDATE','REFERENCES']) p(privilege) "
                 "WHERE a.attrelid=%s::regclass AND a.attnum>0 AND NOT a.attisdropped", (role, "public." + table))
+            bad_columns = []
             for column, privilege, allowed in await cur.fetchall():
                 expected_allowed = privilege in rights or (
                     privilege == "SELECT" and column in COLUMN_SELECT.get((role, table), ()))
-                _require(allowed == expected_allowed)
+                if allowed != expected_allowed:
+                    bad_columns.append((column, privilege))
+            _require_contract(not bad_columns, f"column privilege: {role} public.{table} {bad_columns}")
         for function, caller in FUNCTIONS.items():
             cur = await conn.execute("SELECT has_function_privilege(%s,%s,'EXECUTE')", (role, function))
-            _require((await cur.fetchone())[0] == (role in (caller, BOOTSTRAP_ROLE)))
+            allowed = (await cur.fetchone())[0]
+            _require_contract(allowed == (role in (caller, BOOTSTRAP_ROLE)), f"function privilege: {role} {function}")
         for table, sequence in await _sequences(conn):
             cur = await conn.execute(
                 "SELECT p,has_sequence_privilege(%s,%s,p) FROM unnest(ARRAY['USAGE','SELECT','UPDATE']) p",
                 (role, "public." + sequence))
-            _require(all(allowed == (privilege == "USAGE" and "INSERT" in _table_rights(role, table))
-                         for privilege, allowed in await cur.fetchall()))
+            bad_privileges = [privilege for privilege, allowed in await cur.fetchall()
+                              if allowed != (privilege == "USAGE" and "INSERT" in _table_rights(role, table))]
+            _require_contract(not bad_privileges, f"sequence privilege: {role} public.{sequence} {bad_privileges}")
         for table in ("managed_role_state", "recovery_metadata"):
             cur = await conn.execute(
                 "SELECT p,has_table_privilege(%s,%s,p) FROM unnest(%s::text[]) p",
                 (role, STATE_SCHEMA + "." + table, list(PRIVILEGES)))
-            _require(all(allowed == (privilege == "SELECT" and table == "recovery_metadata" and role in (RUNTIME_ROLE, CONTROL_ROLE))
-                         for privilege, allowed in await cur.fetchall()))
+            bad_privileges = [privilege for privilege, allowed in await cur.fetchall()
+                              if allowed != (privilege == "SELECT" and table == "recovery_metadata" and role in (RUNTIME_ROLE, CONTROL_ROLE))]
+            _require_contract(not bad_privileges, f"table privilege: {role} {STATE_SCHEMA}.{table} {bad_privileges}")
     for function, filename in zip(FUNCTIONS, FUNCTION_FILES, strict=True):
         cur = await conn.execute(
             "SELECT pg_get_userbyid(proowner),prosecdef,proconfig,prosrc FROM pg_proc WHERE oid=%s::regprocedure", (function,))
         row = await cur.fetchone()
         source = (SQL_DIR / filename).read_text()
         body = re.search(r"AS\s+(\$[a-z_]*\$)(.*?)\1", source, re.S | re.I).group(2)
-        _require(row == (BOOTSTRAP_ROLE, True, ["search_path=pg_catalog, pg_temp"], body))
+        _require_contract(row == (BOOTSTRAP_ROLE, True, ["search_path=pg_catalog, pg_temp"], body),
+            f"function definition: {function}")
 
 
 async def prepare_application_roles(database_url: str, *, restoring: bool = False) -> ManagedRoleState:
@@ -338,6 +370,8 @@ async def prepare_application_roles(database_url: str, *, restoring: bool = Fals
             await validate_application_contract(conn, state)
             return state
     except _RolesUsedElsewhere:
+        raise
+    except _ContractMismatch:
         raise
     except Exception:
         raise RoleSetupError("application database setup failed") from None

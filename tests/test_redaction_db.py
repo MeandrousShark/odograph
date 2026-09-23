@@ -163,7 +163,7 @@ def test_snap_worker_unsnappable_trip_logs_trip_id_not_coordinates(caplog):
         async with pool.connection() as conn:
             trip_id = await _insert_unsnappable_trip(conn)
 
-        worker = SnapWorker(pool, None, "http://osrm", 0.5, 250, 15.0, 300.0)
+        worker = SnapWorker(pool, None, "http://osrm", 0.5, 250)
         with caplog.at_level(logging.WARNING, logger="app.snap"):
             await worker._snap_one(trip_id)
 

@@ -104,17 +104,30 @@ async def _render_odometer_table(request: Request, conn):
 
 
 async def _fetch_device_fixes(conn) -> list[dict]:
-    """One row per device that has ever posted a point, so a misconfigured
-    phone (wrong tid, stale credentials, app killed by the OS) is visible on
-    the Settings page instead of only showing up once trips stop appearing.
-    Grouped aggregate over the `(device, recorded_at)` index -- no per-device
-    query loop needed at this scale.
+    """One row per tracking device that has ever posted a point, so a
+    misconfigured phone (wrong tid, stale credentials, app killed by the OS)
+    is visible on the Settings page instead of only showing up once trips
+    stop appearing. Grouped by tracking_device_id, the device's durable
+    identity, not by the payload's tid (`points.device`): a device's tid can
+    change without it becoming a new device, and grouping by both used to
+    split one device into two rows. The device's current name comes from
+    `tracking_devices`; the most recent tid is kept as a secondary detail.
+    Aggregate over the `(account_id, tracking_device_id, recorded_at)` index
+    -- no per-device query loop needed at this scale.
     """
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
-        "SELECT tracking_device_id, device, max(received_at) AS newest_received_at, "
-        "max(recorded_at) AS newest_recorded_at, count(*) AS point_count "
-        "FROM points WHERE account_id = %s GROUP BY tracking_device_id, device ORDER BY device, tracking_device_id",
+        "SELECT p.tracking_device_id, td.label AS device_label, "
+        "(SELECT latest.device FROM points latest WHERE latest.account_id = p.account_id "
+        "AND latest.tracking_device_id = p.tracking_device_id "
+        "ORDER BY latest.recorded_at DESC LIMIT 1) AS latest_tid, "
+        "max(p.received_at) AS newest_received_at, max(p.recorded_at) AS newest_recorded_at, "
+        "count(*) AS point_count "
+        "FROM points p JOIN tracking_devices td "
+        "ON td.account_id = p.account_id AND td.id = p.tracking_device_id "
+        "WHERE p.account_id = %s "
+        "GROUP BY p.account_id, p.tracking_device_id, td.label "
+        "ORDER BY td.label, p.tracking_device_id",
         (account_id(conn),),
     )
     return await cur.fetchall()

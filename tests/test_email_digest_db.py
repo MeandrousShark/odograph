@@ -9,10 +9,12 @@ import asyncio
 import os
 from datetime import datetime, timedelta
 from email.message import EmailMessage
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
 
+from app.account_workers import AccountWorker
 from app.db import make_pool
 from app.email_digest import EmailDigestWorker
 from app.mailer import Mailer
@@ -20,6 +22,7 @@ from app.rates import load_rates
 from app.report import build_range_report
 from conftest import reset_account_db, seed_tracking_device
 from app.account_context import account_id
+from auth_db_fixtures import auth_config
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -390,3 +393,84 @@ async def _disabled_kinds_scenario(pool):
 
 def test_disabled_kinds_are_never_evaluated():
     asyncio.run(_with_pool(_disabled_kinds_scenario))
+
+
+# --- AccountWorker wiring: a swallowed per-kind failure must still surface -
+
+class _FixedNowEmailDigestWorker(EmailDigestWorker):
+    """`AccountWorker.run_once` (app/account_workers.py) always calls a
+    wrapped worker's `run_once()` with no arguments -- unlike every other
+    scenario above, which drives `EmailDigestWorker.run_once(now)` directly
+    with a fixed instant for reproducible date-window math. This subclass
+    supplies that fixed `now` internally so the scenario below can still be
+    driven through the real `AccountWorker` wrapping, exactly as
+    app/main.py wires it.
+    """
+
+    def __init__(self, *args, now: datetime, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._now = now
+
+    async def run_once(self, now: datetime | None = None) -> None:
+        await super().run_once(self._now)
+
+
+async def _account_worker_wraps_email_digest_scenario():
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
+    try:
+        pool = await reset_account_db(raw_pool)
+        async with pool.connection() as conn:
+            await seed_tracking_device(conn, "phone", device_id=1)
+            await conn.execute(
+                "UPDATE account_settings SET display_tz=%s, email_to='you@example.com', "
+                "email_weekly_nudge=true, email_odometer_reminder=true WHERE account_id=%s",
+                (str(TZ), account_id(conn)),
+            )
+            # weekly_nudge and quarterly_odometer both have something to
+            # send in this sweep -- the transport below only fails the
+            # weekly-nudge subject, so this proves AccountWorker learns
+            # about a swallowed per-kind failure without it blocking the
+            # other kind's send or ledger row.
+            await _insert_trip(conn, WINDOW_END - timedelta(days=1))
+            truck_id = await _create_vehicle(conn, "Truck")
+            await _insert_reading(conn, truck_id, QUARTER_START - timedelta(days=5), 1000)
+
+        calls: list[EmailMessage] = []
+        mailer = _mailer(calls, raise_for="unclassified")
+        config = auth_config(TEST_DB, dev_no_auth=True, app_version="test", app_git_revision="test")
+        now = WINDOW_END + timedelta(hours=1)  # also past QUARTER_START
+
+        outer = AccountWorker(
+            SimpleNamespace(control=raw_pool, runtime=raw_pool), config,
+            lambda account_pool, c: _FixedNowEmailDigestWorker(
+                account_pool, mailer, c.app_url, c.display_tz,
+                c.nudge_weekly_hour, c.odometer_reminder_hour, c.email_digest_hour,
+                c.email_filing_reminder_mmdd, c.email_weekly_nudge, c.email_monthly_summary,
+                c.email_filing_reminder, c.email_odometer_reminder, now=now,
+            ),
+            label="email-digest-worker", debounce_s=1, sweep_s=3600,
+        )
+        # Drives the same AccountWorker-wrapped path app/main.py's
+        # start_worker builds every inner worker through, so the `.status`
+        # asserted on below is production's outer status, populated the way
+        # AccountWorker.run_once reads a wrapped worker's own status (see
+        # app/account_workers.py) -- not a bare inner run_once() call.
+        await outer._run_guarded()
+
+        assert outer.status.last_failure_at is not None
+        async with pool.connection() as conn:
+            weekly_row = await (await conn.execute(
+                "SELECT 1 FROM email_deliveries WHERE kind = 'weekly_nudge'"
+            )).fetchone()
+            odometer_row = await (await conn.execute(
+                "SELECT sent FROM email_deliveries WHERE kind = 'quarterly_odometer'"
+            )).fetchone()
+        assert weekly_row is None  # rolled back; the failing kind wrote no ledger row
+        assert odometer_row == (True,)  # unaffected by the other kind's failure
+    finally:
+        await raw_pool.close()
+
+
+def test_account_worker_surfaces_a_swallowed_kind_failure_while_other_kinds_still_land():
+    asyncio.run(_account_worker_wraps_email_digest_scenario())

@@ -32,7 +32,7 @@ from app.detector.runner import DetectorRunner
 from app.diagnose import worker_reports_from_config
 import app.main as main_module
 from app.main import create_app
-from app.worker import RUN_SKIPPED, IntervalWorker, PokeSweepWorker
+from app.worker import RUN_SKIPPED, PokeSweepWorker
 from conftest import reset_db
 
 log = logging.getLogger("test-worker-lifecycle")
@@ -48,20 +48,22 @@ db_only = pytest.mark.skipif(
 
 # ---- 1. skip vs. success (unit) ------------------------------------------
 
-class _SkippingWorker(IntervalWorker):
+class _SkippingWorker(PokeSweepWorker):
     def __init__(self):
         super().__init__(
-            task_name="test-skip", log=log, failure_message="failed", interval_s=100.0
+            task_name="test-skip", log=log, failure_message="failed",
+            debounce_s=100.0, sweep_s=100.0,
         )
 
     async def run_once(self):
         return RUN_SKIPPED
 
 
-class _NormalWorker(IntervalWorker):
+class _NormalWorker(PokeSweepWorker):
     def __init__(self):
         super().__init__(
-            task_name="test-normal", log=log, failure_message="failed", interval_s=100.0
+            task_name="test-normal", log=log, failure_message="failed",
+            debounce_s=100.0, sweep_s=100.0,
         )
 
     async def run_once(self):
@@ -89,7 +91,7 @@ def test_run_guarded_still_records_a_normal_success_and_no_skip():
 
 def test_stop_reraises_a_cancellation_delivered_to_its_caller():
     async def scenario():
-        worker = _NormalWorker()  # interval_s=100.0: still sleeping when we act
+        worker = _NormalWorker()  # sweep_s=100.0: still waiting when we act
         await worker.start()
         await asyncio.sleep(0)  # let the loop task run its immediate first pass and reach the sleep
 

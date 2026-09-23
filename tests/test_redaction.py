@@ -105,8 +105,7 @@ def test_geocode_worker_lookup_failure_never_logs_coordinate_or_api_key(caplog):
                 api_key="SECRET_GEOCODE_KEY", omit_country="United States of America"
             )
             worker = GeocodeWorker(
-                pool=_FakePool(), http_client=client, provider=provider,
-                min_interval_s=0, debounce_s=1, sweep_s=1,
+                pool=_FakePool(), http_client=client, provider=provider, min_interval_s=0,
             )
             with caplog.at_level(logging.WARNING, logger="app.geocode"):
                 await worker._geocode_one(37.123456, -122.123456)
@@ -156,8 +155,7 @@ def test_geocode_worker_cache_miss_never_logs_coordinate(caplog):
                 api_key="SECRET_GEOCODE_KEY", omit_country="United States of America"
             )
             worker = GeocodeWorker(
-                pool=_FakePool(), http_client=client, provider=provider,
-                min_interval_s=0, debounce_s=1, sweep_s=1,
+                pool=_FakePool(), http_client=client, provider=provider, min_interval_s=0,
             )
             with caplog.at_level(logging.INFO, logger="app.geocode"):
                 await worker._geocode_one(37.123456, -122.123456)

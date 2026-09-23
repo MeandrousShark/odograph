@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import traceback
 
 import httpx
 
 import pytest
 from psycopg import errors
 
+from app import application_roles
 from app.account_context import AccountPool, AccountPrincipal, account_id
 from app.accounts import create_admin
 from app.application_roles import (
@@ -66,16 +68,41 @@ def test_live_pools_bootstrap_scoping_and_prepared_privileges():
 def test_prepared_validator_rejects_policy_or_activation_drift():
     async def check(owner, pools, state):
         async with owner.connection() as conn:
-            with pytest.raises(RoleSetupError):
+            with pytest.raises(RoleSetupError, match="relation ownership or RLS flags"):
                 async with conn.transaction(force_rollback=True):
                     await conn.execute("ALTER TABLE trips ENABLE ROW LEVEL SECURITY")
                     await validate_application_contract(conn, state)
-            with pytest.raises(RoleSetupError):
+            with pytest.raises(RoleSetupError, match="policy set"):
                 async with conn.transaction(force_rollback=True):
                     await conn.execute("DROP POLICY account_isolation ON trips")
                     await validate_application_contract(conn, state)
             await validate_application_contract(conn, state)
     asyncio.run(_scenario(check))
+
+
+def test_provisioning_failure_stays_generic_without_leaking_the_cause(monkeypatch):
+    async def broken_provision(conn):
+        raise RuntimeError("scram-secret-should-never-leak")
+
+    monkeypatch.setattr(application_roles, "_provision", broken_provision)
+
+    async def run():
+        owner = make_pool(TEST_DB)
+        await owner.open(wait=True)
+        try:
+            async with owner.connection() as conn:
+                await conn.execute("DROP SCHEMA IF EXISTS odograph_service CASCADE")
+            await full_schema_reset(owner)
+            with pytest.raises(RoleSetupError) as exc_info:
+                await prepare_application_roles(TEST_DB)
+            error = exc_info.value
+            assert str(error) == "application database setup failed"
+            assert error.__cause__ is None
+            rendered = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+            assert "scram-secret-should-never-leak" not in rendered
+        finally:
+            await owner.close()
+    asyncio.run(run())
 
 
 def test_normal_signup_and_personal_pages_use_restricted_pools(monkeypatch):

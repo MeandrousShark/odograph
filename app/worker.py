@@ -1,39 +1,34 @@
 """Shared background-worker loop machinery.
 
-Five workers grew independently and converged on two shapes:
+`AccountWorker` (app/account_workers.py) is the only production consumer of
+the poke/debounce/sweep loop below: each sweep it builds a fresh per-account
+inner worker (`SnapWorker`, `GeocodeWorker`, `RetentionWorker`, `NudgeWorker`,
+`OdometerReminderWorker`, `EmailDigestWorker`, or `DetectorRunner`) and calls
+only that inner worker's `run_once()` directly. None of those inner workers
+run their own loop, `start`/`stop`, `poke()`, or guarded-run wrapper in
+production -- each supplies `run_once()` (and, for `EmailDigestWorker` only,
+its own `WorkerStatus`) and nothing else from this module.
 
-- `AccountWorker`, `SnapWorker`, `GeocodeWorker` each needed identical
-  poke/debounce/sweep wake-up logic -- an external `poke()` resets a
-  debounce deadline so a burst of pokes coalesces into one run shortly
-  after the burst settles, while an independent periodic sweep guarantees
-  forward progress even if nothing ever pokes (or a poked run is skipped
-  or fails).
-- `RetentionWorker` and `NudgeWorker` needed only a simpler fixed-interval
-  variant: run, sleep a fixed duration, repeat forever, with no external
-  wake-up at all.
+`PokeSweepWorker` below factors out the loop, `start`/`stop`, and
+guarded-run wrapper `AccountWorker` needs -- an external `poke()` resets a
+debounce deadline so a burst of pokes coalesces into one run shortly after
+the burst settles, while an independent periodic sweep guarantees forward
+progress even if nothing ever pokes (or a poked run is skipped or fails).
+`after_run_once()` is a no-op hook a subclass can override to react to its
+own `run_once()` result; `AccountWorker` uses it to call an optional
+`after_run` callback, which is how app/main.py pokes the detector's
+snap/geocode workers, but only after a sweep that actually did something
+(not one skipped for advisory-lock contention).
 
-`PokeSweepWorker` and `IntervalWorker` below factor out the loop,
-`start`/`stop`, and guarded-run wrapper both variants shared line-for-line
-across their five copies. A subclass implements only `run_once()` -- the
-actual unit of work -- and passes its task name, sweep/interval cadence,
-and failure-log wording to the base constructor. `after_run_once()` is a
-no-op hook a subclass can override to react to its own `run_once()`
-result; `AccountWorker` (app/account_workers.py) uses it to call an
-optional `after_run` callback, which is how app/main.py pokes the
-detector's snap/geocode workers, but only after a sweep that actually did
-something (not one skipped for advisory-lock contention).
-
-Behavior-preserving refactor: no timing or wake-up semantics changed from
-the five pre-extraction copies. Each worker keeps emitting its own
-pre-existing log messages through its own module's logger (passed in
-here, not a shared one), since those exact messages are load-bearing for
-ops -- see each worker module for its specific wording.
-
-`WorkerStatus` below is the one addition: every subclass gets a `status`
-attribute the base classes update from `_run_guarded()`/`_loop()` with no
-subclass changes required. `EmailDigestWorker` is the one exception -- its
-own per-kind guard (see app/email_digest.py) never lets an exception reach
-`_run_guarded()`'s except clause, so it records its own failures directly.
+`WorkerStatus` below is available to any worker that needs one. Every
+`PokeSweepWorker` subclass gets a `status` attribute the base class updates
+from `_run_guarded()`/`_loop()` with no subclass changes required --
+`AccountWorker` is the only production subclass, and reads an inner
+worker's own `status` (when it has one) through `getattr` in its own
+`run_once()`. `EmailDigestWorker` is the one inner worker that keeps a
+`WorkerStatus` of its own: its per-kind guard (see app/email_digest.py)
+never lets an exception reach a guarded-run wrapper's except clause, so it
+records its own failures onto that status directly.
 """
 from __future__ import annotations
 
@@ -88,9 +83,8 @@ class WorkerStatus:
 
 
 class _LoopWorker:
-    """`start`/`stop`/guarded-run bookkeeping shared by both loop variants
-    below. Not meant to be used directly -- see `PokeSweepWorker` and
-    `IntervalWorker`.
+    """`start`/`stop`/guarded-run bookkeeping for `PokeSweepWorker` below.
+    Not meant to be used directly.
     """
 
     def __init__(self, task_name: str, log: logging.Logger, failure_message: str):
@@ -235,27 +229,3 @@ class PokeSweepWorker(_LoopWorker):
             if due:
                 await self._run_guarded()
             self._update_next_run_estimate()
-
-
-class IntervalWorker(_LoopWorker):
-    """Fixed-interval loop with no external wake-up: run, sleep
-    `interval_s`, repeat forever. For workers nothing else in the app
-    needs to react to (unlike the poke/sweep trio, which chain off
-    ingest/each other) -- a plain periodic wake is enough.
-    """
-
-    def __init__(
-        self,
-        task_name: str,
-        log: logging.Logger,
-        failure_message: str,
-        interval_s: float,
-    ):
-        super().__init__(task_name, log, failure_message)
-        self.interval_s = interval_s
-
-    async def _loop(self) -> None:
-        while True:
-            await self._run_guarded()
-            self.status.next_run_at = _utcnow() + timedelta(seconds=self.interval_s)
-            await asyncio.sleep(self.interval_s)

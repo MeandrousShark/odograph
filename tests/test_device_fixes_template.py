@@ -24,13 +24,13 @@ def _render(device_fixes):
 def test_device_status_lists_each_device_with_timestamps_and_point_count():
     body = _render([
         {
-            "device": "phone",
+            "device_label": "Phone", "latest_tid": "phone",
             "newest_received_at": datetime(2026, 7, 18, 9, 30, tzinfo=TZ),
             "newest_recorded_at": datetime(2026, 7, 18, 9, 29, tzinfo=TZ),
             "point_count": 1234,
         },
         {
-            "device": "test",
+            "device_label": "Bench tester", "latest_tid": "test",
             "newest_received_at": datetime(2026, 7, 1, 8, 0, tzinfo=TZ),
             "newest_recorded_at": datetime(2026, 7, 1, 8, 0, tzinfo=TZ),
             "point_count": 37,
@@ -40,8 +40,10 @@ def test_device_status_lists_each_device_with_timestamps_and_point_count():
     assert "Device status" in body
     assert 'id="device-fixes-table"' in body
     assert "No location fixes received yet" not in body
-    assert ">phone<" in body
-    assert ">test<" in body
+    assert "Phone" in body
+    assert "(phone)" in body
+    assert "Bench tester" in body
+    assert "(test)" in body
     assert ">1234<" in body
     assert ">37<" in body
     # local_dt formats with the day name and HH:MM, per app/main.py's filter.
@@ -60,7 +62,7 @@ def test_device_status_shows_quiet_empty_state_with_no_points():
 def test_device_status_never_renders_coordinates():
     body = _render([
         {
-            "device": "phone",
+            "device_label": "Phone", "latest_tid": "phone",
             "newest_received_at": datetime(2026, 7, 18, 9, 30, tzinfo=TZ),
             "newest_recorded_at": datetime(2026, 7, 18, 9, 29, tzinfo=TZ),
             "point_count": 5,

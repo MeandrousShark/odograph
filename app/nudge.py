@@ -21,12 +21,10 @@ from psycopg_pool import AsyncConnectionPool
 
 from app.db import NUDGE_ADVISORY_LOCK_KEY
 from app.notifications import notification_preferences_current, count_unclassified_trips, publish_ntfy
-from app.worker import IntervalWorker
 
 log = logging.getLogger(__name__)
 
 SUNDAY = 6
-RUN_INTERVAL_S = 60 * 60.0
 
 
 def latest_window_end(now: datetime, hour: int) -> datetime:
@@ -80,10 +78,12 @@ async def publish_nudge(
     )
 
 
-class NudgeWorker(IntervalWorker):
-    """Hourly eligibility checker for the weekly ntfy digest. `IntervalWorker`
-    (app/worker.py) supplies the run/sleep/repeat loop, `start`/`stop`, and
-    guarded-run wrapper.
+class NudgeWorker:
+    """Hourly eligibility checker for the weekly ntfy digest. `run_once()`
+    is the only method `AccountWorker` (app/account_workers.py) calls -- it
+    builds a fresh `NudgeWorker` per account on its own hourly-cadence
+    sweep; this class supplies no loop, `start`/`stop`, or guarded-run
+    wrapper of its own.
 
     The Postgres advisory lock spans the small external POST intentionally:
     it serializes replicas through the completion insert without making a
@@ -99,12 +99,6 @@ class NudgeWorker(IntervalWorker):
         ntfy_url: str, topic: str, token: str, username: str, password: str,
         app_url: str, display_tz, hour: int,
     ):
-        super().__init__(
-            task_name="nudge-worker",
-            log=log,
-            failure_message="nudge worker run failed; will retry next hour",
-            interval_s=RUN_INTERVAL_S,
-        )
         self.pool = pool
         self.http = http_client
         self.ntfy_url = ntfy_url

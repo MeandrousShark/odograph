@@ -18,7 +18,6 @@ from psycopg_pool import AsyncConnectionPool
 
 from app.detector.runner import load_trip_points
 from app.validation import parse_finite_number
-from app.worker import PokeSweepWorker
 
 log = logging.getLogger(__name__)
 
@@ -305,12 +304,13 @@ def parse_match_response(
     )
 
 
-class SnapWorker(PokeSweepWorker):
-    """Poke+sweep background worker draining `snap_status='pending'` trips
-    against a self-hosted OSRM instance. The poke/debounce/sweep loop,
-    `start`/`stop`, and guarded-run wrapper live in `PokeSweepWorker`
-    (app/worker.py) -- shared with `AccountWorker` and `GeocodeWorker`,
-    which need the identical machinery; this class only supplies `run_once()`.
+class SnapWorker:
+    """Drains `snap_status='pending'` trips against a self-hosted OSRM
+    instance. `run_once()` is the only method `AccountWorker`
+    (app/account_workers.py) calls -- it builds a fresh `SnapWorker` per
+    account per sweep and never uses this class's own loop/poke/debounce,
+    since `AccountWorker`'s own `PokeSweepWorker` (app/worker.py) already
+    supplies that for the whole per-account sweep.
 
     No advisory lock and no cross-process claim (unlike the detector, which
     needs a lock because a *skipped* run must never falsely advance its
@@ -339,17 +339,8 @@ class SnapWorker(PokeSweepWorker):
         osrm_url: str,
         min_confidence: float,
         max_coords: int,
-        debounce_s: float,
-        sweep_s: float,
         batch_size: int = 20,
     ):
-        super().__init__(
-            task_name="snap-worker",
-            log=log,
-            failure_message="snap worker run failed; will retry on next debounce/sweep",
-            debounce_s=debounce_s,
-            sweep_s=sweep_s,
-        )
         self.pool = pool
         self.http = http_client
         self.osrm_url = osrm_url.rstrip("/")

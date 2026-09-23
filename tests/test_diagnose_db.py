@@ -13,12 +13,14 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
 from fastapi import FastAPI
 from starlette.middleware.sessions import SessionMiddleware
 
+from app.account_workers import AccountWorker
 from app.db import make_pool
 from app.main import make_templates
 from app.retention import RetentionWorker
@@ -58,11 +60,19 @@ async def _scenario():
     await raw_pool.open(wait=True)
     try:
         pool = await reset_account_db(raw_pool)
+        config = auth_config(TEST_DB, dev_no_auth=True, app_version="test", app_git_revision="test")
 
-        retention_worker = RetentionWorker(pool, retention_days=365)
-        # Runs the same guarded path the real background loop uses
-        # (app/worker.py's `_run_guarded`), just without starting the loop
-        # -- this is what actually populates `WorkerStatus`.
+        retention_worker = AccountWorker(
+            SimpleNamespace(control=raw_pool, runtime=raw_pool), config,
+            lambda account_pool, c: RetentionWorker(account_pool, c.raw_message_retention_days),
+            label="retention-worker", debounce_s=1, sweep_s=86400,
+        )
+        # Drives the same AccountWorker-wrapped path app/main.py's
+        # start_worker builds every inner worker through (app/account_workers.py),
+        # just without starting its loop -- this is what actually populates
+        # `WorkerStatus` on `app.state.retention_worker`, whose type must
+        # match production's (the outer AccountWorker, not the bare
+        # RetentionWorker `run_once()` alone would give).
         await retention_worker._run_guarded()
 
         transport = httpx.ASGITransport(app=_bare_app(pool, retention_worker))

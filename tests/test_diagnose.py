@@ -28,7 +28,7 @@ from app.diagnose import (
     worker_reports_from_state,
 )
 from app.geocode import GeoapifyProvider
-from app.worker import IntervalWorker, WorkerStatus
+from app.worker import WorkerStatus
 
 REQUIRED_VARS = ("DATABASE_URL", "INGEST_PASSWORD", "SESSION_SECRET")
 
