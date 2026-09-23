@@ -914,6 +914,22 @@ def test_wrong_format_or_version_rejected(mutate, expected_field):
     _scenario(run)
 
 
+@pytest.mark.parametrize("schema_version", [26, 27])
+def test_format_3_bundles_import_into_schema_27(schema_version):
+    """Migration 027 only deletes raw_messages rows, which bundles never
+    carry, so format-3 exports from schema 26 and 27 both still import."""
+    async def run(pool):
+        transport = httpx.ASGITransport(app=_bare_app(pool))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            csrf = await _csrf(client)
+            response = await _import(client, csrf, _minimal_bundle(schema_version))
+
+        assert response.status_code == 200
+        assert response.json()["ok"] is True
+
+    _scenario(run)
+
+
 def test_mismatched_schema_version_rejected():
     async def run(pool):
         bundle = _minimal_bundle(999)
