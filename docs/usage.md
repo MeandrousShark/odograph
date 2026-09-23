@@ -184,8 +184,11 @@ GPS points also have **Advanced trip tools**:
 - **Merge with previous trip** or **Merge with next trip** combines adjacent
   detected trips from the same device. The form can keep or replace category,
   purpose, notes, and vehicle.
-- **Split trip** enables map-pick mode. Choose a real GPS point on the route,
-  review the confirmation, and submit. Very short halves are refused.
+- **Split trip** opens a split panel under the map. Tap or click the route
+  where the first trip ended: Odograph marks the nearest recorded GPS point
+  and shows the distance on each side. **Confirm split** saves it and returns
+  to the trip list. Very short halves are refused, and any refusal is shown
+  with its reason.
 
 A manual trip with **No route** can include **Name start location** and **Name
 end location**. These are per-trip labels, not saved Places.

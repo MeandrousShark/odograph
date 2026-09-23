@@ -60,6 +60,56 @@ reproduced here.
   password), are acknowledged and discarded instead of being stored in
   `raw_messages`.
 
+## [0.11.2] - 2026-09-23
+
+### Changed
+
+- The inline trip editor on the Dashboard and Trips list now shows the trip's
+  date, time, route and distance above the form, so it is clear which trip is
+  being edited.
+
+### Fixed
+
+- Split trip works again. Confirm split no longer relies on an
+  expression the Content Security Policy blocks, which previously stopped the
+  request from being sent in v0.6.0 through v0.11.1. Split mode now explains
+  how to pick a point, keeps the map and confirmation together, marks the
+  chosen point and shows progress. See [Known issues](docs/known-issues.md).
+- Failed requests now show the reason in a banner instead of leaving the page
+  unchanged.
+- On desktop, the current-page bar under Settings and Account Settings now sits
+  on the header line and spans the control, matching the other pages.
+
+### Correcting road-snapped trips from before v0.11.1
+
+If you are upgrading from v0.11.0 or earlier and have not applied the v0.11.1
+road-snap correction, apply it now. Save the values it changes first, so the
+correction can be reversed without restoring a backup. In `psql`:
+
+```sql
+\copy (SELECT id, distance_snapped_m FROM trips WHERE distance_snapped_m IS NOT NULL AND distance_m > 0 AND distance_snapped_m / distance_m < 0.85) TO 'snap-correction.csv' CSV HEADER
+
+UPDATE trips SET distance_snapped_m = NULL
+WHERE distance_snapped_m IS NOT NULL
+  AND distance_m > 0
+  AND distance_snapped_m / distance_m < 0.85;
+```
+
+Keep `snap-correction.csv` with your backups. The saved file lives outside
+the database, so it adds no table that a later upgrade would have to account
+for.
+
+### Supported upgrade path
+
+- `v0.11.1` and `v0.10.2` may upgrade directly to `v0.11.2`. Earlier releases
+  should first follow the supported upgrade path to `v0.10.2`.
+
+### Breaking changes
+
+- There are no breaking application, database, configuration, or operational
+  changes. Schema version 25, detector version 2, and portable format 2 are
+  unchanged.
+
 ## [0.11.1] - 2026-09-20
 
 ### Fixed

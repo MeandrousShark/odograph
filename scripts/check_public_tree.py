@@ -22,7 +22,7 @@ PUBLIC_TOP_LEVEL = frozenset({
 })
 PUBLIC_DOCS = frozenset({
     "docs/backups.md", "docs/configuration.md", "docs/install-compose.md",
-    "docs/osrm.md", "docs/owntracks.md", "docs/privacy.md", "docs/releasing.md",
+    "docs/known-issues.md", "docs/osrm.md", "docs/owntracks.md", "docs/privacy.md", "docs/releasing.md",
     "docs/reverse-proxy.md", "docs/security.md", "docs/upgrading.md", "docs/usage.md",
     "docs/images/usage-dashboard.png", "docs/images/usage-review.png",
 })

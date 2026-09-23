@@ -490,6 +490,12 @@ textarea:focus-visible, summary:focus-visible {
   header { align-items: end; padding-bottom: var(--space-1); }
   header h1 { display: flex; min-height: var(--control-height); align-items: center; }
   header nav a::after { bottom: calc(-1 * var(--space-1)); }
+  /* Settings and account settings are header controls, not nav links: the
+     bar is placed inside their 1px border and wider padding, so offset both
+     to land on the nav links' line and span the content as theirs do. */
+  .header-control[aria-current="page"]::after {
+    right: var(--space-2); bottom: calc(-1 * var(--space-1) - 1px); left: var(--space-2);
+  }
 }
 
 @media (min-width: 761px) and (max-width: 1024px) {
@@ -732,6 +738,24 @@ input.notes:hover, input.notes:focus { border-color: var(--border-strong); }
   border-color: var(--danger); background: color-mix(in srgb, var(--danger) 7%, var(--surface-elevated));
 }
 .notice > :first-child { margin-top: 0; }
+/* Shared htmx failure banner (base.html). Fixed so it is visible wherever the
+   failing control sits, clear of the mobile bottom navigation. */
+.request-error {
+  position: fixed; left: 50%; bottom: calc(var(--space-4) + env(safe-area-inset-bottom));
+  transform: translateX(-50%); z-index: 1000;
+  width: min(36rem, calc(100vw - 2 * var(--space-4)));
+  display: flex; gap: var(--space-3); align-items: center; justify-content: space-between;
+  box-shadow: var(--shadow);
+}
+.request-error[hidden] { display: none; }
+.request-error p { margin: 0; }
+.request-error button { flex: 0 0 auto; white-space: nowrap; }
+/* Split panel (trip.html) sits directly under the map. */
+.split-panel { margin-top: var(--space-3); }
+.split-panel h3 { margin: 0 0 var(--space-2); }
+.split-panel p { margin: 0 0 var(--space-2); }
+.split-status:empty { display: none; }
+.split-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 .notice > :last-child { margin-bottom: 0; }
 /* .filter-bar .field-label (below) is a second, deliberately different
    .field-label rule: it omits color, so filter/export/triage/quarterly
@@ -1104,6 +1128,16 @@ input.notes:hover, input.notes:focus { border-color: var(--border-strong); }
   }
 }
 
+/* Row summary repeated at the top of the inline editor (B25). */
+.trip-edit-identity {
+  display: grid; gap: var(--space-1); margin-bottom: var(--space-3); padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+.trip-edit-identity p { margin: 0; }
+.trip-edit-when { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); align-items: baseline; }
+.trip-edit-distance { margin-left: auto; font-weight: 600; }
+.trip-edit-route { display: flex; flex-wrap: wrap; gap: var(--space-1); align-items: center; color: var(--fg-muted); }
+.trip-edit-route .icon { flex: 0 0 auto; }
 .trip-edit-heading { display: flex; justify-content: space-between; gap: var(--space-3); align-items: start; margin-bottom: var(--space-3); }
 .trip-edit-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
 .trip-edit-grid + .trip-edit-grid { margin-top: var(--space-3); }
@@ -2404,6 +2438,9 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
     border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
     background: color-mix(in srgb, var(--surface-elevated) 96%, transparent);
     box-shadow: 0 -.35rem 1rem rgb(17 20 34 / 12%);
+  }
+  .request-error {
+    bottom: calc(var(--control-height) + var(--space-2) + var(--space-3) + env(safe-area-inset-bottom));
   }
   .mobile-nav-item {
     position: relative; display: flex; min-width: 0; min-height: var(--control-height);
