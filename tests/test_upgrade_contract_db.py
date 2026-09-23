@@ -66,13 +66,11 @@ def test_every_later_migration_keeps_the_upgraded_contract(monkeypatch, tmp_path
 
 def test_table_added_without_its_contract_refuses_upgraded_start(monkeypatch, tmp_path):
     async def start_again(pool, state):
-        with pytest.raises(RoleSetupError):
+        # The probe table alone breaks the contract, and prepare_application_roles
+        # now surfaces that specific cause instead of a generic failure.
+        with pytest.raises(RoleSetupError, match="contract_probe"):
             await prepare_application_roles(TEST_DB)
-        # Startup reports every failure generically, so check the validator
-        # directly: the probe table alone breaks the contract.
         async with pool.connection() as conn:
-            with pytest.raises(RoleSetupError, match="security contract mismatch"):
-                await validate_application_contract(conn, state)
             await conn.execute("DROP TABLE contract_probe")
             await validate_application_contract(conn, state)
 
