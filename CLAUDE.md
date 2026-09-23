@@ -39,6 +39,11 @@ before opening a pull request.
 - Human tags and manual trips remain protected from detector-owned changes.
 - Keep OSRM match requests at `tidy=false` so dense valid fixes survive.
 - Applied migrations are immutable. Add a new migration for a correction.
+- Upgrades only validate the database role contract. A migration after 026
+  that adds or replaces a public table, sequence or security-definer function
+  must set `odograph_migrate` ownership, grant role rights and create account
+  policies in its own SQL, and update `app/application_roles.py` to match;
+  `tests/test_upgrade_contract_db.py` enforces this.
 - Preserve CSRF, auth-before-body reads, exact OIDC identity matching,
   source-aware deletion, and graceful routing/geocoding fallback.
 - Keep portable format compatibility and release image identity intact.
