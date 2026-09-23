@@ -20,8 +20,6 @@ from typing import Protocol
 import httpx
 from psycopg_pool import AsyncConnectionPool
 
-from app.worker import PokeSweepWorker
-
 log = logging.getLogger(__name__)
 
 GEOCODE_PRECISION = 4  # keep in sync with migration 006's numeric(8,4)
@@ -287,19 +285,19 @@ def build_geocode_provider(
     raise AssertionError(f"unreachable: unvalidated geocode provider name {name!r}")
 
 
-class GeocodeWorker(PokeSweepWorker):
-    """Poke+sweep background worker filling `geocode_cache` for trip
-    endpoints that resolved to neither a named place nor (already) a cached
-    address. Lighter than `SnapWorker`: "needs geocoding" is a pure SQL
-    query over `trips` LEFT JOIN-equivalent (an `EXCEPT`) against
-    `geocode_cache`, not a stored per-trip status column, so there's no
-    terminal-failure enum to manage -- a cache row's existence (even with a
-    NULL address) *is* the "don't retry" signal.
+class GeocodeWorker:
+    """Fills `geocode_cache` for trip endpoints that resolved to neither a
+    named place nor (already) a cached address. Lighter than `SnapWorker`:
+    "needs geocoding" is a pure SQL query over `trips` LEFT JOIN-equivalent
+    (an `EXCEPT`) against `geocode_cache`, not a stored per-trip status
+    column, so there's no terminal-failure enum to manage -- a cache row's
+    existence (even with a NULL address) *is* the "don't retry" signal.
 
-    The poke/debounce/sweep loop, `start`/`stop`, and guarded-run wrapper
-    live in `PokeSweepWorker` (app/worker.py) -- shared with
-    `AccountWorker` and `SnapWorker`; this class only supplies
-    `run_once()`.
+    `run_once()` is the only method `AccountWorker` (app/account_workers.py)
+    calls -- it builds a fresh `GeocodeWorker` per account per sweep and
+    never uses this class's own loop/poke/debounce, since `AccountWorker`'s
+    own `PokeSweepWorker` (app/worker.py) already supplies that for the
+    whole per-account sweep.
 
     Processes its batch **one coordinate at a time with a fixed delay**
     (`min_interval_s`) rather than `SnapWorker`'s all-at-once loop, since a
@@ -317,17 +315,8 @@ class GeocodeWorker(PokeSweepWorker):
         http_client: httpx.AsyncClient,
         provider: GeocodeProvider,
         min_interval_s: float,
-        debounce_s: float,
-        sweep_s: float,
         batch_size: int = 20,
     ):
-        super().__init__(
-            task_name="geocode-worker",
-            log=log,
-            failure_message="geocode worker run failed; will retry on next debounce/sweep",
-            debounce_s=debounce_s,
-            sweep_s=sweep_s,
-        )
         self.pool = pool
         self.http = http_client
         self.provider = provider

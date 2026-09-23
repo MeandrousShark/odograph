@@ -5,8 +5,8 @@ estimated taxes -- when an active vehicle has gone the whole new quarter
 without one.
 
 Modeled closely on `app.nudge.NudgeWorker` (same advisory-lock and
-ledger-insert-whether-or-not-sent shape, `IntervalWorker` base) but against
-its own table (`odometer_reminder_windows`) and its own worker class.
+ledger-insert-whether-or-not-sent shape) but against its own table
+(`odometer_reminder_windows`) and its own worker class.
 """
 from __future__ import annotations
 
@@ -21,13 +21,8 @@ from psycopg_pool import AsyncConnectionPool
 from app.db import ODOMETER_REMINDER_ADVISORY_LOCK_KEY
 from app.notifications import notification_preferences_current, odometer_reminder_vehicles, publish_ntfy
 from app.odometer import latest_quarter_start
-from app.worker import IntervalWorker
 
 log = logging.getLogger(__name__)
-
-# Daily, not hourly like NudgeWorker: a quarter boundary only moves once
-# every ~13 weeks, so hourly precision buys nothing here.
-RUN_INTERVAL_S = 24 * 60 * 60.0
 
 
 def reminder_message(vehicle_names: list[str], app_url: str) -> str:
@@ -54,10 +49,12 @@ async def publish_reminder(
     )
 
 
-class OdometerReminderWorker(IntervalWorker):
+class OdometerReminderWorker:
     """Daily eligibility checker for the quarterly odometer reminder.
-    `IntervalWorker` (app/worker.py) supplies the run/sleep/repeat loop,
-    `start`/`stop`, and guarded-run wrapper.
+    `run_once()` is the only method `AccountWorker` (app/account_workers.py)
+    calls -- it builds a fresh `OdometerReminderWorker` per account on its
+    own daily-cadence sweep; this class supplies no loop, `start`/`stop`,
+    or guarded-run wrapper of its own.
 
     Same advisory-lock-spans-the-POST reasoning as `NudgeWorker`: it
     serializes replicas through the completion insert without leaving a
@@ -72,12 +69,6 @@ class OdometerReminderWorker(IntervalWorker):
         ntfy_url: str, topic: str, token: str, username: str, password: str,
         app_url: str, display_tz, hour: int,
     ):
-        super().__init__(
-            task_name="odometer-reminder-worker",
-            log=log,
-            failure_message="odometer reminder worker run failed; will retry tomorrow",
-            interval_s=RUN_INTERVAL_S,
-        )
         self.pool = pool
         self.http = http_client
         self.ntfy_url = ntfy_url

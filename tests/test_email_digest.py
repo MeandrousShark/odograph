@@ -37,9 +37,9 @@ def _worker(**overrides) -> EmailDigestWorker:
 
 def test_guarded_records_a_per_kind_failure_onto_status_without_raising():
     # `_guarded`'s whole point is to keep one kind's exception from stopping
-    # the others (see its docstring) -- which also means it never reaches
-    # `IntervalWorker._run_guarded()`'s except clause, so it has to record
-    # the failure onto `status` itself or diagnostics would never see it.
+    # the others (see its docstring) -- which also means the exception is
+    # swallowed right there, so it has to record the failure onto `status`
+    # itself or diagnostics would never see it.
     worker = _worker()
 
     async def failing(now):

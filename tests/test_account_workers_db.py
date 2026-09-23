@@ -87,10 +87,10 @@ async def _private_caches():
         await _trip(first)
         await _trip(second)
         a, b = _Provider("First private address"), _Provider("Second private address")
-        await GeocodeWorker(first,None,a,0,0,60).run_once()
+        await GeocodeWorker(first,None,a,0).run_once()
         async with second.connection() as conn:
             assert await (await conn.execute("SELECT address FROM geocode_cache WHERE account_id=%s", (account_id(conn),))).fetchall() == []
-        await GeocodeWorker(second,None,b,0,0,60).run_once()
+        await GeocodeWorker(second,None,b,0).run_once()
         assert a.calls == b.calls == 1
         async with raw.connection() as conn:
             assert await (await conn.execute("SELECT account_id,address FROM geocode_cache ORDER BY account_id")).fetchall() == [(41,"First private address"),(99,"Second private address")]
@@ -117,7 +117,7 @@ def test_inactive_device_does_not_starve_later_pending_snap(device_state):
                 async def get(self, url):
                     calls.append(url)
                     return httpx.Response(200, json={"code": "NoMatch", "matchings": []})
-            worker = SnapWorker(first, HTTP(), "http://osrm", .5, 250, 0, 60, batch_size=1)
+            worker = SnapWorker(first, HTTP(), "http://osrm", .5, 250, batch_size=1)
             await worker.run_once()
             await worker.run_once()
             assert len(calls) == 1
@@ -146,7 +146,7 @@ def test_inactive_endpoint_does_not_fill_the_geocode_batch(device_state):
             class Probe(GeocodeWorker):
                 async def _geocode_one(self, lat, lon):
                     selected.append((lat, lon))
-            await Probe(first, None, _Provider("unused"), 0, 0, 60, batch_size=1).run_once()
+            await Probe(first, None, _Provider("unused"), 0, batch_size=1).run_once()
             assert len(selected) == 1
             async with first.connection() as conn:
                 await conn.execute(
@@ -156,7 +156,7 @@ def test_inactive_endpoint_does_not_fill_the_geocode_batch(device_state):
                     (device_state != "disabled", device_state == "revoked", account_id(conn), selected[0][0]),
                 )
             provider = _Provider("active source")
-            worker = GeocodeWorker(first, None, provider, 0, 0, 60, batch_size=1)
+            worker = GeocodeWorker(first, None, provider, 0, batch_size=1)
             await worker.run_once()
             await worker.run_once()
             assert provider.calls == 1
@@ -181,7 +181,7 @@ def test_geocode_accepts_manual_and_imported_endpoints_without_a_device(imported
                         (account_id(conn), trip),
                     )
             provider = _Provider("inert endpoint")
-            await GeocodeWorker(first, None, provider, 0, 0, 60, batch_size=1).run_once()
+            await GeocodeWorker(first, None, provider, 0, batch_size=1).run_once()
             assert provider.calls == 1
     asyncio.run(scenario())
 
@@ -191,7 +191,7 @@ async def _delayed_result(worker_kind, mutation):
         trip, device = await _trip(first, detected=True)
         started, release = asyncio.Event(), asyncio.Event()
         if worker_kind == "geocode":
-            worker = GeocodeWorker(first,None,_Provider("stale",started,release),0,0,60)
+            worker = GeocodeWorker(first,None,_Provider("stale",started,release),0)
             task = asyncio.create_task(worker.run_once())
         else:
             class DelayedHTTP:
@@ -199,7 +199,7 @@ async def _delayed_result(worker_kind, mutation):
                     started.set()
                     await release.wait()
                     return httpx.Response(200,json={"code":"NoMatch","matchings":[]})
-            task = asyncio.create_task(SnapWorker(first,DelayedHTTP(),"http://osrm",0.5,250,0,60).run_once())
+            task = asyncio.create_task(SnapWorker(first,DelayedHTTP(),"http://osrm",0.5,250).run_once())
         await asyncio.wait_for(started.wait(),5)
         async with raw.connection() as conn:
             if mutation == "disable_account":

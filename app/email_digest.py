@@ -37,11 +37,9 @@ from app.nudge import latest_window_end
 from app.odometer import latest_quarter_start
 from app.report import build_annual_report, build_range_report
 from app.ui import _fetch_range_trips_in
-from app.worker import IntervalWorker
+from app.worker import WorkerStatus
 
 log = logging.getLogger(__name__)
-
-RUN_INTERVAL_S = 60 * 60.0
 
 TEMPLATES_DIR = pathlib.Path(__file__).resolve().parent / "templates" / "email"
 _ENV = jinja2.Environment(
@@ -135,14 +133,14 @@ def latest_filing_reminder_at(now: datetime, mmdd: str, hour: int) -> datetime:
     return datetime(now.year - 1, month, day, hour, tzinfo=now.tzinfo)
 
 
-class EmailDigestWorker(IntervalWorker):
+class EmailDigestWorker:
     """Hourly eligibility checker for all four email digest kinds.
-    `IntervalWorker` (app/worker.py) supplies the
-    run/sleep/repeat loop, `start`/`stop`, and guarded-run wrapper -- but
-    that wrapper's single try/except is the wrong granularity here (it
-    would let one kind's exception stop the rest from being evaluated), so
-    `run_once` below does its own per-kind try/except and never lets an
-    exception escape to `IntervalWorker`'s guard at all.
+    `run_once()` is the only method `AccountWorker` (app/account_workers.py)
+    calls -- it builds a fresh `EmailDigestWorker` per account on its own
+    hourly-cadence sweep; this class supplies no loop, `start`/`stop`, or
+    guarded-run wrapper of its own. `run_once` below does its own per-kind
+    try/except, since a single try/except around the whole method would let
+    one kind's exception stop the rest from being evaluated.
 
     Each kind's own `_run_*` method opens its own pool connection and
     transaction, spanning the advisory lock, the ledger check, and (inside
@@ -161,12 +159,7 @@ class EmailDigestWorker(IntervalWorker):
         email_weekly_nudge: bool, email_monthly_summary: bool,
         email_filing_reminder: bool, email_odometer_reminder: bool,
     ):
-        super().__init__(
-            task_name="email-digest-worker",
-            log=log,
-            failure_message="email digest worker run failed; will retry next hour",
-            interval_s=RUN_INTERVAL_S,
-        )
+        self.status = WorkerStatus(label="email-digest-worker")
         self.pool = pool
         self.mailer = mailer
         self.app_url = app_url
@@ -200,11 +193,11 @@ class EmailDigestWorker(IntervalWorker):
         `run_once` keeps going.
 
         Also records the failure onto `self.status` directly: this
-        exception never reaches `IntervalWorker._run_guarded()` (that's the
-        whole point of this guard), so without this call a kind stuck
-        failing every hour would look identical to a healthy worker in
-        diagnostics -- `last_success_at` still advances every run because
-        `run_once` itself never raises.
+        exception is swallowed right here (that's the whole point of this
+        guard), so without this call `AccountWorker.run_once`
+        (app/account_workers.py), which reads this worker's
+        `status.last_failure_at` after every sweep, would have no way to
+        learn a kind is stuck failing every hour.
         """
         try:
             await run(now)

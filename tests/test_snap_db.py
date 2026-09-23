@@ -82,7 +82,7 @@ async def _scenario():
             )
             assert (await naive.fetchone())[0] == 4
 
-        worker = SnapWorker(pool, None, "http://osrm", 0.5, 250, 15.0, 300.0)
+        worker = SnapWorker(pool, None, "http://osrm", 0.5, 250)
         async with pool.connection() as conn:
             p1 = await worker._load_points(conn, trip1)
             p2 = await worker._load_points(conn, trip2)
@@ -111,7 +111,7 @@ async def _unsnappable_scenario():
             trip = await _insert_trip(conn, T0, T0 + timedelta(seconds=60), point_count=1)
             await _insert_point(conn, T0, trip)  # only one usable point
 
-        worker = SnapWorker(pool, None, "http://osrm", 0.5, 250, 15.0, 300.0)
+        worker = SnapWorker(pool, None, "http://osrm", 0.5, 250)
         await worker._snap_one(trip)
 
         async with pool.connection() as conn:
@@ -149,7 +149,7 @@ async def _tidy_disabled_scenario():
             return httpx.Response(200, json={"code": "NoMatch", "matchings": []})
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            worker = SnapWorker(pool, client, "http://osrm", 0.5, 250, 15.0, 300.0)
+            worker = SnapWorker(pool, client, "http://osrm", 0.5, 250)
             await worker._snap_one(trip)
 
         assert "tidy=false" in captured["url"], (
@@ -218,7 +218,7 @@ async def _stale_result_scenario():
             await _insert_point(conn, T0 + timedelta(seconds=15), trip)
 
         worker = SnapWorker(
-            pool, _RewritingHTTPClient(pool, trip), "http://osrm", 0.5, 250, 15.0, 300.0
+            pool, _RewritingHTTPClient(pool, trip), "http://osrm", 0.5, 250
         )
         await worker._snap_one(trip)
 
@@ -281,7 +281,7 @@ async def _no_rewrite_scenario():
             )
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            worker = SnapWorker(pool, client, "http://osrm", 0.5, 250, 15.0, 300.0)
+            worker = SnapWorker(pool, client, "http://osrm", 0.5, 250)
             await worker._snap_one(trip)
 
         async with pool.connection() as conn:
@@ -367,7 +367,7 @@ async def _rewrite_during_point_load_scenario():
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             worker = _RaceProbeWorker(
-                pool, client, "http://osrm", 0.5, 250, 15.0, 300.0,
+                pool, client, "http://osrm", 0.5, 250,
                 rewrite_pool=pool, trip_id=trip,
             )
             await worker._snap_one(trip)
@@ -442,7 +442,7 @@ async def _manual_trip_immunity_scenario():
             })
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            worker = SnapWorker(pool, client, "http://osrm", 0.5, 250, 15.0, 300.0)
+            worker = SnapWorker(pool, client, "http://osrm", 0.5, 250)
             await worker.run_once()
 
         async with pool.connection() as conn:

@@ -122,7 +122,7 @@ async def _scenario():
             )
 
         provider = GeoapifyProvider(api_key="fake-key", omit_country="United States of America")
-        worker = GeocodeWorker(pool, None, provider, 0.0, 15.0, 300.0)
+        worker = GeocodeWorker(pool, None, provider, 0.0)
         async with pool.connection() as conn:
             cur = await conn.execute(
                 """
