@@ -182,7 +182,7 @@ version input is optional and otherwise comes from the checked
 out Compose app image; when supplied, it must match that release contract:
 
 ```sh
-VERSION=v0.11.1
+VERSION=v0.11.2
 REF=release/$VERSION
 gh workflow run release-preflight.yml --ref "$REF" \
   --field mode=preflight
@@ -222,7 +222,7 @@ nonempty SPDX package list. Native AMD64 and ARM64 jobs pull their child by
 digest, check its platform and release identity, and run the same HTTPS smoke.
 The published upgrade and rollback drill uses Docker Compose with base
 `v0.10.2`, the exact checked-out revision as `--candidate`, and the exact OCI
-index digest as `--candidate-image`. The current v0.11.1 workflow uses
+index digest as `--candidate-image`. The current v0.11.2 workflow uses
 `v0.10.2`; later releases must cover their supported base release in the
 workflow and the manual drill.
 
