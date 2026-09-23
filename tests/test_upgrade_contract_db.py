@@ -17,7 +17,7 @@ import shutil
 import pytest
 
 import app.db as db_module
-from app.application_roles import prepare_application_roles
+from app.application_roles import prepare_application_roles, validate_application_contract
 from app.db import MIGRATIONS_DIR, make_pool, run_migrations
 from app.role_setup import RoleSetupError
 from conftest import drop_and_recreate_schema, full_schema_reset
@@ -39,17 +39,17 @@ def _migration_dir(tmp_path, name, *, through=None, extra=None):
     return target
 
 
-async def _upgrade_after_provisioning(monkeypatch, provisioned_dir, upgrade_dir):
+async def _upgrade_after_provisioning(monkeypatch, provisioned_dir, upgrade_dir, after_upgrade):
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
         await drop_and_recreate_schema(pool)
         monkeypatch.setattr(db_module, "MIGRATIONS_DIR", provisioned_dir)
         await run_migrations(pool)
-        await prepare_application_roles(TEST_DB)
+        state = await prepare_application_roles(TEST_DB)
         monkeypatch.setattr(db_module, "MIGRATIONS_DIR", upgrade_dir)
         await run_migrations(pool)
-        await prepare_application_roles(TEST_DB)
+        await after_upgrade(pool, state)
     finally:
         monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
         await full_schema_reset(pool)
@@ -57,13 +57,26 @@ async def _upgrade_after_provisioning(monkeypatch, provisioned_dir, upgrade_dir)
 
 
 def test_every_later_migration_keeps_the_upgraded_contract(monkeypatch, tmp_path):
+    async def start_again(pool, state):
+        await prepare_application_roles(TEST_DB)
+
     provisioned = _migration_dir(tmp_path, "provisioned", through=PROVISIONED_SCHEMA)
-    asyncio.run(_upgrade_after_provisioning(monkeypatch, provisioned, MIGRATIONS_DIR))
+    asyncio.run(_upgrade_after_provisioning(monkeypatch, provisioned, MIGRATIONS_DIR, start_again))
 
 
 def test_table_added_without_its_contract_refuses_upgraded_start(monkeypatch, tmp_path):
+    async def start_again(pool, state):
+        with pytest.raises(RoleSetupError):
+            await prepare_application_roles(TEST_DB)
+        # Startup reports every failure generically, so check the validator
+        # directly: the probe table alone breaks the contract.
+        async with pool.connection() as conn:
+            with pytest.raises(RoleSetupError, match="security contract mismatch"):
+                await validate_application_contract(conn, state)
+            await conn.execute("DROP TABLE contract_probe")
+            await validate_application_contract(conn, state)
+
     provisioned = _migration_dir(tmp_path, "provisioned", through=PROVISIONED_SCHEMA)
     upgraded = _migration_dir(
         tmp_path, "upgraded", extra={"999_contract_probe.sql": "CREATE TABLE contract_probe(id int);"})
-    with pytest.raises(RoleSetupError):
-        asyncio.run(_upgrade_after_provisioning(monkeypatch, provisioned, upgraded))
+    asyncio.run(_upgrade_after_provisioning(monkeypatch, provisioned, upgraded, start_again))
