@@ -257,6 +257,13 @@ there. See the
 details, and [Upgrading](docs/upgrading.md) if you are moving an older
 OIDC-only installation.
 
+In **Settings > Account Settings**, you can verify your current login email or
+change it after confirming the new address. Both actions require your current
+password and configured email delivery. Until the new address is confirmed,
+your current email remains the login. A confirmed change signs out other
+Odograph sessions; it does not change your linked OIDC identity or saved
+notification destinations. Email verification is not a password reset flow.
+
 ### Reverse geocoding
 
 Odograph supports Geoapify as a hosted provider and Nominatim as a self-hosted
@@ -288,6 +295,10 @@ closed.
 
 Both a password change and an operator reset sign out your other Odograph
 sessions. The browser that made the change stays signed in.
+
+Changing your login email is separate from password recovery. The new address
+becomes the login only after you confirm the emailed challenge. Odograph does
+not provide email-based password reset in this release.
 
 If you use OIDC, signing out of Odograph does not sign you out of your identity
 provider, so signing back in may not prompt you at all. Sign out of the
