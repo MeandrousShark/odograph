@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Confirm email: Odograph{% endblock %}
+{% block early_head %}
+<script nonce="{{ csp_nonce }}">
+  (function () {
+    var pendingPurpose = null;
+    var pendingToken = null;
+    function consumeFragment() {
+      if (!window.location.hash) return;
+      var fragment = new URLSearchParams(window.location.hash.slice(1));
+      var purpose = fragment.get("purpose");
+      var token = fragment.get("token");
+      window.history.replaceState(
+        null, "", window.location.pathname + window.location.search
+      );
+      if (purpose !== null) {
+        var purposeField = document.getElementById("email-challenge-purpose");
+        if (purposeField) purposeField.value = purpose;
+        else pendingPurpose = purpose;
+      }
+      if (token !== null) {
+        var tokenField = document.getElementById("email-challenge-token");
+        if (tokenField) tokenField.value = token;
+        else pendingToken = token;
+      }
+    }
+    window.addEventListener("hashchange", consumeFragment);
+    consumeFragment();
+    window.addEventListener("DOMContentLoaded", function () {
+      if (pendingPurpose !== null) {
+        var purposeField = document.getElementById("email-challenge-purpose");
+        if (purposeField) purposeField.value = pendingPurpose;
+        pendingPurpose = null;
+      }
+      if (pendingToken !== null) {
+        var tokenField = document.getElementById("email-challenge-token");
+        if (tokenField) tokenField.value = pendingToken;
+        pendingToken = null;
+      }
+    });
+  })();
+</script>
+{% endblock %}
+{% block content %}
+<div class="card auth-card">
+  <div class="page-title auth-page-title">
+    <div>
+      <h2 class="page-title-heading">Confirm email address</h2>
+      <p class="page-title-subtitle">Confirm the address for the account that requested this challenge.</p>
+    </div>
+  </div>
+
+  {% if error %}
+  <div class="notice notice-danger form-error-summary" role="alert">{{ error }}</div>
+  {% endif %}
+  {% if success %}
+  <div class="notice notice-success form-success" role="status">{{ success }}</div>
+  {% else %}
+  <form method="post" action="/settings/account/email/confirm" class="auth-form" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <label>What are you confirming?
+      <select id="email-challenge-purpose" name="purpose" required autocomplete="off">
+        <option value="">Choose an email confirmation</option>
+        <option value="verify_current">Verify your current login email</option>
+        <option value="change_email">Confirm your new login email</option>
+      </select>
+    </label>
+    <label>Confirmation token
+      <input id="email-challenge-token" type="text" name="token" required
+             autocomplete="off" autocapitalize="none" spellcheck="false" inputmode="text">
+    </label>
+    <button type="submit" class="control control-primary auth-submit">Confirm email address</button>
+  </form>
+  <p class="muted">If the link didn't fill in the form, choose the confirmation type and paste the token from your email.</p>
+  {% endif %}
+  {% if user %}
+  <p class="muted"><a href="/settings/account">Back to Account Settings</a></p>
+  {% else %}
+  <p class="muted">Sign in as the account that requested this challenge before submitting. Copy the token first, then sign in and paste it here, or reopen the email link after signing in.</p>
+  <p><a href="/login">Sign in</a></p>
+  {% endif %}
+</div>
+{% endblock %}
