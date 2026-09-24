@@ -31,6 +31,27 @@ def make_pool(database_url: str) -> AsyncConnectionPool:
     return AsyncConnectionPool(database_url, min_size=1, max_size=6, open=False)
 
 
+class MigrationRoleError(RuntimeError):
+    """The migration role would be subject to forced row-level security."""
+
+
+async def check_migration_role(conn) -> None:
+    """Refuse a migration role that forced row-level security would filter.
+
+    Owned tables force their account policies even on their owner, so a data
+    migration run by a plain owner role would silently touch no rows.
+    """
+    cur = await conn.execute(
+        "SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user"
+    )
+    row = await cur.fetchone()
+    if row is None or not row[0]:
+        raise MigrationRoleError(
+            "database migrations require a DATABASE_URL role that is a superuser "
+            "or has BYPASSRLS; the configured role is neither"
+        )
+
+
 async def _fetch_schema_version(conn) -> int:
     cur = await conn.execute("SELECT COALESCE(max(version), 0) FROM schema_migrations")
     row = await cur.fetchone()
@@ -47,6 +68,7 @@ async def run_migrations(pool: AsyncConnectionPool, config=None) -> None:
             )
 
     async with pool.connection() as conn:
+        await check_migration_role(conn)
         # Transaction-scoped, not session-scoped `pg_advisory_lock`: it
         # releases automatically on commit *or* rollback, so a migration
         # that fails mid-loop can never leave the lock held and wedge every
