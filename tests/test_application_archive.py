@@ -10,7 +10,7 @@ from psycopg import sql
 
 from app.account_context import AccountPool, AccountPrincipal
 from app.application_roles import (
-    OWNED_TABLES, TABLES, _policy_contract, application_role_pools, finalize_application_restore,
+    OWNED_TABLES, PROTECTED_TABLES, TABLES, _policy_contract, application_role_pools, finalize_application_restore,
     prepare_application_restore,
 )
 from app.db import make_pool, run_migrations
@@ -129,7 +129,7 @@ def test_application_archive_preserves_rows_credentials_sequences_and_restricted
         first, runtime_info = asyncio.run(_seed(source.database_url))
         before = _snapshot(source.database_url)
         security_before = _row_security(source.database_url)
-        assert [row[0] for row in security_before[0] if row[1:] == (True, True)] == sorted(OWNED_TABLES)
+        assert [row[0] for row in security_before[0] if row[1:] == (True, True)] == sorted(OWNED_TABLES + PROTECTED_TABLES)
         assert {row[:2] for row in security_before[1]} == set(_policy_contract())
         archive = tmp_path / "application.dump"
         result = _dump_archive(source, user=DB_OWNER, password=DB_OWNER_PASSWORD, archive=archive)

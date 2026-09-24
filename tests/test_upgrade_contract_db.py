@@ -39,17 +39,23 @@ PROVISIONED_SCHEMAS = pytest.mark.parametrize("provisioned_schema", [PREPARED_SC
 
 
 async def _provision(pool, monkeypatch, schema):
-    # Reproduce the role contract that existed before invitations were added.
+    # Reproduce the role contract that existed before invitations and email
+    # challenges were added.
+    owned_tables = OWNED_TABLES
     with monkeypatch.context() as patch:
         control_tables = tuple(table for table in application_roles.CONTROL_TABLES if table != "invitations")
+        future_functions = application_roles.INVITATION_FUNCTIONS + application_roles.EMAIL_CHALLENGE_FUNCTIONS
+        patch.setattr(application_roles, "OWNED_TABLES", owned_tables)
+        patch.setattr(application_roles, "PROTECTED_TABLES", ())
         patch.setattr(application_roles, "CONTROL_TABLES", control_tables)
-        patch.setattr(application_roles, "TABLES", application_roles.OWNED_TABLES + control_tables + application_roles.REFERENCE_TABLES)
+        patch.setattr(application_roles, "TABLES", owned_tables + control_tables + application_roles.REFERENCE_TABLES)
         patch.setattr(application_roles, "FUNCTIONS", {
             key: value for key, value in application_roles.FUNCTIONS.items()
-            if key not in application_roles.INVITATION_FUNCTIONS
+            if key not in future_functions
         })
         patch.setattr(application_roles, "FUNCTION_FILES", application_roles.FUNCTION_FILES[:3])
         patch.setattr(application_roles, "INVITATION_FUNCTIONS", ())
+        patch.setattr(application_roles, "EMAIL_CHALLENGE_FUNCTIONS", ())
         if schema < ACTIVATED_SCHEMA:
             patch.setattr(application_roles, "CONTRACT_VERSION", "ownership-prepared-v1")
         await prepare_application_roles(TEST_DB)
@@ -57,7 +63,7 @@ async def _provision(pool, monkeypatch, schema):
         return
     # Schema 26 had every account policy prepared but not yet enforced.
     async with pool.connection() as conn:
-        for table in OWNED_TABLES:
+        for table in owned_tables:
             ident = sql.Identifier(table)
             await conn.execute(sql.SQL("ALTER TABLE {} NO FORCE ROW LEVEL SECURITY").format(ident))
             await conn.execute(sql.SQL("ALTER TABLE {} DISABLE ROW LEVEL SECURITY").format(ident))

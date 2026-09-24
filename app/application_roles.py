@@ -32,9 +32,10 @@ OWNED_TABLES = (
     "odometer_reminder_windows", "email_deliveries", "account_settings",
     "tracking_devices", "tracking_device_aliases", "ingest_credentials",
 )
+PROTECTED_TABLES = ("email_challenges",)
 CONTROL_TABLES = ("accounts", "oidc_identities", "instance_state", "invitations")
 REFERENCE_TABLES = ("schema_migrations", "reference_mileage_rates")
-TABLES = OWNED_TABLES + CONTROL_TABLES + REFERENCE_TABLES
+TABLES = OWNED_TABLES + PROTECTED_TABLES + CONTROL_TABLES + REFERENCE_TABLES
 CREDENTIAL_COLUMNS = (
     "public_id", "basic_username", "account_id", "tracking_device_id", "kind",
     "generation", "revoked_at", "created_at", "updated_at",
@@ -47,6 +48,15 @@ COLUMN_SELECT = {
     ),
     (CONTROL_ROLE, "tracking_devices"): ("id", "account_id", "enabled", "generation", "revoked_at"),
 }
+ACCOUNT_CONTROL_UPDATE_COLUMNS = (
+    "password_hash", "is_enabled", "auth_version", "updated_at",
+    "avatar_bytes", "avatar_mime", "avatar_updated_at",
+)
+EMAIL_CHALLENGE_FUNCTIONS = (
+    "public.issue_email_challenge(bigint,bigint,text,text,text)",
+    "public.revoke_email_challenge(bigint,text,text)",
+    "public.consume_email_challenge(bigint,bigint,text,text)",
+)
 BOOTSTRAP_INSERT_TABLES = ("accounts", "account_settings", "vehicles", "tag_rules", "mileage_rates")
 BOOTSTRAP_LOCK_TABLES = ("accounts", "ingest_credentials", "tracking_devices", "tracking_device_aliases")
 INVITATION_FUNCTIONS = (
@@ -64,6 +74,9 @@ FUNCTIONS = {
     "public.assert_tracking_credential(text,bigint,bigint,bigint,text)": RUNTIME_ROLE,
     INVITATION_FUNCTIONS[0]: CONTROL_ROLE,
     INVITATION_FUNCTIONS[1]: CONTROL_ROLE,
+    EMAIL_CHALLENGE_FUNCTIONS[0]: CONTROL_ROLE,
+    EMAIL_CHALLENGE_FUNCTIONS[1]: CONTROL_ROLE,
+    EMAIL_CHALLENGE_FUNCTIONS[2]: CONTROL_ROLE,
 }
 PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER")
 
@@ -116,7 +129,7 @@ def _table_rights(role: str, table: str) -> set[str]:
             return {"SELECT"}
     if role == CONTROL_ROLE:
         if table == "accounts":
-            return {"SELECT", "UPDATE"}
+            return {"SELECT"}
         if table == "oidc_identities":
             return {"SELECT", "INSERT", "UPDATE", "DELETE"}
         if table in ("instance_state", "schema_migrations"):
@@ -124,6 +137,8 @@ def _table_rights(role: str, table: str) -> set[str]:
     if role == BOOTSTRAP_ROLE:
         rights = set()
         if table == "invitations":
+            return {"SELECT", "INSERT", "UPDATE"}
+        if table == "email_challenges":
             return {"SELECT", "INSERT", "UPDATE"}
         if table in BOOTSTRAP_INSERT_TABLES:
             rights.add("INSERT")
@@ -138,10 +153,10 @@ def _table_rights(role: str, table: str) -> set[str]:
 def _policy_contract() -> dict[tuple[str, str], tuple[str, str, str | None, str | None]]:
     expression = "account_id = NULLIF(current_setting('app.account_id'::text,true),''::text)::bigint"
     policies = {(table, "account_isolation"): (RUNTIME_ROLE, "ALL", expression, expression)
-                for table in OWNED_TABLES}
+                for table in OWNED_TABLES + PROTECTED_TABLES}
     for table in ("ingest_credentials", "tracking_devices"):
         policies[table, "control_lookup"] = (CONTROL_ROLE, "SELECT", "true", None)
-    for table in OWNED_TABLES:
+    for table in OWNED_TABLES + PROTECTED_TABLES:
         if _table_rights(BOOTSTRAP_ROLE, table):
             policies[table, "bootstrap_defaults"] = (BOOTSTRAP_ROLE, "ALL", "true", "true")
     return policies
@@ -194,13 +209,15 @@ async def _provision(conn) -> None:
             if rights:
                 await conn.execute(sql.SQL("GRANT {} ON {} TO {}").format(
                     sql.SQL(",".join(sorted(rights))), ident, sql.Identifier(role)))
-    for table in OWNED_TABLES:
+    for table in OWNED_TABLES + PROTECTED_TABLES:
         ident = sql.Identifier("public", table)
         await conn.execute(sql.SQL("ALTER TABLE {} ENABLE ROW LEVEL SECURITY").format(ident))
         await conn.execute(sql.SQL("ALTER TABLE {} FORCE ROW LEVEL SECURITY").format(ident))
     for (role, table), columns in COLUMN_SELECT.items():
         await conn.execute(sql.SQL("GRANT SELECT ({}) ON {} TO {}").format(
             sql.SQL(",").join(map(sql.Identifier, columns)), sql.Identifier("public", table), sql.Identifier(role)))
+    await conn.execute(sql.SQL("GRANT UPDATE ({}) ON public.accounts TO odograph_control").format(
+        sql.SQL(",").join(map(sql.Identifier, ACCOUNT_CONTROL_UPDATE_COLUMNS))))
     for table, sequence in await _sequences(conn):
         ident = sql.Identifier("public", sequence)
         await conn.execute(sql.SQL("REVOKE ALL ON SEQUENCE {} FROM PUBLIC,odograph_control,odograph_runtime,odograph_bootstrap").format(ident))
@@ -243,7 +260,8 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
     _require_contract(found_tables == set(TABLES),
         f"relation set: unexpected {sorted(found_tables - set(TABLES))} missing {sorted(set(TABLES) - found_tables)}")
     bad_relations = sorted(row[0] for row in rows
-                           if row[1:] != (MIGRATE_ROLE, row[0] in OWNED_TABLES, row[0] in OWNED_TABLES))
+                           if row[1:] != (MIGRATE_ROLE, row[0] in OWNED_TABLES + PROTECTED_TABLES,
+                                         row[0] in OWNED_TABLES + PROTECTED_TABLES))
     _require_contract(not bad_relations, f"relation ownership or RLS flags: {bad_relations}")
     cur = await conn.execute(
         "SELECT p.oid::regprocedure::text FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace "
@@ -321,6 +339,8 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
             for column, privilege, allowed in await cur.fetchall():
                 expected_allowed = privilege in rights or (
                     privilege == "SELECT" and column in COLUMN_SELECT.get((role, table), ()))
+                if privilege == "UPDATE" and role == CONTROL_ROLE and table == "accounts":
+                    expected_allowed = column in ACCOUNT_CONTROL_UPDATE_COLUMNS
                 if allowed != expected_allowed:
                     bad_columns.append((column, privilege))
             _require_contract(not bad_columns, f"column privilege: {role} public.{table} {bad_columns}")
@@ -360,6 +380,18 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
         body = re.search(
             rf"CREATE OR REPLACE FUNCTION {re.escape(name)}\(.*?AS\s+(\$body\$)(.*?)\1",
             invitation_source, re.S | re.I).group(2)
+        _require_contract(row == (BOOTSTRAP_ROLE, True, ["search_path=pg_catalog, pg_temp"], body),
+            f"function definition: {function}")
+    challenge_source = (SQL_DIR.parent.parent / "migrations" / "030_email_challenges.sql").read_text()
+    for function in EMAIL_CHALLENGE_FUNCTIONS:
+        name = function.split("(", 1)[0]
+        cur = await conn.execute(
+            "SELECT pg_get_userbyid(proowner),prosecdef,proconfig,prosrc FROM pg_proc WHERE oid=%s::regprocedure",
+            (function,))
+        row = await cur.fetchone()
+        body = re.search(
+            rf"CREATE FUNCTION {re.escape(name)}\(.*?AS\s+(\$body\$)(.*?)\1",
+            challenge_source, re.S | re.I).group(2)
         _require_contract(row == (BOOTSTRAP_ROLE, True, ["search_path=pg_catalog, pg_temp"], body),
             f"function definition: {function}")
 

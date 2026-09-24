@@ -14,7 +14,7 @@ from app import application_roles
 from app.account_context import AccountPool, AccountPrincipal, account_id
 from app.accounts import create_admin
 from app.application_roles import (
-    CONTROL_TABLES, OWNED_TABLES, REFERENCE_TABLES, TABLES, application_role_pools,
+    CONTROL_TABLES, OWNED_TABLES, PROTECTED_TABLES, REFERENCE_TABLES, TABLES, application_role_pools,
     prepare_application_roles, validate_application_contract,
 )
 from app.db import make_pool
@@ -23,6 +23,7 @@ from conftest import full_schema_reset
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS")
+RLS_TABLES = OWNED_TABLES + PROTECTED_TABLES
 
 
 async def _scenario(callback):
@@ -61,7 +62,7 @@ def test_live_pools_bootstrap_scoping_and_prepared_privileges():
         async with owner.connection() as conn:
             assert (await (await conn.execute("SELECT count(*) FROM vehicles")).fetchone())[0] == 1
             cur = await conn.execute("SELECT bool_and(relrowsecurity AND relforcerowsecurity) FROM pg_class "
-                                     "WHERE relnamespace='public'::regnamespace AND relname=ANY(%s)", (list(OWNED_TABLES),))
+                                     "WHERE relnamespace='public'::regnamespace AND relname=ANY(%s)", (list(RLS_TABLES),))
             assert await cur.fetchone() == (True,)
     asyncio.run(_scenario(check))
 
@@ -140,14 +141,14 @@ def test_normal_signup_and_personal_pages_use_restricted_pools(monkeypatch):
     asyncio.run(_scenario(check))
 
 
-def test_activated_flags_are_exactly_forced_rls_on_owned_tables():
+def test_activated_flags_are_exactly_forced_rls_on_rls_tables():
     async def check(owner, pools, state):
         async with owner.connection() as conn:
             cur = await conn.execute(
                 "SELECT relname,relrowsecurity,relforcerowsecurity FROM pg_class "
                 "WHERE relnamespace='public'::regnamespace AND relname=ANY(%s)", (list(TABLES),))
             flags = {name: (enabled, forced) for name, enabled, forced in await cur.fetchall()}
-            assert flags == {table: (table in OWNED_TABLES,) * 2 for table in TABLES}
+            assert flags == {table: (table in RLS_TABLES,) * 2 for table in TABLES}
             cur = await conn.execute("SELECT security_contract_version FROM instance_state")
             assert await cur.fetchall() == [("ownership-activated-v1",)]
             for table in ("managed_role_state", "recovery_metadata"):
@@ -157,10 +158,10 @@ def test_activated_flags_are_exactly_forced_rls_on_owned_tables():
     asyncio.run(_scenario(check))
 
 
-def test_validator_names_each_owned_table_missing_enable_or_force():
+def test_validator_names_each_rls_table_missing_enable_or_force():
     async def check(owner, pools, state):
         async with owner.connection() as conn:
-            for table in OWNED_TABLES:
+            for table in RLS_TABLES:
                 for change in ("DISABLE ROW LEVEL SECURITY", "NO FORCE ROW LEVEL SECURITY"):
                     with pytest.raises(RoleSetupError, match=rf"relation ownership or RLS flags: \['{table}'\]$"):
                         async with conn.transaction(force_rollback=True):
