@@ -87,11 +87,25 @@ async def _schema_29_upgrade_and_email_change(tmp_path):
             )
 
         await _provision_schema_29_roles()
+        # Schema 29 granted control a table-wide UPDATE on accounts. Restore
+        # that historical grant before migration 030 narrows it.
+        async with owner.connection() as conn:
+            await conn.execute("GRANT UPDATE ON public.accounts TO odograph_control")
+            assert await (await conn.execute(
+                "SELECT bool_or(privilege_type='UPDATE') FROM pg_class c, "
+                "LATERAL aclexplode(c.relacl) acl JOIN pg_roles r ON r.oid=acl.grantee "
+                "WHERE c.oid='public.accounts'::regclass AND r.rolname='odograph_control'"
+            )).fetchone() == (True,)
         db_module.MIGRATIONS_DIR = original_migrations_dir
         await run_migrations(owner)
         await prepare_application_roles(TEST_DB)
 
         async with owner.connection() as conn:
+            assert await (await conn.execute(
+                "SELECT coalesce(bool_or(privilege_type='UPDATE'),false) FROM pg_class c, "
+                "LATERAL aclexplode(c.relacl) acl JOIN pg_roles r ON r.oid=acl.grantee "
+                "WHERE c.oid='public.accounts'::regclass AND r.rolname='odograph_control'"
+            )).fetchone() == (False,)
             assert await (await conn.execute(
                 "SELECT max(version) FROM schema_migrations"
             )).fetchone() == (30,)
@@ -123,6 +137,12 @@ async def _schema_29_upgrade_and_email_change(tmp_path):
 
         async with application_role_pools(TEST_DB) as pools:
             async with pools.control.connection() as conn:
+                with pytest.raises(errors.InsufficientPrivilege):
+                    async with conn.transaction():
+                        await conn.execute(
+                            "UPDATE accounts SET email='bypass@example.invalid' WHERE id=%s",
+                            (ADMIN_ID,),
+                        )
                 old_session_version = 1
                 before = await get_account_by_email(conn, OLD_EMAIL)
                 assert before is not None
