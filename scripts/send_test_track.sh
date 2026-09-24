@@ -36,7 +36,8 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-if [[ ! "$TRACKING_USERNAME" =~ ^odograph_[A-Za-z0-9_-]+$ ]]; then
+# Readable ("test-ab12") and older "odograph_..." usernames.
+if [[ ! "$TRACKING_USERNAME" =~ ^[A-Za-z0-9_-]+$ ]]; then
     echo "error: supply the issued username of your dedicated test device." >&2
     exit 1
 fi

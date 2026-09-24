@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +17,7 @@ import pytest
 from fastapi import FastAPI
 from psycopg.errors import InsufficientPrivilege
 
+import app.tracking as tracking_module
 from app.account_context import AccountPool, AccountPrincipal
 from app.db import DETECTOR_ADVISORY_LOCK_KEY, make_pool
 from app.detector.core import Params
@@ -196,6 +198,127 @@ def test_rotation_rejects_unavailable_device_without_changing_credential(device_
                     (issued.public_id,),
                 )).fetchone()
             assert after == before
+    asyncio.run(run())
+
+
+def test_create_device_issues_a_readable_username_matching_the_device_label():
+    async def run():
+        async with _fixture() as (pool, a, _b):
+            async with a.connection() as conn:
+                issued = await create_device(conn, "Work iPhone")
+            assert re.match(r"^[a-z0-9-]+-[a-z0-9]{4}$", issued.username)
+            assert issued.username.startswith("work-iphone-")
+    asyncio.run(run())
+
+
+def test_forced_basic_username_collision_retries_and_succeeds_across_accounts(monkeypatch):
+    async def run():
+        async with _fixture() as (pool, a, b):
+            monkeypatch.setattr(tracking_module, "_random_suffix", lambda: "aaaa")
+            async with a.connection() as conn:
+                first = await create_device(conn, "Phone")
+            assert first.username == "phone-aaaa"
+
+            # The forced suffix repeats "aaaa" (colliding with account a's
+            # username, since basic_username is unique instance-wide, not
+            # per account) before "bbbb" succeeds, proving the retry looks
+            # past its own account's rows rather than pre-checking with a
+            # SELECT that RLS would otherwise hide.
+            suffixes = iter(["aaaa", "bbbb"])
+            monkeypatch.setattr(tracking_module, "_random_suffix", lambda: next(suffixes))
+            async with b.connection() as conn:
+                second = await create_device(conn, "Phone")
+            assert second.username == "phone-bbbb"
+
+            assert await _authenticate(pool, first.username, first.secret) is not None
+            assert await _authenticate(pool, second.username, second.secret) is not None
+            async with pool.connection() as conn:
+                count = (await (await conn.execute(
+                    "SELECT count(*) FROM ingest_credentials WHERE basic_username LIKE 'phone-%'"
+                )).fetchone())[0]
+                assert count == 2
+    asyncio.run(run())
+
+
+def test_exhausted_username_retries_raise_and_leave_no_partial_rows(monkeypatch):
+    async def run():
+        async with _fixture() as (pool, a, _b):
+            monkeypatch.setattr(tracking_module, "_random_suffix", lambda: "aaaa")
+            async with a.connection() as conn:
+                await create_device(conn, "Phone")
+            # Every further attempt for the same slug now collides on every
+            # try, exhausting all 5 attempts.
+            with pytest.raises(ValueError):
+                async with a.connection() as conn:
+                    await create_device(conn, "Phone")
+            async with pool.connection() as conn:
+                devices = (await (await conn.execute(
+                    "SELECT count(*) FROM tracking_devices WHERE account_id = 42 AND label = 'Phone'"
+                )).fetchone())[0]
+                credentials = (await (await conn.execute(
+                    "SELECT count(*) FROM ingest_credentials"
+                )).fetchone())[0]
+                detector_rows = (await (await conn.execute(
+                    "SELECT count(*) FROM detector_state WHERE account_id = 42"
+                )).fetchone())[0]
+                assert devices == 1
+                assert credentials == 1
+                assert detector_rows == 1
+    asyncio.run(run())
+
+
+def test_rotation_keeps_the_readable_username():
+    async def run():
+        async with _fixture() as (pool, a, _b):
+            async with a.connection() as conn:
+                issued = await create_device(conn, "Phone")
+            async with a.connection() as conn:
+                replacement = await rotate_credential(conn, issued.public_id)
+            assert replacement.username == issued.username
+            assert replacement.secret != issued.secret
+            assert await _authenticate(pool, issued.username, issued.secret) is None
+            assert await _authenticate(pool, issued.username, replacement.secret) is not None
+    asyncio.run(run())
+
+
+def test_pre_change_odograph_prefixed_username_still_authenticates():
+    async def run():
+        async with _fixture() as (pool, a, _b):
+            async with a.connection() as conn:
+                cur = await conn.execute(
+                    "INSERT INTO tracking_devices (account_id, label) VALUES (42, 'Old phone') RETURNING id"
+                )
+                device_id = (await cur.fetchone())[0]
+                await conn.execute(
+                    "INSERT INTO detector_state (account_id, tracking_device_id) VALUES (42, %s)", (device_id,)
+                )
+            legacy_username = "odograph_AbC123-_XyZ9"
+            async with pool.connection() as conn:
+                await conn.execute(
+                    "INSERT INTO ingest_credentials "
+                    "(public_id,basic_username,secret_hash,account_id,tracking_device_id,kind) "
+                    "VALUES (%s,%s,%s,42,%s,'device')",
+                    (legacy_username, legacy_username, hash_password("legacy-device-secret"), device_id),
+                )
+            assert await _authenticate(pool, legacy_username, "legacy-device-secret") is not None
+            assert await _authenticate(pool, legacy_username, "wrong-secret") is None
+            assert await _authenticate(pool, "unknown-" + legacy_username, "legacy-device-secret") is None
+    asyncio.run(run())
+
+
+def test_wrong_secret_and_unknown_username_both_get_the_same_401():
+    async def run():
+        async with _fixture() as (pool, a, _b):
+            async with a.connection() as conn:
+                issued = await create_device(conn, "Phone")
+            app = _app(pool)
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
+                wrong_secret = await client.post("/ingest", json=_payload(), auth=(issued.username, "wrong-secret"))
+                unknown_username = await client.post(
+                    "/ingest", json=_payload(), auth=("no-such-user-zzzz", issued.secret),
+                )
+                assert wrong_secret.status_code == 401
+                assert unknown_username.status_code == 401
     asyncio.run(run())
 
 
@@ -394,6 +517,19 @@ def test_tracking_setup_forms_use_normal_account_auth_and_show_secret_only_once(
                 assert created.headers["cache-control"] == "no-store"
                 username = re.search(r'User <input readonly value="([^"]+)"', created.text).group(1)
                 secret = re.search(r'Password <input readonly value="([^"]+)"', created.text).group(1)
+                assert re.match(r"^[a-z0-9-]+-[a-z0-9]{4}$", username) and username.startswith("phone-")
+                # A copy button beside each of URL/User/Password, wired up by
+                # a static, non-inline script tag under the CSP-allowed path.
+                assert created.text.count('data-copy-target="tracking-setup-') == 3
+                assert re.search(
+                    r'<button type="button"[^>]*data-copy-target="tracking-setup-url"[^>]*>Copy</button>',
+                    created.text,
+                )
+                assert 'aria-live="polite"' in created.text
+                # The tag closes immediately with no body, so this also
+                # confirms the copy logic is not an inline script.
+                assert '<script src="/static/tracking_copy.js"></script>' in created.text
+                assert created.text.count(secret) == 1
                 credential = await _authenticate(pool, username, secret)
                 assert credential is not None and credential.account.account_id == 42
                 page = await client.get("/settings/tracking")

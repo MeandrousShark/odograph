@@ -9,7 +9,9 @@ steps after installation, see the [Odograph usage guide](usage.md).
 ## App configuration
 
 Sign in to Odograph, open **Settings > Tracking**, and create a device for
-this phone. Copy the URL, username, and password shown there into OwnTracks.
+this phone. Copy the URL, username, and password shown there into OwnTracks;
+each field has a Copy button next to it. The username is a readable slug of
+the device name plus a short random suffix, for example `work-iphone-7k3q`.
 The password is shown only once; if you lose it, choose **Replace password**
 and update the phone. Create a separate credential for each device.
 
@@ -164,7 +166,7 @@ From the directory containing your `compose.yaml`, run the matching release's
 helper, replacing the example username with the issued one:
 
 ```sh
-scripts/send_test_track.sh --username odograph_ISSUED_TEST_USERNAME
+scripts/send_test_track.sh --username test-ab12
 ```
 
 The helper silently prompts for the issued password. It never accepts a
@@ -178,7 +180,7 @@ Wait about 90 seconds for the detector's debounce, then look for the short
 drive in the trip list. When finished, remove this dedicated test stream:
 
 ```sh
-scripts/send_test_track.sh --cleanup --username odograph_ISSUED_TEST_USERNAME
+scripts/send_test_track.sh --cleanup --username test-ab12
 ```
 
 Cleanup resolves that issued username to its account and stable device, checks

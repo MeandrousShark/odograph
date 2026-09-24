@@ -33,9 +33,12 @@ reproduced here.
   configuration and are then changed in Settings. Editing their environment
   variables no longer overrides stored preferences.
 - Tracker labels become account-owned devices, and Settings > Tracking issues,
-  rotates, and revokes per-device credentials. `INGEST_USERNAME` and
-  `INGEST_PASSWORD` are imported once on upgrade as a legacy adapter; editing
-  them later does not rotate, restore, or recreate a credential.
+  rotates, and revokes per-device credentials. An issued username is a
+  readable slug of the device name plus a short random suffix (for example
+  `work-iphone-7k3q`), and the setup card adds a Copy button beside the URL,
+  username, and password. `INGEST_USERNAME` and `INGEST_PASSWORD` are
+  imported once on upgrade as a legacy adapter; editing them later does not
+  rotate, restore, or recreate a credential.
 - Temporary ingest throttling answers 503 instead of 429, because OwnTracks
   for iOS deletes a queued fix on any 4xx response.
 - Portable exports use format 3. Imports still accept format 1 and 2 bundles.
