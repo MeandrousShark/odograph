@@ -27,6 +27,8 @@ def test_account_auth_routes_resolve_and_setup_is_removed():
         ("POST", "/login/local"),
         ("GET", "/signup"),
         ("POST", "/signup"),
+        ("GET", "/invite"),
+        ("POST", "/invite"),
         ("GET", "/login/oidc"),
         ("GET", "/auth/callback"),
         ("GET", "/account/establish"),
@@ -53,6 +55,7 @@ def test_plain_auth_forms_use_hidden_form_csrf_checks():
         if route.path in {
             "/login/local",
             "/signup",
+            "/invite",
             "/account/establish",
             "/settings/account/password",
             "/settings/account/oidc/link",

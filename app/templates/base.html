@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>{% block title %}Odograph{% endblock %}</title>
+  {% block early_head %}{% endblock %}
   {# Import with context so icon URLs retain the app's static cache key. #}
   {% from "_icons.html" import icon with context %}
   <script src="/static/vendor/htmx/htmx.min.js"></script>

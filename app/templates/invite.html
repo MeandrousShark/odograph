@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Accept invitation: Odograph{% endblock %}
+{% block early_head %}
+<script nonce="{{ csp_nonce }}">
+  (function () {
+    var token = "";
+    if (window.location.hash) {
+      var fragment = new URLSearchParams(window.location.hash.slice(1));
+      token = fragment.get("token") || "";
+      window.history.replaceState(null, "", "/invite");
+    }
+    window.addEventListener("DOMContentLoaded", function () {
+      if (token) document.getElementById("invitation-token").value = token;
+      token = "";
+    });
+  })();
+</script>
+{% endblock %}
+{% block content %}
+<div class="card auth-card">
+<div class="page-title auth-page-title">
+  <div>
+    <h2 class="page-title-heading">Accept invitation</h2>
+    <p class="page-title-subtitle">Set a password for your Odograph account.</p>
+  </div>
+</div>
+
+{% if error %}
+<div class="notice notice-danger form-error-summary" role="alert">{{ error }}</div>
+{% endif %}
+
+<form method="post" action="/invite" class="auth-form" autocomplete="off">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <label>Invitation token
+    <input id="invitation-token" type="text" name="token" required autocomplete="off" spellcheck="false" autofocus>
+  </label>
+  <label>Password
+    <input type="password" name="password" required autocomplete="new-password" minlength="8">
+  </label>
+  <label>Confirm password
+    <input type="password" name="password_confirm" required autocomplete="new-password" minlength="8">
+  </label>
+  <label>Time zone
+    <input type="text" name="display_timezone" value="{{ display_timezone }}" required placeholder="America/Los_Angeles">
+  </label>
+  <button type="submit" class="control control-primary auth-submit">Create account</button>
+</form>
+
+<p class="muted"><a href="/login">Back to sign in</a></p>
+</div>
+{% endblock %}

@@ -112,6 +112,15 @@ class FailedAuthLimiter:
         self._prune(ip, now)
         self._failures[ip].append(now)
 
+    async def run_bounded(self, operation):
+        """Keep an auth slot until work ends, even if its caller leaves."""
+        if len(self._auth_tasks) >= self._max_concurrent_auth:
+            raise _AuthSaturated
+        task = asyncio.create_task(operation())
+        self._auth_tasks.add(task)
+        task.add_done_callback(self._auth_finished)
+        return await asyncio.shield(task)
+
     async def authenticate(self, ip: str, *args, **kwargs):
         if len(self._auth_tasks) >= self._max_concurrent_auth:
             raise _AuthSaturated
