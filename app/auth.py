@@ -186,6 +186,7 @@ def _account_user(account: dict) -> dict:
         "name": account["email"].split("@", 1)[0],
         "email": account["email"],
         "is_admin": account["is_admin"],
+        "is_enabled": account["is_enabled"],
         "legacy_oidc": False,
         "has_avatar": account["avatar_mime"] is not None,
         "avatar_version": _avatar_version(account["avatar_updated_at"]),

@@ -22,7 +22,7 @@ pytestmark = pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS
 
 
 @asynccontextmanager
-async def _two_databases():
+async def _two_databases(*, prepare_first=False):
     name = "odograph_role_guard_" + uuid4().hex
     first = make_pool(TEST_DB)
     second_url = make_conninfo(TEST_DB, dbname=name)
@@ -31,6 +31,8 @@ async def _two_databases():
     created = False
     try:
         await full_schema_reset(first)
+        if prepare_first:
+            await application_roles.prepare_application_roles(TEST_DB)
         async with await AsyncConnection.connect(TEST_DB, autocommit=True) as admin:
             await admin.execute(sql.SQL("CREATE DATABASE {} TEMPLATE template0").format(sql.Identifier(name)))
             created = True
@@ -46,6 +48,24 @@ async def _two_databases():
                 await admin.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
         await full_schema_reset(first)
         await first.close()
+
+
+def test_fresh_second_migration_does_not_claim_first_installation_roles():
+    async def run():
+        async with _two_databases(prepare_first=True) as (first, second, _url, _name):
+            async with second.connection() as conn:
+                row = await (await conn.execute(
+                    "SELECT pg_get_userbyid(relowner) FROM pg_class "
+                    "WHERE oid='public.invitations'::regclass")).fetchone()
+                assert row[0] not in ALL_ROLES
+                assert await (await conn.execute(
+                    "SELECT has_table_privilege('odograph_control','public.invitations','SELECT'), "
+                    "has_function_privilege('odograph_control',"
+                    "'public.issue_member_invitation(bigint,text,text)','EXECUTE')")).fetchone() == (False, False)
+                assert await (await conn.execute(
+                    "SELECT to_regclass('odograph_service.managed_role_state')")).fetchone() == (None,)
+            await application_roles.prepare_application_roles(TEST_DB)
+    asyncio.run(run())
 
 
 async def _role_fingerprint(pool):

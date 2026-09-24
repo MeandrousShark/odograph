@@ -23,6 +23,9 @@ RUN_MIGRATIONS_ADVISORY_LOCK_KEY = 901408
 
 ROLE_SETUP_ADVISORY_LOCK_KEY = 901409
 
+# Two-int namespace. Hash collisions only serialize unrelated email targets.
+INVITATION_EMAIL_LOCK_CLASS_ID = 901410
+
 
 def make_pool(database_url: str) -> AsyncConnectionPool:
     # max_size 6: up to 3 concurrent borrowers now (detector run, snap
