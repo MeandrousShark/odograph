@@ -3,16 +3,27 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+from contextlib import AsyncExitStack
+from types import SimpleNamespace
 
+import httpx
 import pytest
+from fastapi import FastAPI, Request
 from psycopg import errors
+from starlette.middleware.sessions import SessionMiddleware
+from starlette.responses import JSONResponse
 
+from app import auth
 from app.accounts import create_admin
 from app.application_roles import application_role_pools, prepare_application_roles
 from app.auth import _account_user
 from app.db import make_pool
 from app.invitations import InvitationUnavailable, issue_invitation, redeem_invitation
 from app.local_auth import verify_password
+from app.local_auth import hash_password
+from app.ingest import FailedAuthLimiter
+from app.main import SecurityHeadersMiddleware, make_templates
+from tests.auth_db_fixtures import auth_config
 from conftest import full_schema_reset
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -49,6 +60,200 @@ async def _wait_for_lock(owner, pid, task):
         assert not task.done(), "invitation operation bypassed the expected lock"
         await asyncio.sleep(0.01)
     pytest.fail("invitation operation did not wait for the expected lock")
+
+
+def _invite_route_app(pools):
+    cfg = auth_config(TEST_DB, initial_admin_signup=False, dev_no_auth=False)
+    app = FastAPI()
+    app.state.config = cfg
+    app.state.control_pool = pools.control
+    app.state.runtime_pool = pools.runtime
+    app.state.templates = make_templates(cfg)
+    app.state.oauth = None
+    app.state.login_limiter = FailedAuthLimiter(20, 900)
+    app.state.make_detector_runner = lambda pool: SimpleNamespace(pool=pool)
+    app.add_middleware(SessionMiddleware, secret_key="test-secret", https_only=False)
+    app.add_middleware(SecurityHeadersMiddleware, tile_host="https://tiles.example", hsts_max_age=0)
+    app.include_router(auth.make_router())
+
+    @app.get("/session")
+    async def session(request: Request):
+        return JSONResponse(dict(request.session))
+
+    return app
+
+
+def test_restricted_invite_route_respects_singleton_and_switches_session_in_future_fixture():
+    async def check(owner, pools, admin_user):
+        async with owner.connection() as conn:
+            await conn.execute(
+                "UPDATE accounts SET password_hash=%s WHERE id=%s",
+                (hash_password("admin-password"), admin_user["id"]),
+            )
+        async with pools.control.connection() as conn:
+            token = await issue_invitation(conn, admin_user, "member@example.invalid")
+
+        app = _invite_route_app(pools)
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            await client.get("/invite")
+            csrf = (await client.get("/session")).json()["csrf"]
+            form = {"csrf_token": csrf, "token": token, "password": "member-password",
+                    "password_confirm": "member-password", "display_timezone": "UTC"}
+            refused = await client.post("/invite", data=form)
+            assert refused.status_code == 400
+            assert auth.GENERIC_INVITE_ERROR in refused.text
+            assert token not in refused.text
+            async with owner.connection() as conn:
+                assert await (await conn.execute("SELECT consumed_at FROM invitations")).fetchone() == (None,)
+                await conn.execute("DROP INDEX accounts_singleton_idx")
+                await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
+
+            signed_in = await client.post(
+                "/login/local", data={"email": "admin@example.invalid",
+                                      "password": "admin-password", "csrf_token": csrf},
+            )
+            assert signed_in.status_code == 303
+            admin_session = (await client.get("/session")).json()
+            assert admin_session["account_id"] == admin_user["id"]
+            form["csrf_token"] = admin_session["csrf"]
+            redeemed = await client.post("/invite", data=form)
+            assert redeemed.status_code == 303
+            member_session = (await client.get("/session")).json()
+            assert member_session["account_id"] != admin_user["id"]
+            assert member_session["csrf"] != admin_session["csrf"]
+            assert set(member_session) == {"account_id", "auth_version", "csrf"}
+            async with owner.connection() as conn:
+                member = await (await conn.execute(
+                    "SELECT email,is_admin,password_hash FROM accounts WHERE id=%s",
+                    (member_session["account_id"],),
+                )).fetchone()
+                assert member[0] == "member@example.invalid" and member[1] is False
+                assert verify_password("member-password", member[2])
+                assert await (await conn.execute(
+                    "SELECT consumed_at IS NOT NULL FROM invitations"
+                )).fetchone() == (True,)
+            replay = await client.post("/invite", data={**form, "csrf_token": member_session["csrf"]})
+            assert replay.status_code == 400
+            assert auth.GENERIC_INVITE_ERROR in replay.text
+            assert (await client.get("/session")).json()["account_id"] == member_session["account_id"]
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        ) as admin_client:
+            await admin_client.get("/login")
+            csrf = (await admin_client.get("/session")).json()["csrf"]
+            response = await admin_client.post(
+                "/login/local", data={"email": "admin@example.invalid",
+                                      "password": "admin-password", "csrf_token": csrf},
+            )
+            assert response.status_code == 303
+            assert (await admin_client.get("/session")).json()["account_id"] == admin_user["id"]
+
+    asyncio.run(_scenario(check))
+
+
+def test_restricted_invite_route_handles_expiry_revoke_disabled_issuer_rollback_and_race():
+    async def check(owner, pools, admin_user):
+        async with owner.connection() as conn:
+            await conn.execute("DROP INDEX accounts_singleton_idx")
+            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
+        async with pools.control.connection() as conn:
+            tokens = {
+                name: await issue_invitation(conn, admin_user, f"{name}@example.invalid")
+                for name in ("expired", "revoked", "disabled", "rollback", "race")
+            }
+        async with owner.connection() as conn:
+            await conn.execute(
+                "UPDATE invitations SET created_at=now()-interval '49 hours', "
+                "expires_at=now()-interval '1 hour' "
+                "WHERE email='expired@example.invalid'"
+            )
+            await conn.execute(
+                "UPDATE invitations SET revoked_at=now() WHERE email='revoked@example.invalid'"
+            )
+
+        app = _invite_route_app(pools)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            await client.get("/invite")
+            csrf = (await client.get("/session")).json()["csrf"]
+
+            async def rejected(token):
+                response = await client.post(
+                    "/invite", data={"csrf_token": csrf, "token": token,
+                                     "password": "member-password", "password_confirm": "member-password",
+                                     "display_timezone": "UTC"},
+                )
+                assert response.status_code == 400
+                assert auth.GENERIC_INVITE_ERROR in response.text
+                assert all(value not in response.text for value in tokens.values())
+
+            await rejected("invalid-token")
+            await rejected(tokens["expired"])
+            await rejected(tokens["revoked"])
+
+            async with owner.connection() as conn:
+                await conn.execute(
+                    "UPDATE accounts SET is_enabled=false WHERE id=%s", (admin_user["id"],)
+                )
+            try:
+                await rejected(tokens["disabled"])
+            finally:
+                async with owner.connection() as conn:
+                    await conn.execute(
+                        "UPDATE accounts SET is_enabled=true WHERE id=%s", (admin_user["id"],)
+                    )
+
+            async with owner.connection() as conn:
+                await conn.execute(
+                    "ALTER TABLE vehicles ADD CONSTRAINT invitation_route_failure_probe "
+                    f"CHECK (account_id={admin_user['id']})"
+                )
+            try:
+                await rejected(tokens["rollback"])
+            finally:
+                async with owner.connection() as conn:
+                    await conn.execute(
+                        "ALTER TABLE vehicles DROP CONSTRAINT invitation_route_failure_probe"
+                    )
+
+            async with owner.connection() as conn:
+                states = await (await conn.execute(
+                    "SELECT email,consumed_at FROM invitations"
+                )).fetchall()
+                assert len(states) == 5
+                assert all(consumed is None for _, consumed in states)
+                assert await (await conn.execute("SELECT count(*) FROM accounts")).fetchone() == (1,)
+
+            cookie = client.cookies.get("session")
+            async with AsyncExitStack() as stack:
+                contenders = []
+                for _ in range(2):
+                    contender = await stack.enter_async_context(httpx.AsyncClient(
+                        transport=httpx.ASGITransport(app=app), base_url="http://testserver",
+                        cookies={"session": cookie},
+                    ))
+                    contenders.append(contender)
+                data = {"csrf_token": csrf, "token": tokens["race"],
+                        "password": "member-password", "password_confirm": "member-password",
+                        "display_timezone": "UTC"}
+                responses = await asyncio.gather(
+                    *(contender.post("/invite", data=data) for contender in contenders)
+                )
+                assert sorted(response.status_code for response in responses) == [303, 400]
+                assert all(tokens["race"] not in response.text for response in responses)
+
+            async with owner.connection() as conn:
+                assert await (await conn.execute("SELECT count(*) FROM accounts")).fetchone() == (2,)
+                assert await (await conn.execute(
+                    "SELECT consumed_at IS NOT NULL FROM invitations WHERE email='race@example.invalid'"
+                )).fetchone() == (True,)
+
+    asyncio.run(_scenario(check))
 
 
 def test_issue_requires_enabled_admin_normalizes_email_and_revokes_prior_token():

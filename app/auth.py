@@ -7,6 +7,7 @@ import secrets
 import time
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from urllib.parse import parse_qs
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from authlib.integrations.base_client import OAuthError
@@ -37,7 +38,9 @@ from app.avatar_images import (
     detect_avatar as _detect_avatar,
 )
 from app.config import DEFAULT_ACCOUNT_AVATAR_MAX_BYTES
-from app.ingest import FailedAuthLimiter, client_ip
+from app.ingest import FailedAuthLimiter, _AuthSaturated, client_ip
+from app.ingest import _read_capped_body
+from app.invitations import InvitationUnavailable, redeem_invitation
 from app.local_auth import hash_password, verify_password
 from app.page import render_page
 from app.uploads import read_capped_upload
@@ -61,6 +64,8 @@ GENERIC_PASSWORD_ERROR = "Unable to change password."
 GENERIC_LINK_ERROR = "Unable to link sign-in provider."
 GENERIC_UNLINK_ERROR = "Unable to unlink sign-in provider."
 GENERIC_OIDC_ERROR = "Sign-in failed. Please try again."
+GENERIC_INVITE_ERROR = "Unable to accept invitation. Check the link or ask for a new one."
+MAX_INVITE_FORM_BYTES = 8192
 OIDC_LINK_ATTEMPT_KEY = "oidc_link_attempt"
 OIDC_LINK_STATE_PREFIX = "link."
 OIDC_LOGIN_STATE_PREFIX = "login."
@@ -504,6 +509,15 @@ async def _verified_account(
 def make_router() -> APIRouter:
     router = APIRouter()
 
+    async def _render_invite(request: Request, *, error: str | None = None,
+                             status_code: int = 200):
+        return request.app.state.templates.TemplateResponse(
+            request, "invite.html",
+            {"user": None, "csrf": _ensure_csrf(request), "error": error,
+             "display_timezone": str(request.app.state.config.display_tz)},
+            status_code=status_code,
+        )
+
     async def _render_login(
         request: Request, *, error: str | None, status_code: int = 200
     ):
@@ -681,6 +695,82 @@ def make_router() -> APIRouter:
             return await _render_login(
                 request, error=GENERIC_LOGIN_ERROR, status_code=401
             )
+
+        _set_account_session(request, account)
+        return RedirectResponse("/", status_code=303)
+
+    @router.get("/invite")
+    async def invite_page(request: Request):
+        if request.app.state.config.dev_no_auth:
+            raise HTTPException(status_code=404)
+        return await _render_invite(request)
+
+    @router.post("/invite")
+    async def invite_submit(request: Request):
+        if request.app.state.config.dev_no_auth:
+            raise HTTPException(status_code=404)
+        limiter: FailedAuthLimiter = request.app.state.login_limiter
+        ip = client_ip(request)
+        if limiter.blocked(ip):
+            return await _render_invite(request, error=GENERIC_INVITE_ERROR, status_code=429)
+
+        if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/x-www-form-urlencoded":
+            limiter.record_failure(ip)
+            return await _render_invite(request, error=GENERIC_INVITE_ERROR, status_code=400)
+        body = await _read_capped_body(request, MAX_INVITE_FORM_BYTES)
+        if body is None:
+            limiter.record_failure(ip)
+            return await _render_invite(request, error=GENERIC_INVITE_ERROR, status_code=413)
+        try:
+            fields = parse_qs(body.decode("utf-8"), keep_blank_values=True,
+                              strict_parsing=True, max_num_fields=5)
+            if set(fields) != {"token", "password", "password_confirm", "display_timezone", "csrf_token"}:
+                raise ValueError("invalid fields")
+            if any(len(values) != 1 for values in fields.values()):
+                raise ValueError("duplicate fields")
+            values = {name: items[0] for name, items in fields.items()}
+        except (UnicodeDecodeError, ValueError):
+            limiter.record_failure(ip)
+            return await _render_invite(request, error=GENERIC_INVITE_ERROR, status_code=400)
+
+        check_form_csrf(request, values["csrf_token"])
+        token = values["token"]
+        password = values["password"]
+        timezone_name = values["display_timezone"].strip()
+        if not token or not token.isascii() or len(token) > 256:
+            limiter.record_failure(ip)
+            return await _render_invite(request, error=GENERIC_INVITE_ERROR, status_code=400)
+        error = _new_password_error(password, values["password_confirm"])
+        try:
+            ZoneInfo(timezone_name)
+        except (ValueError, ZoneInfoNotFoundError):
+            error = "Choose a valid time zone, such as America/Los_Angeles or UTC."
+        if error:
+            limiter.record_failure(ip)
+            return await _render_invite(request, error=error, status_code=400)
+
+        async def provision():
+            try:
+                async with control_connection(request.app.state.control_pool) as conn:
+                    async with conn.transaction():
+                        account_id = await redeem_invitation(
+                            conn, token, password, display_timezone=timezone_name
+                        )
+                        account = await get_account(conn, account_id)
+                        if account is None or not account["is_enabled"]:
+                            raise InvitationUnavailable()
+                return account
+            except InvitationUnavailable:
+                # A cancelled HTTP request must still count a failed redemption.
+                limiter.record_failure(ip)
+                raise
+
+        try:
+            account = await limiter.run_bounded(provision)
+        except _AuthSaturated:
+            return await _render_invite(request, error=GENERIC_INVITE_ERROR, status_code=429)
+        except InvitationUnavailable:
+            return await _render_invite(request, error=GENERIC_INVITE_ERROR, status_code=400)
 
         _set_account_session(request, account)
         return RedirectResponse("/", status_code=303)
