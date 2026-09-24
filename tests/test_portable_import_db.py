@@ -300,7 +300,7 @@ def test_round_trip_preserves_ledger_content_and_report_totals():
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             source_bundle = await _export(client)
 
-        await reset_account_db(pool.runtime_pool)
+        await reset_account_db(pool.admin_pool)
 
         transport = httpx.ASGITransport(app=_bare_app(pool))
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -914,10 +914,11 @@ def test_wrong_format_or_version_rejected(mutate, expected_field):
     _scenario(run)
 
 
-@pytest.mark.parametrize("schema_version", [26, 27])
-def test_format_3_bundles_import_into_schema_27(schema_version):
+@pytest.mark.parametrize("schema_version", [26, 27, 28])
+def test_format_3_bundles_import_into_schema_28(schema_version):
     """Migration 027 only deletes raw_messages rows, which bundles never
-    carry, so format-3 exports from schema 26 and 27 both still import."""
+    carry, and 028 only enforces row-level security, so format-3 exports
+    from schema 26, 27 and 28 all still import."""
     async def run(pool):
         transport = httpx.ASGITransport(app=_bare_app(pool))
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -1124,7 +1125,7 @@ def test_dry_run_produces_same_summary_and_leaves_target_unchanged():
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             bundle = await _export(client)
 
-        await reset_account_db(pool.runtime_pool)
+        await reset_account_db(pool.admin_pool)
 
         transport = httpx.ASGITransport(app=_bare_app(pool))
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:

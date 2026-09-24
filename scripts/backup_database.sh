@@ -156,7 +156,7 @@ exec_db() {
 }
 
 # A scoped runtime identity must never produce a deceptively partial
-# "full instance" archive, even while the prepared policies are disabled.
+# "full instance" archive; forced row-level security would hide rows from it.
 backup_privilege="$(exec_db psql -X -U mileage -d mileage -Atc \
     "SELECT CASE WHEN rolsuper OR rolbypassrls THEN 'full-instance' ELSE 'refused' END FROM pg_roles WHERE rolname = current_user")"
 if [ "$backup_privilege" != "full-instance" ]; then

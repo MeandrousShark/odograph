@@ -195,8 +195,9 @@ Schema 26 assigns existing personal data to the installation's established
 account. It preserves that account's actual ID, local password and linked
 identity, along with record IDs, trip geometry, edits, categories, exclusions,
 and detector progress. Registration remains closed after the first account.
-The application uses restricted database roles and explicit account ownership;
-RLS policies are prepared, but enforcement remains disabled in this stage.
+The application uses restricted database roles and explicit account ownership.
+From schema 28, row-level security is enabled and forced on account-owned
+tables. The `DATABASE_URL` role must be a superuser or have BYPASSRLS.
 
 Before this upgrade, establish the account on the previous release if the
 installation contains data but has no account. Sign in through the existing
@@ -227,7 +228,7 @@ old environment values in place does not recreate it.
 After startup, sign in with the original credentials and check representative
 trips, exclusions, places, vehicles, mileage rates and notification settings.
 Submit an authenticated point from an existing phone and confirm it appears
-under the intended device. Check the prepared security contract with:
+under the intended device. Check the security contract with:
 
 ```sh
 docker compose exec -T app python -m app.application_roles verify

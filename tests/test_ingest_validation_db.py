@@ -37,7 +37,7 @@ AUTH_HEADER = {
 
 def _bare_app(pool) -> FastAPI:
     app = FastAPI()
-    app.state.control_pool = pool.runtime_pool
+    app.state.control_pool = pool.control_pool
     app.state.runtime_pool = pool.runtime_pool
     app.state.config = SimpleNamespace(
         ingest_username="owntracks",

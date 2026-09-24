@@ -552,7 +552,7 @@ verify_ownership_upgrade() {
     local dir="$1" version="$2" credential_count credential_filter before after
     [ "$version" -ge 26 ] || return 0
     compose_dir "$dir" exec -T app python -m app.application_roles verify \
-        || step_fail "step 7: prepared account security contract did not validate"
+        || step_fail "step 7: account security contract did not validate"
     credential_filter="c.kind = 'legacy'"
     if [ "$BASE_SCHEMA_VERSION" -ge 26 ]; then
         credential_filter="c.kind = 'device' AND c.basic_username = '${INGEST_USERNAME}'"
@@ -567,7 +567,7 @@ verify_ownership_upgrade() {
     after="$(count_points "$dir" "$POSTRESTORE_DEVICE")"
     [ "$after" -eq "$((before + 1))" ] \
         || step_fail "step 7: migrated tracker did not accept a new point ($before -> $after)"
-    step_pass "step 7: prepared security contract validated and original tracker credentials still ingest"
+    step_pass "step 7: account security contract validated and original tracker credentials still ingest"
 }
 
 assert_manifests_equal() {

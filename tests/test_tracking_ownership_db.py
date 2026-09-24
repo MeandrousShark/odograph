@@ -1,7 +1,7 @@
-"""Query-scoping, stream identity and transaction evidence with RLS prepared.
+"""Query-scoping, stream identity and transaction evidence with RLS enforced.
 
-These use privileged disposable pools to isolate query/constraint behavior;
-restricted-role and policy-enabled evidence lives in the role contract tests.
+Application code runs on the real restricted control and runtime roles. The
+privileged disposable pool only seeds, observes and resets.
 """
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ from fastapi import FastAPI
 from psycopg.errors import InsufficientPrivilege
 
 import app.tracking as tracking_module
-from app.account_context import AccountPool, AccountPrincipal
 from app.db import DETECTOR_ADVISORY_LOCK_KEY, make_pool
 from app.detector.core import Params
 from app.detector.runner import DETECTOR_VERSION, DetectorRunner, load_trip_points
@@ -28,7 +27,7 @@ from app.tracking import (
     TrackingNotFound, admit_ingest, authenticate_ingest, convert_legacy_device, create_device,
     resolve_ingest_stream, revoke_credential, rotate_credential,
 )
-from conftest import reset_db
+from conftest import account_pool, reset_db
 from tests.synth import Drive, Stationary, build_track
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -59,7 +58,7 @@ async def _fixture():
                     (owner, f"account-{owner}@example.test"),
                 )
                 await conn.execute("INSERT INTO account_settings (account_id) VALUES (%s)", (owner,))
-        yield pool, AccountPool(pool, AccountPrincipal(42, True, 1)), AccountPool(pool, AccountPrincipal(84, True, 1))
+        yield pool, await account_pool(pool, 42), await account_pool(pool, 84)
     finally:
         async with pool.connection() as conn:
             for signature in reversed(installed):
@@ -70,9 +69,10 @@ async def _fixture():
         await pool.close()
 
 
-def _app(pool):
+def _app(bound):
     app = FastAPI()
-    app.state.control_pool = app.state.runtime_pool = pool
+    app.state.control_pool = bound.control_pool
+    app.state.runtime_pool = bound.runtime_pool
     app.state.config = SimpleNamespace(
         ingest_username="legacy", ingest_password="legacy-test-secret", ingest_max_body_bytes=10000,
     )
@@ -88,8 +88,8 @@ def _payload(label="same"):
             "account_id": 84, "tracking_device_id": 999999}
 
 
-async def _authenticate(pool, username, password):
-    return await authenticate_ingest(pool, username, password,
+async def _authenticate(bound, username, password):
+    return await authenticate_ingest(bound.control_pool, username, password,
                                      legacy_username="legacy", legacy_password="legacy-test-secret")
 
 
@@ -101,7 +101,7 @@ def test_identical_labels_and_timestamps_are_separate_authenticated_streams():
                 second = await create_device(conn, "Same phone")
             async with b.connection() as conn:
                 third = await create_device(conn, "Same phone")
-            app = _app(pool)
+            app = _app(a)
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
                 for issued in (first, second, third, first):
                     response = await client.post("/ingest", json=_payload(), auth=(issued.username, issued.secret))
@@ -139,7 +139,7 @@ def test_legacy_conversion_rotation_and_revocation_preserve_stream_and_do_not_re
                     "INSERT INTO ingest_credentials (public_id,basic_username,secret_hash,account_id,kind) "
                     "VALUES ('legacy-public','legacy',%s,42,'legacy')", (hash_password("legacy-test-secret"),),
                 )
-            app = _app(pool)
+            app = _app(a)
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
                 for label in ("one", "two"):
                     assert (await client.post("/ingest", json=_payload(label), auth=("legacy", "legacy-test-secret"))).status_code == 200
@@ -151,11 +151,11 @@ def test_legacy_conversion_rotation_and_revocation_preserve_stream_and_do_not_re
                 assert issued.tracking_device_id == device
                 assert (await client.post("/ingest", json=_payload("one"), auth=("legacy", "legacy-test-secret"))).status_code == 401
                 assert (await client.post("/ingest", json=_payload("two"), auth=("legacy", "legacy-test-secret"))).status_code == 200
-                stale = await _authenticate(pool, issued.username, issued.secret)
+                stale = await _authenticate(a, issued.username, issued.secret)
                 async with a.connection() as conn:
                     replacement = await rotate_credential(conn, issued.public_id)
                 assert replacement.tracking_device_id == device
-                assert await _authenticate(pool, issued.username, issued.secret) is None
+                assert await _authenticate(a, issued.username, issued.secret) is None
                 async with a.connection() as conn:
                     stream = await resolve_ingest_stream(conn, stale, "irrelevant")
                     with pytest.raises(InsufficientPrivilege):
@@ -164,7 +164,7 @@ def test_legacy_conversion_rotation_and_revocation_preserve_stream_and_do_not_re
                 assert (await client.post("/ingest", json=_payload("renamed"), auth=(replacement.username, replacement.secret))).status_code == 200
                 async with a.connection() as conn:
                     await revoke_credential(conn, "legacy-public")
-                assert await _authenticate(pool, "legacy", "legacy-test-secret") is None
+                assert await _authenticate(a, "legacy", "legacy-test-secret") is None
                 assert (await client.post("/ingest", json=_payload("new"), auth=("legacy", "legacy-test-secret"))).status_code == 401
             async with pool.connection() as conn:
                 assert (await (await conn.execute("SELECT count(*) FROM tracking_devices")).fetchone())[0] == 2
@@ -230,8 +230,8 @@ def test_forced_basic_username_collision_retries_and_succeeds_across_accounts(mo
                 second = await create_device(conn, "Phone")
             assert second.username == "phone-bbbb"
 
-            assert await _authenticate(pool, first.username, first.secret) is not None
-            assert await _authenticate(pool, second.username, second.secret) is not None
+            assert await _authenticate(a, first.username, first.secret) is not None
+            assert await _authenticate(a, second.username, second.secret) is not None
             async with pool.connection() as conn:
                 count = (await (await conn.execute(
                     "SELECT count(*) FROM ingest_credentials WHERE basic_username LIKE 'phone-%'"
@@ -276,8 +276,8 @@ def test_rotation_keeps_the_readable_username():
                 replacement = await rotate_credential(conn, issued.public_id)
             assert replacement.username == issued.username
             assert replacement.secret != issued.secret
-            assert await _authenticate(pool, issued.username, issued.secret) is None
-            assert await _authenticate(pool, issued.username, replacement.secret) is not None
+            assert await _authenticate(a, issued.username, issued.secret) is None
+            assert await _authenticate(a, issued.username, replacement.secret) is not None
     asyncio.run(run())
 
 
@@ -300,9 +300,9 @@ def test_pre_change_odograph_prefixed_username_still_authenticates():
                     "VALUES (%s,%s,%s,42,%s,'device')",
                     (legacy_username, legacy_username, hash_password("legacy-device-secret"), device_id),
                 )
-            assert await _authenticate(pool, legacy_username, "legacy-device-secret") is not None
-            assert await _authenticate(pool, legacy_username, "wrong-secret") is None
-            assert await _authenticate(pool, "unknown-" + legacy_username, "legacy-device-secret") is None
+            assert await _authenticate(a, legacy_username, "legacy-device-secret") is not None
+            assert await _authenticate(a, legacy_username, "wrong-secret") is None
+            assert await _authenticate(a, "unknown-" + legacy_username, "legacy-device-secret") is None
     asyncio.run(run())
 
 
@@ -311,7 +311,7 @@ def test_wrong_secret_and_unknown_username_both_get_the_same_401():
         async with _fixture() as (pool, a, _b):
             async with a.connection() as conn:
                 issued = await create_device(conn, "Phone")
-            app = _app(pool)
+            app = _app(a)
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
                 wrong_secret = await client.post("/ingest", json=_payload(), auth=(issued.username, "wrong-secret"))
                 unknown_username = await client.post(
@@ -420,7 +420,7 @@ def test_credential_revocation_waits_for_admitted_transaction_and_then_blocks_ne
         async with _fixture() as (pool, a, _b):
             async with a.connection() as conn:
                 issued = await create_device(conn, "phone")
-            credential = await _authenticate(pool, issued.username, issued.secret)
+            credential = await _authenticate(a, issued.username, issued.secret)
             started = asyncio.Event()
             revoker_pid = None
 
@@ -460,7 +460,7 @@ def test_credential_revocation_waits_for_admitted_transaction_and_then_blocks_ne
             finally:
                 if task is not None:
                     await asyncio.wait_for(task, 5)
-            assert await _authenticate(pool, issued.username, issued.secret) is None
+            assert await _authenticate(a, issued.username, issued.secret) is None
             async with a.connection() as conn:
                 with pytest.raises(InsufficientPrivilege):
                     async with conn.transaction():
@@ -488,7 +488,7 @@ def test_tracking_setup_forms_use_normal_account_auth_and_show_secret_only_once(
         async with _fixture() as (pool, _a, b):
             async with b.connection() as conn:
                 foreign = await create_device(conn, "Other account")
-            app = _app(pool)
+            app = _app(b)
             with patch.dict(os.environ, {"DATABASE_URL": TEST_DB, "SESSION_SECRET": "test-cookie-secret"}, clear=True):
                 app.state.config = Config.from_env()
             app.state.templates = make_templates(app.state.config)
@@ -530,7 +530,7 @@ def test_tracking_setup_forms_use_normal_account_auth_and_show_secret_only_once(
                 # confirms the copy logic is not an inline script.
                 assert '<script src="/static/tracking_copy.js"></script>' in created.text
                 assert created.text.count(secret) == 1
-                credential = await _authenticate(pool, username, secret)
+                credential = await _authenticate(b, username, secret)
                 assert credential is not None and credential.account.account_id == 42
                 page = await client.get("/settings/tracking")
                 assert secret not in page.text
@@ -538,23 +538,23 @@ def test_tracking_setup_forms_use_normal_account_auth_and_show_secret_only_once(
                     f"/settings/tracking/credentials/{foreign.public_id}/rotate", data={"csrf_token":"fixture-csrf"},
                 )
                 assert foreign_rotation.status_code == 404
-                assert await _authenticate(pool,foreign.username,foreign.secret) is not None
+                assert await _authenticate(b,foreign.username,foreign.secret) is not None
                 rotated = await client.post(
                     f"/settings/tracking/credentials/{credential.public_id}/rotate", data={"csrf_token":"fixture-csrf"},
                 )
                 assert rotated.status_code == 200
                 replacement = re.search(r'Password <input readonly value="([^"]+)"', rotated.text).group(1)
                 assert replacement != secret
-                assert await _authenticate(pool,username,secret) is None
-                assert await _authenticate(pool,username,replacement) is not None
+                assert await _authenticate(b,username,secret) is None
+                assert await _authenticate(b,username,replacement) is not None
                 revoked = await client.post(
                     f"/settings/tracking/credentials/{credential.public_id}/revoke", data={"csrf_token":"fixture-csrf"},
                 )
                 assert revoked.status_code == 303
-                assert await _authenticate(pool,username,replacement) is None
+                assert await _authenticate(b,username,replacement) is None
                 renewed = await client.post(
                     f"/settings/tracking/credentials/{credential.public_id}/rotate", data={"csrf_token":"fixture-csrf"},
                 )
                 assert renewed.status_code == 200
-                assert await _authenticate(pool,username,replacement) is None
+                assert await _authenticate(b,username,replacement) is None
     asyncio.run(run())

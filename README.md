@@ -213,7 +213,7 @@ database.
 
 This remains a single-account application. Startup provisions restricted
 identity and account database roles, and personal queries carry explicit
-ownership. Row-level security policies are prepared but are not enabled yet;
+ownership. Row-level security enforces account isolation in the database;
 this release does not enable invitations or multi-user operation. See the
 [database role contract](docs/configuration.md#account-ownership-and-database-roles).
 

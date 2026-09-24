@@ -343,7 +343,7 @@ async def _scenario():
         assert 'hx-get="/trips/%s/card?dashboard_week=%s"' % (manual_id, today_iso) \
             in malformed_invalid_body
 
-        async with pool.connection() as conn:
+        async with pool.admin_pool.connection() as conn:
             await conn.execute(
                 "CREATE FUNCTION remove_edit_vehicle() RETURNS trigger LANGUAGE plpgsql AS $$ "
                 "BEGIN DELETE FROM vehicles WHERE id = NEW.vehicle_id; RETURN NEW; END $$"
@@ -352,6 +352,7 @@ async def _scenario():
                 "CREATE TRIGGER remove_edit_vehicle BEFORE UPDATE ON trips FOR EACH ROW "
                 "WHEN (NEW.vehicle_id IS DISTINCT FROM OLD.vehicle_id) EXECUTE FUNCTION remove_edit_vehicle()"
             )
+        async with pool.connection() as conn:
             race_vehicle = (await (await conn.execute(
                 "INSERT INTO vehicles (account_id, name) VALUES (%s, 'Race car') RETURNING id", (account_id(conn),)
             )).fetchone())[0]
@@ -373,7 +374,7 @@ async def _scenario():
             # objects alone (see tests/conftest.py), so a trigger/function
             # created here to simulate the race must be dropped here too,
             # not left for a later test's reset to clean up.
-            async with pool.connection() as conn:
+            async with pool.admin_pool.connection() as conn:
                 await conn.execute("DROP TRIGGER remove_edit_vehicle ON trips")
                 await conn.execute("DROP FUNCTION remove_edit_vehicle()")
     finally:

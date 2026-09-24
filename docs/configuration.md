@@ -34,17 +34,22 @@ application setting.
 ## Account ownership and database roles
 
 The supported baseline is PostgreSQL 16 with PostGIS. Startup now runs the
-ownership migration and validates the live `ownership-prepared-v1` security
+ownership migrations and validates the live `ownership-activated-v1` security
 contract before opening restricted pools. The application remains a
 single-account installation: the singleton guard stays in place, new-account
 registration stays closed after setup, and invitations are not available.
-Account policies are created, but PostgreSQL row-level security is **disabled**
-in this stage. Personal queries explicitly filter their authenticated owner;
-this is not an activated multi-user service.
+PostgreSQL row-level security is enabled and forced on every account-owned
+table. The runtime role reads and changes only the rows of the account bound
+to its transaction, and none without one. Personal queries also filter their
+authenticated owner explicitly. Control and reference tables, such as
+accounts and the reference mileage rates, have no row-level security.
 
-Startup uses `DATABASE_URL` briefly for migrations and managed setup. It
-creates `odograph_control` for identity work and `odograph_runtime` for account
-work, then closes the privileged setup connection. `odograph_migrate` owns the
+Startup uses `DATABASE_URL` briefly for migrations and managed setup. Its role
+must be a superuser or have `BYPASSRLS`: forced row-level security also
+applies to the owner of the tables, so startup refuses to migrate as any other
+role rather than let a data migration silently skip rows. Setup creates
+`odograph_control` for identity work and `odograph_runtime` for account work,
+then closes the privileged setup connection. `odograph_migrate` owns the
 application objects; `odograph_bootstrap` owns narrow account/admission
 functions. Both owner roles are non-login roles. Runtime and control cannot
 own application tables, bypass row security, create schema objects, truncate
@@ -53,9 +58,9 @@ protected tables, or assume an owner role.
 Restricted login credentials are generated and stored in protected database
 state, included in full backups. Operators do not maintain extra passwords or
 connection URLs. Restarts reuse this state and validate its database identity,
-roles, grants, ownership, functions, and prepared policies. Unsafe grants,
-missing state, or the wrong security contract stop startup without falling
-back to privileged request handling. Keep full backups and encrypted instance
+roles, grants, ownership, functions, policies, and row-level security flags.
+Unsafe grants, missing state, or the wrong security contract stop startup
+without falling back to privileged request handling. Keep full backups and encrypted instance
 configuration protected: the database archive includes managed credentials.
 
 The canonical Compose database permits this setup. An external PostgreSQL

@@ -42,8 +42,12 @@ before opening a pull request.
 - Upgrades only validate the database role contract. A migration after 026
   that adds or replaces a public table, sequence or security-definer function
   must set `odograph_migrate` ownership, grant role rights and create account
-  policies in its own SQL, and update `app/application_roles.py` to match;
+  policies in its own SQL, enable and force row-level security on an
+  account-owned table, and update `app/application_roles.py` to match;
   `tests/test_upgrade_contract_db.py` enforces this.
+- Migrations run as a superuser or `BYPASSRLS` role; startup refuses any
+  other. Under forced row-level security, data migrations must not rely on
+  table ownership to see rows.
 - Preserve CSRF, auth-before-body reads, exact OIDC identity matching,
   source-aware deletion, and graceful routing/geocoding fallback.
 - Keep portable format compatibility and release image identity intact.

@@ -352,6 +352,7 @@ async def _batch_delete_scenario():
                                                                                                                                                                                                   rollback_detected,
                                                                                                                                                                                               ),
             )
+        async with pool.admin_pool.connection() as conn:
             await conn.execute(
                 "CREATE FUNCTION reject_one_batch_delete() RETURNS trigger "
                 "LANGUAGE plpgsql AS $$ BEGIN "
@@ -366,7 +367,7 @@ async def _batch_delete_scenario():
             with pytest.raises(RaiseException, match="forced bulk delete failure"):
                 await handler(request, [rollback_detected, rollback_manual], USER)
         finally:
-            async with pool.connection() as conn:
+            async with pool.admin_pool.connection() as conn:
                 await conn.execute("DROP TRIGGER reject_one_batch_delete ON trips")
                 await conn.execute("DROP FUNCTION reject_one_batch_delete()")
         async with pool.connection() as conn:

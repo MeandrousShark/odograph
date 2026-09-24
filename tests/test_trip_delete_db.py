@@ -268,7 +268,7 @@ async def _delete_rollback_scenario() -> None:
             before = await _detected_trip(conn)
         assert before is not None
 
-        async with pool.connection() as conn:
+        async with pool.admin_pool.connection() as conn:
             await conn.execute(
                 "CREATE FUNCTION reject_trip_delete() RETURNS trigger "
                 "LANGUAGE plpgsql AS $$ BEGIN "
@@ -295,7 +295,7 @@ async def _delete_rollback_scenario() -> None:
             # objects alone (see tests/conftest.py), so a trigger/function
             # created here to force this one failure must be dropped here
             # too, not left for a later test's reset to clean up.
-            async with pool.connection() as conn:
+            async with pool.admin_pool.connection() as conn:
                 await conn.execute("DROP TRIGGER reject_trip_delete ON trips")
                 await conn.execute("DROP FUNCTION reject_trip_delete()")
     finally:

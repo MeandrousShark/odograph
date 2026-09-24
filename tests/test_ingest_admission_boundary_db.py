@@ -41,9 +41,9 @@ AUTH_HEADER = {
     "Authorization": "Basic " + base64.b64encode(b"owntracks:testpw").decode()
 }
 
-# A trigger, not a REVOKE: the disposable fixture connects as the database
-# owner, whose privileges cannot be revoked out from under it, and the point
-# of the test is the SQLSTATE the route sees, not how it was produced.
+# A trigger, not a REVOKE: a REVOKE would break the validated role contract,
+# and the point of the test is the SQLSTATE the route sees, not how it was
+# produced. The privileged test pool installs and removes it.
 REFUSE_POINT_WRITES = """
 CREATE FUNCTION public.refuse_point_write() RETURNS trigger
 LANGUAGE plpgsql AS $$
@@ -61,7 +61,7 @@ DROP FUNCTION IF EXISTS public.refuse_point_write();
 
 def _bare_app(pool) -> FastAPI:
     app = FastAPI()
-    app.state.control_pool = pool.runtime_pool
+    app.state.control_pool = pool.control_pool
     app.state.runtime_pool = pool.runtime_pool
     app.state.config = SimpleNamespace(
         ingest_username="owntracks",
@@ -142,12 +142,12 @@ def test_privilege_error_while_storing_answers_5xx_not_401():
     queued fix over what is really a server-side grant or policy fault.
     """
     async def run(pool, client):
-        async with pool.connection() as conn:
+        async with pool.admin_pool.connection() as conn:
             await conn.execute(REFUSE_POINT_WRITES)
         try:
             response = await _post(client)
         finally:
-            async with pool.connection() as conn:
+            async with pool.admin_pool.connection() as conn:
                 await conn.execute(DROP_REFUSE_POINT_WRITES)
         assert response.status_code >= 500, response.status_code
         # The whole transaction rolled back, so the raw message the route had

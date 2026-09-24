@@ -27,8 +27,12 @@ async def fixture_device(conn, label: str) -> int:
 
 
 def configure_personal_app(app, pool) -> None:
-    """Bind a real synthetic account for tests explicitly configured as DEV_NO_AUTH."""
-    app.state.control_pool = pool.runtime_pool
+    """Bind a real synthetic account for tests explicitly configured as DEV_NO_AUTH.
+
+    `pool` comes from conftest's account fixtures, so the app gets the real
+    restricted control and runtime pools with row-level security enforced.
+    """
+    app.state.control_pool = pool.control_pool
     app.state.runtime_pool = pool.runtime_pool
     app.state.dev_principal = pool.principal
 
@@ -37,7 +41,7 @@ def configure_personal_app(app, pool) -> None:
             return await require_user(request)
         async with pool.connection() as conn:
             settings = await load_account_settings(conn)
-        async with pool.runtime_pool.connection() as conn:
+        async with pool.control_pool.connection() as conn:
             account = await get_account(conn, pool.principal.account_id)
         _ensure_csrf(request)
         request.state.principal = pool.principal

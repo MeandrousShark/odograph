@@ -20,14 +20,20 @@ from __future__ import annotations
 
 import asyncio
 import os
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import psycopg
 from psycopg import sql
+from psycopg_pool import AsyncConnectionPool
 import pytest
 
 from app.db import make_pool, run_migrations
-from app.account_context import AccountPool, AccountPrincipal, account_id
+from app.account_context import (
+    CONTROL_ROLE, RUNTIME_ROLE, AccountPool, AccountPrincipal, account_id,
+)
+from app.role_setup import RolePools, role_conninfo
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 
@@ -206,6 +212,29 @@ async def _restore_seed_snapshot(
         await conn.execute("SELECT setval(%s,%s,%s)", ("public." + sequence, value, called))
 
 
+async def provision_test_roles(pool) -> None:
+    """Provision the real restricted roles on a freshly migrated test schema."""
+    from app.application_roles import prepare_application_roles
+    await prepare_application_roles(pool.conninfo)
+
+
+async def _is_provisioned(conn) -> bool:
+    cur = await conn.execute("SELECT to_regclass('odograph_service.managed_role_state') IS NOT NULL")
+    return (await cur.fetchone())[0]
+
+
+async def _restore_single_account_guards(conn) -> None:
+    """Recreate the production singleton guards a two-account fixture dropped."""
+    cur = await conn.execute("SELECT to_regclass('public.accounts_singleton_idx') IS NULL")
+    if (await cur.fetchone())[0]:
+        await conn.execute("CREATE UNIQUE INDEX accounts_singleton_idx ON accounts ((true))")
+    cur = await conn.execute(
+        "SELECT NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.accounts'::regclass "
+        "AND conname='accounts_is_admin_check')")
+    if (await cur.fetchone())[0]:
+        await conn.execute("ALTER TABLE accounts ADD CONSTRAINT accounts_is_admin_check CHECK (is_admin)")
+
+
 async def reset_db(pool) -> None:
     """Truncate every table in schema public except spatial_ref_sys and
     schema_migrations, then restore the rows a fresh migration run seeds.
@@ -219,15 +248,18 @@ async def reset_db(pool) -> None:
     _check_allowed_database(pool)
     async with pool.connection() as conn:
         functions = await _schema_object_names(conn)
+        provisioned = await _is_provisioned(conn)
     # Migration-machinery tests deliberately replay SQL without role setup.
     # Restore the complete test schema before ordinary application fixtures.
     required = {"function:bootstrap_first_account", "function:assert_account_active",
                 "function:assert_tracking_credential"}
-    if not required <= functions:
+    if not required <= functions or not provisioned:
         await full_schema_reset(pool)
+        await provision_test_roles(pool)
     async with pool.connection() as conn:
         await _check_no_leaked_schema_objects(conn)
         await _truncate_all(conn)
+        await _restore_single_account_guards(conn)
         await _restore_seed_snapshot(conn, _seed_snapshot)
 
 
@@ -242,6 +274,8 @@ async def drop_and_recreate_schema(pool) -> None:
     truncate-and-restore reset above.
     """
     _check_allowed_database(pool)
+    # Dropping the role state lets the next provisioning rotate passwords.
+    await close_restricted_role_pools(pool)
     async with pool.connection() as conn:
         await conn.execute("DROP SCHEMA IF EXISTS odograph_service CASCADE; DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
 
@@ -258,8 +292,76 @@ async def full_schema_reset(pool) -> None:
             await conn.execute((Path(__file__).resolve().parents[1] / "scripts" / "sql" / filename).read_text())
 
 
-async def bootstrap_test_account(pool, *, owner_id: int = 41, email="development@localhost.invalid") -> AccountPool:
-    """Create a real owner explicitly; no production default owner is added."""
+@dataclass(frozen=True, slots=True)
+class FixtureAccountPool(AccountPool):
+    """An account pool on the real restricted runtime role.
+
+    `control_pool` is the restricted control role the application uses for
+    identity work. `admin_pool` is the privileged test pool; use it only to
+    seed, reset and assert, never as an application pool.
+    """
+
+    control_pool: Any = None
+    admin_pool: Any = None
+
+
+async def close_restricted_role_pools(pool) -> None:
+    pools = getattr(pool, "_odograph_role_pools", None)
+    if pools is not None:
+        pool._odograph_role_pools = None
+        await pools.runtime.close()
+        await pools.control.close()
+
+
+async def restricted_role_pools(pool) -> RolePools:
+    """Real control and runtime pools, closed together with privileged `pool`.
+
+    Pools are bound to the test's event loop, so they live on the privileged
+    pool the test already opens and closes, rather than per session.
+    """
+    pools = getattr(pool, "_odograph_role_pools", None)
+    if pools is not None:
+        return pools
+    from app.application_roles import _load_state
+    async with pool.connection() as conn:
+        provisioned = await _is_provisioned(conn)
+    if not provisioned:
+        await provision_test_roles(pool)
+    async with pool.connection() as conn:
+        state = await _load_state(conn)
+    opened = []
+    try:
+        for role in (CONTROL_ROLE, RUNTIME_ROLE):
+            restricted = AsyncConnectionPool(
+                role_conninfo(pool.conninfo, state, role), min_size=1, max_size=6,
+                open=False, name=f"test-{role}")
+            opened.append(restricted)
+            await restricted.open(wait=True, timeout=10)
+    except BaseException:
+        for restricted in reversed(opened):
+            await restricted.close()
+        raise
+    pools = RolePools(control=opened[0], runtime=opened[1])
+    pool._odograph_role_pools = pools
+    if not hasattr(pool, "_odograph_close"):
+        pool._odograph_close = pool.close
+
+        async def close(*args, **kwargs):
+            try:
+                await close_restricted_role_pools(pool)
+            finally:
+                await pool._odograph_close(*args, **kwargs)
+
+        pool.close = close
+    return pools
+
+
+async def bootstrap_test_account(pool, *, owner_id: int = 41, email="development@localhost.invalid") -> FixtureAccountPool:
+    """Create a real owner explicitly; no production default owner is added.
+
+    `pool` is the privileged test pool. The returned account pool runs on the
+    restricted runtime role, where row-level security is enforced.
+    """
     from app.accounts import create_admin
     from app.local_auth import hash_password
     async with pool.connection() as conn:
@@ -267,10 +369,41 @@ async def bootstrap_test_account(pool, *, owner_id: int = 41, email="development
         # Existing personal fixtures name their default vehicle explicitly as 1.
         await conn.execute("SELECT setval(pg_get_serial_sequence('vehicles','id'), 1, false)")
         account = await create_admin(conn, email, hash_password("test-password"))
-    return AccountPool(pool, AccountPrincipal(account["id"], account["is_enabled"], account["auth_version"]))
+    return await account_pool(pool, account["id"], account["is_enabled"], account["auth_version"])
 
 
-async def reset_account_db(pool, **kwargs) -> AccountPool:
+async def account_pool(pool, owner: int, enabled: bool = True, auth_version: int = 1) -> FixtureAccountPool:
+    """Bind an existing account to the restricted runtime role."""
+    pools = await restricted_role_pools(pool)
+    return FixtureAccountPool(pools.runtime, AccountPrincipal(owner, enabled, auth_version),
+                              control_pool=pools.control, admin_pool=pool)
+
+
+async def add_test_account(pool, owner: int, *, email: str | None = None, admin: bool = False) -> FixtureAccountPool:
+    """Add a second account with the production defaults, for isolation tests.
+
+    Test-only: production keeps both the singleton guard and the admin-only
+    check. reset_db() recreates both guards once the accounts are gone.
+    """
+    async with pool.connection() as conn:
+        await conn.execute("DROP INDEX IF EXISTS accounts_singleton_idx")
+        await conn.execute("ALTER TABLE accounts DROP CONSTRAINT IF EXISTS accounts_is_admin_check")
+        await conn.execute(
+            "INSERT INTO accounts(id,email,password_hash,is_admin) VALUES (%s,%s,'unused',%s)",
+            (owner, email or f"account-{owner}@example.invalid", admin))
+        # The same defaults scripts/sql/account_bootstrap.sql gives an owner.
+        await conn.execute("INSERT INTO account_settings(account_id) VALUES (%s)", (owner,))
+        await conn.execute("INSERT INTO vehicles(account_id,name,is_default) VALUES (%s,'My Car',true)", (owner,))
+        await conn.execute(
+            "INSERT INTO tag_rules(account_id,a_kind,b_kind,category) "
+            "VALUES (%s,'home','work','personal'),(%s,'work','work','business')", (owner, owner))
+        await conn.execute(
+            "INSERT INTO mileage_rates(account_id,year,rate_per_mi,rate_h2_per_mi,h2_start_month) "
+            "SELECT %s,year,rate_per_mi,rate_h2_per_mi,h2_start_month FROM reference_mileage_rates", (owner,))
+    return await account_pool(pool, owner)
+
+
+async def reset_account_db(pool, **kwargs) -> FixtureAccountPool:
     await reset_db(pool)
     return await bootstrap_test_account(pool, **kwargs)
 
@@ -385,6 +518,7 @@ def _migrated_schema() -> None:
         await pool.open(wait=True)
         try:
             await full_schema_reset(pool)
+            await provision_test_roles(pool)
             snapshot = await capture_seed_snapshot(pool)
             _seed_snapshot.update(snapshot)
             _seed_snapshot.sequences.update(snapshot.sequences)
