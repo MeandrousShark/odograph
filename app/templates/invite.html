@@ -3,15 +3,24 @@
 {% block early_head %}
 <script nonce="{{ csp_nonce }}">
   (function () {
-    var token = "";
-    if (window.location.hash) {
+    var pendingToken = null;
+    function consumeFragment() {
+      if (!window.location.hash) return;
       var fragment = new URLSearchParams(window.location.hash.slice(1));
-      token = fragment.get("token") || "";
+      var token = fragment.get("token");
       window.history.replaceState(null, "", "/invite");
+      if (token === null) return;
+      var field = document.getElementById("invitation-token");
+      if (field) field.value = token;
+      else pendingToken = token;
     }
+    window.addEventListener("hashchange", consumeFragment);
+    consumeFragment();
     window.addEventListener("DOMContentLoaded", function () {
-      if (token) document.getElementById("invitation-token").value = token;
-      token = "";
+      if (pendingToken !== null) {
+        document.getElementById("invitation-token").value = pendingToken;
+        pendingToken = null;
+      }
     });
   })();
 </script>
