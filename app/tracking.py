@@ -3,14 +3,44 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import re
 import secrets
+import string
 from dataclasses import dataclass, field
 
+from psycopg.errors import UniqueViolation
 from psycopg.rows import dict_row
 
 from app.account_context import AccountPrincipal, account_id, control_connection
 from app.db import TRACKING_PROVISION_LOCK_KEY
 from app.local_auth import hash_password, verify_password
+
+# Readable Basic usernames such as "work-iphone-7k3q". `public_id` stays
+# opaque because rotate and revoke URLs use it.
+_SLUG_DASH_RUN = re.compile(r"[^a-z0-9]+")
+_SLUG_MAX_LEN = 20
+_SLUG_FALLBACK = "device"
+_SUFFIX_ALPHABET = string.ascii_lowercase + string.digits
+_SUFFIX_LEN = 4
+_BASIC_USERNAME_CONSTRAINT = "ingest_credentials_basic_username_key"
+_MAX_USERNAME_ATTEMPTS = 5
+
+
+def slugify_label(label: str) -> str:
+    """Lowercase [a-z0-9] runs joined by single dashes, capped, or "device"."""
+    slug = _SLUG_DASH_RUN.sub("-", label.lower()).strip("-")
+    if len(slug) > _SLUG_MAX_LEN:
+        slug = slug[:_SLUG_MAX_LEN].rstrip("-")
+    return slug or _SLUG_FALLBACK
+
+
+def _random_suffix() -> str:
+    """Module-level so tests can force a collision."""
+    return "".join(secrets.choice(_SUFFIX_ALPHABET) for _ in range(_SUFFIX_LEN))
+
+
+def _new_basic_username(label: str) -> str:
+    return f"{slugify_label(label)}-{_random_suffix()}"
 
 
 class TrackingUnavailable(ValueError):
@@ -160,18 +190,34 @@ async def resolve_ingest_stream(
     return stream
 
 
-async def _issue_credential(conn, tracking_device_id: int) -> IssuedCredential:
+async def _issue_credential(conn, tracking_device_id: int, label: str) -> IssuedCredential:
+    """Issue a device credential, retrying a username collision.
+
+    Each attempt runs in a savepoint. Usernames are unique across accounts,
+    which RLS hides from a SELECT, so the insert itself is the check. When
+    attempts run out, the caller's transaction rolls back the new device.
+    """
     owner = account_id(conn)
     public_id = "odograph_" + secrets.token_urlsafe(18)
     secret = secrets.token_urlsafe(32)
     secret_hash = await asyncio.to_thread(hash_password, secret)
-    await conn.execute(
-        "INSERT INTO ingest_credentials "
-        "(public_id, basic_username, secret_hash, account_id, tracking_device_id, kind) "
-        "VALUES (%s, %s, %s, %s, %s, 'device')",
-        (public_id, public_id, secret_hash, owner, tracking_device_id),
-    )
-    return IssuedCredential(public_id, public_id, secret, tracking_device_id)
+    for attempt in range(_MAX_USERNAME_ATTEMPTS):
+        basic_username = _new_basic_username(label)
+        try:
+            async with conn.transaction():
+                await conn.execute(
+                    "INSERT INTO ingest_credentials "
+                    "(public_id, basic_username, secret_hash, account_id, tracking_device_id, kind) "
+                    "VALUES (%s, %s, %s, %s, %s, 'device')",
+                    (public_id, basic_username, secret_hash, owner, tracking_device_id),
+                )
+            return IssuedCredential(public_id, basic_username, secret, tracking_device_id)
+        except UniqueViolation as exc:
+            if getattr(exc.diag, "constraint_name", None) != _BASIC_USERNAME_CONSTRAINT:
+                raise
+            if attempt == _MAX_USERNAME_ATTEMPTS - 1:
+                raise ValueError("Could not create a tracking credential. Try again.") from exc
+    raise AssertionError("unreachable: the loop above always returns or raises")
 
 
 async def create_device(conn, label: str) -> IssuedCredential:
@@ -189,7 +235,7 @@ async def create_device(conn, label: str) -> IssuedCredential:
         "INSERT INTO detector_state (account_id, tracking_device_id) VALUES (%s, %s)",
         (owner, device_id),
     )
-    return await _issue_credential(conn, device_id)
+    return await _issue_credential(conn, device_id, label)
 
 
 async def convert_legacy_device(conn, tracking_device_id: int) -> IssuedCredential:
@@ -197,11 +243,13 @@ async def convert_legacy_device(conn, tracking_device_id: int) -> IssuedCredenti
     owner = account_id(conn)
     await _provision_lock(conn)
     cur = await conn.execute(
-        "SELECT id FROM tracking_devices WHERE account_id = %s AND id = %s "
+        "SELECT label FROM tracking_devices WHERE account_id = %s AND id = %s "
         "AND enabled AND revoked_at IS NULL", (owner, tracking_device_id),
     )
-    if await cur.fetchone() is None:
+    row = await cur.fetchone()
+    if row is None:
         raise TrackingNotFound("No such tracking device")
+    label = row[0]
     cur = await conn.execute(
         "UPDATE tracking_device_aliases SET enabled = false "
         "WHERE account_id = %s AND tracking_device_id = %s AND enabled RETURNING original_label",
@@ -209,7 +257,7 @@ async def convert_legacy_device(conn, tracking_device_id: int) -> IssuedCredenti
     )
     if not await cur.fetchall():
         raise TrackingNotFound("No active legacy aliases for this device")
-    return await _issue_credential(conn, tracking_device_id)
+    return await _issue_credential(conn, tracking_device_id, label)
 
 
 async def rotate_credential(conn, public_id: str) -> IssuedCredential:

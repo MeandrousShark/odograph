@@ -1,5 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Tracking: Odograph{% endblock %}
+{% block head %}
+  <script src="/static/tracking_copy.js"></script>
+{% endblock %}
 {% block content %}
 <div class="settings-page">
   <div class="settings-page-header page-title">
@@ -15,9 +18,13 @@
     <h2 id="setup-heading">Connect this device</h2>
     <p>Copy these values into OwnTracks using HTTP mode. The password is shown only here, once.
       Save it before leaving this page. Replacing a password immediately stops the old one.</p>
-    <p><label>URL <input readonly value="{{ ingest_url }}" autocomplete="off" spellcheck="false"></label></p>
-    <p><label>User <input readonly value="{{ issued.username }}" autocomplete="off" spellcheck="false"></label></p>
-    <p><label>Password <input readonly value="{{ issued.secret }}" autocomplete="off" spellcheck="false"></label></p>
+    <p><label>URL <input readonly value="{{ ingest_url }}" autocomplete="off" spellcheck="false" id="tracking-setup-url"></label>
+      <button type="button" class="link-button" data-copy-target="tracking-setup-url">Copy</button></p>
+    <p><label>User <input readonly value="{{ issued.username }}" autocomplete="off" spellcheck="false" id="tracking-setup-username"></label>
+      <button type="button" class="link-button" data-copy-target="tracking-setup-username">Copy</button></p>
+    <p><label>Password <input readonly value="{{ issued.secret }}" autocomplete="off" spellcheck="false" id="tracking-setup-password"></label>
+      <button type="button" class="link-button" data-copy-target="tracking-setup-password">Copy</button></p>
+    <p id="tracking-copy-status" class="muted" role="status" aria-live="polite"></p>
     <p class="muted">Your device keeps its trip history when its password changes.
       A tracker label can be reused by other devices without mixing their trips.</p>
   </section>

@@ -57,6 +57,8 @@ def register(router: APIRouter) -> None:
                 issued = await convert_legacy_device(conn, device_id)
         except TrackingNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return await _render_tracking(request, user, issued)
 
     @router.post("/settings/tracking/credentials/{public_id}/rotate")
