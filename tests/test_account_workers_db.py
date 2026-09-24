@@ -12,7 +12,7 @@ import psycopg
 import pytest
 from psycopg import errors
 
-from app.account_context import AccountPool, AccountPrincipal, account_id
+from app.account_context import account_id
 from app.account_settings import AccountSettings
 from app.account_workers import AccountWorker
 from app.db import DETECTOR_ADVISORY_LOCK_KEY, NUDGE_ADVISORY_LOCK_KEY, make_pool
@@ -22,7 +22,7 @@ from app.geocode import GeocodeWorker
 from app.nudge import NudgeWorker
 from app.snap import SnapWorker
 from app.worker import WorkerStatus
-from conftest import reset_account_db, seed_tracking_device
+from conftest import account_pool, reset_account_db, seed_tracking_device
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL for disposable DB tests")
@@ -39,7 +39,7 @@ async def _accounts():
             await conn.execute("DROP INDEX accounts_singleton_idx")
             await conn.execute("INSERT INTO accounts(id,email,password_hash) VALUES(99,'second@example.test','hash')")
             await conn.execute("INSERT INTO account_settings(account_id) VALUES(99)")
-        second = AccountPool(raw, AccountPrincipal(99, True, 1))
+        second = await account_pool(raw, 99)
         yield raw, first, second
     finally:
         async with raw.connection() as conn:
@@ -295,7 +295,7 @@ async def _account_failure_independence():
                     raise RuntimeError("synthetic account failure")
                 async with self.pool.connection() as conn:
                     await conn.execute("INSERT INTO geocode_cache(account_id,lat,lon,address) VALUES(%s,10,20,'completed') ON CONFLICT DO NOTHING", (account_id(conn),))
-        worker=AccountWorker(SimpleNamespace(control=raw,runtime=raw),AccountSettings(ZoneInfo("UTC")),lambda pool,config:Job(pool),label="test",debounce_s=0,sweep_s=60)
+        worker=AccountWorker(SimpleNamespace(control=first.control_pool,runtime=first.runtime_pool),AccountSettings(ZoneInfo("UTC")),lambda pool,config:Job(pool),label="test",debounce_s=0,sweep_s=60)
         await worker._run_guarded()
         assert worker.status.last_failure_at is not None
         assert worker.status.last_success_at is None
@@ -332,7 +332,7 @@ async def _detector_sweep_status(*, contended: bool):
             )
         poked = []
         worker = AccountWorker(
-            SimpleNamespace(control=raw, runtime=raw), AccountSettings(ZoneInfo("UTC")),
+            SimpleNamespace(control=pool.control_pool, runtime=pool.runtime_pool), AccountSettings(ZoneInfo("UTC")),
             lambda account_pool, config: DetectorRunner(account_pool, Params()),
             label="detector-scheduler", debounce_s=0, sweep_s=60,
             after_run=lambda: poked.append("poked"),

@@ -44,7 +44,7 @@ MARKER = "OWNTRACKS-PAYLOAD-MARKER-98765"
 
 def _ingest_app(pool) -> FastAPI:
     app = FastAPI()
-    app.state.control_pool = pool.runtime_pool
+    app.state.control_pool = pool.control_pool
     app.state.runtime_pool = pool.runtime_pool
     app.state.config = SimpleNamespace(
         ingest_username="owntracks", ingest_password="testpw", ingest_max_body_bytes=65536,

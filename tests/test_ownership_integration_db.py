@@ -1,7 +1,7 @@
 """Cross-workflow locks and portable isolation on real restricted roles.
 
-Prepared-mode cases prove explicit query scoping. The policy-enabled case
-activates only its disposable fixture and separately proves database denial.
+Row-level security is enforced, so these cases prove both explicit query
+scoping and database denial of missing-context and cross-account access.
 """
 from __future__ import annotations
 
@@ -294,7 +294,7 @@ def test_batch_and_structural_mutations_wait_for_real_detector_transaction(mutat
 
 
 @pytest.mark.parametrize("notifications_enabled", [False, True])
-def test_prepared_portable_import_export_scope_every_table_and_ignore_bundle_ownership(notifications_enabled):
+def test_portable_import_export_scope_every_table_and_ignore_bundle_ownership(notifications_enabled):
     async def run():
         async with _fixture() as (owner, pools, _state, a, b):
             async with b.connection() as conn:
@@ -349,16 +349,16 @@ def test_prepared_portable_import_export_scope_every_table_and_ignore_bundle_own
             assert normalized is not None and issues == []
             async with owner.connection() as conn:
                 assert (await (await conn.execute("SELECT count(*) FROM trips WHERE NOT imported OR tracking_device_id IS NOT NULL")).fetchone())[0] == 0
-                assert (await (await conn.execute("SELECT bool_or(relrowsecurity OR relforcerowsecurity) FROM pg_class WHERE relname=ANY(%s)", (list(OWNED_TABLES),))).fetchone())[0] is False
-            # This broad SQL deliberately sees both accounts while RLS is off:
-            # the export/import result above therefore proves query scoping.
-            async with pools.runtime.connection() as conn:
+                assert (await (await conn.execute("SELECT bool_and(relrowsecurity AND relforcerowsecurity) FROM pg_class WHERE relnamespace='public'::regnamespace AND relname=ANY(%s)", (list(OWNED_TABLES),))).fetchone())[0] is True
                 assert (await (await conn.execute("SELECT count(*) FROM trips")).fetchone())[0] == 2
+            # Broad SQL without an account context sees neither account's trips.
+            async with pools.runtime.connection() as conn:
+                assert (await (await conn.execute("SELECT count(*) FROM trips")).fetchone())[0] == 0
     asyncio.run(run())
 
 
 @pytest.mark.parametrize("caller", [CONTROL_ROLE, RUNTIME_ROLE])
-def test_prepared_validator_rejects_unexpected_executable_definer(caller):
+def test_validator_rejects_unexpected_executable_definer(caller):
     async def run():
         async with _fixture() as (owner, _pools, state, _a, _b):
             async with owner.connection() as conn:
@@ -459,11 +459,11 @@ def test_idle_sweep_skips_only_pristine_streams_and_keeps_point_free_reconciliat
     asyncio.run(run())
 
 
-def test_disposable_enabled_policies_deny_missing_context_and_cross_account_writes():
+def test_enabled_policies_deny_missing_context_and_cross_account_writes():
     async def run():
         async with _fixture() as (owner, _pools, state, a, b):
-            # Use a real runtime identity without the prepared-mode startup
-            # validator; only this fixture deliberately activates policies.
+            # A plain runtime pool, without the startup validator, shows the
+            # live policies deny on their own.
             runtime = make_pool(role_conninfo(TEST_DB, state, RUNTIME_ROLE))
             await runtime.open(wait=True)
             try:
@@ -473,9 +473,6 @@ def test_disposable_enabled_policies_deny_missing_context_and_cross_account_writ
                     foreign_vehicle, foreign_trip = await (await conn.execute(
                         "SELECT vehicle_id,id FROM trips WHERE account_id=84"
                     )).fetchone()
-                    for table in OWNED_TABLES:
-                        await conn.execute(sql.SQL("ALTER TABLE {} ENABLE ROW LEVEL SECURITY").format(sql.Identifier(table)))
-                        await conn.execute(sql.SQL("ALTER TABLE {} FORCE ROW LEVEL SECURITY").format(sql.Identifier(table)))
                 bound = AccountPool(runtime, a.principal)
                 async with runtime.connection() as conn:
                     assert (await (await conn.execute("SELECT count(*) FROM trips")).fetchone())[0] == 0

@@ -43,7 +43,8 @@ CSRF_RE = re.compile(r'X-CSRF-Token": "([^"]+)"')
 def _bare_app(pool) -> FastAPI:
     app = FastAPI()
     app.state.pool = pool
-    app.state.runtime_pool = app.state.control_pool = pool.runtime_pool
+    app.state.runtime_pool = pool.runtime_pool
+    app.state.control_pool = pool.control_pool
     app.state.dev_principal = pool.principal
     app.state.make_detector_runner = lambda bound: DetectorRunner(bound, Params())
     with patch.dict(os.environ, {
