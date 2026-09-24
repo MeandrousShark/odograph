@@ -18,7 +18,7 @@ import shutil
 
 import pytest
 
-from psycopg import sql
+from psycopg import errors, sql
 
 import app.db as db_module
 from app import application_roles
@@ -39,17 +39,23 @@ PROVISIONED_SCHEMAS = pytest.mark.parametrize("provisioned_schema", [PREPARED_SC
 
 
 async def _provision(pool, monkeypatch, schema):
+    # Reproduce the role contract that existed before invitations were added.
+    with monkeypatch.context() as patch:
+        control_tables = tuple(table for table in application_roles.CONTROL_TABLES if table != "invitations")
+        patch.setattr(application_roles, "CONTROL_TABLES", control_tables)
+        patch.setattr(application_roles, "TABLES", application_roles.OWNED_TABLES + control_tables + application_roles.REFERENCE_TABLES)
+        patch.setattr(application_roles, "FUNCTIONS", {
+            key: value for key, value in application_roles.FUNCTIONS.items()
+            if key not in application_roles.INVITATION_FUNCTIONS
+        })
+        patch.setattr(application_roles, "FUNCTION_FILES", application_roles.FUNCTION_FILES[:3])
+        patch.setattr(application_roles, "INVITATION_FUNCTIONS", ())
+        if schema < ACTIVATED_SCHEMA:
+            patch.setattr(application_roles, "CONTRACT_VERSION", "ownership-prepared-v1")
+        await prepare_application_roles(TEST_DB)
     if schema >= ACTIVATED_SCHEMA:
-        await prepare_application_roles(TEST_DB)
         return
-    # Reproduce what the prepared release provisioned: its contract version,
-    # with every account policy present but row-level security disabled.
-    activated = application_roles.CONTRACT_VERSION
-    application_roles.CONTRACT_VERSION = "ownership-prepared-v1"
-    try:
-        await prepare_application_roles(TEST_DB)
-    finally:
-        application_roles.CONTRACT_VERSION = activated
+    # Schema 26 had every account policy prepared but not yet enforced.
     async with pool.connection() as conn:
         for table in OWNED_TABLES:
             ident = sql.Identifier(table)
@@ -131,3 +137,39 @@ def test_table_added_without_its_contract_refuses_upgraded_start(monkeypatch, tm
         tmp_path, "upgraded", extra={"999_contract_probe.sql": "CREATE TABLE contract_probe(id int);"})
     asyncio.run(_upgrade_after_provisioning(
         monkeypatch, provisioned_schema, provisioned, upgraded, start_again))
+
+
+def test_failed_029_rolls_back_objects_and_grants(monkeypatch, tmp_path):
+    async def run():
+        pool = make_pool(TEST_DB)
+        await pool.open(wait=True)
+        try:
+            await drop_and_recreate_schema(pool)
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", _migration_dir(tmp_path, "before_029", through=28))
+            await run_migrations(pool)
+            await _provision(pool, monkeypatch, ACTIVATED_SCHEMA)
+            async with pool.connection() as conn:
+                before_roles = await (await conn.execute(
+                    "SELECT rolname,rolsuper,rolbypassrls,rolcanlogin FROM pg_roles "
+                    "WHERE rolname LIKE 'odograph_%' ORDER BY rolname")).fetchall()
+            failing_sql = (MIGRATIONS_DIR / "029_invitations.sql").read_text()
+            failing_sql += "\nDO $$ BEGIN RAISE EXCEPTION 'forced 029 failure'; END $$;\n"
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", _migration_dir(
+                tmp_path, "failed_029", extra={"029_invitations.sql": failing_sql}))
+            with pytest.raises(errors.RaiseException, match="forced 029 failure"):
+                await run_migrations(pool)
+            async with pool.connection() as conn:
+                assert await (await conn.execute("SELECT max(version) FROM schema_migrations")).fetchone() == (28,)
+                assert await (await conn.execute("SELECT to_regclass('public.invitations')")).fetchone() == (None,)
+                assert await (await conn.execute(
+                    "SELECT to_regprocedure('public.issue_member_invitation(bigint,text,text)'), "
+                    "to_regprocedure('public.redeem_member_invitation(text,text,text)')")).fetchone() == (None, None)
+                after_roles = await (await conn.execute(
+                    "SELECT rolname,rolsuper,rolbypassrls,rolcanlogin FROM pg_roles "
+                    "WHERE rolname LIKE 'odograph_%' ORDER BY rolname")).fetchall()
+                assert after_roles == before_roles
+        finally:
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
+            await full_schema_reset(pool)
+            await pool.close()
+    asyncio.run(run())

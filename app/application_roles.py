@@ -32,7 +32,7 @@ OWNED_TABLES = (
     "odometer_reminder_windows", "email_deliveries", "account_settings",
     "tracking_devices", "tracking_device_aliases", "ingest_credentials",
 )
-CONTROL_TABLES = ("accounts", "oidc_identities", "instance_state")
+CONTROL_TABLES = ("accounts", "oidc_identities", "instance_state", "invitations")
 REFERENCE_TABLES = ("schema_migrations", "reference_mileage_rates")
 TABLES = OWNED_TABLES + CONTROL_TABLES + REFERENCE_TABLES
 CREDENTIAL_COLUMNS = (
@@ -49,12 +49,21 @@ COLUMN_SELECT = {
 }
 BOOTSTRAP_INSERT_TABLES = ("accounts", "account_settings", "vehicles", "tag_rules", "mileage_rates")
 BOOTSTRAP_LOCK_TABLES = ("accounts", "ingest_credentials", "tracking_devices", "tracking_device_aliases")
+INVITATION_FUNCTIONS = (
+    "public.issue_member_invitation(bigint,text,text)",
+    "public.redeem_member_invitation(text,text,text)",
+)
 SQL_DIR = Path(__file__).resolve().parents[1] / "scripts" / "sql"
-FUNCTION_FILES = ("account_bootstrap.sql", "account_admission.sql", "tracking_admission.sql")
+FUNCTION_FILES = (
+    "account_bootstrap.sql", "account_admission.sql", "tracking_admission.sql",
+    "member_invitations.sql",
+)
 FUNCTIONS = {
     "public.bootstrap_first_account(text,text,text)": CONTROL_ROLE,
     "public.assert_account_active(bigint,bigint)": RUNTIME_ROLE,
     "public.assert_tracking_credential(text,bigint,bigint,bigint,text)": RUNTIME_ROLE,
+    INVITATION_FUNCTIONS[0]: CONTROL_ROLE,
+    INVITATION_FUNCTIONS[1]: CONTROL_ROLE,
 }
 PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER")
 
@@ -114,6 +123,8 @@ def _table_rights(role: str, table: str) -> set[str]:
             return {"SELECT"}
     if role == BOOTSTRAP_ROLE:
         rights = set()
+        if table == "invitations":
+            return {"SELECT", "INSERT", "UPDATE"}
         if table in BOOTSTRAP_INSERT_TABLES:
             rights.add("INSERT")
         if table in BOOTSTRAP_LOCK_TABLES or table == "instance_state":
@@ -331,12 +342,24 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
             bad_privileges = [privilege for privilege, allowed in await cur.fetchall()
                               if allowed != (privilege == "SELECT" and table == "recovery_metadata" and role in (RUNTIME_ROLE, CONTROL_ROLE))]
             _require_contract(not bad_privileges, f"table privilege: {role} {STATE_SCHEMA}.{table} {bad_privileges}")
-    for function, filename in zip(FUNCTIONS, FUNCTION_FILES, strict=True):
+    for function, filename in zip(tuple(FUNCTIONS)[:3], FUNCTION_FILES[:3], strict=True):
         cur = await conn.execute(
             "SELECT pg_get_userbyid(proowner),prosecdef,proconfig,prosrc FROM pg_proc WHERE oid=%s::regprocedure", (function,))
         row = await cur.fetchone()
         source = (SQL_DIR / filename).read_text()
         body = re.search(r"AS\s+(\$[a-z_]*\$)(.*?)\1", source, re.S | re.I).group(2)
+        _require_contract(row == (BOOTSTRAP_ROLE, True, ["search_path=pg_catalog, pg_temp"], body),
+            f"function definition: {function}")
+    invitation_source = (SQL_DIR / "member_invitations.sql").read_text()
+    for function in INVITATION_FUNCTIONS:
+        name = function.split("(", 1)[0]
+        cur = await conn.execute(
+            "SELECT pg_get_userbyid(proowner),prosecdef,proconfig,prosrc FROM pg_proc WHERE oid=%s::regprocedure",
+            (function,))
+        row = await cur.fetchone()
+        body = re.search(
+            rf"CREATE OR REPLACE FUNCTION {re.escape(name)}\(.*?AS\s+(\$body\$)(.*?)\1",
+            invitation_source, re.S | re.I).group(2)
         _require_contract(row == (BOOTSTRAP_ROLE, True, ["search_path=pg_catalog, pg_temp"], body),
             f"function definition: {function}")
 
