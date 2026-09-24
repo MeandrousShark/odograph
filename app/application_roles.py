@@ -1,7 +1,9 @@
-"""Managed identities and the prepared ownership security contract.
+"""Managed identities and the activated ownership security contract.
 
 The isolated P0 fixture keeps its own validator. This module validates the
-live schema exactly: account policies exist, but RLS is still disabled.
+live schema exactly: every account-owned table has its account policies with
+row-level security enabled and forced, while control and reference tables
+have no row-level security.
 """
 from __future__ import annotations
 
@@ -21,7 +23,7 @@ from app.role_setup import (
     _SafeConnection, _identities, _policy_expression, role_conninfo,
 )
 
-CONTRACT_VERSION = "ownership-prepared-v1"
+CONTRACT_VERSION = "ownership-activated-v1"
 STATE_SCHEMA = "odograph_service"
 OWNED_TABLES = (
     "raw_messages", "points", "stays", "trips", "detector_state", "places",
@@ -149,7 +151,8 @@ async def _load_state(conn) -> ManagedRoleState:
         "runtime_password,control_password FROM odograph_service.managed_role_state WHERE id=1"
     )
     row = await cur.fetchone()
-    _require(row is not None and row[2:4] == (CONTRACT_VERSION, MIGRATE_ROLE))
+    _require_contract(row is not None and row[2:4] == (CONTRACT_VERSION, MIGRATE_ROLE),
+                      "managed role state version or owner")
     _require(all(isinstance(value, str) and len(value) >= 32 for value in row[4:]))
     return ManagedRoleState(*row)
 
@@ -180,6 +183,10 @@ async def _provision(conn) -> None:
             if rights:
                 await conn.execute(sql.SQL("GRANT {} ON {} TO {}").format(
                     sql.SQL(",".join(sorted(rights))), ident, sql.Identifier(role)))
+    for table in OWNED_TABLES:
+        ident = sql.Identifier("public", table)
+        await conn.execute(sql.SQL("ALTER TABLE {} ENABLE ROW LEVEL SECURITY").format(ident))
+        await conn.execute(sql.SQL("ALTER TABLE {} FORCE ROW LEVEL SECURITY").format(ident))
     for (role, table), columns in COLUMN_SELECT.items():
         await conn.execute(sql.SQL("GRANT SELECT ({}) ON {} TO {}").format(
             sql.SQL(",").join(map(sql.Identifier, columns)), sql.Identifier("public", table), sql.Identifier(role)))
@@ -224,7 +231,8 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
     found_tables = {row[0] for row in rows}
     _require_contract(found_tables == set(TABLES),
         f"relation set: unexpected {sorted(found_tables - set(TABLES))} missing {sorted(set(TABLES) - found_tables)}")
-    bad_relations = [row[0] for row in rows if row[1:] != (MIGRATE_ROLE, False, False)]
+    bad_relations = sorted(row[0] for row in rows
+                           if row[1:] != (MIGRATE_ROLE, row[0] in OWNED_TABLES, row[0] in OWNED_TABLES))
     _require_contract(not bad_relations, f"relation ownership or RLS flags: {bad_relations}")
     cur = await conn.execute(
         "SELECT p.oid::regprocedure::text FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace "
@@ -338,7 +346,7 @@ async def prepare_application_roles(database_url: str, *, restoring: bool = Fals
         async with await _SafeConnection.connect(database_url) as conn:
             await conn.execute("SELECT pg_advisory_xact_lock(%s)", (ROLE_SETUP_ADVISORY_LOCK_KEY,))
             cur = await conn.execute("SELECT security_contract_version FROM public.instance_state WHERE id=1")
-            _require(await cur.fetchone() == (CONTRACT_VERSION,))
+            _require_contract(await cur.fetchone() == (CONTRACT_VERSION,), "security contract version")
             cur = await conn.execute("SELECT to_regclass('odograph_service.managed_role_state')")
             new = (await cur.fetchone())[0] is None
             if new or restoring:

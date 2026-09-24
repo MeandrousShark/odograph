@@ -8,14 +8,14 @@ import traceback
 import httpx
 
 import pytest
-from psycopg import errors
+from psycopg import errors, sql
 
 from app import application_roles
 from app.account_context import AccountPool, AccountPrincipal, account_id
 from app.accounts import create_admin
 from app.application_roles import (
-    OWNED_TABLES, application_role_pools, prepare_application_roles,
-    validate_application_contract,
+    CONTROL_TABLES, OWNED_TABLES, REFERENCE_TABLES, TABLES, application_role_pools,
+    prepare_application_roles, validate_application_contract,
 )
 from app.db import make_pool
 from app.role_setup import RoleSetupError
@@ -54,23 +54,24 @@ def test_live_pools_bootstrap_scoping_and_prepared_privileges():
                 with pytest.raises(errors.InsufficientPrivilege):
                     async with conn.transaction():
                         await conn.execute(statement)
-        # Policies are intentionally disabled at this stage. Direct runtime SQL
-        # does not claim missing-context denial until the activation package.
+        # Direct runtime SQL without an account context sees no owned rows.
         async with pools.runtime.connection() as conn:
-            assert (await (await conn.execute("SELECT count(*) FROM vehicles")).fetchone())[0] == 1
+            assert (await (await conn.execute("SELECT count(*) FROM vehicles")).fetchone())[0] == 0
             assert (await (await conn.execute("SELECT NULLIF(current_setting('app.account_id',true),'')")).fetchone())[0] is None
         async with owner.connection() as conn:
-            cur = await conn.execute("SELECT bool_or(relrowsecurity OR relforcerowsecurity) FROM pg_class WHERE relname=ANY(%s)", (list(OWNED_TABLES),))
-            assert await cur.fetchone() == (False,)
+            assert (await (await conn.execute("SELECT count(*) FROM vehicles")).fetchone())[0] == 1
+            cur = await conn.execute("SELECT bool_and(relrowsecurity AND relforcerowsecurity) FROM pg_class "
+                                     "WHERE relnamespace='public'::regnamespace AND relname=ANY(%s)", (list(OWNED_TABLES),))
+            assert await cur.fetchone() == (True,)
     asyncio.run(_scenario(check))
 
 
-def test_prepared_validator_rejects_policy_or_activation_drift():
+def test_activated_validator_rejects_policy_or_activation_drift():
     async def check(owner, pools, state):
         async with owner.connection() as conn:
             with pytest.raises(RoleSetupError, match="relation ownership or RLS flags"):
                 async with conn.transaction(force_rollback=True):
-                    await conn.execute("ALTER TABLE trips ENABLE ROW LEVEL SECURITY")
+                    await conn.execute("ALTER TABLE trips DISABLE ROW LEVEL SECURITY")
                     await validate_application_contract(conn, state)
             with pytest.raises(RoleSetupError, match="policy set"):
                 async with conn.transaction(force_rollback=True):
@@ -136,4 +137,101 @@ def test_normal_signup_and_personal_pages_use_restricted_pools(monkeypatch):
                 result = await client.post("/settings/tracking/devices", data={"label": "Phone", "csrf_token": csrf})
                 assert result.status_code == 200
                 assert "Phone" in result.text
+    asyncio.run(_scenario(check))
+
+
+def test_activated_flags_are_exactly_forced_rls_on_owned_tables():
+    async def check(owner, pools, state):
+        async with owner.connection() as conn:
+            cur = await conn.execute(
+                "SELECT relname,relrowsecurity,relforcerowsecurity FROM pg_class "
+                "WHERE relnamespace='public'::regnamespace AND relname=ANY(%s)", (list(TABLES),))
+            flags = {name: (enabled, forced) for name, enabled, forced in await cur.fetchall()}
+            assert flags == {table: (table in OWNED_TABLES,) * 2 for table in TABLES}
+            cur = await conn.execute("SELECT security_contract_version FROM instance_state")
+            assert await cur.fetchall() == [("ownership-activated-v1",)]
+            for table in ("managed_role_state", "recovery_metadata"):
+                cur = await conn.execute(sql.SQL("SELECT contract_version FROM {}").format(
+                    sql.Identifier("odograph_service", table)))
+                assert await cur.fetchall() == [("ownership-activated-v1",)]
+    asyncio.run(_scenario(check))
+
+
+def test_validator_names_each_owned_table_missing_enable_or_force():
+    async def check(owner, pools, state):
+        async with owner.connection() as conn:
+            for table in OWNED_TABLES:
+                for change in ("DISABLE ROW LEVEL SECURITY", "NO FORCE ROW LEVEL SECURITY"):
+                    with pytest.raises(RoleSetupError, match=rf"relation ownership or RLS flags: \['{table}'\]$"):
+                        async with conn.transaction(force_rollback=True):
+                            await conn.execute(sql.SQL("ALTER TABLE {} " + change).format(sql.Identifier(table)))
+                            await validate_application_contract(conn, state)
+            await validate_application_contract(conn, state)
+    asyncio.run(_scenario(check))
+
+
+def test_validator_names_rls_on_each_control_or_reference_table():
+    async def check(owner, pools, state):
+        async with owner.connection() as conn:
+            for table in CONTROL_TABLES + REFERENCE_TABLES:
+                for change in ("ENABLE ROW LEVEL SECURITY", "FORCE ROW LEVEL SECURITY"):
+                    with pytest.raises(RoleSetupError, match=rf"relation ownership or RLS flags: \['{table}'\]$"):
+                        async with conn.transaction(force_rollback=True):
+                            await conn.execute(sql.SQL("ALTER TABLE {} " + change).format(sql.Identifier(table)))
+                            await validate_application_contract(conn, state)
+    asyncio.run(_scenario(check))
+
+
+POLICY_DRIFT = (
+    ("DROP POLICY account_isolation ON vehicles", r"policy set: unexpected \[\] missing \[\('vehicles', 'account_isolation'\)\]$"),
+    ("DROP POLICY control_lookup ON tracking_devices", r"missing \[\('tracking_devices', 'control_lookup'\)\]$"),
+    ("ALTER POLICY account_isolation ON trips USING (true)", "policy set: trips.account_isolation using expression$"),
+    ("ALTER POLICY account_isolation ON trips WITH CHECK (account_id > 0)", "policy set: trips.account_isolation check expression$"),
+    ("ALTER POLICY account_isolation ON points TO odograph_control", "policy set: points.account_isolation$"),
+    ("CREATE POLICY extra ON stays FOR SELECT TO odograph_runtime USING (true)", r"unexpected \[\('stays', 'extra'\)\]"),
+)
+
+
+def test_validator_names_a_missing_or_altered_policy():
+    async def check(owner, pools, state):
+        async with owner.connection() as conn:
+            for statement, cause in POLICY_DRIFT:
+                with pytest.raises(RoleSetupError, match=cause):
+                    async with conn.transaction(force_rollback=True):
+                        await conn.execute(statement)
+                        await validate_application_contract(conn, state)
+    asyncio.run(_scenario(check))
+
+
+VERSION_DRIFT = (
+    ("ALTER TABLE instance_state DROP CONSTRAINT instance_state_security_contract_version_check;"
+     "UPDATE instance_state SET security_contract_version='ownership-prepared-v1'",
+     "UPDATE instance_state SET security_contract_version='ownership-activated-v1';"
+     "ALTER TABLE instance_state ADD CONSTRAINT instance_state_security_contract_version_check "
+     "CHECK (security_contract_version='ownership-activated-v1')",
+     "security contract version"),
+    ("UPDATE odograph_service.managed_role_state SET contract_version='ownership-prepared-v1'",
+     "UPDATE odograph_service.managed_role_state SET contract_version='ownership-activated-v1'",
+     "managed role state version or owner"),
+    ("UPDATE odograph_service.recovery_metadata SET contract_version='ownership-prepared-v1'",
+     "UPDATE odograph_service.recovery_metadata SET contract_version='ownership-activated-v1'",
+     "recovery metadata"),
+)
+
+
+def test_startup_refuses_a_security_contract_version_mismatch():
+    async def check(owner, pools, state):
+        for statement, restore, cause in VERSION_DRIFT:
+            async with owner.connection() as conn:
+                await conn.execute(statement)
+            try:
+                with pytest.raises(RoleSetupError, match=f"security contract mismatch: {cause}$"):
+                    await prepare_application_roles(TEST_DB)
+                with pytest.raises(RoleSetupError, match=f"security contract mismatch: {cause}$"):
+                    async with application_role_pools(TEST_DB):
+                        pass
+            finally:
+                async with owner.connection() as conn:
+                    await conn.execute(restore)
+            await prepare_application_roles(TEST_DB)
     asyncio.run(_scenario(check))
