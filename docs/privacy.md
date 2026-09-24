@@ -117,8 +117,7 @@ Private HTML responses use `no-store`; HTMX history snapshots are disabled.
 The browser stores an account marker, without credentials or location data,
 to reload stale pages after an account change in another tab. This prevents
 accidental stale-page reuse, not access by someone who controls the browser.
-The deployment remains single-account, with row-level security prepared but
-not enabled.
+The deployment remains single-account, with row-level security enforced.
 
 ## Logging
 

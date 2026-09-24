@@ -3,8 +3,9 @@
 The application binds personal work to an immutable principal and the
 transaction-local database setting every row-level security policy reads,
 with a separate control entry point for identity work and a privilege check
-that refuses roles capable of defeating those policies. Personal queries
-also scope rows explicitly while live policy activation remains staged.
+that refuses roles capable of defeating those policies. Row-level security
+is enforced on every account-owned table, and personal queries also scope
+rows explicitly.
 
 Two properties are load-bearing and easy to get wrong.
 
@@ -359,9 +360,8 @@ async def check_runtime_privileges(
 ) -> None:
     """Raise `RuntimePrivilegeError` if the connected role is unsafe.
 
-    Not wired into application startup by this change. It exists so the
-    wiring, when it lands, has a checked primitive to call rather than an
-    inline query written under deadline.
+    `app.application_roles` runs this on every restricted control and
+    runtime connection before a pool hands it out.
     """
     problems = await runtime_privilege_problems(conn, schemas=schemas)
     if problems:

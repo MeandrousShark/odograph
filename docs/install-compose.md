@@ -223,8 +223,8 @@ corrections, and reports.
 
 Startup uses the privileged database URL to migrate and provision managed
 restricted roles, then closes the setup connection. Personal data is explicitly
-account-scoped, but row-level security remains disabled in this prepared
-stage and the singleton account guard remains. Follow the
+account-scoped and enforced by row-level security; the singleton account
+guard remains. Follow the
 [database role and preference contract](configuration.md#account-ownership-and-database-roles)
 when configuring an external database or upgrading an existing installation.
 

@@ -10,8 +10,8 @@ document is about who can reach the application and what it does with what
 they send it, not about outbound data flows.
 
 This remains a single-account, self-hosted application. Account ownership is
-explicit in queries and restricted database roles are active, but row-level
-security policies are only prepared, not enabled or forced. The singleton
+explicit in queries, restricted database roles are active, and row-level
+security is enabled and forced on every account-owned table. The singleton
 account guard remains and invitations are unavailable. This stage must not be
 operated as a multi-user service. The operator is trusted and controls the host
 and database; nothing here defends against a hostile operator.
@@ -140,8 +140,8 @@ login, signup, and Account Settings forms that can't set custom headers.
 Startup closes the privileged migration/setup connection before serving
 requests. Identity operations use `odograph_control`; personal routes and
 workers use `odograph_runtime` with an immutable principal and transaction-local
-account context. Every personal query still filters ownership explicitly,
-because the prepared policies are disabled. Composite foreign keys reject
+account context. Row-level security denies rows outside that context, and
+every personal query also filters ownership explicitly. Composite foreign keys reject
 cross-account references. The live role contract and saved credentials must
 validate exactly; there is no privileged fallback for failed startup checks.
 See [Database roles](configuration.md#account-ownership-and-database-roles).

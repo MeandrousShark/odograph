@@ -165,18 +165,19 @@ you; start it yourself once you're satisfied, so its own startup migrations
 (if the target release differs from the one that made the backup) run under
 your observation.
 
-For a schema-26 archive containing `odograph_service`, use the matching
+For a schema-26 or later archive containing `odograph_service`, use the matching
 application image and scripts. Before loading SQL, the script creates the
 required roles with login disabled. After the data commits, a one-off app
 command reconstructs ownership, permissions, and restricted-role credentials
-from the archived state, then validates the security contract. This retains
-the archive's prepared RLS policies and disabled enforcement flags; restoring
-a backup does not activate RLS. Older archives do not run these commands.
+from the archived state, then validates the security contract, including
+enforced RLS from schema 28. An archive taken before schema 28 must be restored
+with its matching image, then upgraded. Older archives do not run these
+commands.
 
 If the security reconstruction fails after SQL commits, keep the app stopped.
 The script reports that data was restored but security validation failed;
 this is not a successful restore. Correct the image or configuration and
-restore into another fresh target. Do not grant broad permissions or enable
+restore into another fresh target. Do not grant broad permissions or change
 RLS manually to get past the check.
 
 When changing the PostGIS database image, keep the old project and volume

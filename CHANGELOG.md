@@ -25,10 +25,13 @@ reproduced here.
   the installation's established account, preserving its IDs and history.
   Requests, workers, and portable operations use explicit account-bound
   connections under restricted database roles whose exact permissions are
-  validated at startup. RLS policies are prepared with enforcement disabled,
-  and the installation remains single-account. The migration refuses a
-  populated database that has no account; follow the
+  validated at startup. The installation remains single-account. The
+  migration refuses a populated database that has no account; follow the
   [schema 26 upgrade notes](docs/upgrading.md#account-ownership-migration-schema-26).
+- The `DATABASE_URL` role must be a superuser or have `BYPASSRLS`. Startup
+  refuses to run migrations as any other role, because forced row-level
+  security would make a data migration silently skip rows. The canonical
+  Compose `mileage` role already qualifies.
 - Personal settings and mileage-rate overrides are imported once from the old
   configuration and are then changed in Settings. Editing their environment
   variables no longer overrides stored preferences.
@@ -65,6 +68,10 @@ reproduced here.
 - Schema 27 deletes the `dump` and `configuration` messages that earlier
   releases stored in `raw_messages`. Backups made before upgrading can still
   contain them; see [Backups](docs/backups.md#what-the-archive-covers-and-what-it-doesnt).
+- Schema 28 enables and forces PostgreSQL row-level security on every
+  account-owned table. The restricted runtime role reads and changes only the
+  rows of the account bound to its transaction, and none without one. Startup
+  and restore validate the `ownership-activated-v1` contract.
 
 ## [0.11.2] - 2026-09-23
 
