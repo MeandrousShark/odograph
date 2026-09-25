@@ -56,22 +56,9 @@ async def get_account_by_email(conn, email: str) -> dict | None:
     return await cur.fetchone()
 
 
-async def get_sole_account(conn) -> dict | None:
-    # Same hot-path constraint as get_account: avatar_mime/avatar_updated_at
-    # only, never avatar_bytes.
-    cur = conn.cursor(row_factory=dict_row)
-    await cur.execute(
-        "SELECT id, email, password_hash, is_admin, is_enabled, auth_version, "
-        "created_at, updated_at, avatar_mime, avatar_updated_at "
-        "FROM accounts ORDER BY id LIMIT 1"
-    )
-    return await cur.fetchone()
-
-
 async def get_account_avatar(conn, account_id: int) -> dict | None:
     """The only query allowed to select avatar_bytes; used solely by the
-    /account/avatar serving route, kept off the get_account/get_sole_account
-    hot path."""
+    /account/avatar serving route, kept off the get_account hot path."""
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         "SELECT avatar_bytes, avatar_mime, avatar_updated_at "

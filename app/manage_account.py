@@ -8,17 +8,19 @@ import sys
 
 from psycopg import errors
 
+from psycopg.rows import dict_row
+
 from app.accounts import (
+    account_exists,
     create_admin,
-    get_sole_account,
     normalize_email,
-    replace_password,
     valid_email,
 )
 from app.auth import MIN_LOCAL_PASSWORD_LENGTH
 from app.application_roles import application_role_pools
 from app.account_context import control_connection
 from app.local_auth import hash_password
+from app.password_reset import host_reset_password
 
 
 def _read_value(prompt: str, *, secret: bool = False) -> str:
@@ -51,7 +53,7 @@ async def _create_admin(database_url: str) -> None:
 
     async with application_role_pools(database_url) as pools:
         async with control_connection(pools.control) as conn:
-            if await get_sole_account(conn) is not None:
+            if await account_exists(conn):
                 raise ValueError("An administrator account already exists.")
             try:
                 await create_admin(conn, email, password_hash, display_timezone=os.environ.get("DISPLAY_TZ", "UTC"))
@@ -59,20 +61,64 @@ async def _create_admin(database_url: str) -> None:
                 raise ValueError("An administrator account already exists.") from exc
 
 
-async def _reset_password(database_url: str) -> None:
-    password = _read_new_password()
-    password_hash = await asyncio.to_thread(hash_password, password)
+async def _account_rows(conn) -> list[dict]:
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(
+        "SELECT id, email, is_admin, is_enabled, email_verified_at IS NOT NULL AS verified "
+        "FROM accounts ORDER BY id"
+    )
+    return await cur.fetchall()
 
+
+def _describe(account: dict) -> str:
+    return (
+        f"{account['id']}\t{account['email']}\t"
+        f"{'admin' if account['is_admin'] else 'member'}\t"
+        f"{'enabled' if account['is_enabled'] else 'disabled'}\t"
+        f"{'verified' if account['verified'] else 'unverified'}"
+    )
+
+
+async def _list_accounts(database_url: str) -> None:
     async with application_role_pools(database_url) as pools:
         async with control_connection(pools.control) as conn:
-            account = await get_sole_account(conn)
-            if account is None:
-                raise ValueError(
-                    "No administrator account exists. Run create-admin instead."
-                )
-            updated = await replace_password(conn, account["id"], password_hash)
-            if updated is None:
-                raise ValueError("The administrator password could not be reset.")
+            rows = await _account_rows(conn)
+    print("ID\tLOGIN EMAIL\tROLE\tSTATUS\tEMAIL")
+    for account in rows:
+        print(_describe(account))
+
+
+async def _reset_password(database_url: str, account_id: int) -> None:
+    """Explicit-target host recovery. Never falls back to another account."""
+    async with application_role_pools(database_url) as pools:
+        async with control_connection(pools.control) as conn:
+            rows = {row["id"]: row for row in await _account_rows(conn)}
+        target = rows.get(account_id)
+        if target is None:
+            raise ValueError("No account has that ID. Run list-accounts to find it.")
+        if not target["is_enabled"]:
+            raise ValueError("That account is disabled; host recovery does not re-enable it.")
+        print("ID\tLOGIN EMAIL\tROLE\tSTATUS\tEMAIL")
+        print(_describe(target))
+        answer = _read_value("Reset this account's password? Type yes to continue: ")
+        if answer.strip().lower() != "yes":
+            raise ValueError("Cancelled; nothing changed.")
+        password = _read_new_password()
+        password_hash = await asyncio.to_thread(hash_password, password)
+        async with control_connection(pools.control) as conn:
+            async with conn.transaction():
+                updated = await host_reset_password(conn, account_id, password_hash)
+        if updated is None:
+            raise ValueError("The password could not be reset; the account is missing or disabled.")
+
+
+def _account_id(value: str) -> int:
+    if not value.isascii() or not value.isdigit():
+        raise argparse.ArgumentTypeError("invalid account ID")
+    number = int(value)
+    if not 1 <= number <= 2**63 - 1:
+        raise argparse.ArgumentTypeError("invalid account ID")
+    return number
 
 
 class _SafeArgumentParser(argparse.ArgumentParser):
@@ -83,12 +129,15 @@ class _SafeArgumentParser(argparse.ArgumentParser):
 
 def _parser() -> argparse.ArgumentParser:
     parser = _SafeArgumentParser(
-        description="Create or recover the sole Odograph administrator account."
+        description="Create the first Odograph administrator, list accounts, or recover "
+        "one account's password on this host."
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
-    # Build both public subcommands without accepting credential arguments.
+    # No subcommand accepts a credential argument; passwords are prompted.
     subcommands.add_parser("create-admin")
-    subcommands.add_parser("reset-password")
+    subcommands.add_parser("list-accounts")
+    reset = subcommands.add_parser("reset-password")
+    reset.add_argument("account_id", type=_account_id)
     return parser
 
 
@@ -101,8 +150,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "create-admin":
             asyncio.run(_create_admin(database_url))
+        elif args.command == "list-accounts":
+            asyncio.run(_list_accounts(database_url))
+            return 0
         else:
-            asyncio.run(_reset_password(database_url))
+            asyncio.run(_reset_password(database_url, args.account_id))
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -114,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
     print(
         "Administrator account created."
         if args.command == "create-admin"
-        else "Administrator password reset. Existing sessions are no longer valid."
+        else "Password reset. That account's existing sessions are no longer valid."
     )
     return 0
 

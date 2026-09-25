@@ -216,7 +216,15 @@ case "${1-}" in
                 exit 0
                 ;;
             *"python -m app.application_roles verify"*) exit 0 ;;
-            *"python -m app.manage_account reset-password"*)
+            *"python -m app.manage_account list-accounts"*)
+                printf 'ID\tLOGIN EMAIL\tROLE\tSTATUS\tEMAIL\n'
+                printf '3\tother@example.invalid\tmember\tenabled\tverified\n'
+                printf '7\tdevelopment@localhost.invalid\tadmin\tenabled\tunverified\n'
+                exit 0
+                ;;
+            *"python -m app.manage_account reset-password 7")
+                IFS= read -r confirmation
+                [ "$confirmation" = yes ] || exit 93
                 IFS= read -r password
                 IFS= read -r confirmation
                 [ "$password" = "$confirmation" ] || exit 94
