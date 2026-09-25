@@ -130,9 +130,11 @@ async def _resolution_and_metadata_scenario():
             cur = conn.cursor(row_factory=dict_row)
             await cur.execute("SELECT email FROM accounts WHERE id = %s", (account["id"],))
             assert (await cur.fetchone())["email"] == "local@example.com"
+        async with pool.connection() as conn:
             await conn.execute(
                 "UPDATE accounts SET is_enabled = false WHERE id = %s", (account["id"],)
             )
+        async with roles.control.connection() as conn:
             assert (
                 await resolve_identity_account(
                     conn, "https://id.example", "subject-1"

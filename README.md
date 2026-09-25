@@ -270,6 +270,12 @@ Resending creates a fresh token and invalidates the old one. The normal
 single-account installation cannot use invitations to add accounts until
 multi-account activation is separately released.
 
+In those fixtures, an administrator can also disable or re-enable another
+account. Disabling ends its app sessions and revokes its pending security
+proofs, invitations it issued, and tracking credentials. Re-enabling allows
+a fresh sign-in with a retained login method, but does not restore old sessions,
+links or tracking credentials. At least one usable administrator must remain.
+
 In **Settings > Account Settings**, you can verify your current login email or
 change it after confirming the new address. These actions require your current
 password and configured email delivery. Until a new address is confirmed, the
