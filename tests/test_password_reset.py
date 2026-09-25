@@ -105,6 +105,64 @@ def test_admission_holds_its_slot_until_the_transport_thread_finishes():
     asyncio.run(run())
 
 
+def test_nonwaiting_mail_admission_refuses_full_slots_and_checks_under_lock():
+    started = asyncio.Event()
+    release = asyncio.Event()
+    events = []
+
+    class AsyncMailer:
+        async def send(self, message):
+            started.set()
+            await release.wait()
+            events.append("sent")
+
+    @asynccontextmanager
+    async def admit():
+        events.append("lock")
+        try:
+            yield True
+        finally:
+            assert len(admission._tasks) == 1
+            events.append("unlock")
+
+    async def run():
+        nonlocal admission
+        admission = reset.SecurityMailAdmission(limit=1)
+        mailer = AsyncMailer()
+        first = asyncio.create_task(admission.send(mailer, "one", wait=False, admit=admit))
+        await started.wait()
+        assert await admission.send(mailer, "two", wait=False, admit=admit) is False
+        assert events[:2] == ["lock", "unlock"]
+        release.set()
+        assert await first is True
+        assert events == ["lock", "unlock", "sent"]
+
+    admission = None
+    asyncio.run(run())
+
+
+def test_denied_mail_admission_does_not_start_transport_or_keep_slot():
+    sent = []
+
+    class AsyncMailer:
+        async def send(self, message):
+            sent.append(message)
+
+    @asynccontextmanager
+    async def deny():
+        yield False
+
+    async def run():
+        admission = reset.SecurityMailAdmission(limit=1)
+        mailer = AsyncMailer()
+        assert await admission.send(mailer, "denied", wait=False, admit=deny) is False
+        assert admission._slots._value == 1
+        assert await admission.send(mailer, "allowed", wait=False) is True
+
+    asyncio.run(run())
+    assert sent == ["allowed"]
+
+
 class _FakeDb:
     def __init__(self, monkeypatch, *, address="verified@example.com", usable=True):
         self.address = address
@@ -116,12 +174,12 @@ class _FakeDb:
         async def connection(pool):
             yield _FakeConn()
 
-        async def issue(conn, token, *, initiator, email=None, account_id=None):
-            self.issued.append((token, initiator, email, account_id))
+        async def issue(conn, token, *, initiator, email=None, account_id=None,
+                        actor_id=None, actor_auth_version=None):
+            self.issued.append((token, initiator, email, account_id, actor_id, actor_auth_version))
             return self.address
 
-        async def usable_check(conn, token, *, lock_account=False):
-            assert lock_account
+        async def usable_check(conn, token, *, actor_id=None, actor_auth_version=None):
             return self.usable
 
         async def revoke(conn, token):
@@ -129,7 +187,7 @@ class _FakeDb:
 
         monkeypatch.setattr(reset, "control_connection", connection)
         monkeypatch.setattr(reset, "issue_password_reset", issue)
-        monkeypatch.setattr(reset, "password_reset_usable", usable_check)
+        monkeypatch.setattr(reset, "password_reset_send_usable", usable_check)
         monkeypatch.setattr(reset, "revoke_password_reset", revoke)
 
 
@@ -160,8 +218,9 @@ def test_public_request_delivers_only_to_the_stored_verified_address(monkeypatch
         await queue.stop()
 
     asyncio.run(run())
-    token, initiator, email, account_id = db.issued[0]
+    token, initiator, email, account_id, actor_id, actor_version = db.issued[0]
     assert (initiator, email, account_id) == ("public", "typed@example.com", None)
+    assert (actor_id, actor_version) == (None, None)
     assert len(messages) == 1
     message = messages[0]
     assert message["To"] == "verified@example.com"
@@ -181,10 +240,10 @@ def test_queue_coalesces_pending_identifiers_and_refuses_when_full_or_closed(mon
         assert queue.submit_public("a@example.com")
         assert queue.submit_public("a@example.com")
         assert queue._queue.qsize() == 1
-        assert queue.submit_admin(7)
+        assert queue.submit_admin(1, 1, 7)
         assert not queue.submit_public("b@example.com")
         queue._closed = True
-        assert not queue.submit_admin(8)
+        assert not queue.submit_admin(1, 1, 8)
 
     asyncio.run(run())
 
@@ -222,7 +281,7 @@ def test_unusable_or_unsafe_reset_is_not_sent(monkeypatch):
 
     async def run(queue):
         await queue.start()
-        queue.submit_admin(7)
+        queue.submit_admin(1, 1, 7)
         for _ in range(50):
             if db.issued:
                 break
@@ -231,7 +290,7 @@ def test_unusable_or_unsafe_reset_is_not_sent(monkeypatch):
         await queue.stop()
 
     asyncio.run(run(_queue(lambda mailer, message: sent.append(message))[0]))
-    assert db.issued[0][1:] == ("admin", None, 7) and sent == []
+    assert db.issued[0][1:] == ("admin", None, 7, 1, 1) and sent == []
 
     db = _FakeDb(monkeypatch, address="victim@example.com\nBcc: other@example.com")
     asyncio.run(run(_queue(lambda mailer, message: sent.append(message))[0]))

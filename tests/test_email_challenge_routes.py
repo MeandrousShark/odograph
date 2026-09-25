@@ -44,7 +44,12 @@ def _app(monkeypatch, *, smtp_host="smtp.example.com"):
 
     @asynccontextmanager
     async def fake_connection(pool):
-        yield object()
+        class Connection:
+            @asynccontextmanager
+            async def transaction(self):
+                yield
+
+        yield Connection()
 
     async def fake_get_account(conn, account_id):
         return ACCOUNT.copy()
@@ -57,10 +62,14 @@ def _app(monkeypatch, *, smtp_host="smtp.example.com"):
     async def fake_verified_state(conn, account_id):
         return False
 
+    async def fake_send_usable(conn, account_id, version, purpose, token):
+        return True
+
     monkeypatch.setattr(auth, "control_connection", fake_connection)
     monkeypatch.setattr(auth, "get_account", fake_get_account)
     monkeypatch.setattr(auth, "_verified_account", fake_verified)
     monkeypatch.setattr(auth, "is_current_email_verified", fake_verified_state)
+    monkeypatch.setattr(auth, "email_challenge_send_usable", fake_send_usable)
 
     async def fake_user(request: Request):
         if not request.session.get("signed_in"):

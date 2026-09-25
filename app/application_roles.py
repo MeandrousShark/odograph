@@ -59,11 +59,14 @@ EMAIL_CHALLENGE_FUNCTIONS = (
     "public.issue_email_challenge(bigint,bigint,text,text,text)",
     "public.revoke_email_challenge(bigint,text,text)",
     "public.consume_email_challenge(bigint,bigint,text,text)",
+    "public.email_challenge_send_usable(bigint,bigint,text,text)",
 )
 PASSWORD_RESET_FUNCTIONS = (
     "public.issue_password_reset(bigint,text,text,text)",
+    "public.issue_admin_password_reset(bigint,bigint,bigint,text)",
     "public.revoke_password_reset(text)",
     "public.password_reset_usable(text,boolean)",
+    "public.password_reset_send_usable(text,bigint,bigint)",
     "public.consume_password_reset(text,text)",
     "public.host_reset_password(bigint,text)",
 )
@@ -73,12 +76,20 @@ CHALLENGE_FUNCTION_SOURCES = {
     EMAIL_CHALLENGE_FUNCTIONS[0]: "031_password_reset.sql",
     EMAIL_CHALLENGE_FUNCTIONS[1]: "030_email_challenges.sql",
     EMAIL_CHALLENGE_FUNCTIONS[2]: "030_email_challenges.sql",
+    EMAIL_CHALLENGE_FUNCTIONS[3]: "035_admin_recovery.sql",
     **{function: "031_password_reset.sql" for function in PASSWORD_RESET_FUNCTIONS},
+    PASSWORD_RESET_FUNCTIONS[0]: "035_admin_recovery.sql",
+    PASSWORD_RESET_FUNCTIONS[1]: "035_admin_recovery.sql",
+    PASSWORD_RESET_FUNCTIONS[4]: "035_admin_recovery.sql",
 }
 BOOTSTRAP_INSERT_TABLES = ("accounts", "account_settings", "vehicles", "tag_rules", "mileage_rates")
 BOOTSTRAP_LOCK_TABLES = ("accounts", "ingest_credentials", "tracking_devices", "tracking_device_aliases")
 INVITATION_FUNCTIONS = (
-    "public.issue_member_invitation(bigint,text,text)",
+    "public.issue_member_invitation(bigint,bigint,text,text)",
+    "public.resend_member_invitation(bigint,bigint,bigint,text)",
+    "public.revoke_member_invitation(bigint,bigint,bigint)",
+    "public.list_member_invitations(bigint,bigint)",
+    "public.admit_member_invitation_send(bigint,bigint,bigint)",
     "public.redeem_member_invitation(text,text,text)",
     "public.redeem_oidc_member_invitation(text,text,text,text,text,text)",
 )
@@ -106,14 +117,10 @@ FUNCTIONS = {
     "public.bootstrap_first_account(text,text,text)": CONTROL_ROLE,
     "public.assert_account_active(bigint,bigint)": RUNTIME_ROLE,
     "public.assert_tracking_credential(text,bigint,bigint,bigint,text)": RUNTIME_ROLE,
-    INVITATION_FUNCTIONS[0]: CONTROL_ROLE,
-    INVITATION_FUNCTIONS[1]: CONTROL_ROLE,
-    INVITATION_FUNCTIONS[2]: CONTROL_ROLE,
+    **{function: CONTROL_ROLE for function in INVITATION_FUNCTIONS},
     **{function: CONTROL_ROLE for function in OIDC_ATTEMPT_FUNCTIONS},
     **{function: CONTROL_ROLE for function in OIDC_METHOD_FUNCTIONS},
-    EMAIL_CHALLENGE_FUNCTIONS[0]: CONTROL_ROLE,
-    EMAIL_CHALLENGE_FUNCTIONS[1]: CONTROL_ROLE,
-    EMAIL_CHALLENGE_FUNCTIONS[2]: CONTROL_ROLE,
+    **{function: CONTROL_ROLE for function in EMAIL_CHALLENGE_FUNCTIONS},
     **{function: CONTROL_ROLE for function in PASSWORD_RESET_FUNCTIONS},
 }
 RESTORE_AUTH_VERSION_STEP = 1_000_000_000
@@ -344,6 +351,15 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
     )
     extra_functions = [row[0] for row in await cur.fetchall()]
     _require_contract(not extra_functions, f"extra security-definer function: {extra_functions}")
+    legacy_issue = "public.issue_member_invitation(bigint,text,text)"
+    cur = await conn.execute("SELECT to_regprocedure(%s)", (legacy_issue,))
+    if (await cur.fetchone())[0] is not None:
+        for role in (CONTROL_ROLE, RUNTIME_ROLE):
+            cur = await conn.execute(
+                "SELECT has_function_privilege(%s,%s,'EXECUTE')", (role, legacy_issue),
+            )
+            _require_contract(not (await cur.fetchone())[0],
+                              f"legacy function privilege: {role} {legacy_issue}")
     cur = await conn.execute("SELECT contract_version,owner_role,installation_id FROM odograph_service.recovery_metadata WHERE id=1")
     _require_contract(await cur.fetchone() == (state.contract_version, MIGRATE_ROLE, state.installation_id), "recovery metadata")
     cur = await conn.execute(

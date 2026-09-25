@@ -96,6 +96,18 @@ Every network-reachable route, and what actually guards it:
   failed provider flow creates no account and consumes no invitation. Normal
   deployments remain blocked by the database singleton guard until supported
   activation is released.
+- **`/admin/accounts`, `/admin/invitations`, `/admin/accounts/{id}/recovery`**:
+  require the current enabled administrator; every mutation is POST with CSRF.
+  The account list exposes login and security metadata, not another account's
+  ledger or notification destinations. Invitation issue and resend enforce
+  target and administrator budgets before rotating a token. The new fragment
+  link and manual token are shown only in the issuing response; later list and
+  revoke actions expose no bearer secret. Optional SMTP sends the same token,
+  and a delivery failure leaves it copyable and valid. Admin recovery only
+  queues a reset to the target's stored verified login address; it never
+  returns a reset token, accepts a destination override, or sets a password.
+  Normal installations retain the singleton account guard until separately
+  reviewed multi-account activation.
 - **`/settings/account`**: requires the caller's enabled account session.
   Password changes, OIDC linking and unlinking, and email verification or
   change require CSRF protection and reauthentication. Accounts with a password

@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block title %}Account administration: Odograph{% endblock %}
+{% block content %}
+
+<div class="settings-page">
+<div class="settings-page-header page-title">
+  <div>
+    <p class="page-title-eyebrow">Administration</p>
+    <h2 id="admin-page-title" class="page-title-heading">Accounts</h2>
+    <p class="page-title-subtitle">Manage login access and invitations. Account activity and trip details stay private to each account.</p>
+  </div>
+</div>
+
+{% if notice %}<p class="notice" role="status">{{ notice }}</p>{% endif %}
+
+{% if invite_result %}
+<section class="settings-section card" aria-labelledby="invitation-result-heading">
+  <h3 id="invitation-result-heading">Invitation created for {{ invite_result.email }}</h3>
+  <p>{{ invite_result.email_status }}</p>
+  <p>Copy this one-time link now. The token is shown only on this response and expires in 48 hours. To use the token manually, open the invitation page and paste it into the invitation field.</p>
+  {% if invite_result.link %}
+  <label class="admin-copy-field">Invitation link
+    <input id="admin-invitation-link" value="{{ invite_result.link }}" readonly>
+  </label>
+  <button type="button" class="control" data-copy-target="admin-invitation-link">Copy link</button>
+  {% else %}
+  <p class="muted">A full invitation link is unavailable because the instance URL is not configured. Share the token manually at the invitation page.</p>
+  {% endif %}
+  <label class="admin-copy-field">One-time invitation token
+    <input id="admin-invitation-token" value="{{ invite_result.token }}" readonly>
+  </label>
+  <button type="button" class="control" data-copy-target="admin-invitation-token">Copy token</button>
+  <p id="admin-copy-status" role="status" aria-live="polite">If copying is unavailable, select and copy the field above.</p>
+  <p><a href="/admin/accounts">Return to Accounts</a></p>
+</section>
+<script nonce="{{ csp_nonce }}">
+(function () {
+  var status = document.getElementById("admin-copy-status");
+  document.querySelectorAll("[data-copy-target]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var field = document.getElementById(button.getAttribute("data-copy-target"));
+      if (!field) return;
+      field.focus();
+      field.select();
+      if (!navigator.clipboard || !navigator.clipboard.writeText) {
+        status.textContent = "Select the field and copy it manually.";
+        return;
+      }
+      navigator.clipboard.writeText(field.value).then(function () {
+        status.textContent = "Copied.";
+      }).catch(function () {
+        status.textContent = "Select the field and copy it manually.";
+      });
+    });
+  });
+})();
+</script>
+{% endif %}
+
+<section class="settings-section" aria-labelledby="accounts-heading">
+  <h3 id="accounts-heading">Account metadata</h3>
+  <div class="table-wrapper">
+  <table>
+    <thead><tr>
+      <th>ID</th><th>Login email</th><th>Email verified</th><th>Role</th>
+      <th>Access</th><th>Login methods</th><th>Deletion</th><th>Recovery</th>
+    </tr></thead>
+    <tbody>
+    {% for account in accounts %}
+      <tr>
+        <td class="num">{{ account.id }}</td>
+        <td>{{ account.email }}</td>
+        <td>{{ "Yes" if account.email_verified else "No" }}</td>
+        <td>{{ "Administrator" if account.is_admin else "Member" }}</td>
+        <td>{{ "Enabled" if account.is_enabled else "Disabled" }}</td>
+        <td>{% if account.has_password and account.has_oidc %}Password, OIDC{% elif account.has_password %}Password{% elif account.has_oidc %}OIDC{% else %}None{% endif %}</td>
+        <td>{% if account.deletion_deadline %}{{ account.deletion_deadline|local_dt }}{% else %}Not scheduled{% endif %}</td>
+        <td>
+          {% if account.email_verified and account.is_enabled %}
+          <form method="post" action="/admin/accounts/{{ account.id }}/recovery">
+            <input type="hidden" name="csrf_token" value="{{ csrf }}">
+            <button type="submit" class="control">Queue password recovery</button>
+          </form>
+          {% elif not account.email_verified %}<span class="muted">Use host-local recovery</span>
+          {% else %}<span class="muted">Account disabled</span>{% endif %}
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="8" class="muted">No accounts.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section class="settings-section" aria-labelledby="invitations-heading">
+  <h3 id="invitations-heading">Invitations</h3>
+  {% if multiuser_available %}
+  <form method="post" action="/admin/invitations" class="admin-invitation-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <label>Invitee email
+      <input type="email" name="email" maxlength="254" autocomplete="email" required>
+    </label>
+    <label class="admin-send-checkbox"><input type="checkbox" name="send_email" value="1"> Send email</label>
+    <button type="submit" class="control control-primary">Create invitation</button>
+  </form>
+  {% else %}
+  <p class="muted">Invitations are unavailable until multi-account mode is activated.</p>
+  {% endif %}
+  <p class="muted">Invitation email does not verify the recipient's login email. Open invitations expire after 48 hours.</p>
+  <div class="table-wrapper">
+  <table>
+    <thead><tr><th>Invitee</th><th>Status</th><th>Expires</th><th>Actions</th></tr></thead>
+    <tbody>
+    {% for invitation in invitations %}
+      <tr>
+        <td>{{ invitation.email }}</td>
+        <td>{{ invitation.status }}</td>
+        <td>{{ invitation.expires_at|local_dt }}</td>
+        <td>
+          {% if multiuser_available and invitation.status == "Open" %}
+          <form method="post" action="/admin/invitations/{{ invitation.id }}/resend">
+            <input type="hidden" name="csrf_token" value="{{ csrf }}">
+            <label><input type="checkbox" name="send_email" value="1"> Send email</label>
+            <button type="submit" class="control">Resend with a new token</button>
+          </form>
+          {% endif %}
+          {% if invitation.status == "Open" %}
+          <form method="post" action="/admin/invitations/{{ invitation.id }}/revoke">
+            <input type="hidden" name="csrf_token" value="{{ csrf }}">
+            <button type="submit" class="control">Revoke</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4" class="muted">No invitations.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+</div>
+{% endblock %}

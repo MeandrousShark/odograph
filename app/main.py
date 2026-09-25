@@ -17,7 +17,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import JSONResponse, RedirectResponse
 from starlette.staticfiles import StaticFiles
 
-from app import auth, ingest, portable, ui
+from app import admin, auth, ingest, portable, ui
 from app.auth import AuthRedirect
 from app.account_context import AccountPrincipal, control_connection
 from app.account_workers import AccountWorker
@@ -152,7 +152,7 @@ class SecurityHeadersMiddleware:
                         headers["Strict-Transport-Security"] = f"max-age={self.hsts_max_age}"
                 if scope.get("path") in (
                     "/invite", "/settings/account/email/confirm", "/forgot-password", "/reset-password",
-                ):
+                ) or scope.get("path", "").startswith("/admin/"):
                     headers["Cache-Control"] = "no-store, private"
                     headers["Referrer-Policy"] = "no-referrer"
             await send(message)
@@ -445,6 +445,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     app.include_router(ingest.make_router())
     app.include_router(auth.make_router())
     app.include_router(ui.make_router())
+    app.include_router(admin.make_router())
     app.include_router(portable.make_router())
     app.mount("/static", RevalidatingStaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
