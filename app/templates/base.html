@@ -37,7 +37,7 @@
   <link rel="stylesheet" href="/static/style.css?v={{ static_version }}">
   {% block head %}{% endblock %}
 </head>
-<body hx-history="false" data-account-id="{{ user.id if user and user.id else '' }}" hx-headers='{"X-CSRF-Token": "{{ csrf }}"}'>
+<body hx-history="false" data-account-id="{{ user.id if user and user.id else '' }}" hx-headers='{"X-CSRF-Token": "{{ csrf }}"{% if user and user.id %}, "X-Odograph-Account": "{{ user.id }}"{% endif %}}'>
   <header>
     <h1><a href="/" class="brand-link"><span class="brand-mark" aria-hidden="true"></span><span>Odograph</span></a></h1>
     {% if user %}
@@ -238,7 +238,10 @@
     (() => {
       const account = document.body.dataset.accountId;
       const marker = "odograph-account";
+      let reloading = false;
       const reloadPrivatePage = () => {
+        if (reloading) return;
+        reloading = true;
         document.documentElement.style.visibility = "hidden";
         window.location.reload();
       };
@@ -266,8 +269,10 @@
       }
 
       if (!account) return;
+      let markerAvailable = false;
       try {
         localStorage.setItem(marker, account);
+        markerAvailable = localStorage.getItem(marker) === account;
       } catch (_) {}
       window.addEventListener("storage", (event) => {
         if (event.key === marker && event.newValue !== account) reloadPrivatePage();
@@ -276,9 +281,36 @@
         document.documentElement.style.visibility = "hidden";
       });
       window.addEventListener("pageshow", (event) => {
-        if (event.persisted) reloadPrivatePage();
+        if (event.persisted || document.documentElement.style.visibility === "hidden") {
+          reloadPrivatePage();
+          return;
+        }
+        try {
+          if (markerAvailable && localStorage.getItem(marker) !== account) reloadPrivatePage();
+        } catch (_) {}
+      });
+      let leftTab = false;
+      window.addEventListener("blur", () => { leftTab = true; });
+      window.addEventListener("focus", () => {
+        if (!leftTab) return;
+        leftTab = false;
+        if (!markerAvailable) {
+          reloadPrivatePage();
+          return;
+        }
+        try {
+          if (localStorage.getItem(marker) !== account) reloadPrivatePage();
+        } catch (_) {
+          reloadPrivatePage();
+        }
       });
       document.addEventListener("htmx:beforeRequest", (event) => {
+        if (reloading || document.documentElement.style.visibility === "hidden" ||
+            (!markerAvailable && leftTab)) {
+          event.preventDefault();
+          reloadPrivatePage();
+          return;
+        }
         try {
           if (localStorage.getItem(marker) !== account) {
             event.preventDefault();
@@ -287,8 +319,11 @@
         } catch (_) {}
       });
       document.addEventListener("htmx:beforeOnLoad", (event) => {
-        const responseAccount = event.detail.xhr.getResponseHeader("X-Odograph-Account");
-        if (responseAccount && responseAccount !== account) {
+        const xhr = event.detail.xhr;
+        const responseAccount = xhr.getResponseHeader("X-Odograph-Account");
+        const redirect = xhr.getResponseHeader("HX-Redirect");
+        if ((!responseAccount && !redirect) ||
+            (responseAccount && responseAccount !== account)) {
           event.preventDefault();
           reloadPrivatePage();
         }

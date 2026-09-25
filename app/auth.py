@@ -27,6 +27,7 @@ from app.accounts import (
     replace_password,
     safe_delivery_email as _safe_delivery_email,
     set_account_avatar,
+    sign_out_everywhere,
     valid_email,
 )
 from app.account_context import AccountPool, AccountPrincipal, control_connection
@@ -361,6 +362,9 @@ async def require_user(request: Request) -> dict:
             and account["is_enabled"]
             and session_version == account["auth_version"]
         ):
+            page_account = getattr(request, "headers", {}).get("X-Odograph-Account")
+            if page_account is not None and page_account != str(account_id):
+                raise HTTPException(status_code=409, detail="Account changed. Reload the page.")
             return await _bind_account(request, account)
         request.session.clear()
         raise AuthRedirect()
@@ -683,6 +687,7 @@ def make_router() -> APIRouter:
             "csrf": _ensure_csrf(request),
             "account_email": account["email"],
             "has_password": account["password_hash"] is not None,
+            "can_sign_out_everywhere": not cfg.dev_no_auth,
             "account_email_verified": account_email_verified,
             "email_challenge_available": bool(
                 getattr(cfg, "smtp_host", "") and getattr(cfg, "email_from", "")
@@ -1845,6 +1850,24 @@ def make_router() -> APIRouter:
         request.session.clear()
         request.session["login_notice"] = RESET_COMPLETE_NOTICE
         # signed_out clears the shared cross-tab account marker (base.html).
+        return RedirectResponse("/login?signed_out=1", status_code=303)
+
+    @router.post("/settings/account/sign-out-everywhere", dependencies=[Depends(require_csrf)])
+    async def sign_out_everywhere_route(
+        request: Request, user: dict = Depends(require_user),
+    ):
+        if request.app.state.config.dev_no_auth:
+            raise HTTPException(status_code=403)
+        async with control_connection(request.app.state.control_pool) as conn:
+            signed_out = await sign_out_everywhere(
+                conn, user["id"],
+                expected_auth_version=request.state.principal.auth_version,
+            )
+        request.session.clear()
+        if not signed_out:
+            raise AuthRedirect()
+        if request.headers.get("HX-Request", "").lower() == "true":
+            return Response(status_code=204, headers={"HX-Redirect": "/login?signed_out=1"})
         return RedirectResponse("/login?signed_out=1", status_code=303)
 
     @router.post("/logout", dependencies=[Depends(require_csrf)])

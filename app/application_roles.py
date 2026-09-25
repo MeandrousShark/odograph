@@ -92,6 +92,7 @@ OIDC_METHOD_FUNCTIONS = (
     "public.link_oidc_identity(bigint,bigint,text,text,text,text)",
     "public.unlink_oidc_identity(bigint,bigint,text,text)",
     "public.replace_account_password(bigint,bigint,text)",
+    "public.sign_out_account_everywhere(bigint,bigint)",
 )
 SQL_DIR = Path(__file__).resolve().parents[1] / "scripts" / "sql"
 MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"

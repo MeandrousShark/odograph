@@ -141,3 +141,13 @@ async def replace_password(
     if not (await cur.fetchone())[0]:
         return None
     return await get_account(conn, account_id)
+
+
+async def sign_out_everywhere(
+    conn, account_id: int, *, expected_auth_version: int,
+) -> bool:
+    cur = await conn.execute(
+        "SELECT public.sign_out_account_everywhere(%s,%s)",
+        (account_id, expected_auth_version),
+    )
+    return bool((await cur.fetchone())[0])

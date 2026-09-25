@@ -26,7 +26,7 @@ from avatar_image_fixtures import (
     _jpeg_with_unknown_scan_huffman_table, _webp_with_invalid_vp8_partition_length,
     _webp_with_oversized_dimensions,
 )
-from tests.auth_db_fixtures import auth_config, seed_auth_account
+from tests.auth_db_fixtures import auth_config, bind_auth_test_roles, seed_auth_account
 from app.account_context import AccountPrincipal
 from app.accounts import get_account, get_account_avatar
 from app.auth import AuthRedirect, _avatar_version, make_router
@@ -71,12 +71,23 @@ async def _set_avatar_at(
     )
 
 
+async def _get_account(pool, account_id: int):
+    async with pool.control_pool.connection() as conn:
+        return await get_account(conn, account_id)
+
+
+async def _get_account_avatar(pool, account_id: int):
+    async with pool.control_pool.connection() as conn:
+        return await get_account_avatar(conn, account_id)
+
+
 def _scenario(coro_factory) -> None:
     async def run():
         pool = make_pool(TEST_DB)
         await pool.open(wait=True)
         try:
             await reset_db(pool)
+            await bind_auth_test_roles(pool)
             await coro_factory(pool)
         finally:
             await pool.close()
@@ -165,7 +176,7 @@ def test_get_account_avatar_round_trips_stored_bytes():
         async with pool.connection() as conn:
             await _insert_account(conn)
             await _set_avatar(conn, 1, mime="image/jpeg")
-            avatar = await get_account_avatar(conn, 1)
+        avatar = await _get_account_avatar(pool, 1)
         assert avatar["avatar_bytes"] == AVATAR_BYTES
         assert avatar["avatar_mime"] == "image/jpeg"
         assert avatar["avatar_updated_at"] is not None
@@ -178,8 +189,7 @@ def test_get_account_never_selects_avatar_bytes():
         async with pool.connection() as conn:
             await _insert_account(conn)
             await _set_avatar(conn, 1, mime="image/webp")
-        async with pool.connection() as conn:
-            account = await get_account(conn, 1)
+        account = await _get_account(pool, 1)
         assert "avatar_bytes" not in account
         assert account["avatar_mime"] == "image/webp"
         assert account["avatar_updated_at"] is not None
@@ -195,8 +205,9 @@ def _bare_app(
     oidc_enabled: bool = False,
 ) -> FastAPI:
     app = FastAPI()
-    app.state.pool = pool
-    app.state.control_pool = app.state.runtime_pool = pool
+    app.state.pool = pool.runtime_pool
+    app.state.control_pool = pool.control_pool
+    app.state.runtime_pool = pool.runtime_pool
     app.state.dev_principal = AccountPrincipal(1, True, 1)
     app.state.make_detector_runner = lambda bound: SimpleNamespace(pool=bound)
     app.state.config = auth_config(TEST_DB,
@@ -346,8 +357,7 @@ def test_sub_second_avatar_writes_produce_distinct_etag_and_version():
             assert first.status_code == 200
             first_etag = first.headers["etag"]
 
-            async with pool.connection() as conn:
-                first_account = await get_account(conn, 1)
+            first_account = await _get_account(pool, 1)
 
             # Same wall-clock second as above -- only the microseconds
             # differ. Truncating to whole seconds (the original bug) would
@@ -359,8 +369,7 @@ def test_sub_second_avatar_writes_produce_distinct_etag_and_version():
             assert second.status_code == 200
             second_etag = second.headers["etag"]
 
-            async with pool.connection() as conn:
-                second_account = await get_account(conn, 1)
+            second_account = await _get_account(pool, 1)
 
         # Confirm the two timestamps genuinely share a wall-clock second, or
         # this wouldn't be exercising the bug at all.
@@ -455,8 +464,7 @@ def test_upload_accepts_png_jpeg_and_webp_and_stores_the_detected_mime():
                 assert fetched.content == content
                 assert fetched.headers["content-type"] == expected_mime
 
-                async with pool.connection() as conn:
-                    account = await get_account(conn, 1)
+                account = await _get_account(pool, 1)
                 assert account["avatar_mime"] == expected_mime
 
     _scenario(run)
@@ -508,8 +516,7 @@ def test_oversized_upload_rejected_with_an_honest_content_length():
             assert 'name="csrf_token"' in response.text
             assert 'name="file"' in response.text
 
-            async with pool.connection() as conn:
-                account = await get_account(conn, 1)
+            account = await _get_account(pool, 1)
             assert account["avatar_mime"] is None
 
     _scenario(run)
@@ -552,8 +559,7 @@ def test_declared_oversized_upload_renders_without_reading_the_request_body():
             assert 'name="file"' in response.text
             assert consumed is False
 
-        async with pool.connection() as conn:
-            account = await get_account_avatar(conn, 1)
+        account = await _get_account_avatar(pool, 1)
         assert account["avatar_bytes"] == AVATAR_BYTES
         assert account["avatar_mime"] == "image/png"
 
@@ -624,8 +630,7 @@ def test_oversized_upload_with_no_content_length_falls_through_to_inner_cap():
             response = await client.send(request)
             assert response.status_code == 413
 
-            async with pool.connection() as conn:
-                account = await get_account(conn, 1)
+            account = await _get_account(pool, 1)
             assert account["avatar_mime"] is None
 
     _scenario(run)
@@ -647,8 +652,7 @@ def test_plain_non_image_upload_is_rejected():
             assert response.status_code == 422
             assert "Unsupported file type" in response.text
 
-            async with pool.connection() as conn:
-                account = await get_account(conn, 1)
+            account = await _get_account(pool, 1)
             assert account["avatar_mime"] is None
 
     _scenario(run)
@@ -675,8 +679,7 @@ def test_non_image_disguised_with_an_image_filename_and_content_type_is_still_re
             assert response.status_code == 422
             assert "Unsupported file type" in response.text
 
-            async with pool.connection() as conn:
-                account = await get_account(conn, 1)
+            account = await _get_account(pool, 1)
             assert account["avatar_mime"] is None
 
             # And GET /account/avatar still 404s -- nothing was stored under
@@ -720,8 +723,7 @@ def test_truncated_or_signature_spoofed_image_upload_is_rejected(content):
             assert response.status_code == 422
             assert "Unsupported file type" in response.text
 
-        async with pool.connection() as conn:
-            account = await get_account(conn, 1)
+        account = await _get_account(pool, 1)
         assert account["avatar_mime"] is None
 
     _scenario(run)
@@ -745,8 +747,7 @@ def test_oversized_dimension_upload_is_rejected_with_the_dimension_message():
             assert "16 megapixels" in response.text
             assert "Unsupported file type" not in response.text
 
-            async with pool.connection() as conn:
-                account = await get_account(conn, 1)
+            account = await _get_account(pool, 1)
             assert account["avatar_mime"] is None
 
     _scenario(run)
@@ -767,8 +768,7 @@ def test_empty_upload_is_rejected():
             assert response.status_code == 422
             assert "Choose an image file" in response.text
 
-            async with pool.connection() as conn:
-                account = await get_account(conn, 1)
+            account = await _get_account(pool, 1)
             assert account["avatar_mime"] is None
 
     _scenario(run)
@@ -792,8 +792,7 @@ def test_missing_file_part_is_rejected():
             assert response.status_code == 422
             assert "Choose an image file" in response.text
 
-            async with pool.connection() as conn:
-                account = await get_account(conn, 1)
+            account = await _get_account(pool, 1)
             assert account["avatar_mime"] is None
 
     _scenario(run)
@@ -820,8 +819,7 @@ def test_upload_rejects_missing_or_wrong_csrf_token():
             )
             assert missing.status_code == 403
 
-            async with pool.connection() as conn:
-                account = await get_account(conn, 1)
+            account = await _get_account(pool, 1)
             assert account["avatar_mime"] is None
 
     _scenario(run)
@@ -849,8 +847,7 @@ def test_remove_rejects_missing_or_wrong_csrf_token():
             # still a rejection, just a step earlier than the wrong-token case.
             assert missing.status_code == 422
 
-            async with pool.connection() as conn:
-                account = await get_account_avatar(conn, 1)
+            account = await _get_account_avatar(pool, 1)
             assert account["avatar_bytes"] == AVATAR_BYTES
 
     _scenario(run)
@@ -879,8 +876,7 @@ def test_unauthenticated_request_is_rejected_on_both_routes_without_mutation():
             assert remove_response.status_code == 303
             assert remove_response.headers["location"] == "/login"
 
-            async with pool.connection() as conn:
-                account = await get_account(conn, 1)
+            account = await _get_account(pool, 1)
             assert account["avatar_mime"] is None
 
     _scenario(run)
@@ -934,10 +930,9 @@ def test_remove_clears_the_avatar_and_is_harmless_when_none_is_set():
             assert first.status_code == 303
             assert first.headers["location"] == "/settings/account"
 
-            async with pool.connection() as conn:
-                account = await get_account(conn, 1)
+            account = await _get_account(pool, 1)
             assert account["avatar_mime"] is None
-            assert (await get_account_avatar(conn, 1))["avatar_bytes"] is None
+            assert (await _get_account_avatar(pool, 1))["avatar_bytes"] is None
 
             after_removal = await client.get("/account/avatar")
             assert after_removal.status_code == 404
@@ -974,8 +969,7 @@ def test_remove_rejects_missing_or_wrong_confirmation_without_mutation():
             )
             assert wrong.status_code == 400
 
-            async with pool.connection() as conn:
-                account = await get_account_avatar(conn, 1)
+            account = await _get_account_avatar(pool, 1)
             assert account["avatar_bytes"] == AVATAR_BYTES
 
     _scenario(run)

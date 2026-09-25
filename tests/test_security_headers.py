@@ -92,6 +92,7 @@ def test_html_response_carries_the_exact_header_set(monkeypatch):
     app = _build_app(monkeypatch)
     response = asyncio.run(_get(app))
 
+    assert response.headers["Cache-Control"] == "no-store, private"
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
     assert response.headers["Cross-Origin-Opener-Policy"] == "same-origin"
@@ -110,6 +111,13 @@ def test_html_response_carries_the_exact_header_set(monkeypatch):
     assert "form-action 'self'" in csp
     match = re.search(r"script-src 'self' 'nonce-([^']+)'", csp)
     assert match, csp
+
+
+def test_unauthenticated_private_redirect_is_not_cacheable(monkeypatch):
+    app = _build_app(monkeypatch)
+    response = asyncio.run(_get(app, "/trips"))
+    assert response.status_code == 303
+    assert response.headers["Cache-Control"] == "no-store, private"
 
 
 def test_nonce_differs_per_request_and_matches_rendered_template(monkeypatch):

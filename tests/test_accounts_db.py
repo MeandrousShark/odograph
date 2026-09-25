@@ -11,7 +11,7 @@ from psycopg.rows import dict_row
 
 import app.auth as auth_module
 from app.auth import AuthRedirect, make_router, require_admin, require_user, require_legacy_establishment
-from tests.auth_db_fixtures import auth_config, seed_auth_account
+from tests.auth_db_fixtures import auth_config, bind_auth_test_roles, seed_auth_account
 from app.db import MIGRATIONS_DIR, make_pool
 from conftest import drop_and_recreate_schema, full_schema_reset, reset_db
 from app.ingest import FailedAuthLimiter
@@ -35,6 +35,8 @@ def _endpoint(path: str, method: str):
 def _request(
     pool, *, signup=True, session=None, ip="203.0.113.5", limiter=None
 ):
+    control_pool = getattr(pool, "control_pool", pool)
+    runtime_pool = getattr(pool, "runtime_pool", pool)
     cfg = auth_config(TEST_DB,
         initial_admin_signup=signup,
         dev_no_auth=False,
@@ -45,7 +47,7 @@ def _request(
         state=SimpleNamespace(),
         app=SimpleNamespace(
             state=SimpleNamespace(
-                pool=pool, control_pool=pool, runtime_pool=pool,
+                pool=control_pool, control_pool=control_pool, runtime_pool=runtime_pool,
                 make_detector_runner=lambda bound: SimpleNamespace(pool=bound),
                 config=cfg,
                 templates=make_templates(
@@ -123,7 +125,7 @@ async def _migration_preserves_local_admin_scenario():
             assert account["password_hash"] == old_hash
             assert verify_password("old password", account["password_hash"])
 
-            # The login endpoint below is HEAD application code, not the
+            # The login endpoint below is current application code, not the
             # historical migration 020 -- it queries whatever columns
             # the account lookups currently select, so the rest of the
             # migrations (021+) have to be applied too before it can run,
@@ -131,9 +133,16 @@ async def _migration_preserves_local_admin_scenario():
             # above.
             async with pool.connection() as conn:
                 for path in paths:
-                    if not 21 <= int(path.name.split("_", 1)[0]) <= 25:
-                        continue
-                    await conn.execute(path.read_text())
+                    if int(path.name.split("_", 1)[0]) > 20:
+                        await conn.execute(path.read_text())
+                await conn.execute(
+                    "CREATE TABLE schema_migrations (version int PRIMARY KEY, "
+                    "applied_at timestamptz NOT NULL DEFAULT now())"
+                )
+            async with pool.connection() as conn:
+                for filename in ("account_bootstrap.sql", "account_admission.sql", "tracking_admission.sql"):
+                    await conn.execute((MIGRATIONS_DIR.parent / "scripts" / "sql" / filename).read_text())
+            await bind_auth_test_roles(pool)
 
             login_request = _request(pool, signup=False)
             login_response = await _endpoint("/login/local", "POST")(
@@ -168,6 +177,12 @@ async def _signup_scenario():
     await pool.open(wait=True)
     try:
         await reset_db(pool)
+        pools = await bind_auth_test_roles(pool)
+        async with pools.control.connection() as conn:
+            assert (await (await conn.execute("SELECT session_user")).fetchone())[0] == "odograph_control"
+            with pytest.raises(errors.InsufficientPrivilege):
+                async with conn.transaction():
+                    await conn.execute("SELECT * FROM trips")
         get_signup = _endpoint("/signup", "GET")
         post_signup = _endpoint("/signup", "POST")
         assert (await get_signup(_request(pool))).status_code == 200
@@ -213,6 +228,7 @@ async def _signup_disabled_scenario():
     await pool.open(wait=True)
     try:
         await reset_db(pool)
+        await bind_auth_test_roles(pool)
         for method in ("GET", "POST"):
             endpoint = _endpoint("/signup", method)
             with pytest.raises(Exception) as exc_info:
@@ -241,6 +257,7 @@ async def _signup_csrf_and_limiter_scenario():
     await pool.open(wait=True)
     try:
         await reset_db(pool)
+        await bind_auth_test_roles(pool)
         endpoint = _endpoint("/signup", "POST")
         with pytest.raises(Exception) as csrf_error:
             await endpoint(
@@ -289,6 +306,7 @@ async def _signup_invalid_email_scenario(email):
     await pool.open(wait=True)
     try:
         await reset_db(pool)
+        await bind_auth_test_roles(pool)
         response = await _endpoint("/signup", "POST")(
             _request(pool),
             email=email,
@@ -314,6 +332,7 @@ async def _concurrent_signup_scenario(monkeypatch):
     await pool.open(wait=True)
     try:
         await reset_db(pool)
+        await bind_auth_test_roles(pool)
         original = auth_module._signup_available
         ready = 0
         release = asyncio.Event()
@@ -368,6 +387,7 @@ async def _password_change_revokes_sessions_scenario():
     await pool.open(wait=True)
     try:
         await reset_db(pool)
+        await bind_auth_test_roles(pool)
         old_hash = hash_password("old password")
         async with pool.connection() as conn:
             await seed_auth_account(conn, password_hash=old_hash)
@@ -406,6 +426,7 @@ async def _password_change_failure_scenario():
     await pool.open(wait=True)
     try:
         await reset_db(pool)
+        await bind_auth_test_roles(pool)
         password_hash = hash_password("old password")
         async with pool.connection() as conn:
             await seed_auth_account(conn, password_hash=password_hash)
@@ -473,6 +494,7 @@ async def _legacy_session_boundary_scenario():
     await pool.open(wait=True)
     try:
         await reset_db(pool)
+        await bind_auth_test_roles(pool)
         session = {
             "legacy_oidc": {
                 "issuer": "https://idp.example.com",
@@ -514,6 +536,7 @@ async def _pre_account_session_bridge_scenario():
     await pool.open(wait=True)
     try:
         await reset_db(pool)
+        await bind_auth_test_roles(pool)
         request = _request(
             pool,
             signup=False,

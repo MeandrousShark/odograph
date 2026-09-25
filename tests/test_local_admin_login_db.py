@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
+from psycopg import errors
 
 from app.auth import make_router
 from app.db import make_pool
@@ -14,7 +15,7 @@ from app.ingest import FailedAuthLimiter
 from app.local_auth import hash_password
 from app.main import make_templates
 from conftest import reset_db
-from tests.auth_db_fixtures import auth_config, seed_auth_account
+from tests.auth_db_fixtures import auth_config, bind_auth_test_roles, seed_auth_account
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -39,12 +40,13 @@ async def _seed_admin(pool, *, email=ADMIN_EMAIL, password=ADMIN_PASSWORD, enabl
 
 
 def _request(pool, *, ip="203.0.113.9", limiter=None, session=None):
+    control_pool = getattr(pool, "control_pool", pool)
     cfg = auth_config(TEST_DB,
         initial_admin_signup=False, dev_no_auth=False, allowed_email=""
     )
     return SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
-            control_pool=pool, config=cfg,
+            control_pool=control_pool, config=cfg,
             templates=make_templates(SimpleNamespace(display_tz=TZ, app_version="test")),
             oauth=None,
             login_limiter=limiter or FailedAuthLimiter(3, 900.0),
@@ -66,7 +68,14 @@ async def _success_and_fixation_scenario():
     await pool.open(wait=True)
     try:
         await reset_db(pool)
+        roles = await bind_auth_test_roles(pool)
         await _seed_admin(pool)
+
+        async with roles.control.connection() as conn:
+            assert (await (await conn.execute("SELECT session_user")).fetchone())[0] == "odograph_control"
+            with pytest.raises(errors.InsufficientPrivilege):
+                async with conn.transaction():
+                    await conn.execute("SELECT * FROM trips")
 
         request = _request(pool)
         response = await _login_local(request)
@@ -93,6 +102,7 @@ async def _wrong_password_and_wrong_email_scenario():
     await pool.open(wait=True)
     try:
         await reset_db(pool)
+        await bind_auth_test_roles(pool)
         await _seed_admin(pool)
 
         wrong_password_request = _request(pool)
@@ -119,6 +129,7 @@ async def _bad_csrf_scenario():
     await pool.open(wait=True)
     try:
         await reset_db(pool)
+        await bind_auth_test_roles(pool)
         await _seed_admin(pool)
         request = _request(pool)
         from fastapi import HTTPException
@@ -138,6 +149,7 @@ async def _limiter_scenario():
     await pool.open(wait=True)
     try:
         await reset_db(pool)
+        await bind_auth_test_roles(pool)
         await _seed_admin(pool)
         limiter = FailedAuthLimiter(2, 900.0)
 
@@ -169,6 +181,7 @@ async def _non_ascii_email_scenario():
     await pool.open(wait=True)
     try:
         await reset_db(pool)
+        await bind_auth_test_roles(pool)
         await _seed_admin(pool)
         limiter = FailedAuthLimiter(1, 900.0)
 
@@ -193,6 +206,7 @@ async def _disabled_account_scenario():
     await pool.open(wait=True)
     try:
         await reset_db(pool)
+        await bind_auth_test_roles(pool)
         await _seed_admin(pool, enabled=False)
         request = _request(pool)
         response = await _login_local(request)

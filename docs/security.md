@@ -123,6 +123,12 @@ Every network-reachable route, and what actually guards it:
   invalidates other app sessions. It leaves the exact OIDC issuer and subject
   binding and saved notification destinations unchanged. Email verification
   does not reset a password.
+- **`/settings/account/sign-out-everywhere`**: authenticated POST with CSRF
+  increments only the current enabled account's authentication version and
+  invalidates its pending security proofs in one transaction. It clears the
+  submitting cookie and sends the browser to sign-in. The control is hidden
+  and the route rejects requests in `DEV_NO_AUTH` mode, which has no real app
+  session to revoke. Provider sessions and tracking credentials are separate.
 - **`/settings/tracking`**: requires the caller's enabled account session and
   form CSRF token for mutations. Device creation and password replacement
   show the new secret once, use `no-store`, and preserve stable device history.
