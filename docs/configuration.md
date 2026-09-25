@@ -213,13 +213,17 @@ choices in Settings. `NTFY_TOPIC` is only a legacy upgrade input.
 | `NTFY_TOKEN` | unset | Optional bearer token. |
 | `NTFY_USERNAME` | unset | Optional Basic-auth username. |
 | `NTFY_PASSWORD` | unset | Optional Basic-auth password. Username/password take precedence over a token when both are set. |
-| `APP_URL` | unset | Public HTTPS base URL placed in reminder links. It does not configure the reverse proxy. |
+| `APP_URL` | unset | Public HTTPS base URL placed in reminder and email confirmation links. It does not configure the reverse proxy. |
 
 ### Email
 
-Set `SMTP_HOST` and `EMAIL_FROM` for the shared transport, then save your
-recipient and delivery choices in Settings. The personal values below are
-legacy one-time upgrade inputs, not live overrides.
+Set `SMTP_HOST` and `EMAIL_FROM` for the shared transport, and set `APP_URL` to
+the public HTTPS base URL. These three values are required to send current
+login-email verification and change challenges. Challenges expire after 30
+minutes. Email challenges are sent to the address being verified or changed;
+they do not use `EMAIL_TO`. Save digest recipients and delivery choices in
+Settings. The personal values below are legacy one-time upgrade inputs, not
+live overrides.
 
 | Variable | Default | Purpose |
 |---|---:|---|
@@ -230,7 +234,7 @@ legacy one-time upgrade inputs, not live overrides.
 | `SMTP_SECURITY` | `starttls` | `starttls`, `ssl`, or `none`. Use `none` only for a trusted local relay. |
 | `SMTP_TLS_INSECURE` | `0` | `1` disables certificate verification. Use only for a localhost bridge with a self-signed certificate. |
 | `EMAIL_FROM` | unset | Message sender address. |
-| `EMAIL_TO` | unset | Message recipient address. |
+| `EMAIL_TO` | unset | Legacy one-time import of the email digest recipient; manage the saved recipient in Settings. |
 | `EMAIL_WEEKLY_NUDGE` | `0` | Sends the weekly unclassified-trip reminder by email. |
 | `EMAIL_MONTHLY_SUMMARY` | `1` | Sends monthly mileage summaries when email is enabled. |
 | `EMAIL_FILING_REMINDER` | `1` | Sends the annual filing reminder when email is enabled. |

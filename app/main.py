@@ -144,7 +144,7 @@ class SecurityHeadersMiddleware:
                     )
                     if self.hsts_max_age and is_https:
                         headers["Strict-Transport-Security"] = f"max-age={self.hsts_max_age}"
-                if scope.get("path") == "/invite":
+                if scope.get("path") in ("/invite", "/settings/account/email/confirm"):
                     headers["Cache-Control"] = "no-store, private"
                     headers["Referrer-Policy"] = "no-referrer"
             await send(message)

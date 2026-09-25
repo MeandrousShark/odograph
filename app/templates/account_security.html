@@ -82,6 +82,45 @@
 </form>
 </section>
 
+<section class="account-security-section" aria-labelledby="login-email-heading">
+  <h4 id="login-email-heading">Login email</h4>
+  {% if account_email_verified %}
+  <p class="muted">Your current login email is verified.</p>
+  {% else %}
+  <p class="muted">Your current login email has not been verified.</p>
+  {% endif %}
+  {% if email_challenge_available %}
+    {% if not account_email_verified %}
+    <h5>Verify your current email</h5>
+    <p>We'll send a confirmation link to {{ account_email }}. Your login stays the same.</p>
+    <form method="post" action="/settings/account/email/verify/request" class="auth-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <label>Current password
+        <input type="password" name="current_password" required autocomplete="current-password">
+      </label>
+      <button type="submit" class="control control-primary auth-submit">Send verification link</button>
+    </form>
+    {% endif %}
+    <h5>Change login email</h5>
+    <p>We'll send a confirmation link to the new address. Your current login email stays active until you confirm it.</p>
+    <form method="post" action="/settings/account/email/change/request" class="auth-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <label>New email address
+        <input type="email" name="new_email" required autocomplete="email" inputmode="email">
+      </label>
+      <label>Confirm new email address
+        <input type="email" name="new_email_confirm" required autocomplete="off" inputmode="email">
+      </label>
+      <label>Current password
+        <input type="password" name="current_password" required autocomplete="current-password">
+      </label>
+      <button type="submit" class="control control-primary auth-submit">Send confirmation link</button>
+    </form>
+  {% else %}
+  <p class="muted">Email challenge delivery isn't available right now.</p>
+  {% endif %}
+</section>
+
 <section class="account-security-section" aria-labelledby="oidc-provider-heading">
   <h4 id="oidc-provider-heading">Optional sign-in provider</h4>
   {% if not oidc_configured %}

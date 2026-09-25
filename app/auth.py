@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import logging
+import re
 import secrets
 import time
 from collections.abc import Mapping
@@ -38,10 +39,19 @@ from app.avatar_images import (
     detect_avatar as _detect_avatar,
 )
 from app.config import DEFAULT_ACCOUNT_AVATAR_MAX_BYTES
+from app.email_challenges import (
+    PURPOSE_CHANGE,
+    PURPOSE_CURRENT,
+    consume_email_challenge,
+    is_current_email_verified,
+    issue_email_challenge,
+    revoke_email_challenge,
+)
 from app.ingest import FailedAuthLimiter, _AuthSaturated, client_ip
 from app.ingest import _read_capped_body
 from app.invitations import InvitationUnavailable, redeem_invitation
 from app.local_auth import hash_password, verify_password
+from app.mailer import Mailer
 from app.page import render_page
 from app.uploads import read_capped_upload
 from app.oidc_identities import (
@@ -66,6 +76,9 @@ GENERIC_UNLINK_ERROR = "Unable to unlink sign-in provider."
 GENERIC_OIDC_ERROR = "Sign-in failed. Please try again."
 GENERIC_INVITE_ERROR = "Unable to accept invitation. Check the link or ask for a new one."
 MAX_INVITE_FORM_BYTES = 8192
+MAX_EMAIL_FORM_BYTES = 8192
+GENERIC_EMAIL_ERROR = "Unable to process email request. Please try again."
+EMAIL_REQUEST_NOTICE = "If the request is eligible, a verification email has been sent."
 OIDC_LINK_ATTEMPT_KEY = "oidc_link_attempt"
 OIDC_LINK_STATE_PREFIX = "link."
 OIDC_LOGIN_STATE_PREFIX = "login."
@@ -143,6 +156,39 @@ def _human_size(num_bytes: int) -> str:
     if num_bytes % 1024 == 0:
         return f"{num_bytes // 1024} KB"
     return f"{num_bytes} bytes"
+
+
+_EMAIL_LOCAL_RE = re.compile(r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]+\Z")
+_EMAIL_LABEL_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\Z")
+
+
+def _safe_delivery_email(email: str) -> bool:
+    """Accept one bounded mailbox, never a header or address list."""
+    if not valid_email(email) or len(email) > 254 or email.count("@") != 1:
+        return False
+    local, domain = email.split("@")
+    if not local or len(local) > 64 or local.startswith(".") or local.endswith(".") or ".." in local:
+        return False
+    if not _EMAIL_LOCAL_RE.fullmatch(local):
+        return False
+    labels = domain.split(".")
+    return bool(labels and all(len(label) <= 63 and _EMAIL_LABEL_RE.fullmatch(label) for label in labels))
+
+
+async def _email_form(request: Request, fields: set[str]) -> dict[str, str]:
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/x-www-form-urlencoded":
+        raise HTTPException(status_code=400, detail=GENERIC_EMAIL_ERROR)
+    body = await _read_capped_body(request, MAX_EMAIL_FORM_BYTES)
+    if body is None:
+        raise HTTPException(status_code=413, detail=GENERIC_EMAIL_ERROR)
+    try:
+        parsed = parse_qs(body.decode("utf-8"), keep_blank_values=True,
+                          strict_parsing=True, max_num_fields=len(fields))
+        if set(parsed) != fields or any(len(values) != 1 for values in parsed.values()):
+            raise ValueError("invalid fields")
+    except (UnicodeDecodeError, ValueError):
+        raise HTTPException(status_code=400, detail=GENERIC_EMAIL_ERROR) from None
+    return {name: values[0] for name, values in parsed.items()}
 
 
 def _avatar_upload_exceeds_limit(request: Request) -> bool:
@@ -596,10 +642,19 @@ def make_router() -> APIRouter:
             "account_avatar_max_bytes",
             DEFAULT_ACCOUNT_AVATAR_MAX_BYTES,
         )
+        cfg = request.app.state.config
+        async with control_connection(request.app.state.control_pool) as conn:
+            account_email_verified = await is_current_email_verified(conn, account["id"])
         context = {
             "user": user,
             "csrf": _ensure_csrf(request),
             "account_email": account["email"],
+            "account_email_verified": account_email_verified,
+            "email_challenge_available": bool(
+                getattr(cfg, "smtp_host", "") and getattr(cfg, "email_from", "")
+                and getattr(cfg, "app_url", "") and account["password_hash"]
+                and not cfg.dev_no_auth
+            ),
             "oidc_configured": oidc_configured,
             "linked_identity": linked_identity,
             "avatar_max_bytes": avatar_max_bytes,
@@ -1132,6 +1187,114 @@ def make_router() -> APIRouter:
         if account is None:
             raise AuthRedirect()
         return await _render_account(request, account, user, include_review_count=True)
+
+    async def _render_email_challenge(
+        request: Request, user: dict | None, *, error: str | None = None,
+        success: str | None = None, status_code: int = 200,
+    ):
+        return request.app.state.templates.TemplateResponse(
+            request, "email_challenge_confirm.html",
+            {"user": user, "csrf": _ensure_csrf(request), "error": error, "success": success},
+            status_code=status_code,
+            headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+        )
+
+    async def _request_email_challenge(
+        request: Request, user: dict, values: dict[str, str], purpose: str,
+    ):
+        check_form_csrf(request, values["csrf_token"])
+        cfg = request.app.state.config
+        if not (cfg.smtp_host and cfg.email_from and cfg.app_url) or cfg.dev_no_auth:
+            return await _render_account_unavailable(request, user)
+        limiter: FailedAuthLimiter = request.app.state.login_limiter
+        try:
+            account = await limiter.run_bounded(lambda: _verified_account(
+                request, user, values["current_password"], generic_error=GENERIC_EMAIL_ERROR
+            ))
+        except _AuthSaturated:
+            return await _render_account_unavailable(request, user, status_code=503)
+        except _AccountActionRejected as rejected:
+            return await _render_rejection(request, user, rejected)
+        target = account["email"] if purpose == PURPOSE_CURRENT else normalize_email(values["new_email"])
+        if purpose == PURPOSE_CHANGE and target != normalize_email(values["new_email_confirm"]):
+            return await _render_account(request, account, user, error="Email addresses do not match.", status_code=400)
+        if not _safe_delivery_email(target):
+            return await _render_account(request, account, user, error="Enter a valid email address.", status_code=400)
+        if purpose == PURPOSE_CHANGE and target == account["email"]:
+            return await _render_account(request, account, user, error="Enter a different email address.", status_code=400)
+        async with control_connection(request.app.state.control_pool) as conn:
+            token = await issue_email_challenge(
+                conn, account["id"], request.state.principal.auth_version, purpose, target
+            )
+        if token is not None:
+            mailer = Mailer(
+                cfg.smtp_host, cfg.smtp_port, cfg.smtp_username, cfg.smtp_password,
+                cfg.smtp_security, cfg.smtp_tls_insecure, cfg.email_from, target,
+            )
+            link = f"{cfg.app_url}/settings/account/email/confirm#purpose={purpose}&token={token}"
+            try:
+                message = mailer.compose(
+                    "Confirm your Odograph email address",
+                    "To confirm your email address, open this link while signed in:\n"
+                    f"{link}\n\nIf the link does not fill the form, choose {purpose} "
+                    f"and enter this code manually: {token}\n\n"
+                    "The code expires in 30 minutes. If you did not request this, ignore this email.",
+                )
+                await mailer.send(message)
+            except Exception:
+                async with control_connection(request.app.state.control_pool) as conn:
+                    await revoke_email_challenge(conn, account["id"], purpose, token)
+                return await _render_account(request, account, user, error=GENERIC_EMAIL_ERROR, status_code=503)
+        return await _render_account(request, account, user, success=EMAIL_REQUEST_NOTICE)
+
+    async def _render_account_unavailable(request: Request, user: dict, *, status_code: int = 503):
+        async with control_connection(request.app.state.control_pool) as conn:
+            account = await get_account(conn, user["id"])
+        if account is None:
+            request.session.clear()
+            raise AuthRedirect()
+        return await _render_account(request, account, user, error=GENERIC_EMAIL_ERROR, status_code=status_code)
+
+    @router.post("/settings/account/email/verify/request")
+    async def request_current_email(request: Request, user: dict = Depends(require_user)):
+        values = await _email_form(request, {"current_password", "csrf_token"})
+        return await _request_email_challenge(request, user, values, PURPOSE_CURRENT)
+
+    @router.post("/settings/account/email/change/request")
+    async def request_change_email(request: Request, user: dict = Depends(require_user)):
+        values = await _email_form(request, {"new_email", "new_email_confirm", "current_password", "csrf_token"})
+        return await _request_email_challenge(request, user, values, PURPOSE_CHANGE)
+
+    @router.get("/settings/account/email/confirm")
+    async def email_confirmation(request: Request):
+        try:
+            user = await require_user(request)
+        except AuthRedirect:
+            user = None
+        return await _render_email_challenge(request, user)
+
+    @router.post("/settings/account/email/confirm")
+    async def confirm_email(request: Request, user: dict = Depends(require_user)):
+        values = await _email_form(request, {"purpose", "token", "csrf_token"})
+        check_form_csrf(request, values["csrf_token"])
+        purpose, token = values["purpose"], values["token"]
+        if purpose not in (PURPOSE_CURRENT, PURPOSE_CHANGE) or not token or len(token) > 256 or not token.isascii():
+            return await _render_email_challenge(request, user, error=GENERIC_EMAIL_ERROR, status_code=400)
+        limiter: FailedAuthLimiter = request.app.state.login_limiter
+        ip = client_ip(request)
+        if limiter.blocked(ip):
+            return await _render_email_challenge(request, user, error=GENERIC_EMAIL_ERROR, status_code=429)
+        async with control_connection(request.app.state.control_pool) as conn:
+            account = await consume_email_challenge(
+                conn, user["id"], request.state.principal.auth_version, purpose, token
+            )
+        if account is None:
+            limiter.record_failure(ip)
+            return await _render_email_challenge(request, user, error=GENERIC_EMAIL_ERROR, status_code=400)
+        if purpose == PURPOSE_CHANGE:
+            _set_account_session(request, account)
+            user = _account_user(account)
+        return await _render_email_challenge(request, user, success="Email address confirmed.")
 
     @router.get("/account/avatar")
     async def account_avatar(request: Request, user: dict = Depends(require_user)):

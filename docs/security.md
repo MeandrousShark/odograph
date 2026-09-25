@@ -91,7 +91,15 @@ Every network-reachable route, and what actually guards it:
   the current local password and a fresh provider authorization. Unlinking
   requires the current password and explicit confirmation, removes the stored
   identity, increments the authentication version, and clears the current
-  session.
+  session. Current-email verification and login-email change also require the
+  current password and email challenge delivery configured with `SMTP_HOST`,
+  `EMAIL_FROM`, and `APP_URL`. Challenges expire after 30 minutes and are
+  single-use. A login-email change takes effect only after the new address is
+  confirmed; the current email remains usable until then. A confirmed
+  login-email change increments the authentication version, invalidating
+  existing app sessions.
+  It leaves the exact OIDC issuer and subject binding and saved notification
+  destinations unchanged. This flow does not reset passwords by email.
 - **`/settings/tracking`**: requires the caller's enabled account session and
   form CSRF token for mutations. Device creation and password replacement
   show the new secret once, use `no-store`, and preserve stable device history.

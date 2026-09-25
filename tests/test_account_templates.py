@@ -107,6 +107,8 @@ def _render_account_security(
     linked_identity=None,
     error=None,
     success=None,
+    account_email_verified=False,
+    email_challenge_available=True,
     has_avatar=False,
     avatar_version=0,
     avatar_max_label="500 KB",
@@ -118,11 +120,23 @@ def _render_account_security(
         },
         csrf="test-csrf-token",
         account_email="admin@example.com",
+        account_email_verified=account_email_verified,
+        email_challenge_available=email_challenge_available,
         oidc_configured=oidc_configured,
         linked_identity=linked_identity,
         avatar_max_label=avatar_max_label,
         error=error,
         success=success,
+    )
+
+
+def _render_email_challenge_confirm(*, user=True, error=None, success=None):
+    return _templates().env.get_template("email_challenge_confirm.html").render(
+        user={"id": 1, "name": "admin", "is_admin": True} if user else None,
+        csrf="test-csrf-token",
+        error=error,
+        success=success,
+        csp_nonce="test-nonce",
     )
 
 
@@ -151,10 +165,74 @@ def test_account_security_shows_safe_email_password_form_and_recovery_command():
     assert 'id="change-password-heading">Change password</h4>' in body
     assert 'aria-labelledby="operator-recovery-heading"' in body
     assert 'id="operator-recovery-heading">Operator recovery</h4>' in body
+    assert 'id="login-email-heading">Login email</h4>' in body
+    assert 'action="/settings/account/email/verify/request"' in body
+    assert 'action="/settings/account/email/change/request"' in body
     structure = _ContainerStructureParser()
     structure.feed(body)
     assert structure.errors == []
     assert structure.stack == []
+
+
+def test_account_email_forms_require_password_and_collect_twice_entered_new_address():
+    body = _render_account_security()
+
+    verify = body.split('action="/settings/account/email/verify/request"', 1)[1].split("</form>", 1)[0]
+    change = body.split('action="/settings/account/email/change/request"', 1)[1].split("</form>", 1)[0]
+    assert 'name="csrf_token" value="test-csrf-token"' in verify
+    assert 'name="current_password"' in verify
+    assert 'name="current_password"' in change
+    assert 'name="new_email"' in change and 'type="email"' in change
+    assert 'name="new_email_confirm"' in change and 'type="email"' in change
+    assert "current login email stays active until you confirm it" in body
+
+
+def test_account_email_verified_state_and_smtp_availability_gate_request_forms():
+    verified = _render_account_security(account_email_verified=True)
+    assert "Your current login email is verified." in verified
+    assert 'action="/settings/account/email/verify/request"' not in verified
+    assert 'action="/settings/account/email/change/request"' in verified
+
+    unavailable = _render_account_security(email_challenge_available=False)
+    assert "Email challenge delivery isn't available right now." in unavailable
+    assert 'action="/settings/account/email/verify/request"' not in unavailable
+    assert 'action="/settings/account/email/change/request"' not in unavailable
+
+
+def test_email_challenge_confirmation_scrubs_fragment_and_keeps_manual_token_entry():
+    body = _render_email_challenge_confirm()
+
+    assert 'action="/settings/account/email/confirm"' in body
+    assert 'name="csrf_token" value="test-csrf-token"' in body
+    assert 'name="purpose"' in body
+    assert 'value="verify_current"' in body
+    assert 'value="change_email"' in body
+    assert 'id="email-challenge-token" type="text" name="token" required' in body
+    assert 'fragment.get("purpose")' in body
+    assert 'fragment.get("token")' in body
+    assert 'window.history.replaceState(' in body
+    assert 'window.location.pathname + window.location.search' in body
+    assert 'window.location.href' not in body
+    assert "paste the token from your email" in body
+    assert 'name="token" value=' not in body
+
+
+def test_email_challenge_confirmation_success_does_not_render_a_token_form():
+    body = _render_email_challenge_confirm(success="Email address confirmed.")
+
+    assert 'class="notice notice-success form-success" role="status"' in body
+    assert "Email address confirmed." in body
+    assert 'action="/settings/account/email/confirm"' not in body
+    assert 'name="token"' not in body
+
+
+def test_signed_out_email_challenge_page_offers_safe_sign_in_path():
+    body = _render_email_challenge_confirm(user=False)
+
+    assert "Sign in as the account that requested this challenge before submitting." in body
+    assert 'href="/login"' in body
+    assert 'href="/settings/account"' not in body
+    assert 'href="/login?token=' not in body
 
 
 def test_account_settings_keeps_notices_above_two_distinct_content_cards():
