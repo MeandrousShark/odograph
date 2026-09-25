@@ -398,7 +398,8 @@ docker compose exec app python -m app.manage_account create-admin
 # or: podman-compose exec app python -m app.manage_account create-admin
 ```
 
-Use `reset-password` instead when an account already exists. Both commands read
+Use `list-accounts` and then `reset-password ACCOUNT_ID` instead when an account
+already exists. Both commands read
 passwords interactively or from protected standard input and accept no password
 argument. After `create-admin`, sign in locally and use Account Settings to link
 the provider deliberately when it is available. Linking requires the current

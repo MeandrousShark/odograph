@@ -213,9 +213,13 @@ What losing a given value actually costs, if you don't have a copy:
   in `.env` and recreate the app. This signs every existing browser session
   out at once; it doesn't touch stored data.
 - **Local administrator credentials** live in the database, not `.env`.
-  Restore them with the database archive. If the password is lost, run
-  `python -m app.manage_account reset-password` inside the app container;
-  the reset invalidates previously issued sessions.
+  Restore them with the database archive. Finalizing a restore signs every
+  account out and revokes outstanding invitations, email challenges and
+  password reset links, because the archive's session versions are older than
+  cookies issued since the backup. If a password is lost, run
+  `python -m app.manage_account list-accounts`, then
+  `python -m app.manage_account reset-password ACCOUNT_ID` inside the app
+  container; the reset invalidates that account's previously issued sessions.
 - **Tracking credentials** are stored as hashes in schema-26 backups, so
   restored devices keep working with their existing credentials. The old
   `INGEST_PASSWORD` is imported only once; changing `.env` cannot rotate or

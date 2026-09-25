@@ -213,15 +213,20 @@ choices in Settings. `NTFY_TOPIC` is only a legacy upgrade input.
 | `NTFY_TOKEN` | unset | Optional bearer token. |
 | `NTFY_USERNAME` | unset | Optional Basic-auth username. |
 | `NTFY_PASSWORD` | unset | Optional Basic-auth password. Username/password take precedence over a token when both are set. |
-| `APP_URL` | unset | Public HTTPS base URL placed in reminder and email confirmation links. It does not configure the reverse proxy. |
+| `APP_URL` | unset | Public HTTPS base URL placed in reminder, email confirmation and password reset links. It must be an absolute `http` or `https` URL with a host and no user information, query or fragment; otherwise emailed security links are disabled. It does not configure the reverse proxy. |
 
 ### Email
 
 Set `SMTP_HOST` and `EMAIL_FROM` for the shared transport, and set `APP_URL` to
 the public HTTPS base URL. These three values are required to send current
-login-email verification and change challenges. Challenges expire after 30
-minutes. Email challenges are sent to the address being verified or changed;
-they do not use `EMAIL_TO`. Save digest recipients and delivery choices in
+login-email verification and change challenges and to offer **Forgot
+password?**. Challenges and reset links expire after 30 minutes. Email
+challenges are sent to the address being verified or changed, and reset links
+only to the account's verified login email; neither uses `EMAIL_TO`. A reset
+request is answered before any lookup or delivery. Each account accepts at
+most one public reset request a minute and five a day, and a repeat request
+within 10 minutes of a delivered link does not replace it. Delivery failures
+are logged without the address or link. Save digest recipients and delivery choices in
 Settings. The personal values below are legacy one-time upgrade inputs, not
 live overrides.
 
