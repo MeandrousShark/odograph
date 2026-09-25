@@ -20,6 +20,7 @@ from app.oidc_identities import (
     unlink_identity,
 )
 from conftest import reset_db
+from tests.auth_db_fixtures import bind_auth_test_roles
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -37,7 +38,8 @@ async def _schema_scenario():
     await pool.open(wait=True)
     try:
         await reset_db(pool)
-        async with pool.connection() as conn:
+        roles = await bind_auth_test_roles(pool)
+        async with roles.control.connection() as conn:
             account = await create_admin(conn, "admin@example.com", "hash")
             await conn.execute(
                 "INSERT INTO oidc_identities (account_id, issuer, subject) "
@@ -78,7 +80,8 @@ async def _resolution_and_metadata_scenario():
     await pool.open(wait=True)
     try:
         await reset_db(pool)
-        async with pool.connection() as conn:
+        roles = await bind_auth_test_roles(pool)
+        async with roles.control.connection() as conn:
             account = await create_admin(conn, "local@example.com", "hash")
             identity = await create_identity_link(
                 conn,
@@ -149,7 +152,8 @@ async def _duplicate_and_owner_scenario():
     await pool.open(wait=True)
     try:
         await reset_db(pool)
-        async with pool.connection() as conn:
+        roles = await bind_auth_test_roles(pool)
+        async with roles.control.connection() as conn:
             owner = await create_admin(conn, "owner@example.com", "hash")
             await create_identity_link(
                 conn, owner["id"], "https://id.example", "subject-1"
@@ -160,21 +164,26 @@ async def _duplicate_and_owner_scenario():
                 )
                 is None
             )
-
+        async with pool.connection() as conn:
             await conn.execute("DROP INDEX accounts_singleton_idx")
             # A privileged synthetic second identity isolates link ownership;
             # first-account bootstrap correctly remains closed even without its index.
             cur = conn.cursor(row_factory=dict_row)
             await cur.execute("INSERT INTO accounts(email,password_hash) VALUES('other@example.com','hash') RETURNING id")
             other = await cur.fetchone()
-            assert (
-                await create_identity_link(
-                    conn, other["id"], "https://id.example", "subject-1"
+
+        try:
+            async with roles.control.connection() as conn:
+                assert (
+                    await create_identity_link(
+                        conn, other["id"], "https://id.example", "subject-1"
+                    )
+                    is None
                 )
-                is None
-            )
-            await conn.execute("DELETE FROM accounts WHERE id = %s", (other["id"],))
-            await conn.execute("CREATE UNIQUE INDEX accounts_singleton_idx ON accounts ((true))")
+        finally:
+            async with pool.connection() as conn:
+                await conn.execute("DELETE FROM accounts WHERE id = %s", (other["id"],))
+                await conn.execute("CREATE UNIQUE INDEX accounts_singleton_idx ON accounts ((true))")
     finally:
         await pool.close()
 
@@ -188,7 +197,8 @@ async def _stale_link_scenario():
     await pool.open(wait=True)
     try:
         await reset_db(pool)
-        async with pool.connection() as conn:
+        roles = await bind_auth_test_roles(pool)
+        async with roles.control.connection() as conn:
             account = await create_admin(conn, "admin@example.com", "hash")
             assert (
                 await create_identity_link(
@@ -221,7 +231,8 @@ async def _unlink_scenario():
     await pool.open(wait=True)
     try:
         await reset_db(pool)
-        async with pool.connection() as conn:
+        roles = await bind_auth_test_roles(pool)
+        async with roles.control.connection() as conn:
             account = await create_admin(conn, "admin@example.com", "hash")
             await create_identity_link(
                 conn, account["id"], "https://id.example", "subject-1"
@@ -275,25 +286,31 @@ async def _legacy_establishment_scenario():
     await pool.open(wait=True)
     try:
         await reset_db(pool)
+        roles = await bind_auth_test_roles(pool)
         async with pool.connection() as conn:
             await conn.execute("DROP INDEX accounts_singleton_idx")
-            owner = await create_admin(conn, "owner@example.com", "hash")
-            await create_identity_link(
-                conn, owner["id"], "https://id.example", "subject-1"
-            )
-            with pytest.raises(errors.UniqueViolation):
-                await establish_legacy_admin_identity(
-                    conn,
-                    email="new@example.com",
-                    password_hash="new-hash",
-                    issuer="https://id.example/",
-                    subject="subject-1",
-                    provider_email="current@example.net",
+
+        try:
+            async with roles.control.connection() as conn:
+                owner = await create_admin(conn, "owner@example.com", "hash")
+                await create_identity_link(
+                    conn, owner["id"], "https://id.example", "subject-1"
                 )
-            cur = await conn.execute("SELECT email FROM accounts ORDER BY id")
-            assert [row[0] for row in await cur.fetchall()] == ["owner@example.com"]
-            assert await _identity_count(conn) == 1
-            await conn.execute("CREATE UNIQUE INDEX accounts_singleton_idx ON accounts ((true))")
+                with pytest.raises(errors.UniqueViolation):
+                    await establish_legacy_admin_identity(
+                        conn,
+                        email="new@example.com",
+                        password_hash="new-hash",
+                        issuer="https://id.example/",
+                        subject="subject-1",
+                        provider_email="current@example.net",
+                    )
+        finally:
+            async with pool.connection() as conn:
+                cur = await conn.execute("SELECT email FROM accounts ORDER BY id")
+                assert [row[0] for row in await cur.fetchall()] == ["owner@example.com"]
+                assert await _identity_count(conn) == 1
+                await conn.execute("CREATE UNIQUE INDEX accounts_singleton_idx ON accounts ((true))")
     finally:
         await pool.close()
 
@@ -314,12 +331,14 @@ def test_failed_identity_link_rolls_back_first_account_and_all_owned_defaults(mo
         await pool.open(wait=True)
         try:
             await reset_db(pool)
-            async with pool.connection() as conn:
+            roles = await bind_auth_test_roles(pool)
+            async with roles.control.connection() as conn:
                 with pytest.raises(IdentityLinkRejectedError):
                     await establish_legacy_admin_identity(
                         conn, email="admin@example.com", password_hash="test-hash",
                         issuer="https://id.example", subject="subject-1",
                     )
+            async with pool.connection() as conn:
                 for table in ("accounts", "account_settings", "vehicles", "tag_rules", "mileage_rates", "oidc_identities"):
                     assert (await (await conn.execute(f"SELECT count(*) FROM {table}")).fetchone())[0] == 0
                 assert (await (await conn.execute("SELECT first_account_id,bootstrap_completed_at FROM instance_state WHERE id=1")).fetchone()) == (None,None)

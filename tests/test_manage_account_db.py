@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 import io
 import os
+from contextlib import asynccontextmanager
 
 import pytest
+from psycopg import errors
 
+import app.manage_account as manage_account
 from app.db import make_pool
 from app.local_auth import verify_password
 from app.manage_account import main
@@ -64,6 +67,19 @@ def test_operator_command_creates_then_resets_admin_and_revokes_sessions(
 ):
     asyncio.run(_reset_schema())
     monkeypatch.setenv("DATABASE_URL", TEST_DB)
+    original_role_pools = manage_account.application_role_pools
+
+    @asynccontextmanager
+    async def verify_restricted_path(database_url):
+        async with original_role_pools(database_url) as pools:
+            async with pools.control.connection() as conn:
+                assert (await (await conn.execute("SELECT session_user")).fetchone())[0] == "odograph_control"
+                with pytest.raises(errors.InsufficientPrivilege):
+                    async with conn.transaction():
+                        await conn.execute("SELECT * FROM trips")
+            yield pools
+
+    monkeypatch.setattr(manage_account, "application_role_pools", verify_restricted_path)
 
     first_password = "first strong password"
     account_id = _create_admin(monkeypatch, first_password)

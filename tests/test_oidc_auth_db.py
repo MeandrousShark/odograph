@@ -6,12 +6,13 @@ from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
+from psycopg import errors
 from psycopg.rows import dict_row
 from starlette.responses import RedirectResponse
 
 import app.auth as auth_module
 from app.auth import AuthRedirect, make_router, require_user, require_legacy_establishment
-from tests.auth_db_fixtures import auth_config, seed_auth_account
+from tests.auth_db_fixtures import auth_config, bind_auth_test_roles, seed_auth_account
 from app.db import make_pool
 from app.ingest import FailedAuthLimiter
 from app.local_auth import hash_password
@@ -57,6 +58,8 @@ def _request(
     allowed_email="",
     initial_signup=False,
 ):
+    control_pool = getattr(pool, "control_pool", pool)
+    runtime_pool = getattr(pool, "runtime_pool", pool)
     cfg = auth_config(TEST_DB,
         dev_no_auth=False,
         initial_admin_signup=initial_signup,
@@ -68,7 +71,7 @@ def _request(
         state=SimpleNamespace(),
         app=SimpleNamespace(
             state=SimpleNamespace(
-                pool=pool, control_pool=pool, runtime_pool=pool,
+                pool=control_pool, control_pool=control_pool, runtime_pool=runtime_pool,
                 make_detector_runner=lambda bound: SimpleNamespace(pool=bound),
                 config=cfg,
                 oauth=SimpleNamespace(pocketid=oauth_client),
@@ -112,6 +115,12 @@ async def _link_and_exact_login_scenario():
     await pool.open(wait=True)
     try:
         await reset_db(pool)
+        roles = await bind_auth_test_roles(pool)
+        async with roles.control.connection() as conn:
+            assert (await (await conn.execute("SELECT session_user")).fetchone())[0] == "odograph_control"
+            with pytest.raises(errors.InsufficientPrivilege):
+                async with conn.transaction():
+                    await conn.execute("SELECT * FROM trips")
         account = await _create_account(pool)
         oauth_client = _OAuthClient(
             {
@@ -205,6 +214,7 @@ async def _link_and_unlink_failures_scenario():
     await pool.open(wait=True)
     try:
         await reset_db(pool)
+        await bind_auth_test_roles(pool)
         await _create_account(pool)
         oauth_client = _OAuthClient({"sub": "subject-1", "email": "local@example.com"})
         user = {
@@ -342,6 +352,7 @@ async def _legacy_establishment_and_email_fallback_scenario():
     await pool.open(wait=True)
     try:
         await reset_db(pool)
+        await bind_auth_test_roles(pool)
         oauth_client = _OAuthClient()
         legacy_session = {
             "legacy_oidc": {
@@ -404,6 +415,7 @@ async def _failed_legacy_establishment_scenario(monkeypatch):
     await pool.open(wait=True)
     try:
         await reset_db(pool)
+        await bind_auth_test_roles(pool)
         oauth_client = _OAuthClient()
         request = _request(
             pool,
@@ -451,6 +463,7 @@ async def _no_provider_scenario():
     await pool.open(wait=True)
     try:
         await reset_db(pool)
+        await bind_auth_test_roles(pool)
         await _create_account(pool)
         request = _request(
             pool,
