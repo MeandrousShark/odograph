@@ -15,7 +15,8 @@ import logging
 import secrets
 import time
 from collections import deque
-from typing import Callable
+from contextlib import asynccontextmanager
+from typing import AsyncContextManager, Callable
 
 from app.account_context import control_connection
 from app.accounts import get_account, safe_delivery_email
@@ -34,14 +35,24 @@ MAX_LIMITER_KEYS = 1024
 
 async def issue_password_reset(
     conn, token: str, *, initiator: str, email: str | None = None, account_id: int | None = None,
+    actor_id: int | None = None, actor_auth_version: int | None = None,
 ) -> str | None:
     """Record a reset for `token`; return the verified delivery address."""
     digest = _digest(token)
     if digest is None:
         return None
-    cur = await conn.execute(
-        "SELECT public.issue_password_reset(%s,%s,%s,%s)", (account_id, email, initiator, digest),
-    )
+    if initiator == INITIATOR_PUBLIC and actor_id is None and actor_auth_version is None:
+        cur = await conn.execute(
+            "SELECT public.issue_password_reset(%s,%s,%s,%s)", (account_id, email, initiator, digest),
+        )
+    elif (initiator == INITIATOR_ADMIN and email is None and account_id is not None
+          and actor_id is not None and actor_auth_version is not None):
+        cur = await conn.execute(
+            "SELECT public.issue_admin_password_reset(%s,%s,%s,%s)",
+            (actor_id, actor_auth_version, account_id, digest),
+        )
+    else:
+        return None
     return (await cur.fetchone())[0]
 
 
@@ -56,6 +67,19 @@ async def password_reset_usable(conn, token: str, *, lock_account: bool = False)
     if digest is None:
         return False
     cur = await conn.execute("SELECT public.password_reset_usable(%s,%s)", (digest, lock_account))
+    return bool((await cur.fetchone())[0])
+
+
+async def password_reset_send_usable(
+    conn, token: str, *, actor_id: int | None = None, actor_auth_version: int | None = None,
+) -> bool:
+    digest = _digest(token)
+    if digest is None:
+        return False
+    cur = await conn.execute(
+        "SELECT public.password_reset_send_usable(%s,%s,%s)",
+        (digest, actor_id, actor_auth_version),
+    )
     return bool((await cur.fetchone())[0])
 
 
@@ -133,16 +157,33 @@ class SecurityMailAdmission:
         self._slots = asyncio.Semaphore(limit)
         self._tasks: set[asyncio.Task] = set()
 
-    async def send(self, mailer: Mailer, message) -> None:
+    async def send(
+        self, mailer: Mailer, message, *, wait: bool = True,
+        admit: Callable[[], AsyncContextManager[bool]] | None = None,
+    ) -> bool:
+        if not wait and self._slots.locked():
+            return False
         await self._slots.acquire()
+        task = None
         try:
-            task = asyncio.create_task(mailer.send(message))
-        except BaseException:
-            self._slots.release()
-            raise
+            if admit is None:
+                task = self._start_send(mailer, message)
+            else:
+                async with admit() as allowed:
+                    if not allowed:
+                        return False
+                    task = self._start_send(mailer, message)
+        finally:
+            if task is None:
+                self._slots.release()
+        await asyncio.shield(task)
+        return True
+
+    def _start_send(self, mailer: Mailer, message) -> asyncio.Task:
+        task = asyncio.create_task(mailer.send(message))
         self._tasks.add(task)
         task.add_done_callback(self._finished)
-        await asyncio.shield(task)
+        return task
 
     def _finished(self, task: asyncio.Task) -> None:
         self._tasks.discard(task)
@@ -200,8 +241,8 @@ class RecoveryQueue:
     def submit_public(self, email: str) -> bool:
         return self._submit((INITIATOR_PUBLIC, email))
 
-    def submit_admin(self, account_id: int) -> bool:
-        return self._submit((INITIATOR_ADMIN, account_id))
+    def submit_admin(self, actor_id: int, actor_auth_version: int, account_id: int) -> bool:
+        return self._submit((INITIATOR_ADMIN, actor_id, actor_auth_version, account_id))
 
     def _submit(self, item: tuple[str, object]) -> bool:
         if self._closed:
@@ -230,14 +271,18 @@ class RecoveryQueue:
             except Exception as exc:
                 log.warning("password reset request failed (%s)", type(exc).__name__)
 
-    async def _process(self, item: tuple[str, object]) -> None:
-        initiator, target = item
+    async def _process(self, item: tuple) -> None:
+        initiator = item[0]
+        target = item[1] if initiator == INITIATOR_PUBLIC else item[3]
+        actor_id = item[1] if initiator == INITIATOR_ADMIN else None
+        actor_version = item[2] if initiator == INITIATOR_ADMIN else None
         token = secrets.token_urlsafe(32)
         async with control_connection(self._pool) as conn:
             address = await issue_password_reset(
                 conn, token, initiator=initiator,
                 email=target if initiator == INITIATOR_PUBLIC else None,
                 account_id=target if initiator == INITIATOR_ADMIN else None,
+                actor_id=actor_id, actor_auth_version=actor_version,
             )
             if address is not None and not safe_delivery_email(address):
                 await revoke_password_reset(conn, token)
@@ -246,14 +291,18 @@ class RecoveryQueue:
             return
         mailer = self._mailer_for(address)
         message = reset_message(mailer, self._link_base, token)
-        # The last check before delivery, under the account's row lock.
-        async with control_connection(self._pool) as conn:
-            async with conn.transaction():
-                usable = await password_reset_usable(conn, token, lock_account=True)
-        if not usable:
-            return
+        @asynccontextmanager
+        async def admit():
+            async with control_connection(self._pool) as conn:
+                async with conn.transaction():
+                    yield await password_reset_send_usable(
+                        conn, token, actor_id=actor_id, actor_auth_version=actor_version,
+                    )
         try:
-            await self._admission.send(mailer, message)
+            admitted = await self._admission.send(mailer, message, admit=admit)
+            if not admitted:
+                async with control_connection(self._pool) as conn:
+                    await revoke_password_reset(conn, token)
         except Exception as exc:
             log.warning("password reset delivery failed (%s)", type(exc).__name__)
             async with control_connection(self._pool) as conn:

@@ -5,6 +5,7 @@ import hmac
 import logging
 import secrets
 from collections.abc import Mapping
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from urllib.parse import parse_qs
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -44,6 +45,7 @@ from app.email_challenges import (
     PURPOSE_CURRENT,
     _digest as _challenge_digest,
     consume_email_challenge,
+    email_challenge_send_usable,
     is_current_email_verified,
     issue_email_challenge,
     revoke_email_challenge,
@@ -1463,7 +1465,19 @@ def make_router() -> APIRouter:
                     f"and enter this code manually: {token}\n\n"
                     "The code expires in 30 minutes. If you did not request this, ignore this email.",
                 )
-                await request.app.state.security_mail.send(mailer, message)
+
+                @asynccontextmanager
+                async def admit():
+                    async with control_connection(request.app.state.control_pool) as conn:
+                        async with conn.transaction():
+                            yield await email_challenge_send_usable(
+                                conn, account["id"], request.state.principal.auth_version,
+                                purpose, token,
+                            )
+
+                admitted = await request.app.state.security_mail.send(mailer, message, admit=admit)
+                if not admitted:
+                    raise RuntimeError("email challenge no longer eligible for delivery")
             except Exception:
                 async with control_connection(request.app.state.control_pool) as conn:
                     await revoke_email_challenge(conn, account["id"], purpose, token)

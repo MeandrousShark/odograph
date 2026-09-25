@@ -61,6 +61,8 @@
       {% set active_page = "expenses" %}
     {% elif current_path == "/stats" or current_path.startswith("/stats/") %}
       {% set active_page = "stats" %}
+    {% elif current_path == "/admin/accounts" or current_path.startswith("/admin/") %}
+      {% set active_page = "accounts" %}
     {% endif %}
     {% set more_active = active_page in ("expenses", "stats") %}
     {% set settings_active = current_path == "/settings" %}
@@ -86,6 +88,7 @@
       <a href="/report"{% if active_page == "report" %} aria-current="page"{% endif %}>Report</a>
       <a href="/expenses"{% if active_page == "expenses" %} aria-current="page"{% endif %}>Expenses</a>
       <a href="/stats"{% if active_page == "stats" %} aria-current="page"{% endif %}>Stats</a>
+      {% if user.is_admin %}<a href="/admin/accounts"{% if active_page == "accounts" %} aria-current="page"{% endif %}>Accounts</a>{% endif %}
     </nav>
     <div class="header-account">
       {% if user.id %}
@@ -113,6 +116,11 @@
         {% if user.id %}
         <a href="/settings/account" class="mobile-account-item{% if account_settings_active %} is-active{% endif %}"{% if account_settings_active %} aria-current="page"{% endif %}>
           {{ icon("gear", extra_class="mobile-account-icon") }}<span>Account Settings</span>
+        </a>
+        {% endif %}
+        {% if user.is_admin %}
+        <a href="/admin/accounts" class="mobile-account-item{% if active_page == 'accounts' %} is-active{% endif %}"{% if active_page == 'accounts' %} aria-current="page"{% endif %}>
+          {{ icon("list-dashes", extra_class="mobile-account-icon") }}<span>Accounts</span>
         </a>
         {% endif %}
         <form class="logout-form mobile-account-logout" hx-post="/logout" hx-swap="none">

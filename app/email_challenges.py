@@ -43,6 +43,19 @@ async def revoke_email_challenge(conn, account_id: int, purpose: str, token: str
     )
 
 
+async def email_challenge_send_usable(
+    conn, account_id: int, expected_auth_version: int, purpose: str, token: str,
+) -> bool:
+    digest = _digest(token)
+    if purpose not in PURPOSES or digest is None:
+        return False
+    cur = await conn.execute(
+        "SELECT public.email_challenge_send_usable(%s,%s,%s,%s)",
+        (account_id, expected_auth_version, purpose, digest),
+    )
+    return bool((await cur.fetchone())[0])
+
+
 async def consume_email_challenge(
     conn, account_id: int, expected_auth_version: int, purpose: str, token: str,
 ) -> dict | None:

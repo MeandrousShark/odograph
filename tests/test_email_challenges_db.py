@@ -15,7 +15,8 @@ from app.application_roles import (
 from app.db import make_pool
 from app.email_challenges import (
     PURPOSE_CHANGE, PURPOSE_CURRENT, consume_email_challenge,
-    is_current_email_verified, issue_email_challenge, revoke_email_challenge,
+    email_challenge_send_usable, is_current_email_verified,
+    issue_email_challenge, revoke_email_challenge,
 )
 from app.role_setup import RoleSetupError
 from conftest import full_schema_reset
@@ -67,6 +68,40 @@ def test_verify_current_is_single_use_and_stale_proof_fails():
         async with pools.control.connection() as conn:
             assert await consume_email_challenge(conn, account_id, 1, PURPOSE_CURRENT, stale) is None
             assert not await is_current_email_verified(conn, account_id)
+    asyncio.run(_scenario(check))
+
+
+def test_final_email_challenge_send_admission_checks_token_and_account_version():
+    async def check(owner, pools, account):
+        account_id = account["id"]
+        async with pools.control.connection() as conn:
+            token = await issue_email_challenge(
+                conn, account_id, 1, PURPOSE_CURRENT, "old@example.invalid",
+            )
+            assert await email_challenge_send_usable(
+                conn, account_id, 1, PURPOSE_CURRENT, token,
+            )
+            assert not await email_challenge_send_usable(
+                conn, account_id, 2, PURPOSE_CURRENT, token,
+            )
+            assert not await email_challenge_send_usable(
+                conn, account_id, 1, PURPOSE_CHANGE, token,
+            )
+        async with owner.connection() as conn:
+            await conn.execute("UPDATE accounts SET is_enabled=false WHERE id=%s", (account_id,))
+        async with pools.control.connection() as conn:
+            assert not await email_challenge_send_usable(
+                conn, account_id, 1, PURPOSE_CURRENT, token,
+            )
+        async with owner.connection() as conn:
+            await conn.execute(
+                "UPDATE accounts SET is_enabled=true, auth_version=2 WHERE id=%s", (account_id,),
+            )
+        async with pools.control.connection() as conn:
+            assert not await email_challenge_send_usable(
+                conn, account_id, 1, PURPOSE_CURRENT, token,
+            )
+
     asyncio.run(_scenario(check))
 
 

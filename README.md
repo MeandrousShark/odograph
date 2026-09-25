@@ -263,6 +263,13 @@ authentication with a valid `auth_time` from a provider that honors
 details, and [Upgrading](docs/upgrading.md) if you are moving an older
 OIDC-only installation.
 
+In controlled activation fixtures, an enabled administrator can issue, resend,
+and revoke member invitations in **Admin > Accounts**. The new invitation link
+and manual token are shown once; optional email sends that same invitation.
+Resending creates a fresh token and invalidates the old one. The normal
+single-account installation cannot use invitations to add accounts until
+multi-account activation is separately released.
+
 In **Settings > Account Settings**, you can verify your current login email or
 change it after confirming the new address. These actions require your current
 password and configured email delivery. Until a new address is confirmed, the
@@ -294,6 +301,12 @@ page to reset a forgotten password. This needs SMTP and `APP_URL`; see
 login email and expires in 30 minutes. Completing a reset signs that account
 out of every Odograph session, including the browser that used the link, and
 returns you to sign-in.
+
+In a controlled multi-account fixture, an enabled administrator can request a
+reset for another account in **Admin > Accounts**. The link goes only to that
+account's stored, verified login email; the administrator never sees it or
+chooses a password. Without a verified address, use the trusted host-local
+recovery command below.
 
 Otherwise, reset it from the server. Find the account ID, then confirm the
 account shown and type the new password when prompted:

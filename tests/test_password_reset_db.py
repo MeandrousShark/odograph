@@ -20,7 +20,8 @@ from app.email_challenges import (
 from app.oidc_identities import create_identity_link
 from app.password_reset import (
     INITIATOR_ADMIN, INITIATOR_PUBLIC, consume_password_reset, host_reset_password,
-    issue_password_reset, password_reset_usable, revoke_password_reset,
+    issue_password_reset, password_reset_send_usable, password_reset_usable,
+    revoke_password_reset,
 )
 from conftest import full_schema_reset
 
@@ -65,11 +66,13 @@ async def _scenario(callback):
         await owner.close()
 
 
-async def _issue(pools, *, email=None, account_id=None, initiator=INITIATOR_PUBLIC):
+async def _issue(pools, *, email=None, account_id=None, initiator=INITIATOR_PUBLIC,
+                 actor_id=None, actor_auth_version=None):
     token = _token()
     async with pools.control.connection() as conn:
         address = await issue_password_reset(
-            conn, token, initiator=initiator, email=email, account_id=account_id)
+            conn, token, initiator=initiator, email=email, account_id=account_id,
+            actor_id=actor_id, actor_auth_version=actor_auth_version)
     return (token, address) if address is not None else (None, None)
 
 
@@ -120,11 +123,60 @@ def test_public_request_coalesces_without_cancelling_or_spending_budget():
             cur = await conn.execute("SELECT count(*) FROM email_challenges WHERE account_id=%s", (a_id,))
             assert await cur.fetchone() == (1,)
         # Admin initiation may supersede within its own budget.
-        admin, address = await _issue(pools, account_id=a_id, initiator=INITIATOR_ADMIN)
+        admin, address = await _issue(pools, account_id=a_id, initiator=INITIATOR_ADMIN,
+                                      actor_id=a_id, actor_auth_version=1)
         assert admin and address == A_EMAIL
         async with pools.control.connection() as conn:
             assert not await password_reset_usable(conn, first)
             assert await password_reset_usable(conn, admin)
+    asyncio.run(_scenario(check))
+
+
+def test_admin_reset_requires_live_actor_and_final_send_rechecks_both_accounts():
+    async def check(owner, pools, a_id, b_id):
+        async with pools.control.connection() as conn:
+            assert await issue_password_reset(
+                conn, _token(), initiator=INITIATOR_ADMIN, account_id=b_id,
+            ) is None
+            cur = await conn.execute(
+                "SELECT public.issue_password_reset(%s,%s,%s,%s)",
+                (b_id, None, INITIATOR_ADMIN, _digest(_token())),
+            )
+            assert (await cur.fetchone())[0] is None
+            assert await issue_password_reset(
+                conn, _token(), initiator=INITIATOR_ADMIN, account_id=b_id,
+                actor_id=b_id, actor_auth_version=1,
+            ) is None
+            assert await issue_password_reset(
+                conn, _token(), initiator=INITIATOR_ADMIN, account_id=b_id,
+                actor_id=a_id, actor_auth_version=2,
+            ) is None
+        token, address = await _issue(
+            pools, initiator=INITIATOR_ADMIN, account_id=b_id,
+            actor_id=a_id, actor_auth_version=1,
+        )
+        assert token and address == B_EMAIL
+        async with pools.control.connection() as conn:
+            assert await password_reset_send_usable(
+                conn, token, actor_id=a_id, actor_auth_version=1,
+            )
+            assert not await password_reset_send_usable(conn, token)
+            assert not await password_reset_send_usable(
+                conn, token, actor_id=b_id, actor_auth_version=1,
+            )
+        async with owner.connection() as conn:
+            await conn.execute("UPDATE accounts SET is_enabled=false WHERE id=%s", (a_id,))
+        async with pools.control.connection() as conn:
+            assert not await password_reset_send_usable(
+                conn, token, actor_id=a_id, actor_auth_version=1,
+            )
+        async with owner.connection() as conn:
+            await conn.execute("UPDATE accounts SET is_enabled=true, auth_version=2 WHERE id=%s", (a_id,))
+        async with pools.control.connection() as conn:
+            assert not await password_reset_send_usable(
+                conn, token, actor_id=a_id, actor_auth_version=1,
+            )
+
     asyncio.run(_scenario(check))
 
 
@@ -137,11 +189,14 @@ def test_public_admin_and_email_budgets_are_separate_and_persistent():
             await _age_resets(owner, a_id)
         assert await _issue(pools, email=A_EMAIL) == (None, None)  # public budget spent
         for _ in range(5):
-            token, _ = await _issue(pools, account_id=a_id, initiator=INITIATOR_ADMIN)
+            token, _ = await _issue(pools, account_id=a_id, initiator=INITIATOR_ADMIN,
+                                    actor_id=a_id, actor_auth_version=1)
             assert token
-            assert await _issue(pools, account_id=a_id, initiator=INITIATOR_ADMIN) == (None, None)
+            assert await _issue(pools, account_id=a_id, initiator=INITIATOR_ADMIN,
+                                actor_id=a_id, actor_auth_version=1) == (None, None)
             await _age_resets(owner, a_id, "2 minutes")
-        assert await _issue(pools, account_id=a_id, initiator=INITIATOR_ADMIN) == (None, None)
+        assert await _issue(pools, account_id=a_id, initiator=INITIATOR_ADMIN,
+                            actor_id=a_id, actor_auth_version=1) == (None, None)
         async with pools.control.connection() as conn:
             assert await issue_email_challenge(conn, a_id, 1, PURPOSE_CURRENT, A_EMAIL)
         # Budgets are rows, so a new process sees the same counts.
@@ -205,9 +260,11 @@ def test_malformed_expired_superseded_stale_and_rolled_back_proofs_fail():
         async with pools.control.connection() as conn:
             assert await consume_password_reset(conn, "short", "hash") is None
             assert await consume_password_reset(conn, "A" * 43, "hash") is None
-        old, _ = await _issue(pools, account_id=a_id, initiator=INITIATOR_ADMIN)
+        old, _ = await _issue(pools, account_id=a_id, initiator=INITIATOR_ADMIN,
+                              actor_id=a_id, actor_auth_version=1)
         await _age_resets(owner, a_id, "2 minutes")
-        new, _ = await _issue(pools, account_id=a_id, initiator=INITIATOR_ADMIN)
+        new, _ = await _issue(pools, account_id=a_id, initiator=INITIATOR_ADMIN,
+                              actor_id=a_id, actor_auth_version=1)
         async with pools.control.connection() as conn:
             assert await consume_password_reset(conn, old, "hash") is None
         async with owner.connection() as conn:
@@ -388,8 +445,8 @@ def test_restore_finalization_ends_sessions_and_revokes_lifecycle_tokens():
         async with pools.control.connection() as conn:
             await issue_email_challenge(conn, b_id, 1, PURPOSE_CURRENT, B_EMAIL)
             await conn.execute(
-                "SELECT public.issue_member_invitation(%s,%s,%s)",
-                (a_id, "invitee@example.invalid", _digest(_token())))
+                "SELECT public.issue_member_invitation(%s,%s,%s,%s)",
+                (a_id, 1, "invitee@example.invalid", _digest(_token())))
             before = {row["id"]: row["auth_version"] for row in
                       [await get_account(conn, a_id), await get_account(conn, b_id)]}
         await finalize_application_restore(TEST_DB)
