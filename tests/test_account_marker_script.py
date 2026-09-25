@@ -58,6 +58,8 @@ def test_body_data_account_id_reflects_the_signed_in_user_or_is_empty():
     )
     assert 'data-account-id=""' in signed_out
     assert 'data-account-id="42"' in signed_in
+    assert '"X-Odograph-Account": "42"' in signed_in
+    assert 'hx-headers=\'{"X-CSRF-Token": "t"}\'' in signed_out
 
 
 HARNESS = r"""
@@ -69,10 +71,17 @@ const store = Object.assign({}, scenario.initialStorage || {});
 const removed = [];
 const localStorage = {
   getItem(key) {
+    if (scenario.blockStorage) throw new Error("storage blocked");
     return Object.prototype.hasOwnProperty.call(store, key) ? store[key] : null;
   },
-  setItem(key, value) { store[key] = String(value); },
-  removeItem(key) { delete store[key]; removed.push(key); },
+  setItem(key, value) {
+    if (scenario.blockStorage) throw new Error("storage blocked");
+    store[key] = String(value);
+  },
+  removeItem(key) {
+    if (scenario.blockStorage) throw new Error("storage blocked");
+    delete store[key]; removed.push(key);
+  },
 };
 
 const documentListeners = new Map();
@@ -87,10 +96,11 @@ function emit(map, type, event) {
 }
 
 let hiddenCount = 0;
+let visibility = "";
 const style = {};
 Object.defineProperty(style, "visibility", {
-  set() { hiddenCount += 1; },
-  get() { return "hidden"; },
+  set(value) { visibility = value; hiddenCount += 1; },
+  get() { return visibility; },
 });
 
 const document = {
@@ -122,8 +132,43 @@ vm.createContext(context);
 vm.runInContext(process.argv[2], context, { filename: "account-marker-inline.js" });
 
 if (scenario.emitStorageNewValue !== undefined) {
+  if (!scenario.blockStorage) {
+    if (scenario.emitStorageNewValue === null) delete store["odograph-account"];
+    else store["odograph-account"] = scenario.emitStorageNewValue;
+  }
   emit(windowListeners, "storage", {
     key: "odograph-account", newValue: scenario.emitStorageNewValue,
+  });
+}
+if (scenario.emitPageHide) {
+  emit(windowListeners, "pagehide", {});
+}
+if (scenario.emitPageShow !== undefined) {
+  emit(windowListeners, "pageshow", { persisted: scenario.emitPageShow });
+}
+if (scenario.emitBlurFocus) {
+  emit(windowListeners, "blur", {});
+  emit(windowListeners, "focus", {});
+}
+if (scenario.emitBlurOnly) {
+  emit(windowListeners, "blur", {});
+}
+let prevented = false;
+if (scenario.emitBeforeRequest) {
+  emit(documentListeners, "htmx:beforeRequest", {
+    preventDefault() { prevented = true; },
+  });
+}
+if (scenario.emitBeforeOnLoad) {
+  emit(documentListeners, "htmx:beforeOnLoad", {
+    preventDefault() { prevented = true; },
+    detail: { xhr: {
+      getResponseHeader(name) {
+        if (name === "X-Odograph-Account") return scenario.responseAccount || null;
+        if (name === "HX-Redirect") return scenario.responseRedirect || null;
+        return null;
+      },
+    } },
   });
 }
 
@@ -134,6 +179,7 @@ process.stdout.write(JSON.stringify({
   hiddenCount,
   replaceStateCalls,
   hasStorageListener: windowListeners.has("storage"),
+  prevented,
 }));
 """
 
@@ -201,6 +247,75 @@ def test_sign_out_signal_preserves_other_query_params_and_the_hash():
     assert result["replaceStateCalls"] == [
         {"state": None, "title": "", "url": "/login?foo=bar#panel"}
     ]
+
+
+def test_restored_private_page_reloads_even_when_storage_is_blocked():
+    result = _run(accountId="42", blockStorage=True, emitPageShow=True)
+    assert result["hiddenCount"] == 1
+    assert result["reloadCount"] == 1
+
+
+def test_pagehide_restoration_reloads_without_persisted_flag():
+    result = _run(accountId="42", emitPageHide=True, emitPageShow=False)
+    assert result["hiddenCount"] >= 1
+    assert result["reloadCount"] == 1
+
+
+def test_blocked_storage_revalidates_when_tab_regains_focus():
+    result = _run(accountId="42", blockStorage=True, emitBlurFocus=True)
+    assert result["hiddenCount"] == 1
+    assert result["reloadCount"] == 1
+
+
+def test_blocked_storage_prevents_request_from_tab_that_left_before_focus():
+    result = _run(
+        accountId="42", blockStorage=True, emitBlurOnly=True, emitBeforeRequest=True,
+    )
+    assert result["prevented"] is True
+    assert result["reloadCount"] == 1
+
+
+def test_request_cannot_start_after_focus_has_scheduled_a_reload():
+    result = _run(
+        accountId="42", blockStorage=True, emitBlurFocus=True, emitBeforeRequest=True,
+    )
+    assert result["prevented"] is True
+    assert result["reloadCount"] == 1
+
+
+def test_blocked_storage_does_not_disable_requests_on_a_fresh_page():
+    result = _run(accountId="42", blockStorage=True, emitBeforeRequest=True)
+    assert result["prevented"] is False
+    assert result["reloadCount"] == 0
+
+
+def test_stale_htmx_response_without_matching_account_cannot_swap():
+    for response_account in ("", "99"):
+        result = _run(
+            accountId="42", emitBeforeOnLoad=True, responseAccount=response_account,
+        )
+        assert result["prevented"] is True
+        assert result["hiddenCount"] == 1
+        assert result["reloadCount"] == 1
+
+
+def test_matching_htmx_response_and_app_redirect_remain_usable():
+    for kwargs in (
+        {"responseAccount": "42"},
+        {"responseRedirect": "/login?signed_out=1"},
+    ):
+        result = _run(accountId="42", emitBeforeOnLoad=True, **kwargs)
+        assert result["prevented"] is False
+        assert result["reloadCount"] == 0
+
+
+def test_old_tab_cannot_submit_after_another_account_changes_marker():
+    result = _run(
+        accountId="42", initialStorage={"odograph-account": "99"},
+        emitBeforeRequest=True, emitStorageNewValue="99",
+    )
+    assert result["prevented"] is True
+    assert result["reloadCount"] == 1
 
 
 def test_a_stale_marker_still_reloads_the_tab_once_notified():

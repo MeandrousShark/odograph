@@ -312,6 +312,10 @@ the change stays signed in. An operator reset signs out every session for that
 account. Neither changes a linked sign-in provider, verified email or tracking
 devices.
 
+**Sign out everywhere** in Account Settings ends every Odograph browser
+session for your account, including the one you are using. It does not end a
+sign-in provider session or revoke tracking-device credentials.
+
 Establishing a password for an OIDC-only account and managing its sign-in
 methods are currently limited to controlled activation fixtures. They will be
 available for normal installations only after supported account activation is

@@ -209,6 +209,16 @@
   <code>python -m app.manage_account reset-password ACCOUNT_ID</code> inside the app container.
   Password input stays in the terminal or protected standard input.</p>
 </section>
+
+{% if can_sign_out_everywhere %}
+<section class="account-security-section" aria-labelledby="sign-out-everywhere-heading">
+  <h4 id="sign-out-everywhere-heading">Sign out everywhere</h4>
+  <p class="muted">End every Odograph session for this account, including this browser. This does not sign you out of your sign-in provider or revoke tracking credentials. If your provider is still signed in, you can use it to start a new Odograph session.</p>
+  <form hx-post="/settings/account/sign-out-everywhere" hx-swap="none" class="auth-form">
+    <button type="submit" class="control control-destructive auth-submit">Sign out everywhere</button>
+  </form>
+</section>
+{% endif %}
 </section>
 </div>
 </div>

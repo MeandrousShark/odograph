@@ -120,7 +120,7 @@ async def _schema_29_upgrade_and_email_change(tmp_path):
             )).fetchone() == (False,)
             assert await (await conn.execute(
                 "SELECT max(version) FROM schema_migrations"
-            )).fetchone() == (32,)
+            )).fetchone() == (33,)
             assert await (await conn.execute(
                 "SELECT id,email,password_hash,is_admin,auth_version "
                 "FROM accounts WHERE id=%s", (ADMIN_ID,),

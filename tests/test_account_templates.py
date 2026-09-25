@@ -114,6 +114,7 @@ def _render_account_security(
     method_notice=None,
     avatar_version=0,
     avatar_max_label="500 KB",
+    can_sign_out_everywhere=True,
 ):
     return _templates().env.get_template("account_security.html").render(
         user={
@@ -128,6 +129,7 @@ def _render_account_security(
         linked_identity=linked_identity,
         avatar_max_label=avatar_max_label,
         has_password=has_password,
+        can_sign_out_everywhere=can_sign_out_everywhere,
         method_notice=method_notice,
         error=error,
         success=success,
@@ -176,6 +178,16 @@ def test_account_security_shows_safe_email_password_form_and_recovery_command():
     structure.feed(body)
     assert structure.errors == []
     assert structure.stack == []
+
+
+def test_account_security_sign_out_everywhere_explains_session_scope_and_dev_boundary():
+    body = _render_account_security(has_password=False)
+    assert 'hx-post="/settings/account/sign-out-everywhere"' in body
+    assert "does not sign you out of your sign-in provider" in body
+    assert "or revoke tracking credentials" in body
+    assert 'hx-post="/settings/account/sign-out-everywhere"' not in (
+        _render_account_security(can_sign_out_everywhere=False)
+    )
 
 
 def test_account_email_forms_require_password_and_collect_twice_entered_new_address():

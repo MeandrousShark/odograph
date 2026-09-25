@@ -116,8 +116,13 @@ class SecurityHeadersMiddleware:
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(raw=message["headers"])
                 principal = scope.get("state", {}).get("principal")
-                if principal is not None:
+                if (
+                    principal is not None
+                    or headers.get("content-type", "").startswith("text/html")
+                    or 300 <= message["status"] < 400
+                ):
                     headers["Cache-Control"] = "no-store, private"
+                if principal is not None:
                     headers["X-Odograph-Account"] = str(principal.account_id)
                 if headers.get("content-type", "").startswith("text/html"):
                     headers["Content-Security-Policy"] = (
