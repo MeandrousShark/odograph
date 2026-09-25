@@ -49,6 +49,7 @@ def _request(pool, *, ip="203.0.113.9", limiter=None, session=None):
             oauth=None,
             login_limiter=limiter or FailedAuthLimiter(3, 900.0),
         )),
+        state=SimpleNamespace(),
         session=session if session is not None else {"csrf": "pre-login-csrf", "junk": "left-over"},
         client=SimpleNamespace(host=ip),
     )

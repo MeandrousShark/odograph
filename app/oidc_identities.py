@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from psycopg.rows import dict_row
 
-from app.accounts import create_admin
+from app.accounts import create_admin, get_account
 
 
 class IdentityLinkRejectedError(Exception):
@@ -67,15 +67,16 @@ async def create_identity_link(
 ) -> dict | None:
     normalized_issuer = normalize_issuer(issuer)
     exact_subject = _validate_subject(subject)
-    cur = conn.cursor(row_factory=dict_row)
     if expected_auth_version is not None:
-        await cur.execute(
-            "SELECT id FROM accounts "
-            "WHERE id = %s AND is_enabled AND auth_version = %s FOR UPDATE",
-            (account_id, expected_auth_version),
+        cur = await conn.execute(
+            "SELECT public.link_oidc_identity(%s,%s,%s,%s,%s,%s)",
+            (account_id, expected_auth_version, normalized_issuer, exact_subject,
+             provider_email, provider_display_name),
         )
-        if await cur.fetchone() is None:
+        if not (await cur.fetchone())[0]:
             return None
+        return await get_account(conn, account_id)
+    cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         "INSERT INTO oidc_identities "
         "(account_id, issuer, subject, provider_email, provider_display_name) "
@@ -125,32 +126,14 @@ async def touch_identity_last_used(
 async def unlink_identity(
     conn, account_id: int, issuer: str, subject: str, *, expected_auth_version: int
 ) -> dict | None:
-    cur = conn.cursor(row_factory=dict_row)
-    await cur.execute(
-        "WITH locked_account AS ("
-        "SELECT id FROM accounts "
-        "WHERE id = %s AND is_enabled AND auth_version = %s FOR UPDATE"
-        "), deleted AS ("
-        "DELETE FROM oidc_identities "
-        "WHERE account_id = %s AND issuer = %s AND subject = %s "
-        "AND EXISTS ("
-        "SELECT 1 FROM locked_account WHERE id = oidc_identities.account_id"
-        ") "
-        "RETURNING account_id"
-        ") "
-        "UPDATE accounts SET auth_version = auth_version + 1, updated_at = now() "
-        "WHERE id = (SELECT account_id FROM deleted) "
-        "RETURNING id, email, password_hash, is_admin, is_enabled, auth_version, "
-        "created_at, updated_at",
-        (
-            account_id,
-            expected_auth_version,
-            account_id,
-            normalize_issuer(issuer),
-            _validate_subject(subject),
-        ),
+    cur = await conn.execute(
+        "SELECT public.unlink_oidc_identity(%s,%s,%s,%s)",
+        (account_id, expected_auth_version, normalize_issuer(issuer),
+         _validate_subject(subject)),
     )
-    return await cur.fetchone()
+    if not (await cur.fetchone())[0]:
+        return None
+    return await get_account(conn, account_id)
 
 
 async def establish_legacy_admin_identity(

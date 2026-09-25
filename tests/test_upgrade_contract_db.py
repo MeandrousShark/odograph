@@ -43,9 +43,12 @@ async def _provision(pool, monkeypatch, schema):
     # challenges were added.
     owned_tables = OWNED_TABLES
     with monkeypatch.context() as patch:
-        control_tables = tuple(table for table in application_roles.CONTROL_TABLES if table != "invitations")
+        control_tables = tuple(table for table in application_roles.CONTROL_TABLES
+                               if table not in ("invitations", "oidc_attempts", "oidc_action_proofs"))
         future_functions = (application_roles.INVITATION_FUNCTIONS + application_roles.EMAIL_CHALLENGE_FUNCTIONS
-                            + application_roles.PASSWORD_RESET_FUNCTIONS)
+                            + application_roles.PASSWORD_RESET_FUNCTIONS
+                            + application_roles.OIDC_ATTEMPT_FUNCTIONS
+                            + application_roles.OIDC_METHOD_FUNCTIONS)
         patch.setattr(application_roles, "OWNED_TABLES", owned_tables)
         patch.setattr(application_roles, "PROTECTED_TABLES", ())
         patch.setattr(application_roles, "CONTROL_TABLES", control_tables)
@@ -58,6 +61,8 @@ async def _provision(pool, monkeypatch, schema):
         patch.setattr(application_roles, "INVITATION_FUNCTIONS", ())
         patch.setattr(application_roles, "EMAIL_CHALLENGE_FUNCTIONS", ())
         patch.setattr(application_roles, "PASSWORD_RESET_FUNCTIONS", ())
+        patch.setattr(application_roles, "OIDC_ATTEMPT_FUNCTIONS", ())
+        patch.setattr(application_roles, "OIDC_METHOD_FUNCTIONS", ())
         if schema < ACTIVATED_SCHEMA:
             patch.setattr(application_roles, "CONTRACT_VERSION", "ownership-prepared-v1")
         await prepare_application_roles(TEST_DB)
@@ -176,6 +181,38 @@ def test_failed_029_rolls_back_objects_and_grants(monkeypatch, tmp_path):
                     "SELECT rolname,rolsuper,rolbypassrls,rolcanlogin FROM pg_roles "
                     "WHERE rolname LIKE 'odograph_%' ORDER BY rolname")).fetchall()
                 assert after_roles == before_roles
+        finally:
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
+            await full_schema_reset(pool)
+            await pool.close()
+    asyncio.run(run())
+
+
+def test_032_converts_only_empty_passwords_and_rejects_new_empty_hashes(monkeypatch, tmp_path):
+    async def run():
+        pool = make_pool(TEST_DB)
+        await pool.open(wait=True)
+        try:
+            await drop_and_recreate_schema(pool)
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", _migration_dir(tmp_path, "before_032", through=31))
+            await run_migrations(pool)
+            async with pool.connection() as conn:
+                await conn.execute("DROP INDEX accounts_singleton_idx")
+                await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
+                await conn.execute(
+                    "INSERT INTO accounts(email,password_hash,is_admin) VALUES"
+                    "('empty@example.invalid','',false),('valid@example.invalid','valid-hash',false)")
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
+            await run_migrations(pool)
+            async with pool.connection() as conn:
+                rows = await (await conn.execute(
+                    "SELECT email,password_hash FROM accounts ORDER BY email")).fetchall()
+                assert rows == [("empty@example.invalid", None),
+                                ("valid@example.invalid", "valid-hash")]
+                with pytest.raises(errors.CheckViolation):
+                    await conn.execute(
+                        "INSERT INTO accounts(email,password_hash,is_admin) "
+                        "VALUES('new@example.invalid','',false)")
         finally:
             monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
             await full_schema_reset(pool)

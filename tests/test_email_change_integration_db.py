@@ -41,13 +41,18 @@ def _migrations_through(tmp_path: Path, version: int) -> Path:
 
 
 async def _provision_schema_29_roles() -> None:
-    """Provision the actual 029 contract before applying migration 030."""
+    """Provision the schema-29 contract before later migrations."""
     owned_tables = application_roles.OWNED_TABLES
+    control_tables = tuple(table for table in application_roles.CONTROL_TABLES
+                           if table not in ("oidc_attempts", "oidc_action_proofs"))
     functions = {
         function: owner
         for function, owner in application_roles.FUNCTIONS.items()
         if function not in application_roles.EMAIL_CHALLENGE_FUNCTIONS
         and function not in application_roles.PASSWORD_RESET_FUNCTIONS
+        and function not in application_roles.OIDC_ATTEMPT_FUNCTIONS
+        and function not in application_roles.OIDC_METHOD_FUNCTIONS
+        and function != application_roles.INVITATION_FUNCTIONS[2]
     }
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(application_roles, "OWNED_TABLES", owned_tables)
@@ -55,11 +60,16 @@ async def _provision_schema_29_roles() -> None:
         patch.setattr(
             application_roles,
             "TABLES",
-            owned_tables + application_roles.CONTROL_TABLES + application_roles.REFERENCE_TABLES,
+            owned_tables + control_tables + application_roles.REFERENCE_TABLES,
         )
+        patch.setattr(application_roles, "CONTROL_TABLES", control_tables)
         patch.setattr(application_roles, "FUNCTIONS", functions)
+        patch.setattr(application_roles, "FUNCTION_FILES", application_roles.FUNCTION_FILES[:4])
+        patch.setattr(application_roles, "INVITATION_FUNCTIONS", application_roles.INVITATION_FUNCTIONS[:2])
         patch.setattr(application_roles, "EMAIL_CHALLENGE_FUNCTIONS", ())
         patch.setattr(application_roles, "PASSWORD_RESET_FUNCTIONS", ())
+        patch.setattr(application_roles, "OIDC_ATTEMPT_FUNCTIONS", ())
+        patch.setattr(application_roles, "OIDC_METHOD_FUNCTIONS", ())
         await prepare_application_roles(TEST_DB)
 
 
@@ -110,7 +120,7 @@ async def _schema_29_upgrade_and_email_change(tmp_path):
             )).fetchone() == (False,)
             assert await (await conn.execute(
                 "SELECT max(version) FROM schema_migrations"
-            )).fetchone() == (31,)
+            )).fetchone() == (32,)
             assert await (await conn.execute(
                 "SELECT id,email,password_hash,is_admin,auth_version "
                 "FROM accounts WHERE id=%s", (ADMIN_ID,),

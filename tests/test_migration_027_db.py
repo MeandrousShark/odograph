@@ -69,7 +69,7 @@ def test_027_deletes_only_dump_and_configuration_rows(tmp_path, monkeypatch):
                 cur = await conn.execute("SELECT id, payload FROM raw_messages ORDER BY id")
                 after = await cur.fetchall()
                 cur = await conn.execute("SELECT max(version) FROM schema_migrations")
-                assert (await cur.fetchone())[0] == 31
+                assert (await cur.fetchone())[0] == 32
         finally:
             await full_schema_reset(pool)
             await pool.close()
