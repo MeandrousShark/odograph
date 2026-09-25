@@ -175,6 +175,18 @@ def test_reset_rejects_malformed_proof_and_weak_password_before_any_work(monkeyp
     assert app.state.calls == []
 
 
+@pytest.mark.parametrize("extra", [{"account_id": "1"}, {"redirect": "https://evil.example"},
+                                   {"email": "other@example.com"}])
+def test_reset_accepts_no_target_redirect_or_address_field(monkeypatch, extra):
+    app = _app(monkeypatch)
+    response, session = _post(app, "/reset-password", {
+        "token": TOKEN, "password": "new password", "password_confirm": "new password",
+        "csrf_token": "csrf-test", **extra})
+    assert response.status_code == 400
+    assert app.state.calls == []
+    assert session["account_id"] == 9
+
+
 def test_unusable_proof_fails_generically_without_hashing(monkeypatch):
     app = _app(monkeypatch)
     response, session = _post(app, "/reset-password", {

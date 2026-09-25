@@ -68,7 +68,11 @@ async def consume_password_reset(conn, token: str, password_hash: str) -> int | 
 
 
 async def host_reset_password(conn, account_id: int, password_hash: str) -> dict | None:
-    """Explicit-target host recovery; the caller holds host authority."""
+    """Explicit-target host recovery; the caller holds host authority.
+
+    Needs no bearer proof, so only the host CLI (app/manage_account.py) may
+    call it. Never reach it from request handling; a test enforces this.
+    """
     cur = await conn.execute("SELECT public.host_reset_password(%s,%s)", (account_id, password_hash))
     if not (await cur.fetchone())[0]:
         return None

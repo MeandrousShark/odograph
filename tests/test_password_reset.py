@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import threading
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import pytest
 
@@ -293,3 +295,14 @@ def test_blocked_delivery_and_full_queue_never_delay_submission(monkeypatch):
         assert restarted._queue.qsize() == 0
 
     asyncio.run(run())
+
+
+def test_proofless_host_reset_is_reachable_only_from_the_host_cli():
+    # The role contract names the SQL function only to grant and validate it.
+    reference = re.compile(r"(?<!public\.)\bhost_reset_password\b")
+    app_dir = Path(reset.__file__).parent
+    callers = sorted(
+        str(path.relative_to(app_dir)) for path in app_dir.rglob("*.py")
+        if reference.search(path.read_text())
+    )
+    assert callers == ["manage_account.py", "password_reset.py"]
