@@ -47,6 +47,7 @@ async def _provision_schema_29_roles() -> None:
         function: owner
         for function, owner in application_roles.FUNCTIONS.items()
         if function not in application_roles.EMAIL_CHALLENGE_FUNCTIONS
+        and function not in application_roles.PASSWORD_RESET_FUNCTIONS
     }
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(application_roles, "OWNED_TABLES", owned_tables)
@@ -58,6 +59,7 @@ async def _provision_schema_29_roles() -> None:
         )
         patch.setattr(application_roles, "FUNCTIONS", functions)
         patch.setattr(application_roles, "EMAIL_CHALLENGE_FUNCTIONS", ())
+        patch.setattr(application_roles, "PASSWORD_RESET_FUNCTIONS", ())
         await prepare_application_roles(TEST_DB)
 
 
@@ -108,7 +110,7 @@ async def _schema_29_upgrade_and_email_change(tmp_path):
             )).fetchone() == (False,)
             assert await (await conn.execute(
                 "SELECT max(version) FROM schema_migrations"
-            )).fetchone() == (30,)
+            )).fetchone() == (31,)
             assert await (await conn.execute(
                 "SELECT id,email,password_hash,is_admin,auth_version "
                 "FROM accounts WHERE id=%s", (ADMIN_ID,),

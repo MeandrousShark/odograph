@@ -290,9 +290,12 @@ configuration files.
 7. **Keep account creation and recovery narrow.** Fresh generated
    configuration sets `INITIAL_ADMIN_SIGNUP=1`; the first account row closes
    signup even if that value remains unchanged. Existing configurations that
-   omit it stay fail-closed. Recover a missing account or lost password only
-   with `python -m app.manage_account create-admin` or `reset-password` inside
-   the application container. The command accepts no password argument.
+   omit it stay fail-closed. A signed-out password reset is emailed only to an
+   account's verified login email; requests get the same reply whether or not
+   an account matches. Otherwise recover a missing account with
+   `python -m app.manage_account create-admin`, or one account's password with
+   `list-accounts` and then `reset-password ACCOUNT_ID`, inside the application
+   container. The command accepts no password argument.
 
 8. **Encrypt backups, and control who can read them.** `scripts/backup_database.sh`
    captures your full location history, credentials hashes, and every other
@@ -333,10 +336,11 @@ configuration files.
       immediately invalidates every existing signed session cookie,
       including your own, so everyone has to sign back in. It does not touch
       any stored data.
-    - **A local administrator password**: change it in Account Settings when
-      signed in, or run `python -m app.manage_account reset-password` inside
-      the app container for operator recovery. Either path increments the
-      account authentication version and invalidates older sessions.
+    - **A local account password**: change it in Account Settings when
+      signed in, use **Forgot password?** with a verified login email, or run
+      `python -m app.manage_account reset-password ACCOUNT_ID` inside the app
+      container for operator recovery. Each path increments the account
+      authentication version and invalidates older sessions.
     - **OIDC client secret**: rotate it with your identity provider and
       update `OIDC_CLIENT_SECRET` in `.env`, then recreate the app.
       A linked identity still belongs to the same account after client-secret

@@ -681,8 +681,12 @@ login_page_offers_oidc() {
 }
 
 rotate_candidate_password() {
-    printf '%s\n%s\n' "$ROTATED_PASSWORD" "$ROTATED_PASSWORD" \
-        | compose_cand exec -T app python -m app.manage_account reset-password \
+    local account_id
+    account_id="$(compose_cand exec -T app python -m app.manage_account list-accounts \
+        | awk -F '\t' -v email="$ADMIN_EMAIL" '$2 == email { print $1 }')"
+    [ -n "$account_id" ] || return 1
+    printf 'yes\n%s\n%s\n' "$ROTATED_PASSWORD" "$ROTATED_PASSWORD" \
+        | compose_cand exec -T app python -m app.manage_account reset-password "$account_id" \
             >/dev/null
 }
 

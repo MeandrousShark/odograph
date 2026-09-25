@@ -914,11 +914,12 @@ def test_wrong_format_or_version_rejected(mutate, expected_field):
     _scenario(run)
 
 
-@pytest.mark.parametrize("schema_version", [26, 27, 28, 29, 30])
-def test_format_3_bundles_import_into_schema_30(schema_version):
+@pytest.mark.parametrize("schema_version", [26, 27, 28, 29, 30, 31])
+def test_format_3_bundles_import_into_schema_31(schema_version):
     """Migration 027 only deletes raw_messages rows, which bundles never
-    carry, 028 only enforces row-level security, 029 adds invitations, and
-    030 adds email challenges. Format-3 exports from schema 26 through 30 import."""
+    carry, 028 only enforces row-level security, 029 adds invitations, 030
+    adds email challenges and 031 adds password resets. Format-3 exports from
+    schema 26 through 31 import."""
     async def run(pool):
         transport = httpx.ASGITransport(app=_bare_app(pool))
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:

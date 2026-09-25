@@ -282,23 +282,32 @@ Odograph itself. See the [OSRM guide](docs/osrm.md).
 While signed in, open **Settings**, then **Account Settings**, and use
 **Change password** under **Security**.
 
-If you are locked out, reset it from the server and type the new password when
-prompted:
+If you forget it and your login email is verified, choose **Forgot password?**
+on the sign-in page. This needs SMTP and `APP_URL`; see
+[Email](docs/configuration.md#email). The link goes only to your verified
+login email and expires in 30 minutes. Completing a reset signs that account
+out of every Odograph session, including the browser that used the link, and
+returns you to sign-in.
+
+Otherwise, reset it from the server. Find the account ID, then confirm the
+account shown and type the new password when prompted:
 
 ```sh
-docker compose exec app python -m app.manage_account reset-password
-# or: podman-compose exec app python -m app.manage_account reset-password
+docker compose exec app python -m app.manage_account list-accounts
+docker compose exec app python -m app.manage_account reset-password ACCOUNT_ID
+# or: podman-compose exec app python -m app.manage_account reset-password ACCOUNT_ID
 ```
 
 Use `create-admin` instead when no account exists yet and public signup is
 closed.
 
-Both a password change and an operator reset sign out your other Odograph
-sessions. The browser that made the change stays signed in.
+A password change signs out your other Odograph sessions; the browser that made
+the change stays signed in. An operator reset signs out every session for that
+account. Neither changes a linked sign-in provider, verified email or tracking
+devices.
 
 Changing your login email is separate from password recovery. The new address
-becomes the login only after you confirm the emailed challenge. Odograph does
-not provide email-based password reset in this release.
+becomes the login only after you confirm the emailed challenge.
 
 If you use OIDC, signing out of Odograph does not sign you out of your identity
 provider, so signing back in may not prompt you at all. Sign out of the

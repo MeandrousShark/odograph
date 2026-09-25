@@ -28,7 +28,7 @@ from avatar_image_fixtures import (
 )
 from tests.auth_db_fixtures import auth_config, seed_auth_account
 from app.account_context import AccountPrincipal
-from app.accounts import get_account, get_account_avatar, get_sole_account
+from app.accounts import get_account, get_account_avatar
 from app.auth import AuthRedirect, _avatar_version, make_router
 from app.db import MIGRATIONS_DIR, make_pool
 from app.main import make_templates
@@ -173,18 +173,16 @@ def test_get_account_avatar_round_trips_stored_bytes():
     _scenario(run)
 
 
-def test_get_account_and_get_sole_account_never_select_avatar_bytes():
+def test_get_account_never_selects_avatar_bytes():
     async def run(pool):
         async with pool.connection() as conn:
             await _insert_account(conn)
             await _set_avatar(conn, 1, mime="image/webp")
         async with pool.connection() as conn:
             account = await get_account(conn, 1)
-            sole = await get_sole_account(conn)
-        for row in (account, sole):
-            assert "avatar_bytes" not in row
-            assert row["avatar_mime"] == "image/webp"
-            assert row["avatar_updated_at"] is not None
+        assert "avatar_bytes" not in account
+        assert account["avatar_mime"] == "image/webp"
+        assert account["avatar_updated_at"] is not None
 
     _scenario(run)
 

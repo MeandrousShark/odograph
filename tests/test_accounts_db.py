@@ -125,7 +125,7 @@ async def _migration_preserves_local_admin_scenario():
 
             # The login endpoint below is HEAD application code, not the
             # historical migration 020 -- it queries whatever columns
-            # get_sole_account currently selects, so the rest of the
+            # the account lookups currently select, so the rest of the
             # migrations (021+) have to be applied too before it can run,
             # even though only 020's data-preserving behavior is under test
             # above.
