@@ -35,7 +35,7 @@ OWNED_TABLES = (
 PROTECTED_TABLES = ("email_challenges",)
 CONTROL_TABLES = (
     "accounts", "oidc_identities", "instance_state", "invitations",
-    "oidc_attempts", "oidc_action_proofs",
+    "oidc_attempts", "oidc_action_proofs", "account_security_audit",
 )
 REFERENCE_TABLES = ("schema_migrations", "reference_mileage_rates")
 TABLES = OWNED_TABLES + PROTECTED_TABLES + CONTROL_TABLES + REFERENCE_TABLES
@@ -52,8 +52,7 @@ COLUMN_SELECT = {
     (CONTROL_ROLE, "tracking_devices"): ("id", "account_id", "enabled", "generation", "revoked_at"),
 }
 ACCOUNT_CONTROL_UPDATE_COLUMNS = (
-    "password_hash", "is_enabled", "auth_version", "updated_at",
-    "avatar_bytes", "avatar_mime", "avatar_updated_at",
+    "updated_at", "avatar_bytes", "avatar_mime", "avatar_updated_at",
 )
 EMAIL_CHALLENGE_FUNCTIONS = (
     "public.issue_email_challenge(bigint,bigint,text,text,text)",
@@ -105,6 +104,11 @@ OIDC_METHOD_FUNCTIONS = (
     "public.replace_account_password(bigint,bigint,text)",
     "public.sign_out_account_everywhere(bigint,bigint)",
 )
+ACCOUNT_LIFECYCLE_FUNCTIONS = (
+    "public.admin_set_account_enabled(bigint,bigint,bigint,boolean)",
+    "public.list_account_security_audit(bigint,bigint)",
+    "public.prune_account_security_audit()",
+)
 SQL_DIR = Path(__file__).resolve().parents[1] / "scripts" / "sql"
 MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
 FUNCTION_FILES = (
@@ -112,6 +116,7 @@ FUNCTION_FILES = (
     "member_invitations.sql",
     "oidc_attempts.sql",
     "oidc_methods.sql",
+    "account_lifecycle.sql",
 )
 FUNCTIONS = {
     "public.bootstrap_first_account(text,text,text)": CONTROL_ROLE,
@@ -122,6 +127,7 @@ FUNCTIONS = {
     **{function: CONTROL_ROLE for function in OIDC_METHOD_FUNCTIONS},
     **{function: CONTROL_ROLE for function in EMAIL_CHALLENGE_FUNCTIONS},
     **{function: CONTROL_ROLE for function in PASSWORD_RESET_FUNCTIONS},
+    **{function: CONTROL_ROLE for function in ACCOUNT_LIFECYCLE_FUNCTIONS},
 }
 RESTORE_AUTH_VERSION_STEP = 1_000_000_000
 PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER")
@@ -182,6 +188,8 @@ def _table_rights(role: str, table: str) -> set[str]:
             return {"SELECT"}
     if role == BOOTSTRAP_ROLE:
         rights = set()
+        if table == "account_security_audit":
+            return {"SELECT", "INSERT", "DELETE"}
         if table == "invitations":
             return {"SELECT", "INSERT", "UPDATE"}
         if table in ("oidc_attempts", "oidc_action_proofs"):
@@ -470,6 +478,7 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
     for functions, filename in (
         (OIDC_ATTEMPT_FUNCTIONS, "oidc_attempts.sql"),
         (OIDC_METHOD_FUNCTIONS, "oidc_methods.sql"),
+        (ACCOUNT_LIFECYCLE_FUNCTIONS, "account_lifecycle.sql"),
     ):
         source = (SQL_DIR / filename).read_text()
         for function in functions:

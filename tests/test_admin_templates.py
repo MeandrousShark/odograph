@@ -47,6 +47,7 @@ def _app():
                     "id": 11, "email": "invitee@example.invalid", "status": status,
                     "expires_at": expires_at,
                 }] if page in ("expired", "open") else [],
+                "audit_events": [],
                 "multiuser_available": True,
                 "notice": "", "deletion_deadline_label": "Not scheduled",
                 "invite_result": {

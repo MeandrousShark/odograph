@@ -1,18 +1,19 @@
 """Shared background-worker loop machinery.
 
-`AccountWorker` (app/account_workers.py) is the only production consumer of
-the poke/debounce/sweep loop below: each sweep it builds a fresh per-account
-inner worker (`SnapWorker`, `GeocodeWorker`, `RetentionWorker`, `NudgeWorker`,
+`AccountWorker` (app/account_workers.py) uses the poke/debounce/sweep loop
+below. Each sweep it builds a fresh per-account inner worker (`SnapWorker`,
+`GeocodeWorker`, `RetentionWorker`, `NudgeWorker`,
 `OdometerReminderWorker`, `EmailDigestWorker`, or `DetectorRunner`) and calls
 only that inner worker's `run_once()` directly. None of those inner workers
 run their own loop, `start`/`stop`, `poke()`, or guarded-run wrapper in
 production -- each supplies `run_once()` (and, for `EmailDigestWorker` only,
-its own `WorkerStatus`) and nothing else from this module.
+its own `WorkerStatus`) and nothing else from this module. The global
+`AuditRetentionWorker` also uses the loop to prune old audit rows hourly.
 
 `PokeSweepWorker` below factors out the loop, `start`/`stop`, and
-guarded-run wrapper `AccountWorker` needs -- an external `poke()` resets a
-debounce deadline so a burst of pokes coalesces into one run shortly after
-the burst settles, while an independent periodic sweep guarantees forward
+guarded-run wrapper `AccountWorker` and `AuditRetentionWorker` need. An external
+`poke()` resets a debounce deadline so a burst of pokes coalesces into one run
+shortly after the burst settles, while an independent periodic sweep guarantees forward
 progress even if nothing ever pokes (or a poked run is skipped or fails).
 `after_run_once()` is a no-op hook a subclass can override to react to its
 own `run_once()` result; `AccountWorker` uses it to call an optional
@@ -23,9 +24,9 @@ snap/geocode workers, but only after a sweep that actually did something
 `WorkerStatus` below is available to any worker that needs one. Every
 `PokeSweepWorker` subclass gets a `status` attribute the base class updates
 from `_run_guarded()`/`_loop()` with no subclass changes required --
-`AccountWorker` is the only production subclass, and reads an inner
-worker's own `status` (when it has one) through `getattr` in its own
-`run_once()`. `EmailDigestWorker` is the one inner worker that keeps a
+`AccountWorker` and `AuditRetentionWorker` are the production subclasses.
+`AccountWorker` reads an inner worker's own `status` (when it has one) through
+`getattr` in its own `run_once()`. `EmailDigestWorker` is the one inner worker that keeps a
 `WorkerStatus` of its own: its per-kind guard (see app/email_digest.py)
 never lets an exception reach a guarded-run wrapper's except clause, so it
 records its own failures onto that status directly.
