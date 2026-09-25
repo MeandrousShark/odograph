@@ -185,7 +185,7 @@ async def _app_settings_scenario():
             versions = await conn.execute(
                 "SELECT COALESCE(max(version), 0) FROM schema_migrations"
             )
-            assert (await versions.fetchone())[0] == 30
+            assert (await versions.fetchone())[0] == 31
 
             row = await conn.execute("SELECT count(*) FROM account_settings")
             assert (await row.fetchone())[0] == 1

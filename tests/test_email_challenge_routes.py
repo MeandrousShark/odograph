@@ -11,6 +11,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import PlainTextResponse
 
 import app.auth as auth
+from app.password_reset import SecurityMailAdmission
 
 
 ACCOUNT = {
@@ -39,6 +40,7 @@ def _app(monkeypatch, *, smtp_host="smtp.example.com"):
     app.state.oauth = None
     app.state.templates = _Templates()
     app.state.login_limiter = auth.FailedAuthLimiter(5, 60)
+    app.state.security_mail = SecurityMailAdmission()
 
     @asynccontextmanager
     async def fake_connection(pool):

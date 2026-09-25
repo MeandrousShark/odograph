@@ -10,7 +10,8 @@ from psycopg import sql
 
 from app.account_context import AccountPool, AccountPrincipal
 from app.application_roles import (
-    OWNED_TABLES, PROTECTED_TABLES, TABLES, _policy_contract, application_role_pools, finalize_application_restore,
+    OWNED_TABLES, PROTECTED_TABLES, RESTORE_AUTH_VERSION_STEP, TABLES, _policy_contract, application_role_pools,
+    finalize_application_restore,
     prepare_application_restore,
 )
 from app.db import make_pool, run_migrations
@@ -85,7 +86,7 @@ def _row_security(database_url):
         return flags, policies
 
 
-async def _verify(database_url, first):
+async def _verify(database_url, first, version=1):
     async with application_role_pools(database_url) as roles:
         # Unscoped SQL on the runtime role: only the restored policies isolate.
         async with roles.runtime.connection() as conn:
@@ -94,7 +95,7 @@ async def _verify(database_url, first):
                     sql.Identifier(table)))).fetchone())[0]
                 assert count == 0, table
         for owner, other in ((first, 73), (73, first)):
-            bound = AccountPool(roles.runtime, AccountPrincipal(owner, True, 1))
+            bound = AccountPool(roles.runtime, AccountPrincipal(owner, True, version))
             async with bound.connection() as conn:
                 owners = await (await conn.execute(
                     "SELECT (SELECT array_agg(DISTINCT account_id) FROM trips),"
@@ -110,7 +111,7 @@ async def _verify(database_url, first):
                             "VALUES(%s,'cross','manual','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',1)",
                             (other,))
         for owner in (first, 73):
-            bound = AccountPool(roles.runtime, AccountPrincipal(owner, True, 1))
+            bound = AccountPool(roles.runtime, AccountPrincipal(owner, True, version))
             async with bound.connection() as conn:
                 trips = await _fetch_export_trips(conn)
             assert len(trips) == 1
@@ -142,8 +143,19 @@ def test_application_archive_preserves_rows_credentials_sequences_and_restricted
         restored = _restore_archive(target, archive)
         assert restored.returncode == 0, restored.stderr.decode(errors="replace")
         asyncio.run(finalize_application_restore(target.database_url))
+        # Finalization signs every account out: sessions issued before the
+        # restore, including any revoked after the backup, no longer match.
+        restored_version = 1 + RESTORE_AUTH_VERSION_STEP
+        with psycopg.connect(target.database_url) as conn:
+            assert conn.execute("SELECT array_agg(DISTINCT auth_version) FROM accounts").fetchone() == (
+                [restored_version],)
+            conn.execute("UPDATE accounts SET auth_version=auth_version-%s", (RESTORE_AUTH_VERSION_STEP,))
         assert _snapshot(target.database_url) == before
+        with psycopg.connect(target.database_url) as conn:
+            conn.execute("UPDATE accounts SET auth_version=auth_version+%s", (RESTORE_AUTH_VERSION_STEP,))
         assert _row_security(target.database_url) == security_before
-        asyncio.run(_verify(target.database_url, first))
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            asyncio.run(_verify(target.database_url, first))
+        asyncio.run(_verify(target.database_url, first, restored_version))
     finally:
         clusters.close()

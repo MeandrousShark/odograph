@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from psycopg.rows import dict_row
 
 
@@ -9,6 +11,23 @@ def normalize_email(email: str) -> str:
 
 def valid_email(email: str) -> bool:
     return bool(email and email.isascii())
+
+
+_EMAIL_LOCAL_RE = re.compile(r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]+\Z")
+_EMAIL_LABEL_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\Z")
+
+
+def safe_delivery_email(email: str) -> bool:
+    """Accept one bounded mailbox, never a header or address list."""
+    if not valid_email(email) or len(email) > 254 or email.count("@") != 1:
+        return False
+    local, domain = email.split("@")
+    if not local or len(local) > 64 or local.startswith(".") or local.endswith(".") or ".." in local:
+        return False
+    if not _EMAIL_LOCAL_RE.fullmatch(local):
+        return False
+    labels = domain.split(".")
+    return bool(labels and all(len(label) <= 63 and _EMAIL_LABEL_RE.fullmatch(label) for label in labels))
 
 
 async def get_account(conn, account_id: int) -> dict | None:

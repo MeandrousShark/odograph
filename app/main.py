@@ -41,6 +41,7 @@ from app.missing_trip import missing_trip_badge
 from app.nudge import NudgeWorker
 from app.odometer import coverage_line
 from app.odometer_reminder import OdometerReminderWorker
+from app.password_reset import AttemptLimiter, RecoveryQueue, SecurityMailAdmission
 from app.places_desc import describe_compact_endpoint, describe_endpoint
 from app.report import caveat_lines, format_rate_periods, quarter_bounds, range_label
 from app.retention import RetentionWorker
@@ -144,7 +145,9 @@ class SecurityHeadersMiddleware:
                     )
                     if self.hsts_max_age and is_https:
                         headers["Strict-Transport-Security"] = f"max-age={self.hsts_max_age}"
-                if scope.get("path") in ("/invite", "/settings/account/email/confirm"):
+                if scope.get("path") in (
+                    "/invite", "/settings/account/email/confirm", "/forgot-password", "/reset-password",
+                ):
                     headers["Cache-Control"] = "no-store, private"
                     headers["Referrer-Policy"] = "no-referrer"
             await send(message)
@@ -355,6 +358,19 @@ def create_app(config: Config | None = None) -> FastAPI:
                     if worker is not None:
                         worker.poke()
 
+            app.state.password_reset_queue = None
+            if auth.password_reset_available(cfg):
+                reset_queue = RecoveryQueue(
+                    pools.control, cfg.security_link_base,
+                    lambda address: Mailer(cfg.smtp_host, cfg.smtp_port, cfg.smtp_username,
+                        cfg.smtp_password, cfg.smtp_security, cfg.smtp_tls_insecure,
+                        cfg.email_from, address),
+                    app.state.security_mail,
+                )
+                await reset_queue.start()
+                stack.push_async_callback(reset_queue.stop)
+                app.state.password_reset_queue = reset_queue
+
             await start_worker("detector_scheduler", lambda pool, c: DetectorRunner(
                 pool, c.detector_params, c.full_reprocess_warn_points),
                 cfg.detect_debounce_s, cfg.detect_sweep_s, after_run=after_detection)
@@ -383,6 +399,16 @@ def create_app(config: Config | None = None) -> FastAPI:
     app.state.login_limiter = FailedAuthLimiter(
         cfg.login_auth_max_failures, cfg.login_auth_window_s
     )
+    # Password reset counts every attempt, not only failures, in bounded
+    # key maps: a public request never learns whether an account exists.
+    app.state.reset_request_client_limiter = AttemptLimiter(
+        "password reset request client", cfg.login_auth_max_failures, cfg.login_auth_window_s)
+    app.state.reset_request_identifier_limiter = AttemptLimiter(
+        "password reset request identifier", cfg.login_auth_max_failures, cfg.login_auth_window_s)
+    app.state.reset_validation_limiter = AttemptLimiter(
+        "password reset validation", cfg.login_auth_max_failures, cfg.login_auth_window_s)
+    app.state.security_mail = SecurityMailAdmission()
+    app.state.password_reset_queue = None
 
     app.add_middleware(
         SessionMiddleware,

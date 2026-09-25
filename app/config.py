@@ -22,6 +22,29 @@ DEFAULT_MISSING_TRIP_GAP_M = 1000.0
 DEFAULT_ACCOUNT_AVATAR_MAX_BYTES = 512000
 
 
+def security_link_base(app_url: str) -> str:
+    """Return APP_URL when it is a usable base for emailed security links.
+
+    Security links are built only from configuration, never from a request's
+    Host or forwarded headers. The base must be an absolute HTTP(S) URL with
+    an authority and no userinfo, query or fragment; anything else disables
+    those links rather than guessing.
+    """
+    if not isinstance(app_url, str) or not app_url.isascii() or any(
+        ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in app_url
+    ):
+        return ""
+    try:
+        parsed = urlsplit(app_url)
+        parsed.port  # Raises on a malformed port.
+    except ValueError:
+        return ""
+    if (parsed.scheme not in ("http", "https") or not parsed.hostname
+            or "@" in parsed.netloc or "?" in app_url or "#" in app_url):
+        return ""
+    return app_url.rstrip("/")
+
+
 def _f(name: str, default: float) -> float:
     return float(os.environ.get(name, default))
 
@@ -102,6 +125,10 @@ class Config:
         """
         parsed = urlsplit(self.map_tile_url)
         return f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme else parsed.netloc
+
+    @property
+    def security_link_base(self) -> str:
+        return security_link_base(self.app_url)
 
     @property
     def snap_enabled(self) -> bool:
@@ -199,6 +226,13 @@ class Config:
                 forwarded_allow_ips or "<empty>",
             )
 
+        app_url = os.environ.get("APP_URL", "").rstrip("/")
+        if app_url and not security_link_base(app_url):
+            log.warning(
+                "APP_URL is not an absolute http(s) URL without userinfo, query or "
+                "fragment; emailed verification and password reset links are disabled"
+            )
+
         geocode_api_key = os.environ.get("GEOCODE_API_KEY", "")
         # Raises RuntimeError on an unrecognised value -- fail fast, not a
         # silently-disabled geocoder (see resolve_geocode_provider_name's
@@ -260,7 +294,7 @@ class Config:
             ntfy_token=os.environ.get("NTFY_TOKEN", ""),
             ntfy_username=os.environ.get("NTFY_USERNAME", ""),
             ntfy_password=os.environ.get("NTFY_PASSWORD", ""),
-            app_url=os.environ.get("APP_URL", "").rstrip("/"),
+            app_url=app_url,
             nudge_weekly_hour=int(os.environ.get("NUDGE_WEEKLY_HOUR", 18)),
             # Default on whenever ntfy is configured (same gate the weekly
             # nudge itself uses in app/main.py), but independently

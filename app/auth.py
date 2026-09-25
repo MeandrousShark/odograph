@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import hmac
 import logging
-import re
 import secrets
 import time
 from collections.abc import Mapping
@@ -27,6 +26,7 @@ from app.accounts import (
     get_account_by_email,
     normalize_email,
     replace_password,
+    safe_delivery_email as _safe_delivery_email,
     set_account_avatar,
     valid_email,
 )
@@ -38,10 +38,11 @@ from app.avatar_images import (
     REASON_TOO_LARGE,
     detect_avatar as _detect_avatar,
 )
-from app.config import DEFAULT_ACCOUNT_AVATAR_MAX_BYTES
+from app.config import DEFAULT_ACCOUNT_AVATAR_MAX_BYTES, security_link_base
 from app.email_challenges import (
     PURPOSE_CHANGE,
     PURPOSE_CURRENT,
+    _digest as _challenge_digest,
     consume_email_challenge,
     is_current_email_verified,
     issue_email_challenge,
@@ -52,6 +53,7 @@ from app.ingest import _read_capped_body
 from app.invitations import InvitationUnavailable, redeem_invitation
 from app.local_auth import hash_password, verify_password
 from app.mailer import Mailer
+from app.password_reset import consume_password_reset, password_reset_usable
 from app.page import render_page
 from app.uploads import read_capped_upload
 from app.oidc_identities import (
@@ -79,6 +81,15 @@ MAX_INVITE_FORM_BYTES = 8192
 MAX_EMAIL_FORM_BYTES = 8192
 GENERIC_EMAIL_ERROR = "Unable to process email request. Please try again."
 EMAIL_REQUEST_NOTICE = "If the request is eligible, a verification email has been sent."
+RESET_REQUEST_NOTICE = (
+    "If an enabled account with a verified email address matches, a password reset "
+    "link is on its way. It expires in 30 minutes."
+)
+GENERIC_RESET_ERROR = "Unable to reset password. Check the link or request a new one."
+RESET_COMPLETE_NOTICE = (
+    "Password reset. Every Odograph session for that account has been signed out; "
+    "sign in with your new password."
+)
 OIDC_LINK_ATTEMPT_KEY = "oidc_link_attempt"
 OIDC_LINK_STATE_PREFIX = "link."
 OIDC_LOGIN_STATE_PREFIX = "login."
@@ -156,23 +167,6 @@ def _human_size(num_bytes: int) -> str:
     if num_bytes % 1024 == 0:
         return f"{num_bytes // 1024} KB"
     return f"{num_bytes} bytes"
-
-
-_EMAIL_LOCAL_RE = re.compile(r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]+\Z")
-_EMAIL_LABEL_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\Z")
-
-
-def _safe_delivery_email(email: str) -> bool:
-    """Accept one bounded mailbox, never a header or address list."""
-    if not valid_email(email) or len(email) > 254 or email.count("@") != 1:
-        return False
-    local, domain = email.split("@")
-    if not local or len(local) > 64 or local.startswith(".") or local.endswith(".") or ".." in local:
-        return False
-    if not _EMAIL_LOCAL_RE.fullmatch(local):
-        return False
-    labels = domain.split(".")
-    return bool(labels and all(len(label) <= 63 and _EMAIL_LABEL_RE.fullmatch(label) for label in labels))
 
 
 async def _email_form(request: Request, fields: set[str]) -> dict[str, str]:
@@ -587,6 +581,8 @@ def make_router() -> APIRouter:
                 "signup_available": signup_available,
                 "legacy_oidc_available": legacy_oidc_available,
                 "oidc_login_available": oidc_login_available,
+                "password_reset_available": has_account and password_reset_available(cfg),
+                "notice": request.session.pop("login_notice", None),
                 "error": error,
             },
             status_code=status_code,
@@ -652,7 +648,7 @@ def make_router() -> APIRouter:
             "account_email_verified": account_email_verified,
             "email_challenge_available": bool(
                 getattr(cfg, "smtp_host", "") and getattr(cfg, "email_from", "")
-                and getattr(cfg, "app_url", "") and account["password_hash"]
+                and security_link_base(getattr(cfg, "app_url", "")) and account["password_hash"]
                 and not cfg.dev_no_auth
             ),
             "oidc_configured": oidc_configured,
@@ -1204,7 +1200,8 @@ def make_router() -> APIRouter:
     ):
         check_form_csrf(request, values["csrf_token"])
         cfg = request.app.state.config
-        if not (cfg.smtp_host and cfg.email_from and cfg.app_url) or cfg.dev_no_auth:
+        link_base = security_link_base(cfg.app_url)
+        if not (cfg.smtp_host and cfg.email_from and link_base) or cfg.dev_no_auth:
             return await _render_account_unavailable(request, user)
         limiter: FailedAuthLimiter = request.app.state.login_limiter
         try:
@@ -1231,7 +1228,7 @@ def make_router() -> APIRouter:
                 cfg.smtp_host, cfg.smtp_port, cfg.smtp_username, cfg.smtp_password,
                 cfg.smtp_security, cfg.smtp_tls_insecure, cfg.email_from, target,
             )
-            link = f"{cfg.app_url}/settings/account/email/confirm#purpose={purpose}&token={token}"
+            link = f"{link_base}/settings/account/email/confirm#purpose={purpose}&token={token}"
             try:
                 message = mailer.compose(
                     "Confirm your Odograph email address",
@@ -1240,7 +1237,7 @@ def make_router() -> APIRouter:
                     f"and enter this code manually: {token}\n\n"
                     "The code expires in 30 minutes. If you did not request this, ignore this email.",
                 )
-                await mailer.send(message)
+                await request.app.state.security_mail.send(mailer, message)
             except Exception:
                 async with control_connection(request.app.state.control_pool) as conn:
                     await revoke_email_challenge(conn, account["id"], purpose, token)
@@ -1491,6 +1488,91 @@ def make_router() -> APIRouter:
             success="Password changed. Other sessions have been signed out.",
         )
 
+    async def _render_reset_page(request: Request, name: str, *, error: str | None = None,
+                                 notice: str | None = None, status_code: int = 200):
+        return request.app.state.templates.TemplateResponse(
+            request, name,
+            {"user": None, "csrf": _ensure_csrf(request), "error": error, "notice": notice,
+             "password_reset_available": password_reset_available(request.app.state.config)},
+            status_code=status_code,
+            headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+        )
+
+    @router.get("/forgot-password")
+    async def forgot_password_page(request: Request):
+        if request.app.state.config.dev_no_auth:
+            raise HTTPException(status_code=404)
+        return await _render_reset_page(request, "forgot_password.html")
+
+    @router.post("/forgot-password")
+    async def forgot_password(request: Request):
+        """Same acknowledgement for unknown, disabled, unverified, limited and
+        eligible accounts. Lookup and delivery happen after the reply."""
+        cfg = request.app.state.config
+        if cfg.dev_no_auth:
+            raise HTTPException(status_code=404)
+        values = await _email_form(request, {"email", "csrf_token"})
+        check_form_csrf(request, values["csrf_token"])
+        queue = getattr(request.app.state, "password_reset_queue", None)
+        if queue is None or not password_reset_available(cfg):
+            return await _render_reset_page(request, "forgot_password.html")
+        email = normalize_email(values["email"])
+        client_allowed = request.app.state.reset_request_client_limiter.allow(client_ip(request))
+        identifier_allowed = (
+            _safe_delivery_email(email)
+            and request.app.state.reset_request_identifier_limiter.allow(email)
+        )
+        if client_allowed and identifier_allowed:
+            queue.submit_public(email)
+        return await _render_reset_page(request, "forgot_password.html", notice=RESET_REQUEST_NOTICE)
+
+    @router.get("/reset-password")
+    async def reset_password_page(request: Request):
+        if request.app.state.config.dev_no_auth:
+            raise HTTPException(status_code=404)
+        return await _render_reset_page(request, "reset_password.html")
+
+    @router.post("/reset-password")
+    async def reset_password(request: Request):
+        """Signed-out bearer-proof reset. It never signs the holder in."""
+        if request.app.state.config.dev_no_auth:
+            raise HTTPException(status_code=404)
+        values = await _email_form(request, {"token", "password", "password_confirm", "csrf_token"})
+        check_form_csrf(request, values["csrf_token"])
+        if not request.app.state.reset_validation_limiter.allow(client_ip(request)):
+            return await _render_reset_page(
+                request, "reset_password.html", error=GENERIC_RESET_ERROR, status_code=429)
+        token = values["token"].strip()
+        if _challenge_digest(token) is None:
+            return await _render_reset_page(
+                request, "reset_password.html", error=GENERIC_RESET_ERROR, status_code=400)
+        error = _new_password_error(values["password"], values["password_confirm"])
+        if error:
+            return await _render_reset_page(request, "reset_password.html", error=error, status_code=400)
+        pool = request.app.state.control_pool
+
+        async def replace():
+            # Check the proof before paying for a password hash.
+            async with control_connection(pool) as conn:
+                if not await password_reset_usable(conn, token):
+                    return None
+            password_hash = await asyncio.to_thread(hash_password, values["password"])
+            async with control_connection(pool) as conn:
+                return await consume_password_reset(conn, token, password_hash)
+
+        try:
+            account_id = await request.app.state.login_limiter.run_bounded(replace)
+        except _AuthSaturated:
+            return await _render_reset_page(
+                request, "reset_password.html", error=GENERIC_RESET_ERROR, status_code=429)
+        if account_id is None:
+            return await _render_reset_page(
+                request, "reset_password.html", error=GENERIC_RESET_ERROR, status_code=400)
+        request.session.clear()
+        request.session["login_notice"] = RESET_COMPLETE_NOTICE
+        # signed_out clears the shared cross-tab account marker (base.html).
+        return RedirectResponse("/login?signed_out=1", status_code=303)
+
     @router.post("/logout", dependencies=[Depends(require_csrf)])
     async def logout(request: Request):
         request.session.clear()
@@ -1501,6 +1583,15 @@ def make_router() -> APIRouter:
         return Response(status_code=204, headers={"HX-Redirect": "/login?signed_out=1"})
 
     return router
+
+
+def password_reset_available(cfg) -> bool:
+    """Public reset needs SMTP delivery and a trusted link base. Notification
+    EMAIL_TO is irrelevant: resets go only to the account's verified address."""
+    return bool(
+        not cfg.dev_no_auth and getattr(cfg, "smtp_host", "") and getattr(cfg, "email_from", "")
+        and security_link_base(getattr(cfg, "app_url", ""))
+    )
 
 
 async def _signup_available(request: Request) -> bool:

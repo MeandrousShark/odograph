@@ -12,6 +12,9 @@
 {% if error %}
 <div class="notice notice-danger form-error-summary" role="alert">{{ error }}</div>
 {% endif %}
+{% if notice %}
+<div class="notice notice-success form-success" role="status">{{ notice }}</div>
+{% endif %}
 
 {% if account_exists %}
 <form method="post" action="/login/local" class="auth-form">
@@ -24,6 +27,9 @@
   </label>
   <button type="submit" class="control control-primary auth-submit">Sign in</button>
 </form>
+{% if password_reset_available %}
+<p class="muted"><a href="/forgot-password">Forgot password?</a></p>
+{% endif %}
 {% endif %}
 
 {% if oidc_login_available or legacy_oidc_available %}

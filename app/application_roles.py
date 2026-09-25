@@ -57,6 +57,21 @@ EMAIL_CHALLENGE_FUNCTIONS = (
     "public.revoke_email_challenge(bigint,text,text)",
     "public.consume_email_challenge(bigint,bigint,text,text)",
 )
+PASSWORD_RESET_FUNCTIONS = (
+    "public.issue_password_reset(bigint,text,text,text)",
+    "public.revoke_password_reset(text)",
+    "public.password_reset_usable(text,boolean)",
+    "public.consume_password_reset(text,text)",
+    "public.host_reset_password(bigint,text)",
+)
+# Each protected challenge function's current definition lives in the
+# migration that last created or replaced it.
+CHALLENGE_FUNCTION_SOURCES = {
+    EMAIL_CHALLENGE_FUNCTIONS[0]: "031_password_reset.sql",
+    EMAIL_CHALLENGE_FUNCTIONS[1]: "030_email_challenges.sql",
+    EMAIL_CHALLENGE_FUNCTIONS[2]: "030_email_challenges.sql",
+    **{function: "031_password_reset.sql" for function in PASSWORD_RESET_FUNCTIONS},
+}
 BOOTSTRAP_INSERT_TABLES = ("accounts", "account_settings", "vehicles", "tag_rules", "mileage_rates")
 BOOTSTRAP_LOCK_TABLES = ("accounts", "ingest_credentials", "tracking_devices", "tracking_device_aliases")
 INVITATION_FUNCTIONS = (
@@ -64,6 +79,7 @@ INVITATION_FUNCTIONS = (
     "public.redeem_member_invitation(text,text,text)",
 )
 SQL_DIR = Path(__file__).resolve().parents[1] / "scripts" / "sql"
+MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
 FUNCTION_FILES = (
     "account_bootstrap.sql", "account_admission.sql", "tracking_admission.sql",
     "member_invitations.sql",
@@ -77,7 +93,9 @@ FUNCTIONS = {
     EMAIL_CHALLENGE_FUNCTIONS[0]: CONTROL_ROLE,
     EMAIL_CHALLENGE_FUNCTIONS[1]: CONTROL_ROLE,
     EMAIL_CHALLENGE_FUNCTIONS[2]: CONTROL_ROLE,
+    **{function: CONTROL_ROLE for function in PASSWORD_RESET_FUNCTIONS},
 }
+RESTORE_AUTH_VERSION_STEP = 1_000_000_000
 PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER")
 
 
@@ -248,6 +266,28 @@ async def _provision(conn) -> None:
     await conn.execute("GRANT SELECT ON odograph_service.recovery_metadata TO odograph_control,odograph_runtime")
 
 
+async def _revoke_restored_security_state(conn) -> None:
+    """A restore rolls credentials and auth_version back while SESSION_SECRET
+    is unchanged, so a cookie revoked after the backup would validate again.
+    End every session and revoke outstanding invitations and challenges,
+    including password resets, in the same transaction as role recovery.
+    Older archives may predate either lifecycle table.
+
+    Versions issued after the backup may already be higher than the restored
+    value, so one increment could revive a later-revoked cookie. The large
+    step moves past any version a real account could have reached since.
+    """
+    await conn.execute(
+        "UPDATE public.accounts SET auth_version = auth_version + %s", (RESTORE_AUTH_VERSION_STEP,))
+    for table in ("invitations", "email_challenges"):
+        cur = await conn.execute("SELECT to_regclass(%s)", ("public." + table,))
+        if (await cur.fetchone())[0] is not None:
+            await conn.execute(sql.SQL(
+                "UPDATE {} SET revoked_at = pg_catalog.clock_timestamp() "
+                "WHERE consumed_at IS NULL AND revoked_at IS NULL"
+            ).format(sql.Identifier("public", table)))
+
+
 async def validate_application_contract(conn, state: ManagedRoleState) -> None:
     """Validate effective privileges and policies without fixing drift."""
     cur = await conn.execute(
@@ -382,15 +422,15 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
             invitation_source, re.S | re.I).group(2)
         _require_contract(row == (BOOTSTRAP_ROLE, True, ["search_path=pg_catalog, pg_temp"], body),
             f"function definition: {function}")
-    challenge_source = (SQL_DIR.parent.parent / "migrations" / "030_email_challenges.sql").read_text()
-    for function in EMAIL_CHALLENGE_FUNCTIONS:
+    for function in EMAIL_CHALLENGE_FUNCTIONS + PASSWORD_RESET_FUNCTIONS:
         name = function.split("(", 1)[0]
         cur = await conn.execute(
             "SELECT pg_get_userbyid(proowner),prosecdef,proconfig,prosrc FROM pg_proc WHERE oid=%s::regprocedure",
             (function,))
         row = await cur.fetchone()
+        challenge_source = (MIGRATIONS_DIR / CHALLENGE_FUNCTION_SOURCES[function]).read_text()
         body = re.search(
-            rf"CREATE FUNCTION {re.escape(name)}\(.*?AS\s+(\$body\$)(.*?)\1",
+            rf"CREATE (?:OR REPLACE )?FUNCTION {re.escape(name)}\(.*?AS\s+(\$body\$)(.*?)\1",
             challenge_source, re.S | re.I).group(2)
         _require_contract(row == (BOOTSTRAP_ROLE, True, ["search_path=pg_catalog, pg_temp"], body),
             f"function definition: {function}")
@@ -430,6 +470,8 @@ async def prepare_application_roles(database_url: str, *, restoring: bool = Fals
                     verifier = conn.pgconn.encrypt_password(password.encode(), role.encode(), b"scram-sha-256").decode()
                     await conn.execute(sql.SQL("ALTER ROLE {} LOGIN PASSWORD {}").format(sql.Identifier(role), sql.Literal(verifier)))
                 await _provision(conn)
+            if restoring:
+                await _revoke_restored_security_state(conn)
             await validate_application_contract(conn, state)
             return state
     except _RolesUsedElsewhere:
