@@ -113,8 +113,10 @@ def test_callback_rejects_swapped_or_mismatched_state_before_token_exchange(
     assert client.calls == 0
 
 
-@pytest.mark.parametrize("auth_time", [None, 1, time.time() + 300])
+@pytest.mark.parametrize("auth_time", [None, 1, "future"])
 def test_reauth_callback_rejects_absent_stale_or_future_auth_time(monkeypatch, auth_time):
+    if auth_time == "future":
+        auth_time = time.time() + 300
     request, client = _request(
         session=_protected_session(),
         userinfo={"sub": "exact-subject", "auth_time": auth_time},
