@@ -35,9 +35,12 @@ application setting.
 
 The supported baseline is PostgreSQL 16 with PostGIS. Startup now runs the
 ownership migrations and validates the live `ownership-activated-v1` security
-contract before opening restricted pools. The application remains a
-single-account installation: the singleton guard stays in place, new-account
-registration stays closed after setup, and invitations are not available.
+contract before opening restricted pools. Normal installations remain
+single-account: the database singleton and admin-only account constraints stay
+in place, and public signup closes after the first administrator is created.
+Invitation redemption and passwordless OIDC provisioning are exercised only
+in a controlled activated fixture. A separately reviewed activation migration
+and release are required before those flows are available in normal installs.
 PostgreSQL row-level security is enabled and forced on every account-owned
 table. The runtime role reads and changes only the rows of the account bound
 to its transaction, and none without one. Personal queries also filter their
@@ -76,10 +79,12 @@ backup and the supported [upgrade procedure](upgrading.md) before upgrading an
 existing installation. Ambiguous legacy ownership fails closed and requires
 repair before migration.
 
-First-account creation atomically installs the account and its fixed defaults.
-An empty instance admits no personal data or tracking writes before setup.
-Existing one-account data keeps its IDs and ownership, while legacy effective
-preferences and ingest credentials are imported once.
+First-account creation atomically installs the administrator and fixed
+defaults. An empty instance admits no personal data or tracking writes before
+setup. Existing account data keeps its IDs and ownership, while legacy
+effective preferences and ingest credentials are imported once. The activated
+fixture also checks that invited accounts receive separate defaults and
+account-owned data.
 
 Use the [backup and fresh-target restore commands](backups.md) to preserve
 managed-role metadata and restore the required cluster roles, ownership, and
@@ -120,9 +125,14 @@ verifications. When both slots are busy, additional requests receive `503`
 with `Retry-After: 1` before verification or body reads. Cancelled requests keep
 their slot until verification finishes; a device can retry afterward.
 
-OIDC is optional. Set all three required provider values together, register
-`https://your-domain/auth/callback`, then link the identity from Account
-Security while signed in locally.
+OIDC is optional. Set all three required provider values together and register
+`https://your-domain/auth/callback`. Existing password accounts can link the
+configured identity from Account Security while signed in with a password.
+Invitation redemption without a password and OIDC-only method management are
+currently exercised only in the controlled activated fixture; normal installs
+retain the single-account guard until supported activation is released. When
+enabled, OIDC-only security actions require a provider that honors `max_age=0`
+and returns a valid `auth_time`; otherwise these actions fail closed.
 
 | Variable | Default | Purpose |
 |---|---:|---|

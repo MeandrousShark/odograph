@@ -12,7 +12,7 @@
 {% if error %}
 <div class="notice notice-danger form-error-summary" role="alert">{{ error }}</div>
 {% endif %}
-{% if success %}
+{% if success and not method_notice %}
 <div class="notice notice-success form-success" role="status">{{ success }}</div>
 {% endif %}
 
@@ -63,22 +63,35 @@
 
 <section class="card account-settings-card account-settings-security" aria-labelledby="security-heading">
 <h3 id="security-heading">Security</h3>
+{% if method_notice %}
+<div class="notice notice-success form-success" role="status">{{ method_notice }}</div>
+{% endif %}
 <section class="account-security-section account-security-local" aria-labelledby="change-password-heading">
 <p class="account-security-email">Local login email: <strong>{{ account_email }}</strong></p>
 
-<h4 id="change-password-heading">Change password</h4>
+<h4 id="change-password-heading">{{ "Change password" if has_password|default(true) else "Add a password" }}</h4>
+{% if not has_password|default(true) %}
+<form method="post" action="/settings/account/oidc/reauth" class="auth-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <input type="hidden" name="action" value="add_password">
+  <button type="submit" class="control control-primary auth-submit">Confirm with sign-in provider</button>
+</form>
+<p class="muted">After confirming, return here within 10 minutes to set a password.</p>
+{% endif %}
 <form method="post" action="/settings/account/password" class="auth-form">
   <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  {% if has_password|default(true) %}
   <label>Current password
     <input type="password" name="current_password" required autocomplete="current-password">
   </label>
+  {% endif %}
   <label>New password
     <input type="password" name="password" required autocomplete="new-password" minlength="8">
   </label>
   <label>Confirm new password
     <input type="password" name="password_confirm" required autocomplete="new-password" minlength="8">
   </label>
-  <button type="submit" class="control control-primary auth-submit">Change password</button>
+  <button type="submit" class="control control-primary auth-submit">{{ "Change password" if has_password|default(true) else "Add password" }}</button>
 </form>
 </section>
 
@@ -93,16 +106,39 @@
     {% if not account_email_verified %}
     <h5>Verify your current email</h5>
     <p>We'll send a confirmation link to {{ account_email }}. Your login stays the same.</p>
+    {% if not has_password|default(true) %}
+    <form method="post" action="/settings/account/oidc/reauth" class="auth-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input type="hidden" name="action" value="verify_current">
+      <button type="submit" class="control control-primary auth-submit">Confirm with sign-in provider</button>
+    </form>
+    {% endif %}
     <form method="post" action="/settings/account/email/verify/request" class="auth-form">
       <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      {% if has_password|default(true) %}
       <label>Current password
         <input type="password" name="current_password" required autocomplete="current-password">
       </label>
+      {% endif %}
       <button type="submit" class="control control-primary auth-submit">Send verification link</button>
     </form>
     {% endif %}
     <h5>Change login email</h5>
     <p>We'll send a confirmation link to the new address. Your current login email stays active until you confirm it.</p>
+    {% if not has_password|default(true) %}
+    <form method="post" action="/settings/account/oidc/reauth" class="auth-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input type="hidden" name="action" value="change_email">
+      <label>New email address
+        <input type="email" name="target" required autocomplete="email" inputmode="email">
+      </label>
+      <label>Confirm new email address
+        <input type="email" name="target_confirm" required autocomplete="off" inputmode="email">
+      </label>
+      <button type="submit" class="control control-primary auth-submit">Confirm with sign-in provider</button>
+    </form>
+    <p class="muted">After confirming, enter the same address below within 10 minutes.</p>
+    {% endif %}
     <form method="post" action="/settings/account/email/change/request" class="auth-form">
       <input type="hidden" name="csrf_token" value="{{ csrf }}">
       <label>New email address
@@ -111,9 +147,11 @@
       <label>Confirm new email address
         <input type="email" name="new_email_confirm" required autocomplete="off" inputmode="email">
       </label>
+      {% if has_password|default(true) %}
       <label>Current password
         <input type="password" name="current_password" required autocomplete="current-password">
       </label>
+      {% endif %}
       <button type="submit" class="control control-primary auth-submit">Send confirmation link</button>
     </form>
   {% else %}
@@ -137,6 +175,7 @@
       <dd>{{ linked_identity["display_name"] or "Not provided" }}</dd>
     </div>
   </dl>
+  {% if has_password|default(true) %}
   <form method="post" action="/settings/account/oidc/unlink" class="auth-form">
     <input type="hidden" name="csrf_token" value="{{ csrf }}">
     <label>Current password
@@ -148,6 +187,9 @@
     </label>
     <button type="submit" class="control control-destructive auth-submit">Unlink sign-in provider</button>
   </form>
+  {% else %}
+  <p class="muted">Add a password before removing this provider.</p>
+  {% endif %}
   {% else %}
   <p>Sign-in provider: available but not linked.</p>
   <form method="post" action="/settings/account/oidc/link" class="auth-form">

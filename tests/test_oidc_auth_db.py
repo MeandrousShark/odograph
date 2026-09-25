@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import time
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -145,6 +144,10 @@ async def _link_and_exact_login_scenario():
         assert state.startswith("link.")
         assert oauth_client.authorize_kwargs["nonce"]
 
+        old_link_session = _request(
+            pool, oauth_client,
+            session={"account_id": 1, "auth_version": 1, "csrf": "other"},
+        )
         request.query_params = {"state": state, "code": "valid"}
         response = await _endpoint("/auth/callback", "GET")(request)
         assert response.status_code == 303
@@ -154,6 +157,10 @@ async def _link_and_exact_login_scenario():
         assert linked["subject"] == "stable-subject"
         assert linked["provider_email"] == "different-provider@example.net"
         assert (await _account(pool))["email"] == "local@example.com"
+        assert (await _account(pool))["auth_version"] == 2
+        assert request.session["auth_version"] == 2
+        with pytest.raises(AuthRedirect):
+            await require_user(old_link_session)
         account_page = await _endpoint("/settings/account", "GET")(
             request, user=user
         )
@@ -182,7 +189,7 @@ async def _link_and_exact_login_scenario():
         logged_in = await _endpoint("/auth/callback", "GET")(login_request)
         assert logged_in.status_code == 303
         assert login_request.session["account_id"] == account["id"]
-        assert login_request.session["auth_version"] == 1
+        assert login_request.session["auth_version"] == 2
         assert (await _account(pool))["email"] == "local@example.com"
         assert (await _identity(pool))["provider_email"] == "changed-provider@example.net"
     finally:
@@ -242,28 +249,22 @@ async def _link_and_unlink_failures_scenario():
         duplicate = _request(
             pool,
             oauth_client,
-            session={
-                "account_id": 1,
-                "auth_version": 1,
-                "csrf": "csrf",
-                "oidc_link_attempt": {
-                    "state": "link.duplicate",
-                    "account_id": 1,
-                    "auth_version": 1,
-                    "issued_at": time.time(),
-                },
-            },
-            query_params={"state": "link.duplicate"},
+            session={"account_id": 1, "auth_version": 2, "csrf": "csrf"},
         )
-        with pytest.raises(Exception) as duplicate_error:
-            await _endpoint("/auth/callback", "GET")(duplicate)
-        assert duplicate_error.value.status_code == 409
+        await require_user(duplicate)
+        duplicate_response = await _endpoint("/settings/account/oidc/link", "POST")(
+            duplicate,
+            current_password="local password",
+            csrf_token="csrf",
+            user=user,
+        )
+        assert duplicate_response.status_code == 409
         assert (await _identity(pool))["subject"] == "subject-1"
 
         no_confirm = _request(
             pool,
             oauth_client,
-            session={"account_id": 1, "auth_version": 1, "csrf": "csrf"},
+            session={"account_id": 1, "auth_version": 2, "csrf": "csrf"},
         )
         await require_user(no_confirm)
         response = await _endpoint("/settings/account/oidc/unlink", "POST")(
@@ -279,7 +280,7 @@ async def _link_and_unlink_failures_scenario():
         wrong_password = _request(
             pool,
             oauth_client,
-            session={"account_id": 1, "auth_version": 1, "csrf": "csrf"},
+            session={"account_id": 1, "auth_version": 2, "csrf": "csrf"},
         )
         await require_user(wrong_password)
         response = await _endpoint("/settings/account/oidc/unlink", "POST")(
@@ -290,17 +291,17 @@ async def _link_and_unlink_failures_scenario():
             user=user,
         )
         assert response.status_code == 401
-        assert (await _account(pool))["auth_version"] == 1
+        assert (await _account(pool))["auth_version"] == 2
 
         old_session = _request(
             pool,
             oauth_client,
-            session={"account_id": 1, "auth_version": 1, "csrf": "other"},
+            session={"account_id": 1, "auth_version": 2, "csrf": "other"},
         )
         unlink_request = _request(
             pool,
             oauth_client,
-            session={"account_id": 1, "auth_version": 1, "csrf": "csrf"},
+            session={"account_id": 1, "auth_version": 2, "csrf": "csrf"},
         )
         await require_user(unlink_request)
         response = await _endpoint("/settings/account/oidc/unlink", "POST")(
@@ -311,10 +312,11 @@ async def _link_and_unlink_failures_scenario():
             user=user,
         )
         assert response.status_code == 303
-        assert response.headers["location"] == "/login"
-        assert unlink_request.session == {}
+        assert response.headers["location"] == "/settings/account"
+        assert unlink_request.session["account_id"] == 1
+        assert unlink_request.session["auth_version"] == 3
         assert await _identity(pool) is None
-        assert (await _account(pool))["auth_version"] == 2
+        assert (await _account(pool))["auth_version"] == 3
         with pytest.raises(AuthRedirect):
             await require_user(old_session)
 
@@ -326,7 +328,7 @@ async def _link_and_unlink_failures_scenario():
             csrf_token="fresh",
         )
         assert local_response.status_code == 303
-        assert local_request.session["auth_version"] == 2
+        assert local_request.session["auth_version"] == 3
     finally:
         await pool.close()
 

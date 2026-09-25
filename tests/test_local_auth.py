@@ -54,3 +54,7 @@ def test_verify_password_rejects_malformed_stored_hash_without_raising():
     assert not verify_password("anything", "not-a-valid-hash")
     assert not verify_password("anything", "scrypt$notanint$8$1$c2FsdA==$ZGlnZXN0")
     assert not verify_password("anything", "bcrypt$10$abc$def")
+
+
+def test_verify_password_rejects_missing_local_method():
+    assert not verify_password("anything", None)

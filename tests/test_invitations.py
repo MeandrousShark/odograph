@@ -1,4 +1,4 @@
-"""The upgrade migration and current role contract install the same functions."""
+"""The upgrade migrations and current role contract install the same functions."""
 from __future__ import annotations
 
 import re
@@ -9,9 +9,13 @@ from app.db import INVITATION_EMAIL_LOCK_CLASS_ID
 
 
 def test_migration_029_matches_current_invitation_functions():
-    migration = (SQL_DIR.parent.parent / "migrations" / "029_invitations.sql").read_text()
     current = (SQL_DIR / "member_invitations.sql").read_text()
     for function in INVITATION_FUNCTIONS:
+        migration_name = (
+            "032_oidc_member_invitation.sql" if "redeem_oidc" in function
+            else "029_invitations.sql"
+        )
+        migration = (SQL_DIR.parent.parent / "migrations" / migration_name).read_text()
         name = function.split("(", 1)[0]
         pattern = rf"CREATE (?:OR REPLACE )?FUNCTION {re.escape(name)}\(.*?AS\s+(\$body\$)(.*?)\1"
         migration_body = re.search(pattern, migration, re.S | re.I).group(2)
@@ -20,8 +24,11 @@ def test_migration_029_matches_current_invitation_functions():
 
 
 def test_invitation_email_lock_uses_registered_namespace():
-    migration = (SQL_DIR.parent.parent / "migrations" / "029_invitations.sql").read_text()
+    migrations = [
+        (SQL_DIR.parent.parent / "migrations" / name).read_text()
+        for name in ("029_invitations.sql", "032_oidc_member_invitation.sql")
+    ]
     current = (SQL_DIR / "member_invitations.sql").read_text()
     lock_call = f"pg_advisory_xact_lock({INVITATION_EMAIL_LOCK_CLASS_ID},"
-    assert migration.count(lock_call) == 2
-    assert current.count(lock_call) == 2
+    assert [migration.count(lock_call) for migration in migrations] == [2, 1]
+    assert current.count(lock_call) == 3

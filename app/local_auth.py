@@ -46,11 +46,13 @@ def hash_password(password: str) -> str:
     ))
 
 
-def verify_password(password: str, stored: str) -> bool:
+def verify_password(password: str, stored: str | None) -> bool:
     """True if `password` matches `stored`. Reads scrypt parameters back out
     of `stored` (not the module constants above) so a hash created under
     older parameters still verifies after SCRYPT_N/R/P are raised.
     """
+    if stored is None:
+        return False
     try:
         scheme, n, r, p, salt_b64, digest_b64 = stored.split("$")
         if scheme != "scrypt":

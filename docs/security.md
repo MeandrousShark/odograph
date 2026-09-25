@@ -9,12 +9,15 @@ which data can leave your instance and under what configuration. This
 document is about who can reach the application and what it does with what
 they send it, not about outbound data flows.
 
-This remains a single-account, self-hosted application. Account ownership is
-explicit in queries, restricted database roles are active, and row-level
-security is enabled and forced on every account-owned table. The singleton
-account guard remains and invitations are unavailable. This stage must not be
-operated as a multi-user service. The operator is trusted and controls the host
-and database; nothing here defends against a hostile operator.
+Normal installations remain single-account. Account ownership is explicit in
+queries, restricted database roles are active, and row-level security is
+enabled and forced on every account-owned table. The database singleton and
+admin-only account constraints remain in place until a separately reviewed
+activation migration is released. Invitation redemption and OIDC-only account
+flows described below are currently exercised only in a controlled activated
+fixture. Do not operate a normal installation as a multi-user service. The
+operator is trusted and controls the host and database; nothing here defends
+against a hostile operator.
 
 ## Trust boundaries
 
@@ -80,26 +83,46 @@ Every network-reachable route, and what actually guards it:
   (fixation defense) and issues a fresh CSRF token.
 - **`/signup`**: reachable only when `INITIAL_ADMIN_SIGNUP=1`, no account
   exists, and development auth bypass is off. The first successful transaction
-  creates the sole administrator. A database singleton constraint prevents a
-  concurrent request or application bug from creating a second account. The
-  durable account row closes both signup routes permanently.
+  creates the administrator. The durable account row closes public signup and
+  the normal database schema rejects additional accounts. The invitation
+  redemption routes below are not a supported way to add users to a normal
+  installation.
+- **`/invite`, `/invite/oidc`**: controlled-fixture flows for testing invited
+  account redemption. The invitee can set a local password or use the
+  configured provider without setting one. OIDC redemption consumes the
+  invitation only after callback state and nonce checks, and the invitation's
+  email becomes the account login. Provider email claims neither choose nor
+  verify it. The invitation token is not sent to the provider. A cancelled or
+  failed provider flow creates no account and consumes no invitation. Normal
+  deployments remain blocked by the database singleton guard until supported
+  activation is released.
 - **`/settings/account`**: requires the caller's enabled account session.
-  Password changes require the current password, matching new passwords, and
-  a session-bound CSRF token. A successful change increments the account's
-  authentication version, invalidating older sessions while issuing a fresh
-  valid session to the browser that completed the change. Linking OIDC requires
-  the current local password and a fresh provider authorization. Unlinking
-  requires the current password and explicit confirmation, removes the stored
-  identity, increments the authentication version, and clears the current
-  session. Current-email verification and login-email change also require the
-  current password and email challenge delivery configured with `SMTP_HOST`,
+  Password changes, OIDC linking and unlinking, and email verification or
+  change require CSRF protection and reauthentication. Accounts with a password
+  use that password. OIDC-only account actions are implemented and tested in
+  the controlled activated fixture, but are not available as a supported
+  normal-install path yet. When supported activation is released, those
+  accounts must first complete a fresh provider authentication through
+  `/settings/account/oidc/reauth`. Odograph requests
+  `max_age=0` and requires a validated `auth_time` within 60 seconds of the
+  fresh-authentication attempt, matched to the account's exact linked issuer
+  and subject. A missing, stale, or future timestamp fails closed. The one-use
+  proof is bound to the account, authentication version, action, and target,
+  and expires after 10 minutes. Providers that do not return the required
+  evidence cannot authorize these actions; use an existing password, a
+  verified-email password reset, or operator recovery instead.
+
+  A successful password addition or change and OIDC link or unlink increments
+  the account's authentication version, invalidating older sessions while
+  keeping the reauthenticated browser signed in. Unlinking requires a usable
+  password, so the sole sign-in method cannot be removed. Email verification
+  and login-email change also require delivery configured with `SMTP_HOST`,
   `EMAIL_FROM`, and `APP_URL`. Challenges expire after 30 minutes and are
   single-use. A login-email change takes effect only after the new address is
-  confirmed; the current email remains usable until then. A confirmed
-  login-email change increments the authentication version, invalidating
-  existing app sessions.
-  It leaves the exact OIDC issuer and subject binding and saved notification
-  destinations unchanged. This flow does not reset passwords by email.
+  confirmed; the current email remains usable until then. A confirmed change
+  invalidates other app sessions. It leaves the exact OIDC issuer and subject
+  binding and saved notification destinations unchanged. Email verification
+  does not reset a password.
 - **`/settings/tracking`**: requires the caller's enabled account session and
   form CSRF token for mutations. Device creation and password replacement
   show the new secret once, use `no-store`, and preserve stable device history.
@@ -117,15 +140,16 @@ Every network-reachable route, and what actually guards it:
   entry into this one-time transition. The operator command is the safer
   alternative if the provider's trust boundary is too broad or unavailable.
 - **The OIDC callback (`/auth/callback`)**: handles distinct login and linking
-  flows protected by state and nonce checks. A linked login resolves the exact
-  provider issuer and subject to the same account used by local login. Email is
-  display metadata, not an account selector, and `ALLOWED_EMAIL` does not apply
-  to linked login. Linking also requires a current account session and the
-  password reauthentication that started the flow. The callback does not
-  persist access, refresh, or ID tokens. It shares the failed-auth limiter with
-  other authentication checks, and the limiter is checked before the outbound
-  token exchange so garbage authorization codes cannot freely consume provider
-  requests.
+  login, invitation, and account-action flows protected by state and nonce
+  checks. A linked login resolves the exact provider issuer and subject to its
+  account. Email is metadata, not an account selector, and `ALLOWED_EMAIL` does
+  not apply to linked login. Invitation tokens are not forwarded to the
+  provider; a digest is held server-side during the flow. Reauthentication
+  requests `max_age=0` and validates `auth_time`; a new token or `prompt=login`
+  alone does not count as fresh proof. The callback does not persist access,
+  refresh, or ID tokens. It shares the failed-auth limiter with other
+  authentication checks, and the limiter is checked before the outbound token
+  exchange.
 - **`/healthz`**: deliberately unauthenticated, and deliberately minimal: it
   runs `SELECT 1` against the database and returns `{"ok": true}` or an
   error. It discloses no version string, no git revision, no schema or

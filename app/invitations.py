@@ -64,3 +64,27 @@ async def redeem_invitation(conn, token: str, password: str, *, display_timezone
             return (await cur.fetchone())[0]
     except Error:
         raise InvitationUnavailable() from None
+
+
+async def redeem_oidc_invitation_by_digest(
+    conn, token_digest: str, issuer: str, subject: str, *,
+    provider_email: str | None = None,
+    provider_display_name: str | None = None,
+    display_timezone: str = "UTC",
+) -> int:
+    """Provision an invited member after a validated OIDC callback."""
+    if (not isinstance(token_digest, str) or len(token_digest) != 64
+        or any(ch not in "0123456789abcdef" for ch in token_digest)
+        or not isinstance(issuer, str) or not issuer
+        or not isinstance(subject, str) or not subject):
+        raise InvitationUnavailable()
+    try:
+        async with conn.transaction():
+            cur = await conn.execute(
+                "SELECT public.redeem_oidc_member_invitation(%s,%s,%s,%s,%s,%s)",
+                (token_digest, issuer.rstrip("/"), subject, provider_email,
+                 provider_display_name, display_timezone),
+            )
+            return (await cur.fetchone())[0]
+    except Error:
+        raise InvitationUnavailable() from None

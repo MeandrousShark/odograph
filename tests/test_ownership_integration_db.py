@@ -73,7 +73,7 @@ async def _fixture():
 
 def _bundle(label="Imported"):
     bundle = {
-        "format": "odograph-portable", "format_version": 3, "schema_version": 26,
+        "format": "odograph-portable", "format_version": 3, "schema_version": 32,
         "exported_at": "2026-08-05T00:00:00+00:00",
         "vehicles": [{"$id": 101, "name": f"{label} car", "make": None, "model": None,
                       "plate": None, "is_default": True, "active": True}],

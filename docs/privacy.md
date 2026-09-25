@@ -39,7 +39,14 @@ of a hosted service, and this project has no hosted service.
   plus email and display name as non-authoritative metadata. It does not
   retain access, refresh, or ID tokens after the callback. Logging out of
   Odograph ends only the application session; sign out at the provider
-  separately to end that session too.
+  separately to end that session too. Invitation redemption and OIDC-only
+  account flows described here are implemented for controlled activated
+  fixtures; normal installations remain single-account until supported
+  activation is released. In the fixture flow, accepting an OIDC invitation
+  sends no invitation token to the provider; only its digest is held in
+  short-lived server-side state. The invitation email becomes the login email,
+  and provider email claims do not verify it. OIDC-only security actions
+  request fresh authentication and check the provider's validated `auth_time`.
 - **A geocoder** (optional reverse geocoding and address autocomplete),
   selected by `GEOCODE_PROVIDER`. Whichever provider you pick receives the
   same underlying data: trip-endpoint coordinates (for reverse geocoding)
@@ -117,7 +124,9 @@ Private HTML responses use `no-store`; HTMX history snapshots are disabled.
 The browser stores an account marker, without credentials or location data,
 to reload stale pages after an account change in another tab. This prevents
 accidental stale-page reuse, not access by someone who controls the browser.
-The deployment remains single-account, with row-level security enforced.
+Normal deployments remain single-account, with row-level security enforcing
+account isolation. Multi-account invitation behavior is limited to controlled
+activated fixtures until supported activation is released.
 
 ## Logging
 

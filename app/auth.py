@@ -4,7 +4,6 @@ import asyncio
 import hmac
 import logging
 import secrets
-import time
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from urllib.parse import parse_qs
@@ -67,6 +66,13 @@ from app.oidc_identities import (
     touch_identity_last_used,
     unlink_identity,
 )
+from app.oidc_attempts import (
+    consume_action_proof,
+    consume_oidc_attempt,
+    finish_oidc_reauth,
+    start_oidc_attempt,
+)
+from app.invitations import redeem_oidc_invitation_by_digest
 
 log = logging.getLogger(__name__)
 
@@ -77,6 +83,8 @@ GENERIC_LINK_ERROR = "Unable to link sign-in provider."
 GENERIC_UNLINK_ERROR = "Unable to unlink sign-in provider."
 GENERIC_OIDC_ERROR = "Sign-in failed. Please try again."
 GENERIC_INVITE_ERROR = "Unable to accept invitation. Check the link or ask for a new one."
+OIDC_REAUTH_NOTICE = "Provider authentication confirmed. Complete the action within 10 minutes."
+PASSWORD_SAVED_NOTICE = "Password saved. Other sessions have been signed out."
 MAX_INVITE_FORM_BYTES = 8192
 MAX_EMAIL_FORM_BYTES = 8192
 GENERIC_EMAIL_ERROR = "Unable to process email request. Please try again."
@@ -90,10 +98,11 @@ RESET_COMPLETE_NOTICE = (
     "Password reset. Every Odograph session for that account has been signed out; "
     "sign in with your new password."
 )
-OIDC_LINK_ATTEMPT_KEY = "oidc_link_attempt"
 OIDC_LINK_STATE_PREFIX = "link."
 OIDC_LOGIN_STATE_PREFIX = "login."
-OIDC_LINK_ATTEMPT_TTL_S = 600
+OIDC_PROTECTED_ATTEMPT_KEY = "oidc_protected_attempt"
+OIDC_INVITE_STATE_PREFIX = "invite."
+OIDC_REAUTH_STATE_PREFIX = "reauth."
 
 
 class AuthRedirect(Exception):
@@ -242,6 +251,15 @@ def _set_account_session(request: Request, account: dict) -> None:
     request.session.clear()
     request.session["account_id"] = account["id"]
     request.session["auth_version"] = account["auth_version"]
+    principal = AccountPrincipal(account["id"], account["is_enabled"], account["auth_version"])
+    request.state.principal = principal
+    runtime_pool = getattr(request.app.state, "runtime_pool", None)
+    if runtime_pool is not None:
+        pool = AccountPool(runtime_pool, principal)
+        request.state.account_pool = pool
+        make_detector_runner = getattr(request.app.state, "make_detector_runner", None)
+        if make_detector_runner is not None:
+            request.state.detector_runner = make_detector_runner(pool)
     _ensure_csrf(request)
 
 
@@ -255,29 +273,6 @@ def _safe_oidc_metadata(userinfo: Mapping) -> tuple[str | None, str | None]:
     reported_name = userinfo.get("name") or userinfo.get("preferred_username")
     display_name = reported_name if isinstance(reported_name, str) else None
     return email, display_name
-
-
-def _consume_link_attempt(request: Request, state: str) -> dict | None:
-    attempt = request.session.get(OIDC_LINK_ATTEMPT_KEY)
-    if not isinstance(attempt, Mapping) or attempt.get("state") != state:
-        return None
-    request.session.pop(OIDC_LINK_ATTEMPT_KEY, None)
-    account_id = attempt.get("account_id")
-    auth_version = attempt.get("auth_version")
-    issued_at = attempt.get("issued_at")
-    if not (
-        _positive_session_int(account_id)
-        and _positive_session_int(auth_version)
-        and type(issued_at) in (int, float)
-    ):
-        return None
-    age = time.time() - issued_at
-    if age < 0 or age > OIDC_LINK_ATTEMPT_TTL_S:
-        return None
-    return {
-        "account_id": account_id,
-        "auth_version": auth_version,
-    }
 
 
 def _valid_legacy_oidc_session(value, issuer: str) -> bool:
@@ -458,30 +453,70 @@ def build_oauth(config) -> OAuth | None:
     return oauth
 
 
-async def _oidc_authorize_redirect(
-    request: Request, *, flow: str, account: dict | None = None
-):
+async def _oidc_authorize_redirect(request: Request):
     oauth = request.app.state.oauth
     redirect_uri = str(request.url_for("auth_callback"))
-    state = f"{flow}.{secrets.token_urlsafe(32)}"
+    state = f"login.{secrets.token_urlsafe(32)}"
     nonce = secrets.token_urlsafe(32)
-    if flow == "link":
-        if account is None:
-            raise ValueError("link flow requires an account")
-        request.session[OIDC_LINK_ATTEMPT_KEY] = {
-            "state": state,
-            "account_id": account["id"],
-            "auth_version": account["auth_version"],
-            "issued_at": time.time(),
-        }
-    else:
-        request.session.clear()
+    request.session.clear()
     return await oauth.pocketid.authorize_redirect(
         request,
         redirect_uri,
         state=state,
         nonce=nonce,
     )
+
+
+async def _oidc_protected_redirect(
+    request: Request, *, action: str, account: dict | None = None,
+    invite_token: str | None = None, timezone_name: str | None = None,
+    proof_action: str | None = None, target: str | None = None,
+):
+    state = f"{action}.{secrets.token_urlsafe(32)}"
+    nonce = secrets.token_urlsafe(32)
+    browser_nonce = request.session.get("oidc_browser_nonce")
+    if not (isinstance(browser_nonce, str) and browser_nonce.isascii()
+            and len(browser_nonce) == 43):
+        browser_nonce = secrets.token_urlsafe(32)
+    async with control_connection(request.app.state.control_pool) as conn:
+        started = await start_oidc_attempt(
+            conn, action=action, state=state, nonce=nonce,
+            browser_nonce=browser_nonce,
+            account_id=account["id"] if account else None,
+            auth_version=account["auth_version"] if account else None,
+            invite_token=invite_token, proof_action=proof_action,
+            target=(target if target is not None else timezone_name
+                    if timezone_name is not None else
+                    normalize_issuer(request.app.state.config.oidc_issuer)
+                    if action == "link" else ""),
+        )
+    if not started:
+        raise HTTPException(status_code=400, detail=GENERIC_OIDC_ERROR)
+    request.session.pop("oidc_action_proof_nonce", None)
+    if action == "invite":
+        request.session.clear()
+    request.session["oidc_browser_nonce"] = browser_nonce
+    request.session[OIDC_PROTECTED_ATTEMPT_KEY] = {
+        "action": action, "state": state, "nonce": nonce,
+        "browser_nonce": browser_nonce,
+        "account_id": account["id"] if account else None,
+        "auth_version": account["auth_version"] if account else None,
+    }
+    try:
+        return await request.app.state.oauth.pocketid.authorize_redirect(
+            request, str(request.url_for("auth_callback")), state=state, nonce=nonce,
+            **({"max_age": 0, "prompt": "login"} if action == "reauth" else {}),
+        )
+    except Exception:
+        request.session.pop(OIDC_PROTECTED_ATTEMPT_KEY, None)
+        async with control_connection(request.app.state.control_pool) as conn:
+            await consume_oidc_attempt(
+                conn, action=action, state=state, nonce=nonce,
+                browser_nonce=browser_nonce,
+                account_id=account["id"] if account else None,
+                auth_version=account["auth_version"] if account else None,
+            )
+        raise
 
 
 def _require_oidc_enabled(request: Request) -> None:
@@ -554,8 +589,10 @@ def make_router() -> APIRouter:
         return request.app.state.templates.TemplateResponse(
             request, "invite.html",
             {"user": None, "csrf": _ensure_csrf(request), "error": error,
-             "display_timezone": str(request.app.state.config.display_tz)},
+             "display_timezone": str(request.app.state.config.display_tz),
+             "oidc_invite_available": getattr(request.app.state, "oauth", None) is not None},
             status_code=status_code,
+            headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
         )
 
     async def _render_login(
@@ -645,10 +682,12 @@ def make_router() -> APIRouter:
             "user": user,
             "csrf": _ensure_csrf(request),
             "account_email": account["email"],
+            "has_password": account["password_hash"] is not None,
             "account_email_verified": account_email_verified,
             "email_challenge_available": bool(
                 getattr(cfg, "smtp_host", "") and getattr(cfg, "email_from", "")
-                and security_link_base(getattr(cfg, "app_url", "")) and account["password_hash"]
+                and security_link_base(getattr(cfg, "app_url", ""))
+                and (account["password_hash"] is not None or oidc_configured)
                 and not cfg.dev_no_auth
             ),
             "oidc_configured": oidc_configured,
@@ -657,6 +696,7 @@ def make_router() -> APIRouter:
             "avatar_max_label": _human_size(avatar_max_bytes),
             "error": error,
             "success": success,
+            "method_notice": success if success in (OIDC_REAUTH_NOTICE, PASSWORD_SAVED_NOTICE) else None,
         }
         if include_review_count:
             return await render_page(
@@ -826,6 +866,33 @@ def make_router() -> APIRouter:
         _set_account_session(request, account)
         return RedirectResponse("/", status_code=303)
 
+    @router.post("/invite/oidc")
+    async def invite_oidc(request: Request):
+        _require_oidc_enabled(request)
+        limiter: FailedAuthLimiter = request.app.state.login_limiter
+        ip = client_ip(request)
+        if limiter.blocked(ip):
+            return await _render_invite(request, error=GENERIC_INVITE_ERROR, status_code=429)
+        try:
+            values = await _email_form(request, {"token", "display_timezone", "csrf_token"})
+        except HTTPException:
+            limiter.record_failure(ip)
+            return await _render_invite(request, error=GENERIC_INVITE_ERROR, status_code=400)
+        check_form_csrf(request, values["csrf_token"])
+        try:
+            token = values["token"]
+            timezone_name = values["display_timezone"].strip()
+            if not token or not token.isascii() or len(token) > 256:
+                raise ValueError("invalid invite token")
+            ZoneInfo(timezone_name)
+            return await _oidc_protected_redirect(
+                request, action="invite", invite_token=token,
+                timezone_name=timezone_name,
+            )
+        except (ValueError, ZoneInfoNotFoundError, HTTPException):
+            limiter.record_failure(ip)
+            return await _render_invite(request, error=GENERIC_INVITE_ERROR, status_code=400)
+
     @router.get("/signup")
     async def signup_page(request: Request):
         if not await _signup_available(request):
@@ -887,7 +954,7 @@ def make_router() -> APIRouter:
     async def login_oidc(request: Request):
         if not await _oidc_login_available(request):
             raise HTTPException(status_code=404)
-        return await _oidc_authorize_redirect(request, flow="login")
+        return await _oidc_authorize_redirect(request)
 
     @router.get("/auth/callback", name="auth_callback")
     async def auth_callback(request: Request):
@@ -896,41 +963,78 @@ def make_router() -> APIRouter:
         callback_state = request.query_params.get("state") or ""
         is_link_callback = callback_state.startswith(OIDC_LINK_STATE_PREFIX)
         is_login_callback = callback_state.startswith(OIDC_LOGIN_STATE_PREFIX)
-        if not is_link_callback and not await _oidc_login_available(request):
+        is_invite_callback = callback_state.startswith(OIDC_INVITE_STATE_PREFIX)
+        is_reauth_callback = callback_state.startswith(OIDC_REAUTH_STATE_PREFIX)
+        if not (is_link_callback or is_invite_callback or is_reauth_callback) and not await _oidc_login_available(request):
             raise HTTPException(status_code=404)
 
         limiter: FailedAuthLimiter = request.app.state.login_limiter
         ip = client_ip(request)
         if limiter.blocked(ip):
             return Response(status_code=429)
-        if not (is_link_callback or is_login_callback):
+        if not (is_link_callback or is_login_callback or is_invite_callback or is_reauth_callback):
+            limiter.record_failure(ip)
+            raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
+        if is_login_callback and OIDC_PROTECTED_ATTEMPT_KEY in request.session:
             limiter.record_failure(ip)
             raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
 
-        link_attempt = None
-        link_user = None
-        if is_link_callback:
-            link_attempt = _consume_link_attempt(request, callback_state)
-            if link_attempt is None:
+        protected_action = (
+            "link" if is_link_callback else "invite" if is_invite_callback
+            else "reauth" if is_reauth_callback else None
+        )
+        protected_attempt = None
+        pending = None
+        if protected_action is not None:
+            protected_attempt = request.session.get(OIDC_PROTECTED_ATTEMPT_KEY)
+            if (not isinstance(protected_attempt, Mapping)
+                or protected_attempt.get("action") != protected_action
+                or protected_attempt.get("state") != callback_state
+                or not isinstance(protected_attempt.get("nonce"), str)
+                or not isinstance(protected_attempt.get("browser_nonce"), str)):
                 limiter.record_failure(ip)
                 raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
-            try:
-                link_user = await require_user(request)
-            except (AuthRedirect, HTTPException):
-                limiter.record_failure(ip)
-                raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
-            if (
-                link_user["id"] != link_attempt["account_id"]
-                or request.session.get("auth_version")
-                != link_attempt["auth_version"]
-            ):
-                limiter.record_failure(ip)
-                raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
+            request.session.pop(OIDC_PROTECTED_ATTEMPT_KEY, None)
+            if protected_action in ("link", "reauth"):
+                try:
+                    actor = await require_user(request)
+                except (AuthRedirect, HTTPException):
+                    limiter.record_failure(ip)
+                    raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
+                if (actor["id"] != protected_attempt.get("account_id")
+                    or request.state.principal.auth_version != protected_attempt.get("auth_version")):
+                    limiter.record_failure(ip)
+                    raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
+            else:
+                if "account_id" in request.session:
+                    limiter.record_failure(ip)
+                    raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
+            if protected_action != "reauth":
+                async with control_connection(request.app.state.control_pool) as conn:
+                    pending = await consume_oidc_attempt(
+                        conn, action=protected_action, state=callback_state,
+                        nonce=protected_attempt["nonce"],
+                        browser_nonce=protected_attempt["browser_nonce"],
+                        account_id=protected_attempt.get("account_id"),
+                        auth_version=protected_attempt.get("auth_version"),
+                    )
+                if pending is None:
+                    limiter.record_failure(ip)
+                    raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
 
         oauth = request.app.state.oauth
         try:
             token = await oauth.pocketid.authorize_access_token(request)
         except OAuthError as exc:
+            if protected_action == "reauth":
+                async with control_connection(request.app.state.control_pool) as conn:
+                    await consume_oidc_attempt(
+                        conn, action="reauth", state=callback_state,
+                        nonce=protected_attempt["nonce"],
+                        browser_nonce=protected_attempt["browser_nonce"],
+                        account_id=protected_attempt["account_id"],
+                        auth_version=protected_attempt["auth_version"],
+                    )
             limiter.record_failure(ip)
             log.warning(
                 "auth callback: token exchange rejected (%s)", type(exc).__name__
@@ -942,25 +1046,82 @@ def make_router() -> APIRouter:
             userinfo = {}
         subject = userinfo.get("sub")
         if not isinstance(subject, str) or not subject:
+            if protected_action == "reauth":
+                async with control_connection(request.app.state.control_pool) as conn:
+                    await consume_oidc_attempt(
+                        conn, action="reauth", state=callback_state,
+                        nonce=protected_attempt["nonce"],
+                        browser_nonce=protected_attempt["browser_nonce"],
+                        account_id=protected_attempt["account_id"],
+                        auth_version=protected_attempt["auth_version"],
+                    )
             limiter.record_failure(ip)
             raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
         provider_email, display_name = _safe_oidc_metadata(userinfo)
         cfg = request.app.state.config
         issuer = normalize_issuer(cfg.oidc_issuer)
 
-        if link_attempt is not None:
+        if protected_action == "reauth":
+            auth_time = userinfo.get("auth_time")
+            if type(auth_time) not in (int, float):
+                async with control_connection(request.app.state.control_pool) as conn:
+                    await consume_oidc_attempt(
+                        conn, action="reauth", state=callback_state,
+                        nonce=protected_attempt["nonce"],
+                        browser_nonce=protected_attempt["browser_nonce"],
+                        account_id=protected_attempt["account_id"],
+                        auth_version=protected_attempt["auth_version"],
+                    )
+                limiter.record_failure(ip)
+                raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
+            async with control_connection(request.app.state.control_pool) as conn:
+                verified = await finish_oidc_reauth(
+                    conn, state=callback_state, nonce=protected_attempt["nonce"],
+                    browser_nonce=protected_attempt["browser_nonce"],
+                    account_id=protected_attempt["account_id"],
+                    auth_version=protected_attempt["auth_version"],
+                    issuer=issuer, subject=subject, auth_time=auth_time,
+                )
+            if not verified:
+                limiter.record_failure(ip)
+                raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
+            request.session["oidc_action_proof_nonce"] = protected_attempt["browser_nonce"]
+            request.session["account_notice"] = OIDC_REAUTH_NOTICE
+            return RedirectResponse("/settings/account", status_code=303)
+
+        if protected_action == "invite":
+            try:
+                async with control_connection(request.app.state.control_pool) as conn:
+                    async with conn.transaction():
+                        account_id = await redeem_oidc_invitation_by_digest(
+                            conn, pending["invitation_digest"], issuer, subject,
+                            provider_email=provider_email,
+                            provider_display_name=display_name,
+                            display_timezone=pending["target"],
+                        )
+                        account = await get_account(conn, account_id)
+                        if account is None or not account["is_enabled"]:
+                            raise InvitationUnavailable()
+            except InvitationUnavailable:
+                limiter.record_failure(ip)
+                raise HTTPException(status_code=401, detail=GENERIC_INVITE_ERROR)
+            _set_account_session(request, account)
+            return RedirectResponse("/", status_code=303)
+
+        if protected_action == "link":
             async with control_connection(request.app.state.control_pool) as conn:
                 linked = await create_identity_link(
                     conn,
-                    link_attempt["account_id"],
+                    pending["account_id"],
                     issuer,
                     subject,
                     provider_email=provider_email,
                     provider_display_name=display_name,
-                    expected_auth_version=link_attempt["auth_version"],
+                    expected_auth_version=pending["auth_version"],
                 )
             if linked is None:
                 raise HTTPException(status_code=409, detail=GENERIC_LINK_ERROR)
+            _set_account_session(request, linked)
             request.session["account_notice"] = "Sign-in provider linked."
             return RedirectResponse("/settings/account", status_code=303)
 
@@ -1124,8 +1285,43 @@ def make_router() -> APIRouter:
                 error=GENERIC_LINK_ERROR,
                 status_code=409,
             )
-        return await _oidc_authorize_redirect(
-            request, flow="link", account=account
+        return await _oidc_protected_redirect(request, action="link", account=account)
+
+    @router.post("/settings/account/oidc/reauth")
+    async def oidc_reauth(
+        request: Request,
+        action: str = Form(...),
+        target: str = Form(""),
+        target_confirm: str = Form(""),
+        csrf_token: str = Form(...),
+        user: dict = Depends(require_user),
+    ):
+        _require_oidc_enabled(request)
+        check_form_csrf(request, csrf_token)
+        limiter: FailedAuthLimiter = request.app.state.login_limiter
+        if limiter.blocked(client_ip(request)):
+            return await _render_account_unavailable(request, user, status_code=429)
+        async with control_connection(request.app.state.control_pool) as conn:
+            account = await get_account(conn, user["id"])
+            identity = await get_identity_for_account(
+                conn, user["id"], request.app.state.config.oidc_issuer
+            )
+        if (account is None or account["password_hash"] is not None
+            or identity is None or action not in (PURPOSE_CURRENT, PURPOSE_CHANGE, "add_password")):
+            raise HTTPException(status_code=403, detail=GENERIC_OIDC_ERROR)
+        if action == PURPOSE_CURRENT:
+            exact_target = account["email"]
+        elif action == PURPOSE_CHANGE:
+            exact_target = normalize_email(target)
+            if (exact_target != normalize_email(target_confirm)
+                or not _safe_delivery_email(exact_target)
+                or exact_target == account["email"]):
+                return await _render_account(request, account, user, error=GENERIC_EMAIL_ERROR, status_code=400)
+        else:
+            exact_target = ""
+        return await _oidc_protected_redirect(
+            request, action="reauth", account=account,
+            proof_action=action, target=exact_target,
         )
 
     @router.post("/settings/account/oidc/unlink")
@@ -1171,8 +1367,9 @@ def make_router() -> APIRouter:
                 error=GENERIC_UNLINK_ERROR,
                 status_code=409,
             )
-        request.session.clear()
-        return RedirectResponse("/login", status_code=303)
+        _set_account_session(request, updated)
+        request.session["account_notice"] = "Sign-in provider unlinked. Other sessions have been signed out."
+        return RedirectResponse("/settings/account", status_code=303)
 
     @router.get("/settings/account")
     async def account_security(
@@ -1204,14 +1401,22 @@ def make_router() -> APIRouter:
         if not (cfg.smtp_host and cfg.email_from and link_base) or cfg.dev_no_auth:
             return await _render_account_unavailable(request, user)
         limiter: FailedAuthLimiter = request.app.state.login_limiter
-        try:
-            account = await limiter.run_bounded(lambda: _verified_account(
-                request, user, values["current_password"], generic_error=GENERIC_EMAIL_ERROR
-            ))
-        except _AuthSaturated:
-            return await _render_account_unavailable(request, user, status_code=503)
-        except _AccountActionRejected as rejected:
-            return await _render_rejection(request, user, rejected)
+        async with control_connection(request.app.state.control_pool) as conn:
+            account = await get_account(conn, user["id"])
+        if account is None:
+            request.session.clear()
+            raise AuthRedirect()
+        if account["password_hash"] is not None:
+            try:
+                account = await limiter.run_bounded(lambda: _verified_account(
+                    request, user, values["current_password"], generic_error=GENERIC_EMAIL_ERROR
+                ))
+            except _AuthSaturated:
+                return await _render_account_unavailable(request, user, status_code=503)
+            except _AccountActionRejected as rejected:
+                return await _render_rejection(request, user, rejected)
+        elif limiter.blocked(client_ip(request)):
+            return await _render_account_unavailable(request, user, status_code=429)
         target = account["email"] if purpose == PURPOSE_CURRENT else normalize_email(values["new_email"])
         if purpose == PURPOSE_CHANGE and target != normalize_email(values["new_email_confirm"]):
             return await _render_account(request, account, user, error="Email addresses do not match.", status_code=400)
@@ -1220,9 +1425,25 @@ def make_router() -> APIRouter:
         if purpose == PURPOSE_CHANGE and target == account["email"]:
             return await _render_account(request, account, user, error="Enter a different email address.", status_code=400)
         async with control_connection(request.app.state.control_pool) as conn:
-            token = await issue_email_challenge(
-                conn, account["id"], request.state.principal.auth_version, purpose, target
-            )
+            if account["password_hash"] is None:
+                async with conn.transaction():
+                    proof_nonce = request.session.pop("oidc_action_proof_nonce", None)
+                    proven = bool(proof_nonce) and await consume_action_proof(
+                        conn, account_id=account["id"],
+                        auth_version=request.state.principal.auth_version,
+                        action=purpose, target=target, browser_nonce=proof_nonce,
+                    )
+                    token = await issue_email_challenge(
+                        conn, account["id"], request.state.principal.auth_version,
+                        purpose, target,
+                    ) if proven else None
+            else:
+                proven = True
+                token = await issue_email_challenge(
+                    conn, account["id"], request.state.principal.auth_version, purpose, target
+                )
+        if not proven:
+            return await _render_account(request, account, user, error=GENERIC_EMAIL_ERROR, status_code=401)
         if token is not None:
             mailer = Mailer(
                 cfg.smtp_host, cfg.smtp_port, cfg.smtp_username, cfg.smtp_password,
@@ -1254,12 +1475,24 @@ def make_router() -> APIRouter:
 
     @router.post("/settings/account/email/verify/request")
     async def request_current_email(request: Request, user: dict = Depends(require_user)):
-        values = await _email_form(request, {"current_password", "csrf_token"})
+        async with control_connection(request.app.state.control_pool) as conn:
+            account = await get_account(conn, user["id"])
+        if account is None:
+            raise AuthRedirect()
+        fields = {"current_password", "csrf_token"} if account["password_hash"] else {"csrf_token"}
+        values = await _email_form(request, fields)
         return await _request_email_challenge(request, user, values, PURPOSE_CURRENT)
 
     @router.post("/settings/account/email/change/request")
     async def request_change_email(request: Request, user: dict = Depends(require_user)):
-        values = await _email_form(request, {"new_email", "new_email_confirm", "current_password", "csrf_token"})
+        async with control_connection(request.app.state.control_pool) as conn:
+            account = await get_account(conn, user["id"])
+        if account is None:
+            raise AuthRedirect()
+        fields = {"new_email", "new_email_confirm", "csrf_token"}
+        if account["password_hash"]:
+            fields.add("current_password")
+        values = await _email_form(request, fields)
         return await _request_email_challenge(request, user, values, PURPOSE_CHANGE)
 
     @router.get("/settings/account/email/confirm")
@@ -1448,19 +1681,34 @@ def make_router() -> APIRouter:
     @router.post("/settings/account/password")
     async def change_password(
         request: Request,
-        current_password: str = Form(...),
+        current_password: str = Form(""),
         password: str = Form(...),
         password_confirm: str = Form(...),
         csrf_token: str = Form(...),
         user: dict = Depends(require_user),
     ):
         check_form_csrf(request, csrf_token)
-        try:
-            account = await _verified_account(
-                request, user, current_password, generic_error=GENERIC_PASSWORD_ERROR
+        async with control_connection(request.app.state.control_pool) as conn:
+            account = await get_account(conn, user["id"])
+        if account is None:
+            request.session.clear()
+            raise AuthRedirect()
+        limiter: FailedAuthLimiter = request.app.state.login_limiter
+        ip = client_ip(request)
+        if limiter.blocked(ip):
+            return await _render_account(
+                request, account, user, error="Too many failed attempts. Try again later.",
+                status_code=429,
             )
-        except _AccountActionRejected as rejected:
-            return await _render_rejection(request, user, rejected)
+        if account["password_hash"] is not None:
+            try:
+                account = await limiter.run_bounded(lambda: _verified_account(
+                    request, user, current_password, generic_error=GENERIC_PASSWORD_ERROR
+                ))
+            except _AuthSaturated:
+                return await _render_account(request, account, user, error=GENERIC_PASSWORD_ERROR, status_code=503)
+            except _AccountActionRejected as rejected:
+                return await _render_rejection(request, user, rejected)
 
         error = _new_password_error(password, password_confirm)
         if error:
@@ -1468,14 +1716,40 @@ def make_router() -> APIRouter:
                 request, account, user, error=error, status_code=400
             )
 
-        password_hash = await asyncio.to_thread(hash_password, password)
-        async with control_connection(request.app.state.control_pool) as conn:
-            updated = await replace_password(
-                conn,
-                account["id"],
-                password_hash,
-                expected_auth_version=request.state.principal.auth_version,
-            )
+        proof_nonce = None
+        if account["password_hash"] is None:
+            proof_nonce = request.session.pop("oidc_action_proof_nonce", None)
+            if not isinstance(proof_nonce, str) or not proof_nonce:
+                limiter.record_failure(ip)
+                return await _render_account(
+                    request, account, user, error=GENERIC_PASSWORD_ERROR, status_code=401
+                )
+
+        async def save_password():
+            async with control_connection(request.app.state.control_pool) as conn:
+                async with conn.transaction():
+                    if proof_nonce is not None:
+                        proven = await consume_action_proof(
+                            conn, account_id=account["id"],
+                            auth_version=request.state.principal.auth_version,
+                            action="add_password", target="", browser_nonce=proof_nonce,
+                        )
+                        if not proven:
+                            limiter.record_failure(ip)
+                            return None, False
+                    password_hash = await asyncio.to_thread(hash_password, password)
+                    updated = await replace_password(
+                        conn, account["id"], password_hash,
+                        expected_auth_version=request.state.principal.auth_version,
+                    )
+                    return updated, True
+
+        try:
+            updated, proven = await limiter.run_bounded(save_password)
+        except _AuthSaturated:
+            return await _render_account(request, account, user, error=GENERIC_PASSWORD_ERROR, status_code=503)
+        if not proven:
+            return await _render_account(request, account, user, error=GENERIC_PASSWORD_ERROR, status_code=401)
         if updated is None:
             request.session.clear()
             raise AuthRedirect()
@@ -1485,7 +1759,7 @@ def make_router() -> APIRouter:
             request,
             updated,
             _account_user(updated),
-            success="Password changed. Other sessions have been signed out.",
+            success=PASSWORD_SAVED_NOTICE,
         )
 
     async def _render_reset_page(request: Request, name: str, *, error: str | None = None,

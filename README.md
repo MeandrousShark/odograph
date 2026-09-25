@@ -211,10 +211,10 @@ database.
 
 ## Security
 
-This remains a single-account application. Startup provisions restricted
-identity and account database roles, and personal queries carry explicit
-ownership. Row-level security enforces account isolation in the database;
-this release does not enable invitations or multi-user operation. See the
+Normal installations remain single-account. Account ownership is explicit in
+queries, restricted database roles are active, and row-level security is
+enabled and forced on every account-owned table. Do not operate a normal
+installation as a multi-user service. See the
 [database role contract](docs/configuration.md#account-ownership-and-database-roles).
 
 Before relying on your installation, work through the
@@ -242,27 +242,33 @@ spells out what.
 
 ### OIDC
 
-OIDC is a second way to sign in to the administrator account you already have,
-not a separate account.
+OIDC can be linked as a second way to sign in to an existing account. The
+administrator configures one OIDC provider for the instance.
 
-Register `https://mileage.example.com/auth/callback` with your provider, set
-the three OIDC variables, then link it from **Settings, then Account Settings**
-while signed in with your password. Linking asks for that password and a fresh
-authorization from the provider.
+Register `https://mileage.example.com/auth/callback` with your provider and set
+the three OIDC variables. To link it to an existing password account, open
+**Settings > Account Settings** while signed in, enter your current password,
+and authorize with the provider.
 
-Afterward either method signs you into the same account. The link follows the
-provider's issuer and subject, so it survives your email address changing
-there. See the
+After linking, either method signs you into the same account. The link follows
+the provider's issuer and subject, so it survives your email address changing
+there. Invitation redemption without a local password and OIDC-only method
+management are implemented for controlled activation fixtures. Normal
+installations retain the single-account database guard; these flows are not
+available for regular use until a separately reviewed activation migration is
+released. When enabled, OIDC-only security actions require fresh provider
+authentication with a valid `auth_time` from a provider that honors
+`max_age=0`. See the
 [authentication settings](docs/configuration.md#authentication-and-ingest) for
 details, and [Upgrading](docs/upgrading.md) if you are moving an older
 OIDC-only installation.
 
 In **Settings > Account Settings**, you can verify your current login email or
-change it after confirming the new address. Both actions require your current
-password and configured email delivery. Until the new address is confirmed,
-your current email remains the login. A confirmed change signs out other
-Odograph sessions; it does not change your linked OIDC identity or saved
-notification destinations. Email verification is not a password reset flow.
+change it after confirming the new address. These actions require your current
+password and configured email delivery. Until a new address is confirmed, the
+current email remains the login. A confirmed change signs out other Odograph
+sessions; it does not change the linked OIDC identity or saved notification
+destinations. Email verification is not a password reset flow.
 
 ### Reverse geocoding
 
@@ -282,8 +288,8 @@ Odograph itself. See the [OSRM guide](docs/osrm.md).
 While signed in, open **Settings**, then **Account Settings**, and use
 **Change password** under **Security**.
 
-If you forget it and your login email is verified, choose **Forgot password?**
-on the sign-in page. This needs SMTP and `APP_URL`; see
+If your login email is verified, choose **Forgot password?** on the sign-in
+page to reset a forgotten password. This needs SMTP and `APP_URL`; see
 [Email](docs/configuration.md#email). The link goes only to your verified
 login email and expires in 30 minutes. Completing a reset signs that account
 out of every Odograph session, including the browser that used the link, and
@@ -305,6 +311,11 @@ A password change signs out your other Odograph sessions; the browser that made
 the change stays signed in. An operator reset signs out every session for that
 account. Neither changes a linked sign-in provider, verified email or tracking
 devices.
+
+Establishing a password for an OIDC-only account and managing its sign-in
+methods are currently limited to controlled activation fixtures. They will be
+available for normal installations only after supported account activation is
+released.
 
 Changing your login email is separate from password recovery. The new address
 becomes the login only after you confirm the emailed challenge.

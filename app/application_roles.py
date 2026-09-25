@@ -33,7 +33,10 @@ OWNED_TABLES = (
     "tracking_devices", "tracking_device_aliases", "ingest_credentials",
 )
 PROTECTED_TABLES = ("email_challenges",)
-CONTROL_TABLES = ("accounts", "oidc_identities", "instance_state", "invitations")
+CONTROL_TABLES = (
+    "accounts", "oidc_identities", "instance_state", "invitations",
+    "oidc_attempts", "oidc_action_proofs",
+)
 REFERENCE_TABLES = ("schema_migrations", "reference_mileage_rates")
 TABLES = OWNED_TABLES + PROTECTED_TABLES + CONTROL_TABLES + REFERENCE_TABLES
 CREDENTIAL_COLUMNS = (
@@ -77,12 +80,26 @@ BOOTSTRAP_LOCK_TABLES = ("accounts", "ingest_credentials", "tracking_devices", "
 INVITATION_FUNCTIONS = (
     "public.issue_member_invitation(bigint,text,text)",
     "public.redeem_member_invitation(text,text,text)",
+    "public.redeem_oidc_member_invitation(text,text,text,text,text,text)",
+)
+OIDC_ATTEMPT_FUNCTIONS = (
+    "public.start_oidc_attempt(text,text,text,text,bigint,bigint,text,text,text)",
+    "public.consume_oidc_attempt(text,text,text,text,bigint,bigint)",
+    "public.finish_oidc_reauth(text,text,text,bigint,bigint,text,text,timestamptz)",
+    "public.consume_oidc_action_proof(bigint,bigint,text,text,text)",
+)
+OIDC_METHOD_FUNCTIONS = (
+    "public.link_oidc_identity(bigint,bigint,text,text,text,text)",
+    "public.unlink_oidc_identity(bigint,bigint,text,text)",
+    "public.replace_account_password(bigint,bigint,text)",
 )
 SQL_DIR = Path(__file__).resolve().parents[1] / "scripts" / "sql"
 MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
 FUNCTION_FILES = (
     "account_bootstrap.sql", "account_admission.sql", "tracking_admission.sql",
     "member_invitations.sql",
+    "oidc_attempts.sql",
+    "oidc_methods.sql",
 )
 FUNCTIONS = {
     "public.bootstrap_first_account(text,text,text)": CONTROL_ROLE,
@@ -90,6 +107,9 @@ FUNCTIONS = {
     "public.assert_tracking_credential(text,bigint,bigint,bigint,text)": RUNTIME_ROLE,
     INVITATION_FUNCTIONS[0]: CONTROL_ROLE,
     INVITATION_FUNCTIONS[1]: CONTROL_ROLE,
+    INVITATION_FUNCTIONS[2]: CONTROL_ROLE,
+    **{function: CONTROL_ROLE for function in OIDC_ATTEMPT_FUNCTIONS},
+    **{function: CONTROL_ROLE for function in OIDC_METHOD_FUNCTIONS},
     EMAIL_CHALLENGE_FUNCTIONS[0]: CONTROL_ROLE,
     EMAIL_CHALLENGE_FUNCTIONS[1]: CONTROL_ROLE,
     EMAIL_CHALLENGE_FUNCTIONS[2]: CONTROL_ROLE,
@@ -156,6 +176,10 @@ def _table_rights(role: str, table: str) -> set[str]:
         rights = set()
         if table == "invitations":
             return {"SELECT", "INSERT", "UPDATE"}
+        if table in ("oidc_attempts", "oidc_action_proofs"):
+            return {"SELECT", "INSERT", "UPDATE", "DELETE"}
+        if table == "oidc_identities":
+            return {"SELECT", "INSERT", "DELETE"}
         if table == "email_challenges":
             return {"SELECT", "INSERT", "UPDATE"}
         if table in BOOTSTRAP_INSERT_TABLES:
@@ -286,6 +310,10 @@ async def _revoke_restored_security_state(conn) -> None:
                 "UPDATE {} SET revoked_at = pg_catalog.clock_timestamp() "
                 "WHERE consumed_at IS NULL AND revoked_at IS NULL"
             ).format(sql.Identifier("public", table)))
+    for table in ("oidc_attempts", "oidc_action_proofs"):
+        cur = await conn.execute("SELECT to_regclass(%s)", ("public." + table,))
+        if (await cur.fetchone())[0] is not None:
+            await conn.execute(sql.SQL("DELETE FROM {}").format(sql.Identifier("public", table)))
 
 
 async def validate_application_contract(conn, state: ManagedRoleState) -> None:
@@ -422,6 +450,22 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
             invitation_source, re.S | re.I).group(2)
         _require_contract(row == (BOOTSTRAP_ROLE, True, ["search_path=pg_catalog, pg_temp"], body),
             f"function definition: {function}")
+    for functions, filename in (
+        (OIDC_ATTEMPT_FUNCTIONS, "oidc_attempts.sql"),
+        (OIDC_METHOD_FUNCTIONS, "oidc_methods.sql"),
+    ):
+        source = (SQL_DIR / filename).read_text()
+        for function in functions:
+            name = function.split("(", 1)[0]
+            cur = await conn.execute(
+                "SELECT pg_get_userbyid(proowner),prosecdef,proconfig,prosrc FROM pg_proc WHERE oid=%s::regprocedure",
+                (function,))
+            row = await cur.fetchone()
+            body = re.search(
+                rf"CREATE OR REPLACE FUNCTION {re.escape(name)}\(.*?AS\s+(\$body\$)(.*?)\1",
+                source, re.S | re.I).group(2)
+            _require_contract(row == (BOOTSTRAP_ROLE, True, ["search_path=pg_catalog, pg_temp"], body),
+                f"function definition: {function}")
     for function in EMAIL_CHALLENGE_FUNCTIONS + PASSWORD_RESET_FUNCTIONS:
         name = function.split("(", 1)[0]
         cur = await conn.execute(

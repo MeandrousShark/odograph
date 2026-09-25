@@ -110,6 +110,8 @@ def _render_account_security(
     account_email_verified=False,
     email_challenge_available=True,
     has_avatar=False,
+    has_password=True,
+    method_notice=None,
     avatar_version=0,
     avatar_max_label="500 KB",
 ):
@@ -125,6 +127,8 @@ def _render_account_security(
         oidc_configured=oidc_configured,
         linked_identity=linked_identity,
         avatar_max_label=avatar_max_label,
+        has_password=has_password,
+        method_notice=method_notice,
         error=error,
         success=success,
     )
@@ -309,6 +313,24 @@ def test_account_security_error_and_success_use_accessible_shared_notices():
 
     assert 'class="notice notice-danger form-error-summary" role="alert"' in body
     assert 'class="notice notice-success form-success" role="status"' in body
+
+
+def test_method_confirmation_is_visible_beside_password_controls():
+    from app.auth import OIDC_REAUTH_NOTICE, PASSWORD_SAVED_NOTICE
+
+    for notice, has_password in (
+        (OIDC_REAUTH_NOTICE, False),
+        (PASSWORD_SAVED_NOTICE, True),
+    ):
+        body = _render_account_security(
+            has_password=has_password, success=notice, method_notice=notice,
+        )
+        assert body.count(notice) == 1
+        assert (
+            body.index('<h3 id="security-heading">')
+            < body.index(notice)
+            < body.index('<h4 id="change-password-heading"')
+        )
 
 
 def test_account_security_recovery_and_identity_metadata_keep_safe_wrapping_structure():

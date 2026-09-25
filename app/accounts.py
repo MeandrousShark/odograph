@@ -129,21 +129,15 @@ async def create_admin(
 async def replace_password(
     conn, account_id: int, password_hash: str, *, expected_auth_version: int | None = None
 ) -> dict | None:
-    query = (
-        "UPDATE accounts SET password_hash = %s, auth_version = auth_version + 1, "
-        "updated_at = now() WHERE id = %s"
+    if expected_auth_version is None:
+        account = await get_account(conn, account_id)
+        if account is None:
+            return None
+        expected_auth_version = account["auth_version"]
+    cur = await conn.execute(
+        "SELECT public.replace_account_password(%s,%s,%s)",
+        (account_id, expected_auth_version, password_hash),
     )
-    params: tuple = (password_hash, account_id)
-    if expected_auth_version is not None:
-        query += " AND is_enabled AND auth_version = %s"
-        params += (expected_auth_version,)
-    # Its result is fed straight into _account_user (app/auth.py), which now
-    # reads avatar_mime/avatar_updated_at -- both must be RETURNING here or
-    # that lookup KeyErrors.
-    query += (
-        " RETURNING id, email, password_hash, is_admin, is_enabled, auth_version, "
-        "avatar_mime, avatar_updated_at"
-    )
-    cur = conn.cursor(row_factory=dict_row)
-    await cur.execute(query, params)
-    return await cur.fetchone()
+    if not (await cur.fetchone())[0]:
+        return None
+    return await get_account(conn, account_id)
