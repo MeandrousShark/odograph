@@ -97,7 +97,9 @@ Every network-reachable route, and what actually guards it:
   deployments remain blocked by the database singleton guard until supported
   activation is released.
 - **`/admin/accounts`, `/admin/invitations`, `/admin/accounts/{id}/recovery`,
-  `/admin/accounts/{id}/disable`, `/admin/accounts/{id}/enable`**:
+  `/admin/accounts/{id}/disable`, `/admin/accounts/{id}/enable`,
+  `/admin/accounts/{id}/deletion`, `/admin/accounts/{id}/deletion/cancel`,
+  and `/admin/accounts/{id}/purge`**:
   require the current enabled administrator; every mutation is POST with CSRF.
   The account list exposes login and security metadata, not another account's
   ledger or notification destinations. Invitation issue and resend enforce
@@ -113,8 +115,25 @@ Every network-reachable route, and what actually guards it:
   At least one enabled administrator with a usable login method must remain;
   the security audit shows only actor/target IDs, action, outcome and time.
   Live audit rows expire after 365 days through bounded periodic pruning.
-  Normal installations retain the singleton account guard until separately
-  reviewed multi-account activation.
+  In controlled activated fixtures, an administrator can schedule deletion of
+  another account by typing its login email and acknowledging export and
+  backup effects. Scheduling immediately disables the account and starts a
+  30-day grace period. An enabled administrator can cancel only during that
+  period; cancellation permits a new sign-in but does not restore revoked
+  sessions, proofs or tracking credentials. Nothing purges automatically.
+  After the grace period, purge requires fresh administrator authentication
+  with the current password or reauthentication as the exact linked OIDC
+  identity, the target login email and a separate confirmation. An
+  administrator cannot delete their own account, and the last usable
+  administrator cannot be removed. The owner can download a portable export
+  before disablement or after cancellation; administrators cannot download
+  another account's bundle. It covers the ledger, rates and basic preferences,
+  but omits notification destinations, schedules and raw points. Purge removes
+  data from the live database only. Backups may retain it until their retention
+  period expires, and restoring an older backup can reintroduce purged data.
+  Restore finalization revokes sessions and pending proofs. Normal installations
+  retain the singleton account guard until separately reviewed multi-account
+  activation.
 - **`/settings/account`**: requires the caller's enabled account session.
   Password changes, OIDC linking and unlinking, and email verification or
   change require CSRF protection and reauthentication. Accounts with a password
@@ -341,10 +360,13 @@ configuration files.
    signup even if that value remains unchanged. Existing configurations that
    omit it stay fail-closed. A signed-out password reset is emailed only to an
    account's verified login email; requests get the same reply whether or not
-   an account matches. Otherwise recover a missing account with
-   `python -m app.manage_account create-admin`, or one account's password with
-   `list-accounts` and then `reset-password ACCOUNT_ID`, inside the application
-   container. The command accepts no password argument.
+   an account matches. Before initial bootstrap, create the first account with
+   `python -m app.manage_account create-admin`; after bootstrap, first-account
+   creation stays closed even if the original administrator is later purged.
+   For an existing account, use `list-accounts` and then
+   `reset-password ACCOUNT_ID` inside the application container. The command
+   accepts no password argument. Restoring an earlier database backup can
+   reintroduce an account that was purged from the live database.
 
 8. **Encrypt backups, and control who can read them.** `scripts/backup_database.sh`
    captures your full location history, credentials hashes, and every other

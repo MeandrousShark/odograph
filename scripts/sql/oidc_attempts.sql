@@ -19,7 +19,7 @@ BEGIN
        OR (input_action = 'invite') = (input_auth_version IS NOT NULL)
        OR (input_action = 'reauth') <> (input_proof_action IS NOT NULL)
        OR (input_action = 'reauth' AND input_proof_action NOT IN
-           ('verify_current', 'change_email', 'add_password'))
+           ('verify_current', 'change_email', 'add_password', 'purge_account'))
        OR input_target IS NULL OR length(input_target) > 512 THEN
         RETURN false;
     END IF;
@@ -40,7 +40,12 @@ BEGIN
         RETURN false;
     END IF;
     IF input_action = 'reauth' AND (
-        (input_proof_action = 'add_password' AND input_target <> '')
+        (input_proof_action = 'purge_account' AND NOT EXISTS (
+            SELECT 1 FROM public.accounts actor, public.accounts target
+            WHERE actor.id = input_account_id AND actor.is_admin AND actor.is_enabled
+              AND target.id <> actor.id AND target.id::text = input_target
+              AND NOT target.is_enabled AND target.deletion_deadline <= checked_at))
+        OR (input_proof_action = 'add_password' AND input_target <> '')
         OR (input_proof_action = 'verify_current' AND NOT EXISTS (
             SELECT 1 FROM public.accounts WHERE id = input_account_id AND email = input_target))
         OR (input_proof_action = 'change_email' AND EXISTS (

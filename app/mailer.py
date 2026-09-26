@@ -100,4 +100,18 @@ class Mailer:
         return message
 
     async def send(self, message: EmailMessage) -> None:
-        await asyncio.to_thread(self.transport, self, message)
+        task = asyncio.create_task(asyncio.to_thread(self.transport, self, message))
+        cancelled = False
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                # The SMTP thread cannot be cancelled. Retain admission until it exits.
+                cancelled = True
+            except Exception:
+                break
+        if cancelled:
+            if not task.cancelled():
+                task.exception()
+            raise asyncio.CancelledError
+        task.result()

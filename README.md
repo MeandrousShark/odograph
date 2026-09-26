@@ -132,7 +132,7 @@ how you use Odograph day to day.
 
 ### Create your account before public access
 
-Create the only administrator from the running app container. This reads the
+Create the first administrator from the running app container. This reads the
 email and password interactively and accepts no password argument:
 
 ```sh
@@ -144,8 +144,12 @@ Keep `INITIAL_ADMIN_SIGNUP=0`. The account command works with browser signup
 disabled, so the public `/signup` route never lets an unknown visitor create
 the first account.
 
-If an account already exists, this command refuses to replace it. Use the
-password recovery command below when you need to recover an existing account.
+This command is for initial setup only. Once bootstrap completes, deleting the
+original administrator does not reopen first-account signup or make
+`create-admin` available again. If an account exists, the command refuses to
+replace it. For an account that still exists, see
+[Password recovery](#password-recovery). A purged account can return only by
+restoring a database backup that contains it.
 
 ## Set up HTTPS
 
@@ -276,6 +280,21 @@ proofs, invitations it issued, and tracking credentials. Re-enabling allows
 a fresh sign-in with a retained login method, but does not restore old sessions,
 links or tracking credentials. At least one usable administrator must remain.
 
+An administrator can also schedule another account for deletion in those
+fixtures by typing its login email and acknowledging the export and backup
+effects. Scheduling immediately disables the account and starts a 30-day
+grace period. An enabled administrator can cancel during that period; there is
+no automatic purge. After the grace period, permanent purge requires fresh
+administrator authentication with a password or the exact linked OIDC
+identity, the target login email, and a separate confirmation. Administrators
+cannot delete themselves, and a usable administrator must remain. The account
+owner can download a portable export before disablement or after cancellation.
+It includes the ledger, rates and basic preferences, but omits notification
+destinations, schedules and raw points. Purge removes data from the live
+database only; retained backups may still contain it. Restoring an older
+backup can reintroduce the account and its data. These flows remain unavailable
+in normal installations until multi-account activation is separately released.
+
 In **Settings > Account Settings**, you can verify your current login email or
 change it after confirming the new address. These actions require your current
 password and configured email delivery. Until a new address is confirmed, the
@@ -323,8 +342,11 @@ docker compose exec app python -m app.manage_account reset-password ACCOUNT_ID
 # or: podman-compose exec app python -m app.manage_account reset-password ACCOUNT_ID
 ```
 
-Use `create-admin` instead when no account exists yet and public signup is
-closed.
+Use `create-admin` only before the first account has been created, when public
+signup is closed. Completing bootstrap permanently closes first-account
+creation, even if the original administrator is later purged. Restoring an
+earlier database backup can restore a purged account and its data; there is no
+post-bootstrap `create-admin` recovery path.
 
 A password change signs out your other Odograph sessions; the browser that made
 the change stays signed in. An operator reset signs out every session for that

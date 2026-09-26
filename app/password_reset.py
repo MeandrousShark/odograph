@@ -15,11 +15,12 @@ import logging
 import secrets
 import time
 from collections import deque
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, AsyncExitStack
 from typing import AsyncContextManager, Callable
 
 from app.account_context import control_connection
-from app.accounts import get_account, safe_delivery_email
+from app.accounts import get_account, get_account_by_email, safe_delivery_email
+from app.account_work import external_account_work
 from app.email_challenges import _digest
 from app.mailer import Mailer
 
@@ -160,30 +161,47 @@ class SecurityMailAdmission:
     async def send(
         self, mailer: Mailer, message, *, wait: bool = True,
         admit: Callable[[], AsyncContextManager[bool]] | None = None,
+        lease: Callable[[], AsyncContextManager] | None = None,
     ) -> bool:
         if not wait and self._slots.locked():
             return False
         await self._slots.acquire()
-        task = None
-        try:
-            if admit is None:
-                task = self._start_send(mailer, message)
-            else:
-                async with admit() as allowed:
-                    if not allowed:
-                        return False
-                    task = self._start_send(mailer, message)
-        finally:
-            if task is None:
-                self._slots.release()
-        await asyncio.shield(task)
-        return True
-
-    def _start_send(self, mailer: Mailer, message) -> asyncio.Task:
-        task = asyncio.create_task(mailer.send(message))
+        task = asyncio.create_task(self._send(mailer, message, admit, lease))
         self._tasks.add(task)
         task.add_done_callback(self._finished)
-        return task
+        return await asyncio.shield(task)
+
+    async def _send(self, mailer, message, admit, lease) -> bool:
+        async with AsyncExitStack() as contexts:
+            if lease is not None:
+                await contexts.enter_async_context(lease())
+            if admit is None:
+                await mailer.send(message)
+            else:
+                transport = None
+                try:
+                    async with admit() as allowed:
+                        if not allowed:
+                            return False
+                        transport = asyncio.create_task(mailer.send(message))
+                except BaseException:
+                    if transport is not None:
+                        await self._drain_transport(transport)
+                    raise
+                await transport
+            return True
+
+    @staticmethod
+    async def _drain_transport(task: asyncio.Task) -> None:
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not task.cancelled():
+            task.exception()
 
     def _finished(self, task: asyncio.Task) -> None:
         self._tasks.discard(task)
@@ -284,10 +302,11 @@ class RecoveryQueue:
                 account_id=target if initiator == INITIATOR_ADMIN else None,
                 actor_id=actor_id, actor_auth_version=actor_version,
             )
+            target_account = await get_account_by_email(conn, address) if address else None
             if address is not None and not safe_delivery_email(address):
                 await revoke_password_reset(conn, token)
                 address = None
-        if address is None:
+        if address is None or target_account is None:
             return
         mailer = self._mailer_for(address)
         message = reset_message(mailer, self._link_base, token)
@@ -299,7 +318,10 @@ class RecoveryQueue:
                         conn, token, actor_id=actor_id, actor_auth_version=actor_version,
                     )
         try:
-            admitted = await self._admission.send(mailer, message, admit=admit)
+            admitted = await self._admission.send(
+                mailer, message, admit=admit,
+                lease=lambda: external_account_work(self._pool, target_account["id"], *([actor_id] if actor_id else [])),
+            )
             if not admitted:
                 async with control_connection(self._pool) as conn:
                     await revoke_password_reset(conn, token)

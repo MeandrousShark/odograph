@@ -345,8 +345,16 @@ Use the output that matches the job:
 - **Settings, Data export / import, Download export:** a portable JSON bundle
   containing vehicles, Places, rules, rates, trips, expenses, odometer
   readings, and settings. It excludes raw location points and route geometry.
-  Import works only into a freshly migrated, otherwise-empty instance on the
-  same schema version. Use **Dry run** to validate without writing.
+  Export and import apply to your account only. Import requires a clean target
+  account, where the initial default data can be replaced. Only explicitly
+  supported schema-version transitions are accepted, including some older
+  bundles. Use **Dry run** to validate without writing.
+
+In controlled activated fixtures, scheduling deletion disables the account
+immediately. Its owner can download this bundle before the account is disabled
+or after an administrator cancels during the 30-day grace period.
+The bundle omits notification destinations and schedules. Normal installations
+do not yet support multi-account activation.
 
 None of these exports is a complete database backup. For recovery, use the
 [backup and disaster recovery guide](backups.md), which covers the database

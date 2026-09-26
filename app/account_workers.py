@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 
 from app.account_context import AccountPool, AccountPrincipal, control_connection
+from app.account_work import external_account_work
 from app.account_settings import config_for_account, load_account_settings
 from app.worker import PokeSweepWorker, RUN_SKIPPED
 
@@ -55,25 +56,26 @@ class AccountWorker(PokeSweepWorker):
         failed = False
         for principal in await enabled_principals(self.pools.control):
             try:
-                pool = AccountPool(self.pools.runtime, principal)
-                async with pool.connection() as conn:
-                    settings = await load_account_settings(conn)
-                config = config_for_account(self.config, settings)
-                worker = self.factory(pool, config)
-                if worker is None:
-                    continue
-                result = await worker.run_once()
-                ran |= not _did_not_run(result)
-                # Not every wrapped job is a _LoopWorker: DetectorRunner owns
-                # no WorkerStatus and reports failure by raising, which the
-                # clause below already records. Reading `.status` off it
-                # unconditionally turns every sweep, successful or not, into
-                # an AttributeError logged as an account-job failure.
-                status = getattr(worker, "status", None)
-                if status is not None and status.last_failure_at is not None:
-                    failed = True
-                    self.status.last_failure_at = status.last_failure_at
-                    self.status.last_failure_type = status.last_failure_type
+                async with external_account_work(self.pools.control, principal.account_id):
+                    pool = AccountPool(self.pools.runtime, principal)
+                    async with pool.connection() as conn:
+                        settings = await load_account_settings(conn)
+                    config = config_for_account(self.config, settings)
+                    worker = self.factory(pool, config)
+                    if worker is None:
+                        continue
+                    result = await worker.run_once()
+                    ran |= not _did_not_run(result)
+                    # Not every wrapped job is a _LoopWorker: DetectorRunner owns
+                    # no WorkerStatus and reports failure by raising, which the
+                    # clause below already records. Reading `.status` off it
+                    # unconditionally turns every sweep, successful or not, into
+                    # an AttributeError logged as an account-job failure.
+                    status = getattr(worker, "status", None)
+                    if status is not None and status.last_failure_at is not None:
+                        failed = True
+                        self.status.last_failure_at = status.last_failure_at
+                        self.status.last_failure_type = status.last_failure_type
             except Exception as exc:
                 failed = True
                 # Provider exceptions can contain private URLs/coordinates.

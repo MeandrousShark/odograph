@@ -24,7 +24,8 @@ BEGIN
     SELECT * INTO target_row FROM public.accounts WHERE id = input_target_id;
     IF actor_row.id IS NULL OR NOT actor_row.is_admin OR NOT actor_row.is_enabled
        OR actor_row.auth_version <> input_actor_auth_version
-       OR target_row.id IS NULL THEN
+       OR target_row.id IS NULL
+       OR (input_enable AND target_row.deletion_deadline IS NOT NULL) THEN
         RAISE EXCEPTION 'account transition unavailable' USING ERRCODE = '42501';
     END IF;
     IF target_row.is_enabled = input_enable THEN
@@ -126,3 +127,167 @@ BEGIN
 END
 $body$;
 REVOKE ALL ON FUNCTION public.prune_account_security_audit() FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION public.admin_request_account_deletion(
+    input_actor_id bigint, input_actor_auth_version bigint,
+    input_target_id bigint, input_email text, input_acknowledge boolean
+) RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp
+AS $body$
+DECLARE
+    target_row public.accounts%ROWTYPE;
+    checked_at timestamptz;
+BEGIN
+    IF input_acknowledge IS DISTINCT FROM true OR input_email IS NULL
+       OR input_actor_id IS NULL OR input_target_id IS NULL
+       OR input_actor_id = input_target_id THEN
+        RAISE EXCEPTION 'account deletion unavailable' USING ERRCODE = '42501';
+    END IF;
+    PERFORM pg_catalog.pg_advisory_xact_lock(901412, 1);
+    PERFORM 1 FROM public.accounts
+    WHERE id IN (input_actor_id, input_target_id) ORDER BY id FOR UPDATE;
+    SELECT * INTO target_row FROM public.accounts WHERE id = input_target_id;
+    IF target_row.id IS NULL OR target_row.email <> input_email
+       OR target_row.deletion_deadline IS NOT NULL THEN
+        RAISE EXCEPTION 'account deletion unavailable' USING ERRCODE = '42501';
+    END IF;
+    PERFORM public.admin_set_account_enabled(
+        input_actor_id, input_actor_auth_version, input_target_id, false);
+    checked_at := pg_catalog.clock_timestamp();
+    UPDATE public.accounts SET deletion_deadline = checked_at + interval '30 days',
+        updated_at = checked_at WHERE id = input_target_id;
+    INSERT INTO public.account_security_audit
+        (occurred_at, actor_account_id, target_account_id, action, outcome)
+    VALUES (checked_at, input_actor_id, input_target_id, 'request_deletion', 'scheduled');
+    RETURN 'scheduled';
+END
+$body$;
+REVOKE ALL ON FUNCTION public.admin_request_account_deletion(bigint,bigint,bigint,text,boolean) FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION public.admin_cancel_account_deletion(
+    input_actor_id bigint, input_actor_auth_version bigint, input_target_id bigint
+) RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp
+AS $body$
+DECLARE
+    target_row public.accounts%ROWTYPE;
+    checked_at timestamptz;
+BEGIN
+    IF input_actor_id IS NULL OR input_target_id IS NULL OR input_actor_id = input_target_id THEN
+        RAISE EXCEPTION 'account deletion unavailable' USING ERRCODE = '42501';
+    END IF;
+    PERFORM pg_catalog.pg_advisory_xact_lock(901412, 1);
+    PERFORM 1 FROM public.accounts
+    WHERE id IN (input_actor_id, input_target_id) ORDER BY id FOR UPDATE;
+    SELECT * INTO target_row FROM public.accounts WHERE id = input_target_id;
+    checked_at := pg_catalog.clock_timestamp();
+    IF target_row.id IS NULL OR target_row.deletion_deadline IS NULL
+       OR target_row.deletion_deadline <= checked_at THEN
+        RAISE EXCEPTION 'account deletion unavailable' USING ERRCODE = '42501';
+    END IF;
+    UPDATE public.accounts SET deletion_deadline = NULL WHERE id = input_target_id;
+    PERFORM public.admin_set_account_enabled(
+        input_actor_id, input_actor_auth_version, input_target_id, true);
+    INSERT INTO public.account_security_audit
+        (occurred_at, actor_account_id, target_account_id, action, outcome)
+    VALUES (checked_at, input_actor_id, input_target_id, 'cancel_deletion', 'cancelled');
+    RETURN 'cancelled';
+END
+$body$;
+REVOKE ALL ON FUNCTION public.admin_cancel_account_deletion(bigint,bigint,bigint) FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION public.admin_purge_account(
+    input_actor_id bigint, input_actor_auth_version bigint, input_target_id bigint,
+    input_email text, input_confirm boolean,
+    input_verified_password_hash text, input_browser_digest text
+) RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp
+AS $body$
+DECLARE
+    actor_row public.accounts%ROWTYPE;
+    target_row public.accounts%ROWTYPE;
+    checked_at timestamptz;
+BEGIN
+    IF input_actor_id IS NULL OR input_actor_auth_version IS NULL
+       OR input_target_id IS NULL OR input_actor_id = input_target_id
+       OR input_email IS NULL OR input_confirm IS DISTINCT FROM true THEN
+        RAISE EXCEPTION 'account purge unavailable' USING ERRCODE = '42501';
+    END IF;
+    PERFORM pg_catalog.pg_advisory_xact_lock(901412, 1);
+    IF NOT pg_catalog.pg_try_advisory_xact_lock(-input_target_id) THEN
+        RAISE EXCEPTION 'account purge unavailable' USING ERRCODE = '42501';
+    END IF;
+    -- An admitted unit holds a shared account lock. Never purge through it.
+    PERFORM 1 FROM public.accounts
+    WHERE id IN (input_actor_id, input_target_id) ORDER BY id FOR UPDATE NOWAIT;
+    SELECT * INTO actor_row FROM public.accounts WHERE id = input_actor_id;
+    SELECT * INTO target_row FROM public.accounts WHERE id = input_target_id;
+    checked_at := pg_catalog.clock_timestamp();
+    IF actor_row.id IS NULL OR NOT actor_row.is_admin OR NOT actor_row.is_enabled
+       OR actor_row.auth_version <> input_actor_auth_version
+       OR target_row.id IS NULL OR target_row.email <> input_email
+       OR target_row.is_enabled OR target_row.deletion_deadline IS NULL
+       OR target_row.deletion_deadline > checked_at
+       OR NOT EXISTS (
+           SELECT 1 FROM public.accounts a
+           WHERE a.id <> input_target_id AND a.is_admin AND a.is_enabled
+             AND (NULLIF(a.password_hash, '') IS NOT NULL OR EXISTS (
+                 SELECT 1 FROM public.oidc_identities i WHERE i.account_id = a.id))
+       ) THEN
+        RAISE EXCEPTION 'account purge unavailable' USING ERRCODE = '42501';
+    END IF;
+    IF input_verified_password_hash IS NOT NULL THEN
+        IF actor_row.password_hash IS NULL
+           OR actor_row.password_hash <> input_verified_password_hash THEN
+            RAISE EXCEPTION 'account purge unavailable' USING ERRCODE = '42501';
+        END IF;
+    ELSIF input_browser_digest IS NULL OR NOT EXISTS (
+        SELECT 1 FROM public.oidc_action_proofs proof
+        WHERE proof.browser_digest = input_browser_digest
+          AND proof.account_id = input_actor_id AND proof.action = 'purge_account'
+          AND proof.target = input_target_id::text
+          AND proof.created_at >= target_row.deletion_deadline - interval '30 days'
+    ) OR NOT public.consume_oidc_action_proof(
+        input_actor_id, input_actor_auth_version, 'purge_account',
+        input_target_id::text, input_browser_digest
+    ) THEN
+        RAISE EXCEPTION 'account purge unavailable' USING ERRCODE = '42501';
+    END IF;
+
+    DELETE FROM public.trip_boundary_overrides WHERE account_id = input_target_id;
+    DELETE FROM public.points WHERE account_id = input_target_id;
+    DELETE FROM public.expenses WHERE account_id = input_target_id;
+    DELETE FROM public.odometer_readings WHERE account_id = input_target_id;
+    DELETE FROM public.trips WHERE account_id = input_target_id;
+    DELETE FROM public.stays WHERE account_id = input_target_id;
+    DELETE FROM public.raw_messages WHERE account_id = input_target_id;
+    DELETE FROM public.detector_state WHERE account_id = input_target_id;
+    DELETE FROM public.tracking_device_aliases WHERE account_id = input_target_id;
+    DELETE FROM public.ingest_credentials WHERE account_id = input_target_id;
+    DELETE FROM public.tracking_devices WHERE account_id = input_target_id;
+    DELETE FROM public.tag_rules WHERE account_id = input_target_id;
+    DELETE FROM public.places WHERE account_id = input_target_id;
+    DELETE FROM public.vehicles WHERE account_id = input_target_id;
+    DELETE FROM public.mileage_rates WHERE account_id = input_target_id;
+    DELETE FROM public.geocode_cache WHERE account_id = input_target_id;
+    DELETE FROM public.nudge_delivery_windows WHERE account_id = input_target_id;
+    DELETE FROM public.odometer_reminder_windows WHERE account_id = input_target_id;
+    DELETE FROM public.email_deliveries WHERE account_id = input_target_id;
+    DELETE FROM public.account_settings WHERE account_id = input_target_id;
+    DELETE FROM public.email_challenges WHERE account_id = input_target_id;
+    DELETE FROM public.oidc_action_proofs WHERE account_id = input_target_id;
+    DELETE FROM public.oidc_attempts
+    WHERE account_id = input_target_id OR invitation_digest IN (
+        SELECT token_digest FROM public.invitations WHERE issued_by = input_target_id);
+    DELETE FROM public.invitations WHERE issued_by = input_target_id;
+    DELETE FROM public.oidc_identities WHERE account_id = input_target_id;
+    UPDATE public.instance_state SET first_account_id = NULL WHERE first_account_id = input_target_id;
+    DELETE FROM public.accounts WHERE id = input_target_id;
+    INSERT INTO public.account_security_audit
+        (occurred_at, actor_account_id, target_account_id, action, outcome)
+    VALUES (checked_at, input_actor_id, input_target_id, 'purge_account', 'purged');
+    PERFORM public.prune_account_security_audit();
+    RETURN 'purged';
+END
+$body$;
+REVOKE ALL ON FUNCTION public.admin_purge_account(bigint,bigint,bigint,text,boolean,text,text) FROM PUBLIC;
