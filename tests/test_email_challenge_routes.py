@@ -45,6 +45,9 @@ def _app(monkeypatch, *, smtp_host="smtp.example.com"):
     @asynccontextmanager
     async def fake_connection(pool):
         class Connection:
+            async def execute(self, query, parameters=None):
+                return None
+
             @asynccontextmanager
             async def transaction(self):
                 yield
@@ -65,6 +68,7 @@ def _app(monkeypatch, *, smtp_host="smtp.example.com"):
     async def fake_send_usable(conn, account_id, version, purpose, token):
         return True
 
+    monkeypatch.setattr("app.account_work._lease_connection", fake_connection)
     monkeypatch.setattr(auth, "control_connection", fake_connection)
     monkeypatch.setattr(auth, "get_account", fake_get_account)
     monkeypatch.setattr(auth, "_verified_account", fake_verified)

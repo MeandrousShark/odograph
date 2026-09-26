@@ -185,6 +185,11 @@ class _FakeDb:
         async def revoke(conn, token):
             self.revoked.append(token)
 
+        async def target_account(conn, email):
+            return {"id": 7, "email": email}
+
+        monkeypatch.setattr(reset, "get_account_by_email", target_account)
+        monkeypatch.setattr("app.account_work._lease_connection", connection)
         monkeypatch.setattr(reset, "control_connection", connection)
         monkeypatch.setattr(reset, "issue_password_reset", issue)
         monkeypatch.setattr(reset, "password_reset_send_usable", usable_check)
@@ -192,6 +197,9 @@ class _FakeDb:
 
 
 class _FakeConn:
+    async def execute(self, query, parameters=None):
+        return None
+
     @asynccontextmanager
     async def transaction(self):
         yield
@@ -365,3 +373,70 @@ def test_proofless_host_reset_is_reachable_only_from_the_host_cli():
         if reference.search(path.read_text())
     )
     assert callers == ["manage_account.py", "password_reset.py"]
+
+
+def test_admission_exit_error_keeps_lease_and_slot_until_transport_finishes():
+    started, release = threading.Event(), threading.Event()
+    lease_held = False
+
+    def transport(*_):
+        started.set()
+        release.wait(5)
+
+    @asynccontextmanager
+    async def lease():
+        nonlocal lease_held
+        lease_held = True
+        try:
+            yield
+        finally:
+            lease_held = False
+
+    @asynccontextmanager
+    async def admit():
+        yield True
+        raise RuntimeError("admission commit failed")
+
+    async def run():
+        admission = reset.SecurityMailAdmission(limit=1)
+        waiter = asyncio.create_task(admission.send(_mailer("verified@example.com", transport), "message", admit=admit, lease=lease))
+        try:
+            assert await asyncio.to_thread(started.wait,2)
+            assert lease_held
+            assert admission._slots.locked()
+            assert not waiter.done()
+            waiter.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiter
+            assert lease_held
+        finally:
+            release.set()
+            await admission.drain()
+        assert not lease_held
+        assert not admission._slots.locked()
+        assert not admission._tasks
+
+    asyncio.run(run())
+
+
+def test_cancelled_mail_send_preserves_cancellation_when_thread_later_fails():
+    started, release = threading.Event(), threading.Event()
+
+    def transport(*_):
+        started.set()
+        release.wait(5)
+        raise RuntimeError("transport failed after cancellation")
+
+    async def run():
+        task = asyncio.create_task(_mailer("verified@example.com",transport).send("message"))
+        try:
+            assert await asyncio.to_thread(started.wait,2)
+            task.cancel()
+            await asyncio.sleep(.01)
+            assert not task.done()
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())

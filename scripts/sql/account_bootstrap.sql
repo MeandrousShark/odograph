@@ -9,13 +9,14 @@ AS $$
 DECLARE
     owner_id bigint;
     established_id bigint;
+    completed_at timestamptz;
 BEGIN
-    SELECT first_account_id INTO established_id
+    SELECT first_account_id, bootstrap_completed_at INTO established_id, completed_at
     FROM public.instance_state WHERE id = 1 FOR UPDATE;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'instance bootstrap state is missing';
     END IF;
-    IF established_id IS NOT NULL OR EXISTS (SELECT 1 FROM public.accounts) THEN
+    IF completed_at IS NOT NULL OR established_id IS NOT NULL OR EXISTS (SELECT 1 FROM public.accounts) THEN
         RAISE EXCEPTION 'first-account setup is already complete' USING ERRCODE = '23505';
     END IF;
     IF input_email IS NULL OR btrim(input_email) = ''

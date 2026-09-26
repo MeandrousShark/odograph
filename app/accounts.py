@@ -110,7 +110,7 @@ async def clear_account_avatar(conn, account_id: int, *, expected_auth_version: 
 
 
 async def account_exists(conn) -> bool:
-    cur = await conn.execute("SELECT EXISTS (SELECT 1 FROM accounts)")
+    cur = await conn.execute("SELECT EXISTS (SELECT 1 FROM accounts) OR EXISTS (SELECT 1 FROM instance_state WHERE bootstrap_completed_at IS NOT NULL)")
     return bool((await cur.fetchone())[0])
 
 

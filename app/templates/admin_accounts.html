@@ -80,7 +80,7 @@
             <input type="hidden" name="csrf_token" value="{{ csrf }}">
             <button type="submit" class="control">Disable</button>
           </form>
-          {% else %}
+          {% elif not account.deletion_deadline %}
           <form method="post" action="/admin/accounts/{{ account.id }}/enable">
             <input type="hidden" name="csrf_token" value="{{ csrf }}">
             <button type="submit" class="control">Re-enable</button>
@@ -89,7 +89,47 @@
           {% elif account.id == user.id %}<span class="muted">Current account</span>{% endif %}
         </td>
         <td>{% if account.has_password and account.has_oidc %}Password, OIDC{% elif account.has_password %}Password{% elif account.has_oidc %}OIDC{% else %}None{% endif %}</td>
-        <td>{% if account.deletion_deadline %}{{ account.deletion_deadline|local_dt }}{% else %}Not scheduled{% endif %}</td>
+        <td>
+          {% if account.deletion_deadline %}{{ account.deletion_deadline|local_dt }}{% else %}Not scheduled{% endif %}
+          {% if multiuser_available and account.id != user.id %}
+          {% if not account.deletion_deadline %}
+          <details><summary>Schedule deletion</summary>
+            <form method="post" action="/admin/accounts/{{ account.id }}/deletion">
+              <input type="hidden" name="csrf_token" value="{{ csrf }}">
+              <label>Type target login email <input name="target_email" required autocomplete="off"></label>
+              <label><input type="checkbox" name="acknowledge" value="1" required> I understand the export and backup effects below.</label>
+              <button type="submit" class="control">Disable and start 30-day deletion window</button>
+            </form>
+          </details>
+          {% elif not account.purge_available %}
+          <form method="post" action="/admin/accounts/{{ account.id }}/deletion/cancel">
+            <input type="hidden" name="csrf_token" value="{{ csrf }}">
+            <button type="submit" class="control">Cancel deletion and re-enable</button>
+          </form>
+          {% else %}
+          <details><summary>Permanently purge account</summary>
+            {% if actor_account.has_oidc and oidc_purge_available %}
+            <form method="post" action="/settings/account/oidc/reauth">
+              <input type="hidden" name="csrf_token" value="{{ csrf }}">
+              <input type="hidden" name="action" value="purge_account">
+              <input type="hidden" name="target" value="{{ account.id }}">
+              <button type="submit" class="control">Reauthenticate with OIDC for this purge</button>
+            </form>
+            {% endif %}
+            <form method="post" action="/admin/accounts/{{ account.id }}/purge">
+              <input type="hidden" name="csrf_token" value="{{ csrf }}">
+              <label>Type target login email <input name="target_email" required autocomplete="off"></label>
+              {% if actor_account.has_password %}
+              <label>Your current administrator password <input type="password" name="current_password" autocomplete="current-password"></label>
+              {% endif %}
+              <p>Enter your password or first reauthenticate with the exact linked OIDC identity. OIDC proof is one-use and expires within 10 minutes.</p>
+              <label><input type="checkbox" name="confirm_purge" value="1" required> I confirm permanent deletion from the live database.</label>
+              <button type="submit" class="control">Permanently purge</button>
+            </form>
+          </details>
+          {% endif %}
+          {% endif %}
+        </td>
         <td>
           {% if account.email_verified and account.is_enabled %}
           <form method="post" action="/admin/accounts/{{ account.id }}/recovery">
@@ -106,6 +146,13 @@
     </tbody>
   </table>
   </div>
+</section>
+
+<section class="settings-section" aria-labelledby="deletion-effects-heading">
+  <h3 id="deletion-effects-heading">Deletion, exports and backups</h3>
+  <p>Scheduling deletion immediately disables login, tracking and sends. An enabled administrator can cancel during the 30-day grace period. Cancellation allows a new sign-in but never revives revoked sessions, proofs or tracking credentials.</p>
+  <p>The owner can export before deletion or after cancellation. Administrators cannot export another account's data. Portable exports cover ledger, rates and basic preferences; notification destinations, schedules and raw points are omitted. A complete server backup is a separate operator action.</p>
+  <p>Purge removes live data only. Historical encrypted backups may retain account data until the operator's backup retention expires. Restoring an older backup can reintroduce purged data and requires restore-time session and proof revocation.</p>
 </section>
 
 <section class="settings-section" aria-labelledby="security-audit-heading">

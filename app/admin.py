@@ -15,9 +15,13 @@ from app.account_lifecycle import (
     AccountLifecycleUnavailable,
     list_account_security_audit,
     set_account_enabled,
+    request_account_deletion, cancel_account_deletion, purge_account,
 )
-from app.accounts import normalize_email, safe_delivery_email
-from app.auth import check_form_csrf, require_admin
+from app.accounts import get_account, normalize_email, safe_delivery_email
+from app.account_work import external_account_work
+from app.auth import (
+    check_form_csrf, require_admin, _verified_account, _AccountActionRejected, _AuthSaturated,
+)
 from app.config import security_link_base
 from app.invitations import (
     InvitationUnavailable,
@@ -76,7 +80,7 @@ async def _metadata_accounts(conn) -> list[dict]:
         "a.is_admin, a.is_enabled, "
         "(a.password_hash IS NOT NULL AND a.password_hash <> '') AS has_password, "
         "EXISTS (SELECT 1 FROM public.oidc_identities i WHERE i.account_id = a.id) AS has_oidc, "
-        "NULL::timestamptz AS deletion_deadline "
+        "a.deletion_deadline "
         "FROM public.accounts a ORDER BY a.id"
     )
     return await cur.fetchall()
@@ -100,6 +104,8 @@ async def _load_page_data(
         audit_events = await list_account_security_audit(conn, actor)
         multiuser_available = await _multiuser_available(conn)
     checked_at = datetime.now(timezone.utc)
+    for account in accounts:
+        account["purge_available"] = bool(account["deletion_deadline"] and account["deletion_deadline"] <= checked_at)
     for invitation in invitations:
         if invitation["consumed_at"] is not None:
             invitation["status"] = "Accepted"
@@ -132,11 +138,13 @@ async def _render_accounts(
             "csrf": request.session.get("csrf", ""),
             "review_count": 0,
             "accounts": accounts,
+            "actor_account": next((account for account in accounts if account["id"] == actor["id"]), None),
             "invitations": invitations,
             "audit_events": audit_events,
             "multiuser_available": multiuser_available,
             "notice": notice,
             "invite_result": invite_result,
+            "oidc_purge_available": bool(getattr(request.app.state.config, "oidc_issuer", "") and getattr(request.app.state, "oauth", None)),
         },
         status_code=status_code,
     )
@@ -180,7 +188,10 @@ async def _send_invitation_email(
                 yield bool(target_email and target_email == email)
 
         try:
-            admitted = await admission.send(mailer, message, wait=False, admit=admit)
+            admitted = await admission.send(
+                mailer, message, wait=False, admit=admit,
+                lease=lambda: external_account_work(request.app.state.control_pool, actor["id"]),
+            )
             return "sent" if admitted else "not_sent"
         except Exception as exc:
             # SMTP exceptions can include transport details. Do not log the
@@ -259,6 +270,60 @@ async def _set_account_enabled_route(
     return await _render_accounts(request, user, notice=notice)
 
 
+async def _deletion_route(request: Request, user: dict, account_id: int, action: str) -> Response:
+    required = {"csrf_token"} if action == "cancel" else {"csrf_token", "target_email"}
+    optional = {"acknowledge"} if action == "request" else {"confirm_purge", "current_password"} if action == "purge" else set()
+    form = await _read_form(request, required, optional_fields=optional)
+    check_form_csrf(request, form["csrf_token"])
+    if account_id < 1:
+        raise HTTPException(status_code=404)
+    actor = _actor(user, request)
+    async with control_connection(request.app.state.control_pool) as conn:
+        available = await _multiuser_available(conn)
+    if not available or actor["id"] == account_id:
+        return await _render_accounts(request, user, notice="Deletion requires activated multi-account mode and another target account.", status_code=409)
+    if action == "request" and form.get("acknowledge") != "1":
+        return await _render_accounts(request, user, notice="Acknowledge the export and backup effects before starting deletion.", status_code=400)
+    if action == "purge" and form.get("confirm_purge") != "1":
+        return await _render_accounts(request, user, notice="Confirm permanent deletion before purging the account.", status_code=400)
+    password_hash = None
+    proof_nonce = None
+    if action == "purge":
+        async with control_connection(request.app.state.control_pool) as conn:
+            current = await get_account(conn, actor["id"])
+        if current and current["password_hash"] is not None and form.get("current_password"):
+            try:
+                verified = await request.app.state.login_limiter.run_bounded(lambda: _verified_account(
+                    request, user, form.get("current_password", ""), generic_error="Fresh administrator authentication is required.",
+                ))
+                password_hash = verified["password_hash"]
+            except _AccountActionRejected as rejected:
+                return await _render_accounts(request, user, notice=rejected.error, status_code=rejected.status_code)
+            except _AuthSaturated:
+                return await _render_accounts(request, user, notice="Authentication is busy. Try again later.", status_code=503)
+        else:
+            proof_nonce = request.session.get("oidc_action_proof_nonce")
+    try:
+        async with control_connection(request.app.state.control_pool) as conn:
+            if action == "request":
+                await request_account_deletion(conn, actor, account_id, email=form["target_email"], acknowledge=True)
+            elif action == "cancel":
+                await cancel_account_deletion(conn, actor, account_id)
+            else:
+                await purge_account(conn, actor, account_id, email=form["target_email"], confirm=True,
+                                    verified_password_hash=password_hash, browser_nonce=proof_nonce)
+    except AccountLifecycleUnavailable:
+        return await _render_accounts(request, user, notice="Deletion could not be changed. Check the grace deadline, confirmation, fresh authentication and active work.", status_code=409)
+    if action == "purge" and proof_nonce is not None:
+        request.session.pop("oidc_action_proof_nonce", None)
+    notices = {
+        "request": "Deletion scheduled. Account access is disabled for the 30-day recovery window.",
+        "cancel": "Deletion cancelled. New sign-in is available; revoked sessions and tracking credentials stay revoked.",
+        "purge": "Account permanently removed from the live database. Historical backups may still retain its data.",
+    }
+    return await _render_accounts(request, user, notice=notices[action])
+
+
 def make_router() -> APIRouter:
     router = APIRouter()
 
@@ -277,6 +342,18 @@ def make_router() -> APIRouter:
         request: Request, account_id: int, user: dict = Depends(require_admin),
     ):
         return await _set_account_enabled_route(request, user, account_id, enable=True)
+
+    @router.post("/admin/accounts/{account_id}/deletion")
+    async def request_deletion_route(request: Request, account_id: int, user: dict = Depends(require_admin)):
+        return await _deletion_route(request, user, account_id, "request")
+
+    @router.post("/admin/accounts/{account_id}/deletion/cancel")
+    async def cancel_deletion_route(request: Request, account_id: int, user: dict = Depends(require_admin)):
+        return await _deletion_route(request, user, account_id, "cancel")
+
+    @router.post("/admin/accounts/{account_id}/purge")
+    async def purge_account_route(request: Request, account_id: int, user: dict = Depends(require_admin)):
+        return await _deletion_route(request, user, account_id, "purge")
 
     @router.post("/admin/invitations")
     async def issue_member_invitation_route(

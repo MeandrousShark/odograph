@@ -31,6 +31,7 @@ from app.accounts import (
     sign_out_everywhere,
     valid_email,
 )
+from app.account_work import external_account_work
 from app.account_context import AccountPool, AccountPrincipal, control_connection
 from app.account_settings import config_for_account, load_account_settings
 from app.avatar_images import (
@@ -504,7 +505,7 @@ async def _oidc_protected_redirect(
     request.session["oidc_browser_nonce"] = browser_nonce
     request.session[OIDC_PROTECTED_ATTEMPT_KEY] = {
         "action": action, "state": state, "nonce": nonce,
-        "browser_nonce": browser_nonce,
+        "browser_nonce": browser_nonce, "proof_action": proof_action,
         "account_id": account["id"] if account else None,
         "auth_version": account["auth_version"] if account else None,
     }
@@ -1094,7 +1095,7 @@ def make_router() -> APIRouter:
                 raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
             request.session["oidc_action_proof_nonce"] = protected_attempt["browser_nonce"]
             request.session["account_notice"] = OIDC_REAUTH_NOTICE
-            return RedirectResponse("/settings/account", status_code=303)
+            return RedirectResponse("/admin/accounts" if protected_attempt.get("proof_action") == "purge_account" else "/settings/account", status_code=303)
 
         if protected_action == "invite":
             try:
@@ -1313,10 +1314,15 @@ def make_router() -> APIRouter:
             identity = await get_identity_for_account(
                 conn, user["id"], request.app.state.config.oidc_issuer
             )
-        if (account is None or account["password_hash"] is not None
-            or identity is None or action not in (PURPOSE_CURRENT, PURPOSE_CHANGE, "add_password")):
+        if (account is None or (account["password_hash"] is not None and action != "purge_account")
+            or identity is None or action not in (PURPOSE_CURRENT, PURPOSE_CHANGE, "add_password", "purge_account")):
             raise HTTPException(status_code=403, detail=GENERIC_OIDC_ERROR)
-        if action == PURPOSE_CURRENT:
+        if action == "purge_account":
+            if (not account["is_admin"] or len(target) > 19 or not target.isascii()
+                or not target.isdecimal() or not 1 <= int(target) <= 2**63 - 1):
+                raise HTTPException(status_code=403, detail=GENERIC_OIDC_ERROR)
+            exact_target = str(int(target))
+        elif action == PURPOSE_CURRENT:
             exact_target = account["email"]
         elif action == PURPOSE_CHANGE:
             exact_target = normalize_email(target)
@@ -1475,7 +1481,10 @@ def make_router() -> APIRouter:
                                 purpose, token,
                             )
 
-                admitted = await request.app.state.security_mail.send(mailer, message, admit=admit)
+                admitted = await request.app.state.security_mail.send(
+                    mailer, message, admit=admit,
+                    lease=lambda: external_account_work(request.app.state.control_pool, account["id"]),
+                )
                 if not admitted:
                     raise RuntimeError("email challenge no longer eligible for delivery")
             except Exception:

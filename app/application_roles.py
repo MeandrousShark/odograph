@@ -108,6 +108,9 @@ ACCOUNT_LIFECYCLE_FUNCTIONS = (
     "public.admin_set_account_enabled(bigint,bigint,bigint,boolean)",
     "public.list_account_security_audit(bigint,bigint)",
     "public.prune_account_security_audit()",
+    "public.admin_request_account_deletion(bigint,bigint,bigint,text,boolean)",
+    "public.admin_cancel_account_deletion(bigint,bigint,bigint)",
+    "public.admin_purge_account(bigint,bigint,bigint,text,boolean,text,text)",
 )
 SQL_DIR = Path(__file__).resolve().parents[1] / "scripts" / "sql"
 MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
@@ -187,17 +190,17 @@ def _table_rights(role: str, table: str) -> set[str]:
         if table in ("instance_state", "schema_migrations"):
             return {"SELECT"}
     if role == BOOTSTRAP_ROLE:
-        rights = set()
+        rights = {"SELECT", "DELETE"} if table in OWNED_TABLES + ("accounts", "invitations", "email_challenges") else set()
         if table == "account_security_audit":
             return {"SELECT", "INSERT", "DELETE"}
         if table == "invitations":
-            return {"SELECT", "INSERT", "UPDATE"}
+            return {"SELECT", "INSERT", "UPDATE", "DELETE"}
         if table in ("oidc_attempts", "oidc_action_proofs"):
             return {"SELECT", "INSERT", "UPDATE", "DELETE"}
         if table == "oidc_identities":
             return {"SELECT", "INSERT", "DELETE"}
         if table == "email_challenges":
-            return {"SELECT", "INSERT", "UPDATE"}
+            return {"SELECT", "INSERT", "UPDATE", "DELETE"}
         if table in BOOTSTRAP_INSERT_TABLES:
             rights.add("INSERT")
         if table in BOOTSTRAP_LOCK_TABLES or table == "instance_state":

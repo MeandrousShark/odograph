@@ -214,9 +214,11 @@ What losing a given value actually costs, if you don't have a copy:
   out at once; it doesn't touch stored data.
 - **Local administrator credentials** live in the database, not `.env`.
   Restore them with the database archive. Finalizing a restore signs every
-  account out and revokes outstanding invitations, email challenges and
-  password reset links, because the archive's session versions are older than
-  cookies issued since the backup. If a password is lost, run
+  account out and revokes outstanding invitations, email challenges, password
+  reset links and pending account-action proofs. This also applies after
+  restoring a backup that contains an account previously purged from the live
+  database: restoring it can reintroduce that account and its data. If a
+  password is lost, run
   `python -m app.manage_account list-accounts`, then
   `python -m app.manage_account reset-password ACCOUNT_ID` inside the app
   container; the reset invalidates that account's previously issued sessions.
@@ -368,6 +370,13 @@ it for as long as your backup retention policy keeps that dump around. If
 raw-message retention matters to you for privacy reasons, remember that your
 backup archives are a separate, parallel copy of that same location data
 with its own lifetime.
+
+Account deletion also affects only the live database. A permanent purge does
+not edit existing archives; they may retain the account's data until the
+operator's backup retention period expires. Restoring an earlier archive can
+reintroduce a purged account and its data. Restore finalization signs accounts
+out and revokes pending proofs, so restored sessions and security links cannot
+be reused.
 
 ## Restore drills
 
