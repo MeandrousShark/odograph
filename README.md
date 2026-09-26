@@ -148,8 +148,7 @@ This command is for initial setup only. Once bootstrap completes, deleting the
 original administrator does not reopen first-account signup or make
 `create-admin` available again. If an account exists, the command refuses to
 replace it. For an account that still exists, see
-[Password recovery](#password-recovery). A purged account can return only by
-restoring a database backup that contains it.
+[Password recovery](#password-recovery).
 
 ## Set up HTTPS
 
