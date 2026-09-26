@@ -44,11 +44,13 @@ async def _provision(pool, monkeypatch, schema):
     owned_tables = OWNED_TABLES
     with monkeypatch.context() as patch:
         control_tables = tuple(table for table in application_roles.CONTROL_TABLES
-                               if table not in ("invitations", "oidc_attempts", "oidc_action_proofs"))
+                               if table not in ("invitations", "oidc_attempts", "oidc_action_proofs",
+                                                "account_security_audit"))
         future_functions = (application_roles.INVITATION_FUNCTIONS + application_roles.EMAIL_CHALLENGE_FUNCTIONS
                             + application_roles.PASSWORD_RESET_FUNCTIONS
                             + application_roles.OIDC_ATTEMPT_FUNCTIONS
-                            + application_roles.OIDC_METHOD_FUNCTIONS)
+                            + application_roles.OIDC_METHOD_FUNCTIONS
+                            + application_roles.ACCOUNT_LIFECYCLE_FUNCTIONS)
         patch.setattr(application_roles, "OWNED_TABLES", owned_tables)
         patch.setattr(application_roles, "PROTECTED_TABLES", ())
         patch.setattr(application_roles, "CONTROL_TABLES", control_tables)
@@ -63,6 +65,7 @@ async def _provision(pool, monkeypatch, schema):
         patch.setattr(application_roles, "PASSWORD_RESET_FUNCTIONS", ())
         patch.setattr(application_roles, "OIDC_ATTEMPT_FUNCTIONS", ())
         patch.setattr(application_roles, "OIDC_METHOD_FUNCTIONS", ())
+        patch.setattr(application_roles, "ACCOUNT_LIFECYCLE_FUNCTIONS", ())
         if schema < ACTIVATED_SCHEMA:
             patch.setattr(application_roles, "CONTRACT_VERSION", "ownership-prepared-v1")
         await prepare_application_roles(TEST_DB)

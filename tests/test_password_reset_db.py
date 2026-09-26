@@ -375,7 +375,7 @@ def test_reset_cannot_follow_committed_disablement_or_expiry_during_lock_wait():
         token, _ = await _issue(pools, email=A_EMAIL)
 
         async def disable():
-            async with pools.control.connection() as conn:
+            async with owner.connection() as conn:
                 await conn.execute("UPDATE accounts SET is_enabled=false WHERE id=%s", (a_id,))
 
         async def reset():

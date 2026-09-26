@@ -11,6 +11,11 @@ from psycopg.rows import dict_row
 from starlette.responses import Response
 
 from app.account_context import control_connection
+from app.account_lifecycle import (
+    AccountLifecycleUnavailable,
+    list_account_security_audit,
+    set_account_enabled,
+)
 from app.accounts import normalize_email, safe_delivery_email
 from app.auth import check_form_csrf, require_admin
 from app.config import security_link_base
@@ -88,10 +93,11 @@ async def _multiuser_available(conn) -> bool:
 
 async def _load_page_data(
     request: Request, actor: dict,
-) -> tuple[list[dict], list[dict], bool]:
+) -> tuple[list[dict], list[dict], list[dict], bool]:
     async with control_connection(request.app.state.control_pool) as conn:
         accounts = await _metadata_accounts(conn)
         invitations = await list_invitations(conn, actor)
+        audit_events = await list_account_security_audit(conn, actor)
         multiuser_available = await _multiuser_available(conn)
     checked_at = datetime.now(timezone.utc)
     for invitation in invitations:
@@ -103,7 +109,7 @@ async def _load_page_data(
             invitation["status"] = "Expired"
         else:
             invitation["status"] = "Open"
-    return accounts, invitations, multiuser_available
+    return accounts, invitations, audit_events, multiuser_available
 
 
 async def _render_accounts(
@@ -115,7 +121,9 @@ async def _render_accounts(
     status_code: int = 200,
 ) -> Response:
     actor = _actor(user, request)
-    accounts, invitations, multiuser_available = await _load_page_data(request, actor)
+    accounts, invitations, audit_events, multiuser_available = await _load_page_data(
+        request, actor,
+    )
     response = request.app.state.templates.TemplateResponse(
         request,
         "admin_accounts.html",
@@ -125,6 +133,7 @@ async def _render_accounts(
             "review_count": 0,
             "accounts": accounts,
             "invitations": invitations,
+            "audit_events": audit_events,
             "multiuser_available": multiuser_available,
             "notice": notice,
             "invite_result": invite_result,
@@ -210,12 +219,64 @@ async def _checked_invitation_result(
     )
 
 
+async def _set_account_enabled_route(
+    request: Request, user: dict, account_id: int, *, enable: bool,
+) -> Response:
+    form = await _read_form(request, {"csrf_token"})
+    check_form_csrf(request, form["csrf_token"])
+    if account_id < 1:
+        raise HTTPException(status_code=404)
+    actor = _actor(user, request)
+    if account_id == actor["id"]:
+        return await _render_accounts(
+            request, user,
+            notice="Administrators cannot change their own account access here.",
+            status_code=409,
+        )
+    async with control_connection(request.app.state.control_pool) as conn:
+        multiuser_available = await _multiuser_available(conn)
+    if not multiuser_available:
+        return await _render_accounts(
+            request, user,
+            notice="Account access controls are unavailable until multi-account mode is activated.",
+            status_code=409,
+        )
+    try:
+        async with control_connection(request.app.state.control_pool) as conn:
+            outcome = await set_account_enabled(conn, actor, account_id, enable=enable)
+    except AccountLifecycleUnavailable:
+        return await _render_accounts(
+            request, user,
+            notice="Account access could not be changed. Check the account and administrator requirements.",
+            status_code=409,
+        )
+    notice = {
+        "disabled": "Account disabled. Existing sessions and tracking credentials were revoked.",
+        "enabled": "Account enabled. New sign-in is available; tracking credentials need reissue.",
+        "already_disabled": "Account was already disabled. Access is unchanged.",
+        "already_enabled": "Account was already enabled. Access is unchanged.",
+    }[outcome]
+    return await _render_accounts(request, user, notice=notice)
+
+
 def make_router() -> APIRouter:
     router = APIRouter()
 
     @router.get("/admin/accounts")
     async def admin_accounts(request: Request, user: dict = Depends(require_admin)):
         return await _render_accounts(request, user)
+
+    @router.post("/admin/accounts/{account_id}/disable")
+    async def disable_account_route(
+        request: Request, account_id: int, user: dict = Depends(require_admin),
+    ):
+        return await _set_account_enabled_route(request, user, account_id, enable=False)
+
+    @router.post("/admin/accounts/{account_id}/enable")
+    async def enable_account_route(
+        request: Request, account_id: int, user: dict = Depends(require_admin),
+    ):
+        return await _set_account_enabled_route(request, user, account_id, enable=True)
 
     @router.post("/admin/invitations")
     async def issue_member_invitation_route(

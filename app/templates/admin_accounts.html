@@ -72,7 +72,22 @@
         <td>{{ account.email }}</td>
         <td>{{ "Yes" if account.email_verified else "No" }}</td>
         <td>{{ "Administrator" if account.is_admin else "Member" }}</td>
-        <td>{{ "Enabled" if account.is_enabled else "Disabled" }}</td>
+        <td>
+          {{ "Enabled" if account.is_enabled else "Disabled" }}
+          {% if multiuser_available and account.id != user.id %}
+          {% if account.is_enabled %}
+          <form method="post" action="/admin/accounts/{{ account.id }}/disable">
+            <input type="hidden" name="csrf_token" value="{{ csrf }}">
+            <button type="submit" class="control">Disable</button>
+          </form>
+          {% else %}
+          <form method="post" action="/admin/accounts/{{ account.id }}/enable">
+            <input type="hidden" name="csrf_token" value="{{ csrf }}">
+            <button type="submit" class="control">Re-enable</button>
+          </form>
+          {% endif %}
+          {% elif account.id == user.id %}<span class="muted">Current account</span>{% endif %}
+        </td>
         <td>{% if account.has_password and account.has_oidc %}Password, OIDC{% elif account.has_password %}Password{% elif account.has_oidc %}OIDC{% else %}None{% endif %}</td>
         <td>{% if account.deletion_deadline %}{{ account.deletion_deadline|local_dt }}{% else %}Not scheduled{% endif %}</td>
         <td>
@@ -87,6 +102,29 @@
       </tr>
     {% else %}
       <tr><td colspan="8" class="muted">No accounts.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section class="settings-section" aria-labelledby="security-audit-heading">
+  <h3 id="security-audit-heading">Recent security audit</h3>
+  <p class="muted">Latest 50 account access events. Times are shown in your local time zone.</p>
+  <div class="table-wrapper">
+  <table>
+    <thead><tr><th>Time</th><th>Actor ID</th><th>Target ID</th><th>Action</th><th>Outcome</th></tr></thead>
+    <tbody>
+    {% for event in audit_events %}
+      <tr>
+        <td>{{ event.occurred_at|local_dt }}</td>
+        <td class="num">{{ event.actor_account_id }}</td>
+        <td class="num">{{ event.target_account_id }}</td>
+        <td>{{ event.action }}</td>
+        <td>{{ event.outcome }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5" class="muted">No account access events.</td></tr>
     {% endfor %}
     </tbody>
   </table>

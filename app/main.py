@@ -21,6 +21,7 @@ from app import admin, auth, ingest, portable, ui
 from app.auth import AuthRedirect
 from app.account_context import AccountPrincipal, control_connection
 from app.account_workers import AccountWorker
+from app.audit_retention import AuditRetentionWorker
 from app.application_roles import application_role_pools
 from app.config import (
     DEFAULT_MAP_TILE_ATTRIBUTION,
@@ -333,6 +334,11 @@ def create_app(config: Config | None = None) -> FastAPI:
                     stack.push_async_callback(worker.stop)
                 setattr(app.state, name, worker)
                 return worker
+
+            audit_retention_worker = AuditRetentionWorker(pools.control)
+            await audit_retention_worker.start()
+            stack.push_async_callback(audit_retention_worker.stop)
+            app.state.audit_retention_worker = audit_retention_worker
 
             snap_worker = await start_worker("snap_worker", lambda pool, c: SnapWorker(
                 pool, http_client, c.osrm_url, c.osrm_min_confidence, c.osrm_max_coords),
