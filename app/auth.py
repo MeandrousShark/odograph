@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import ipaddress
 import logging
+import re
 import secrets
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from authlib.integrations.base_client import OAuthError
@@ -107,6 +109,8 @@ OIDC_LOGIN_STATE_PREFIX = "login."
 OIDC_PROTECTED_ATTEMPT_KEY = "oidc_protected_attempt"
 OIDC_INVITE_STATE_PREFIX = "invite."
 OIDC_REAUTH_STATE_PREFIX = "reauth."
+_OIDC_HOST_LABEL_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\Z")
+_OIDC_BAD_PERCENT_ESCAPE_RE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 
 
 class AuthRedirect(Exception):
@@ -474,6 +478,69 @@ async def _oidc_authorize_redirect(request: Request):
     )
 
 
+def _validate_oidc_authorization_url(value: str | None) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or any(char.isspace() or ord(char) < 0x20 or ord(char) == 0x7F for char in value)
+        or "\\" in value
+        or "#" in value
+        or _OIDC_BAD_PERCENT_ESCAPE_RE.search(value)
+    ):
+        raise ValueError("invalid OIDC authorization URL")
+    try:
+        parsed = urlsplit(value)
+        scheme = parsed.scheme.lower()
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        raise ValueError("invalid OIDC authorization URL") from None
+    if (
+        scheme not in ("http", "https")
+        or not parsed.netloc
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.netloc.endswith(":")
+        or (port is not None and not 1 <= port <= 65535)
+    ):
+        raise ValueError("invalid OIDC authorization URL")
+
+    if "%" in hostname:
+        raise ValueError("invalid OIDC authorization URL")
+    bracketed_host = parsed.netloc.startswith("[")
+    try:
+        ipaddress.ip_address(hostname)
+    except ValueError:
+        if bracketed_host:
+            raise ValueError("invalid OIDC authorization URL") from None
+        domain = hostname[:-1] if hostname.endswith(".") else hostname
+        try:
+            ascii_domain = domain.encode("idna").decode("ascii")
+        except UnicodeError:
+            raise ValueError("invalid OIDC authorization URL") from None
+        labels = ascii_domain.split(".")
+        if (
+            not ascii_domain
+            or len(ascii_domain) > 253
+            or (all(label.isdecimal() for label in labels))
+            or any(not _OIDC_HOST_LABEL_RE.fullmatch(label) for label in labels)
+        ):
+            raise ValueError("invalid OIDC authorization URL")
+    return value
+
+
+async def _clear_oidc_authorization_state(request: Request, state: str) -> None:
+    provider = request.app.state.oauth.pocketid
+    framework = getattr(provider, "framework", None)
+    clear_state_data = getattr(framework, "clear_state_data", None)
+    if callable(clear_state_data):
+        await clear_state_data(request.session, state)
+        return
+    provider_name = getattr(provider, "name", "pocketid")
+    request.session.pop(f"_state_{provider_name}_{state}", None)
+
+
 async def _oidc_protected_redirect(
     request: Request, *, action: str, account: dict | None = None,
     invite_token: str | None = None, timezone_name: str | None = None,
@@ -510,19 +577,38 @@ async def _oidc_protected_redirect(
         "auth_version": account["auth_version"] if account else None,
     }
     try:
-        return await request.app.state.oauth.pocketid.authorize_redirect(
+        redirect = await request.app.state.oauth.pocketid.authorize_redirect(
             request, str(request.url_for("auth_callback")), state=state, nonce=nonce,
             **({"max_age": 0, "prompt": "login"} if action == "reauth" else {}),
         )
+        try:
+            authorization_url = _validate_oidc_authorization_url(
+                redirect.headers.get("location")
+            )
+        except ValueError:
+            raise HTTPException(status_code=502, detail=GENERIC_OIDC_ERROR) from None
+        return request.app.state.templates.TemplateResponse(
+            request,
+            "oidc_handoff.html",
+            {"authorization_url": authorization_url},
+            status_code=200,
+            headers={
+                "Cache-Control": "no-store, private",
+                "Referrer-Policy": "no-referrer",
+            },
+        )
     except Exception:
         request.session.pop(OIDC_PROTECTED_ATTEMPT_KEY, None)
-        async with control_connection(request.app.state.control_pool) as conn:
-            await consume_oidc_attempt(
-                conn, action=action, state=state, nonce=nonce,
-                browser_nonce=browser_nonce,
-                account_id=account["id"] if account else None,
-                auth_version=account["auth_version"] if account else None,
-            )
+        try:
+            await _clear_oidc_authorization_state(request, state)
+        finally:
+            async with control_connection(request.app.state.control_pool) as conn:
+                await consume_oidc_attempt(
+                    conn, action=action, state=state, nonce=nonce,
+                    browser_nonce=browser_nonce,
+                    account_id=account["id"] if account else None,
+                    auth_version=account["auth_version"] if account else None,
+                )
         raise
 
 

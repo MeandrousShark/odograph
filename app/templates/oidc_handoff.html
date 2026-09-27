@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Continue with sign-in provider: Odograph</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="card auth-card">
+    <h1>Continue with your sign-in provider</h1>
+    <p>Your protected account action is ready. Continue to your sign-in provider.</p>
+    <p><a id="oidc-authorization-link" class="control control-primary auth-submit" href="{{ authorization_url }}">Continue</a></p>
+    <p class="muted">If you are not redirected automatically, use the link above.</p>
+  </main>
+  <script nonce="{{ csp_nonce }}">
+    window.location.assign(document.getElementById("oidc-authorization-link").href);
+  </script>
+</body>
+</html>

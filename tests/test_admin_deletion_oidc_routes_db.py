@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi import HTTPException
@@ -14,6 +15,7 @@ from app.oidc_identities import create_identity_link
 from tests.test_admin_deletion_db import _activate, _elapsed
 from tests.test_admin_lifecycle_routes_db import _scenario
 from tests.test_oidc_routes_integration_db import _Provider, _endpoint, _request
+from tests.oidc_test_helpers import oidc_authorization_url
 
 pytestmark = pytest.mark.skipif(not os.environ.get("TEST_DATABASE_URL"), reason="requires disposable PostGIS")
 
@@ -36,16 +38,20 @@ def test_purge_reauthentication_has_exact_identity_freshness_and_admin_return(me
         reauth = _endpoint("/settings/account/oidc/reauth","POST")
         for claims in [{"sub":"wrong", "auth_time":time.time()}, {"sub":"actor", "auth_time":time.time()-300}]:
             response = await reauth(request,action="purge_account",target=str(target),target_confirm="",csrf_token="csrf",user=user)
-            assert response.status_code == 303
+            destination = oidc_authorization_url(response)
             assert provider.redirect_kwargs["max_age"] == 0
             assert provider.redirect_kwargs["prompt"] == "login"
-            request.query_params = {"state":provider.redirect_kwargs["state"],"code":"valid"}
+            destination_params = parse_qs(urlsplit(destination).query)
+            assert destination_params["max_age"] == ["0"]
+            assert destination_params["prompt"] == ["login"]
+            request.query_params = {"state":destination_params["state"][0],"code":"valid"}
             provider.userinfo = claims
             with pytest.raises(HTTPException):
                 await _endpoint("/auth/callback","GET")(request)
             assert "oidc_action_proof_nonce" not in request.session
-        await reauth(request,action="purge_account",target=str(target),target_confirm="",csrf_token="csrf",user=user)
-        request.query_params = {"state":provider.redirect_kwargs["state"],"code":"valid"}
+        response = await reauth(request,action="purge_account",target=str(target),target_confirm="",csrf_token="csrf",user=user)
+        destination_params = parse_qs(urlsplit(oidc_authorization_url(response)).query)
+        request.query_params = {"state":destination_params["state"][0],"code":"valid"}
         provider.userinfo = {"sub":"actor", "auth_time":time.time()}
         response = await _endpoint("/auth/callback","GET")(request)
         assert response.headers["location"] == "/admin/accounts"

@@ -11,6 +11,7 @@ import json
 import os
 import re
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import pytest
 from fastapi import Depends, Request
@@ -27,6 +28,7 @@ from app.tracking import create_device
 from conftest import full_schema_reset
 from tests.auth_db_fixtures import auth_config
 from tests.test_admin_routes_db import _app, _client
+from tests.oidc_test_helpers import oidc_authorization_url
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS")
@@ -41,7 +43,10 @@ class _Provider:
 
     async def authorize_redirect(self, _request, _redirect_uri, **kwargs):
         self.redirect_kwargs = kwargs
-        return RedirectResponse("https://idp.example/authorize", status_code=303)
+        query = urlencode({"redirect_uri": _redirect_uri, **kwargs})
+        return RedirectResponse(
+            f"https://idp.example/authorize?{query}", status_code=303
+        )
 
     async def authorize_access_token(self, _request):
         return {"userinfo": self.userinfo}
@@ -97,8 +102,11 @@ async def _issue_invitation(admin_client, email: str) -> str:
     return match.group(1)
 
 
-async def _complete_oidc(client, provider, *, userinfo: dict):
-    state = provider.redirect_kwargs["state"]
+async def _complete_oidc(client, provider, *, userinfo: dict, authorization_url=None):
+    state = (
+        parse_qs(urlsplit(authorization_url).query)["state"][0]
+        if authorization_url is not None else provider.redirect_kwargs["state"]
+    )
     provider.userinfo = userinfo
     response = await client.get("/auth/callback", params={"state": state, "code": "stub"})
     assert response.status_code == 303
@@ -129,11 +137,12 @@ async def _onboard_oidc(client, provider, token: str, subject: str) -> int:
         "/invite/oidc",
         data={"token": token, "display_timezone": "UTC", "csrf_token": csrf},
     )
-    assert response.status_code == 303
+    authorization_url = oidc_authorization_url(response)
     await _complete_oidc(
         client,
         provider,
         userinfo={"sub": subject, "email": "provider@example.invalid"},
+        authorization_url=authorization_url,
     )
     return (await _session(client))["account_id"]
 
@@ -144,11 +153,12 @@ async def _link_oidc(client, provider, password: str, subject: str):
         "/settings/account/oidc/link",
         data={"current_password": password, "csrf_token": csrf},
     )
-    assert response.status_code == 303
+    authorization_url = oidc_authorization_url(response)
     await _complete_oidc(
         client,
         provider,
         userinfo={"sub": subject, "email": "provider@example.invalid"},
+        authorization_url=authorization_url,
     )
 
 

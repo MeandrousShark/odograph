@@ -139,6 +139,51 @@ def test_nonce_differs_per_request_and_matches_rendered_template(monkeypatch):
     assert first_nonce != second_nonce
 
 
+def test_protected_oidc_handoff_keeps_csp_and_escapes_provider_destination(monkeypatch):
+    app = _build_app(monkeypatch)
+    baseline = asyncio.run(_get(app))
+
+    async def handoff(request):
+        return app.state.templates.TemplateResponse(
+            request,
+            "oidc_handoff.html",
+            {
+                "authorization_url": (
+                    'https://idp.example/authorize?next="'
+                    '><script>alert(1)</script>&state=server-generated'
+                )
+            },
+            headers={
+                "Cache-Control": "no-store, private",
+                "Referrer-Policy": "no-referrer",
+            },
+        )
+
+    # Shadow the real POST route so middleware applies its protected-flow headers.
+    app.add_route("/invite/oidc", handoff)
+    app.router.routes.insert(0, app.router.routes.pop())
+    response = asyncio.run(_get(app, "/invite/oidc"))
+
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store, private"
+    assert response.headers["Referrer-Policy"] == "no-referrer"
+
+    def normalize_nonce(policy):
+        return re.sub(r"nonce-[^']+", "nonce-<nonce>", policy)
+
+    assert normalize_nonce(response.headers["Content-Security-Policy"]) == normalize_nonce(
+        baseline.headers["Content-Security-Policy"]
+    )
+    assert "form-action 'self'" in response.headers["Content-Security-Policy"]
+    assert b'&#34;&gt;&lt;script&gt;alert(1)&lt;/script&gt;&amp;state=' in response.content
+    assert response.text.count("<script") == 1
+    csp_nonce = re.search(
+        r"script-src 'self' 'nonce-([^']+)'", response.headers["Content-Security-Policy"]
+    ).group(1)
+    assert f'<script nonce="{csp_nonce}">' in response.text
+    assert 'href="/static/style.css"' in response.text
+
+
 def test_hsts_absent_when_max_age_unset(monkeypatch):
     app = _build_app(monkeypatch)
     response = asyncio.run(_get(app, scheme="https"))
