@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -12,6 +14,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import JSONResponse, RedirectResponse, Response
 
 from app import admin
+from app.invitations import issue_invitation_record
 from app.accounts import create_admin
 from app.application_roles import application_role_pools, prepare_application_roles
 from app.auth import AuthRedirect
@@ -247,6 +250,90 @@ def test_admin_invitation_token_is_copy_once_and_never_in_server_urls_or_lists(m
             assert revoked.status_code == 200
             assert "Revoked" in revoked.text
             assert token not in revoked.text
+
+    asyncio.run(_scenario(check))
+
+
+@pytest.mark.parametrize("barrier", ["before_admission", "inside_transaction"])
+def test_cancelled_invitation_send_owns_its_real_pool_connection(monkeypatch, barrier):
+    async def check(owner, pools, account):
+        async with owner.connection() as conn:
+            await conn.execute("DROP INDEX accounts_singleton_idx")
+            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
+        actor = dict(account, auth_version=1)
+        async with pools.control.connection() as conn:
+            invitation_id, token = await issue_invitation_record(
+                conn, actor, "invitee@example.invalid",
+            )
+        cfg = auth_config(
+            TEST_DB, initial_admin_signup=False, dev_no_auth=False,
+            smtp_host="smtp.example.invalid", email_from="odograph@example.invalid",
+            app_url="https://odograph.example.invalid",
+        )
+        admission = SecurityMailAdmission(limit=1)
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+            control_pool=pools.control, security_mail=admission, config=cfg,
+        )))
+        entered, release = asyncio.Event(), asyncio.Event()
+        sent = []
+        original_lease = admin.external_account_work
+        original_admission = admin.invitation_mail_admission
+        original_connection = admin.control_connection
+        checked_out = set()
+
+        @asynccontextmanager
+        async def tracked_connection(pool):
+            async with original_connection(pool) as conn:
+                checked_out.add(id(conn))
+                try:
+                    yield conn
+                finally:
+                    checked_out.remove(id(conn))
+
+        @asynccontextmanager
+        async def lease(*args):
+            if barrier == "before_admission":
+                entered.set()
+                await release.wait()
+            async with original_lease(*args):
+                yield
+
+        @asynccontextmanager
+        async def admit(conn, *args):
+            assert id(conn) in checked_out
+            async with original_admission(conn, *args) as target:
+                if barrier == "inside_transaction":
+                    entered.set()
+                    await release.wait()
+                    assert (await (await conn.execute("SELECT pg_backend_pid()"))
+                            .fetchone())[0] > 0
+                yield target
+
+        async def send(_mailer, _message):
+            sent.append(True)
+
+        monkeypatch.setattr(admin, "external_account_work", lease)
+        monkeypatch.setattr(admin, "control_connection", tracked_connection)
+        monkeypatch.setattr(admin, "invitation_mail_admission", admit)
+        monkeypatch.setattr("app.mailer.Mailer.send", send)
+        caller = asyncio.create_task(admin._send_invitation_email(
+            request, actor, invitation_id, "invitee@example.invalid", token,
+        ))
+        try:
+            await asyncio.wait_for(entered.wait(), 5)
+            caller.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await caller
+            assert len(admission._tasks) == 1
+        finally:
+            release.set()
+            await admission.drain()
+        assert sent == [True]
+        async with owner.connection() as conn:
+            row = await (await conn.execute(
+                "SELECT revoked_at, consumed_at FROM invitations WHERE id=%s", (invitation_id,),
+            )).fetchone()
+            assert row == (None, None)
 
     asyncio.run(_scenario(check))
 
