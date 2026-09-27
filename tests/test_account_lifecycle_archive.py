@@ -2,12 +2,18 @@
 from __future__ import annotations
 
 import asyncio
+import re
+import secrets
 
 import psycopg
 import pytest
 
+from app import auth
 from app.account_lifecycle import cancel_account_deletion, request_account_deletion, purge_account
 from app.accounts import create_admin
+from app.email_challenges import PURPOSE_CURRENT, issue_email_challenge
+from app.invitations import issue_invitation
+from app.password_reset import INITIATOR_PUBLIC, AttemptLimiter, issue_password_reset
 from app.application_roles import (
     application_role_pools,
     finalize_application_restore,
@@ -75,11 +81,29 @@ async def _seed_source(database_url):
                 assert await request_account_deletion(
                     conn, actor, first["id"], email=first["email"], acknowledge=True,
                 ) == "scheduled"
+            async with pool.connection() as conn:
+                await conn.execute(
+                    "UPDATE accounts SET email_verified_at=now() WHERE email='password@example.invalid'"
+                )
+            # Outstanding proofs of each kind, issued through the real restricted role.
+            async with roles.control.connection() as conn:
+                proofs = {
+                    "invitation": await issue_invitation(conn, actor, "invitee@example.invalid"),
+                    "verification": await issue_email_challenge(
+                        conn, ids["dual@example.invalid"], 1, PURPOSE_CURRENT, "dual@example.invalid",
+                    ),
+                    "reset": secrets.token_urlsafe(32),
+                    "dual_id": ids["dual@example.invalid"],
+                }
+                assert proofs["invitation"] and proofs["verification"]
+                assert await issue_password_reset(
+                    conn, proofs["reset"], initiator=INITIATOR_PUBLIC, email="password@example.invalid",
+                ) == "password@example.invalid"
             async with await _client(_app(roles, config=auth_config(database_url))) as client:
                 await client.post(f"/test/session/{actor_id}/1")
                 cookie = client.cookies.get("session")
                 assert (await client.get("/admin/accounts")).status_code == 200
-            return first, actor, cookie
+            return first, actor, cookie, proofs
     finally:
         await pool.close()
 
@@ -122,7 +146,88 @@ def _restore_current_archive(target, archive):
     asyncio.run(finalize_application_restore(target.database_url))
 
 
-async def _assert_restored_state(database_url, first, actor, cookie, *, purged):
+def _proof_counts(database_url):
+    """(outstanding, revoked) as (invitations, verifications, resets)."""
+    live = "consumed_at IS NULL AND revoked_at IS NULL AND expires_at > now()"
+    with psycopg.connect(database_url) as conn:
+        outstanding = conn.execute(
+            f"SELECT (SELECT count(*) FROM invitations WHERE {live}),"
+            f"(SELECT count(*) FROM email_challenges WHERE purpose='verify_current' AND {live}),"
+            f"(SELECT count(*) FROM email_challenges WHERE purpose='reset_password' AND {live})"
+        ).fetchone()
+        revoked = conn.execute(
+            "SELECT (SELECT count(*) FROM invitations WHERE revoked_at IS NOT NULL),"
+            "(SELECT count(*) FROM email_challenges WHERE purpose='verify_current' AND revoked_at IS NOT NULL),"
+            "(SELECT count(*) FROM email_challenges WHERE purpose='reset_password' AND revoked_at IS NOT NULL)"
+        ).fetchone()
+    return outstanding, revoked
+
+
+async def _assert_public_routes_reject_restored_proofs(roles, database_url, proofs):
+    config = auth_config(database_url, dev_no_auth=False, initial_admin_signup=False)
+    app = _app(roles, config=config)
+    app.include_router(auth.make_router())
+    app.state.reset_validation_limiter = AttemptLimiter("archive reset validation", 20, 900)
+
+    def csrf(page):
+        return re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+
+    def account_facts():
+        with psycopg.connect(database_url) as conn:
+            return conn.execute(
+                "SELECT (SELECT count(*) FROM accounts WHERE email='invitee@example.invalid'),"
+                "(SELECT password_hash FROM accounts WHERE email='password@example.invalid'),"
+                "(SELECT email_verified_at IS NULL FROM accounts WHERE id=%s)",
+                (proofs["dual_id"],),
+            ).fetchone()
+
+    before = account_facts()
+    assert before[0] == 0 and before[2] is True
+    async with roles.control.connection() as conn:
+        dual_version = (await (await conn.execute(
+            "SELECT auth_version FROM accounts WHERE id=%s", (proofs["dual_id"],),
+        )).fetchone())[0]
+    async with await _client(app) as anonymous, await _client(app) as member:
+        page = await anonymous.get("/invite")
+        assert (await anonymous.post("/invite", data={
+            "token": proofs["invitation"], "password": "invited password",
+            "password_confirm": "invited password", "display_timezone": "UTC",
+            "csrf_token": csrf(page),
+        })).status_code == 400
+        page = await anonymous.get("/reset-password")
+        assert (await anonymous.post("/reset-password", data={
+            "token": proofs["reset"], "password": "replacement password",
+            "password_confirm": "replacement password", "csrf_token": csrf(page),
+        })).status_code == 400
+        # A session at the account's current version isolates the challenge itself.
+        await member.post(f"/test/session/{proofs['dual_id']}/{dual_version}")
+        assert (await member.post("/settings/account/email/confirm", data={
+            "purpose": "verify_current", "token": proofs["verification"],
+            "csrf_token": "route-csrf",
+        })).status_code == 400
+        assert account_facts() == before
+
+        # Control: the same routes still accept a freshly issued reset.
+        with psycopg.connect(database_url) as conn:
+            conn.execute("UPDATE email_challenges SET created_at=created_at-interval '2 hours', "
+                         "expires_at=expires_at-interval '2 hours'")
+        fresh = secrets.token_urlsafe(32)
+        async with roles.control.connection() as conn:
+            assert await issue_password_reset(
+                conn, fresh, initiator=INITIATOR_PUBLIC, email="password@example.invalid",
+            ) == "password@example.invalid"
+        page = await anonymous.get("/reset-password")
+        assert (await anonymous.post("/reset-password", data={
+            "token": fresh, "password": "replacement password",
+            "password_confirm": "replacement password", "csrf_token": csrf(page),
+        })).status_code == 303
+        assert account_facts()[1] != before[1]
+
+
+async def _assert_restored_state(database_url, first, actor, cookie, proofs, *, purged):
+    assert _proof_counts(database_url) == ((0, 0, 0), (1, 1, 1))
+    async with application_role_pools(database_url) as roles:
+        await _assert_public_routes_reject_restored_proofs(roles, database_url, proofs)
     async with application_role_pools(database_url) as roles:
         async with roles.control.connection() as conn:
             restored_version = (await (await conn.execute(
@@ -195,12 +300,15 @@ def test_real_archive_restores_deletion_state_without_reviving_sessions_or_signu
         before_target = clusters.start()
         after_target = clusters.start()
         _assert_pg16_clients(source)
-        first, actor, cookie = asyncio.run(_seed_source(source.database_url))
+        first, actor, cookie, proofs = asyncio.run(_seed_source(source.database_url))
         before = tmp_path / "before-purge.dump"
         after = tmp_path / "after-purge.dump"
+        # Each archive must really carry live proofs, or revocation proves nothing.
+        assert _proof_counts(source.database_url)[0] == (1, 1, 1)
         result = _dump_archive(source, user="mileage", password="testpw", archive=before)
         assert result.returncode == 0, result.stderr.decode(errors="replace")
         asyncio.run(_purge_source(source.database_url, first, actor))
+        assert _proof_counts(source.database_url)[0] == (1, 1, 1)
         result = _dump_archive(source, user="mileage", password="testpw", archive=after)
         assert result.returncode == 0, result.stderr.decode(errors="replace")
         for target, archive, purged in (
@@ -208,7 +316,7 @@ def test_real_archive_restores_deletion_state_without_reviving_sessions_or_signu
         ):
             _restore_current_archive(target, archive)
             asyncio.run(_assert_restored_state(
-                target.database_url, first, actor, cookie, purged=purged,
+                target.database_url, first, actor, cookie, proofs, purged=purged,
             ))
     finally:
         clusters.close()

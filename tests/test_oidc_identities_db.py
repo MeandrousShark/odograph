@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+from types import SimpleNamespace
 
 import pytest
 from psycopg import errors
 from psycopg.rows import dict_row
 
+from app import auth
 from app.accounts import create_admin
 from app.db import make_pool
 from app.oidc_identities import (
@@ -21,6 +23,8 @@ from app.oidc_identities import (
 )
 from conftest import reset_db
 from tests.auth_db_fixtures import bind_auth_test_roles
+from tests.auth_db_fixtures import auth_config
+from tests.test_admin_routes_db import _app, _client
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -281,6 +285,84 @@ async def _unlink_scenario():
 
 def test_unlink_targets_the_exact_identity_and_revokes_sessions():
     asyncio.run(_unlink_scenario())
+
+
+async def _oidc_only_last_method_scenario():
+    pool = make_pool(TEST_DB)
+    await pool.open(wait=True)
+    try:
+        await reset_db(pool)
+        roles = await bind_auth_test_roles(pool)
+        async with roles.control.connection() as conn:
+            await create_admin(conn, "first@example.invalid", "first-password-hash")
+        async with pool.connection() as conn:
+            await conn.execute("DROP INDEX accounts_singleton_idx")
+            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
+            account_id = (await (await conn.execute(
+                "INSERT INTO accounts(email,password_hash,is_admin) "
+                "VALUES ('oidc-only@example.invalid',NULL,false) RETURNING id",
+            )).fetchone())[0]
+            await conn.execute("INSERT INTO account_settings(account_id) VALUES (%s)", (account_id,))
+        identity = ("https://id.example", "sole-login-subject")
+        async with roles.control.connection() as conn:
+            linked = await create_identity_link(conn, account_id, *identity)
+            assert linked is not None
+            before = await (await conn.execute(
+                "SELECT id,email,password_hash,auth_version FROM accounts WHERE id=%s", (account_id,),
+            )).fetchone()
+            before_identity = await (await conn.execute(
+                "SELECT account_id,issuer,subject FROM oidc_identities WHERE account_id=%s",
+                (account_id,),
+            )).fetchall()
+            assert before_identity == [(account_id, *identity)]
+
+            # The restricted database operation itself refuses to remove the
+            # only usable method and leaves both identity and session version.
+            assert await unlink_identity(
+                conn, account_id, identity[0], identity[1], expected_auth_version=1,
+            ) is None
+            assert await (await conn.execute(
+                "SELECT id,email,password_hash,auth_version FROM accounts WHERE id=%s", (account_id,),
+            )).fetchone() == before
+            assert await (await conn.execute(
+                "SELECT account_id,issuer,subject FROM oidc_identities WHERE account_id=%s",
+                (account_id,),
+            )).fetchall() == before_identity
+
+        config = auth_config(
+            TEST_DB, initial_admin_signup=False, dev_no_auth=False,
+            oidc_client_id="unlink-client", oidc_client_secret="unlink-secret",
+            oidc_issuer="https://id.example/",
+        )
+        app = _app(roles, config=config)
+        app.state.oauth = SimpleNamespace(pocketid=object())
+        app.include_router(auth.make_router())
+        async with await _client(app) as client:
+            await client.post(f"/test/session/{account_id}/1")
+            assert (await client.get("/settings/account")).status_code == 200
+            denied = await client.post("/settings/account/oidc/unlink", data={
+                "current_password": "not-a-password", "confirm_unlink": "yes",
+                "csrf_token": "route-csrf",
+            })
+            assert denied.status_code == 401
+            assert "Unable to unlink sign-in provider." in denied.text
+            assert (await client.get("/settings/account")).status_code == 200
+
+        async with roles.control.connection() as conn:
+            assert await (await conn.execute(
+                "SELECT id,email,password_hash,auth_version FROM accounts WHERE id=%s", (account_id,),
+            )).fetchone() == before
+            assert await (await conn.execute(
+                "SELECT account_id,issuer,subject FROM oidc_identities WHERE account_id=%s",
+                (account_id,),
+            )).fetchall() == before_identity
+            assert await resolve_identity_account(conn, *identity) is not None
+    finally:
+        await pool.close()
+
+
+def test_oidc_only_last_method_cannot_be_unlinked_in_database_or_route():
+    asyncio.run(_oidc_only_last_method_scenario())
 
 
 async def _legacy_establishment_scenario():
