@@ -13,6 +13,7 @@ from app.auth import (
     OIDC_PROTECTED_ATTEMPT_KEY,
     _oidc_authorize_redirect,
     _oidc_protected_redirect,
+    _validate_oidc_authorization_url,
 )
 import app.auth as auth
 from app.main import make_templates
@@ -26,8 +27,15 @@ class _OAuthClient:
 
     async def authorize_redirect(self, request, redirect_uri, **kwargs):
         self.kwargs = kwargs
+        for key in list(request.session):
+            if key.startswith("_state_pocketid_"):
+                request.session.pop(key)
+        request.session[f"_state_pocketid_{kwargs['state']}"] = {
+            "data": {"redirect_uri": redirect_uri, **kwargs}
+        }
         if self.location is not None:
-            return RedirectResponse(self.location)
+            location = self.location(kwargs) if callable(self.location) else self.location
+            return RedirectResponse(location)
         query = urlencode({"redirect_uri": redirect_uri, **kwargs})
         return RedirectResponse(f"https://idp.example/authorize?{query}")
 
@@ -53,8 +61,11 @@ def _request(session=None):
 
 def test_link_authorization_uses_server_pending_state_bound_to_current_account(monkeypatch):
     request, client = _request({"account_id": 1, "auth_version": 4, "csrf": "csrf"})
-    request.app.state.config = SimpleNamespace(oidc_issuer="https://idp.example/")
+    request.app.state.config = SimpleNamespace(oidc_issuer="https://issuer.example/")
     request.app.state.control_pool = object()
+    client.location = lambda kwargs: (
+        "https://login.provider.example/authorize?" + urlencode(kwargs)
+    )
     account = {"id": 1, "auth_version": 4}
     attempts = []
 
@@ -74,12 +85,13 @@ def test_link_authorization_uses_server_pending_state_bound_to_current_account(m
     )
 
     destination = oidc_authorization_url(response)
-    assert urlsplit(destination).netloc == "idp.example"
+    assert urlsplit(destination).netloc == "login.provider.example"
+    assert urlsplit(destination).netloc != "issuer.example"
     assert parse_qs(urlsplit(destination).query)["state"] == [client.kwargs["state"]]
     assert client.kwargs["state"].startswith("link.")
     assert client.kwargs["nonce"]
     assert attempts[0]["action"] == "link"
-    assert attempts[0]["target"] == "https://idp.example"
+    assert attempts[0]["target"] == "https://issuer.example"
     assert attempts[0]["account_id"] == 1
     assert attempts[0]["auth_version"] == 4
     assert request.session[OIDC_PROTECTED_ATTEMPT_KEY]["state"] == client.kwargs["state"]
@@ -152,6 +164,80 @@ def test_rejected_link_start_does_not_replace_existing_cookie_attempt(monkeypatc
     assert denied.value.status_code == 400
     assert request.session[OIDC_PROTECTED_ATTEMPT_KEY]["state"] == "link.current"
     assert client.kwargs is None
+
+
+@pytest.mark.parametrize(
+    "destination",
+    [
+        "javascript:alert(1)",
+        "data:text/html,<script>alert(1)</script>",
+        "//attacker.example/authorize",
+        "https:///authorize",
+        "https://provider.example:bad/authorize",
+        "https://[invalid]/authorize",
+        "https://[v1.provider]/authorize",
+        "https://user:password@provider.example/authorize",
+        "https://provider.example/%zz",
+        "https://bad_host.example/authorize",
+    ],
+)
+def test_unsafe_authorization_destination_fails_closed_and_consumes_attempt(
+    monkeypatch, destination
+):
+    request, client = _request({"account_id": 1, "auth_version": 4, "csrf": "csrf"})
+    request.app.state.config = SimpleNamespace(oidc_issuer="https://issuer.example")
+    request.app.state.control_pool = object()
+    client.location = destination
+    started = []
+    consumed = []
+
+    @asynccontextmanager
+    async def connection(_pool):
+        yield object()
+
+    async def start(_conn, **kwargs):
+        started.append(kwargs)
+        return True
+
+    async def consume(_conn, **kwargs):
+        consumed.append(kwargs)
+
+    monkeypatch.setattr(auth, "control_connection", connection)
+    monkeypatch.setattr(auth, "start_oidc_attempt", start)
+    monkeypatch.setattr(auth, "consume_oidc_attempt", consume)
+
+    with pytest.raises(HTTPException) as rejected:
+        asyncio.run(_oidc_protected_redirect(
+            request, action="link", account={"id": 1, "auth_version": 4}
+        ))
+
+    assert rejected.value.status_code == 502
+    assert rejected.value.detail == auth.GENERIC_OIDC_ERROR
+    assert len(consumed) == 1
+    for key in ("action", "state", "nonce", "browser_nonce", "account_id", "auth_version"):
+        assert consumed[0][key] == started[0][key]
+    assert OIDC_PROTECTED_ATTEMPT_KEY not in request.session
+    assert not any(key.startswith("_state_pocketid_") for key in request.session)
+
+
+@pytest.mark.parametrize(
+    "destination",
+    [
+        "http://localhost:18091/authorize",
+        "https://login.provider.example/authorize",
+        "https://[2001:db8::1]:8443/authorize",
+    ],
+)
+def test_absolute_http_authorization_destinations_are_valid(destination):
+    assert _validate_oidc_authorization_url(destination) == destination
+
+
+def test_authorization_destination_may_use_a_different_host_than_the_issuer():
+    issuer = "https://issuer.example"
+    destination = "https://login.provider.example/authorize"
+
+    assert urlsplit(issuer).hostname != urlsplit(destination).hostname
+    assert _validate_oidc_authorization_url(destination) == destination
 
 
 def test_link_provider_departure_failure_consumes_bound_pending_attempt(monkeypatch):

@@ -21,6 +21,7 @@ from app.invitations import issue_invitation
 from app.local_auth import verify_password
 from app.main import make_templates
 from app.oidc_identities import create_identity_link
+from app.oidc_attempts import consume_oidc_attempt
 from tests.auth_db_fixtures import auth_config
 from conftest import full_schema_reset
 from tests.oidc_test_helpers import oidc_authorization_url
@@ -45,6 +46,12 @@ class _Provider:
 
     async def authorize_redirect(self, _request, _redirect_uri, **kwargs):
         self.redirect_kwargs = kwargs
+        for key in list(_request.session):
+            if key.startswith("_state_pocketid_"):
+                _request.session.pop(key)
+        _request.session[f"_state_pocketid_{kwargs['state']}"] = {
+            "data": {"redirect_uri": _redirect_uri, **kwargs}
+        }
         query = urlencode({"redirect_uri": _redirect_uri, **kwargs})
         return RedirectResponse(
             f"https://idp.example/authorize?{query}", status_code=303
@@ -52,9 +59,17 @@ class _Provider:
 
     async def authorize_access_token(self, _request):
         self.token_calls += 1
+        state = _request.query_params.get("state")
+        if state:
+            _request.session.pop(f"_state_pocketid_{state}", None)
         if self.cancel:
             raise OAuthError(error="access_denied")
         return {"userinfo": self.userinfo}
+
+
+class _FailingTemplates:
+    def TemplateResponse(self, *_args, **_kwargs):
+        raise RuntimeError("handoff template rendering failed")
 
 
 def _request(pools, provider):
@@ -156,6 +171,54 @@ async def _run_route_scenario(monkeypatch):
                     "JOIN accounts a ON a.id=i.account_id WHERE i.account_id=%s", (member_id,)
                 )).fetchone()
                 assert row == ("fresh-subject", None)
+
+            templates = request.app.state.templates
+            request.app.state.templates = _FailingTemplates()
+            async with pools.control.connection() as conn:
+                failed_invite_token = await issue_invitation(
+                    conn, dict(admin, is_admin=True), "render-failure@example.invalid",
+                )
+            with pytest.raises(RuntimeError, match="handoff template rendering failed"):
+                await auth._oidc_protected_redirect(
+                    request, action="invite", invite_token=failed_invite_token,
+                    timezone_name="UTC",
+                )
+            failed_state = dict(provider.redirect_kwargs)
+            assert auth.OIDC_PROTECTED_ATTEMPT_KEY not in request.session
+            assert not any(key.startswith("_state_pocketid_") for key in request.session)
+            assert "account_id" not in request.session
+            assert failed_invite_token not in repr(request.session)
+            async with pools.control.connection() as conn:
+                assert await consume_oidc_attempt(
+                    conn, action="invite", state=failed_state["state"],
+                    nonce=failed_state["nonce"],
+                    browser_nonce=request.session["oidc_browser_nonce"],
+                ) is None
+
+            request.session.update({
+                "account_id": member_id,
+                "auth_version": member["auth_version"],
+                "csrf": "csrf",
+                "oidc_action_proof_nonce": "stale-proof",
+            })
+            with pytest.raises(RuntimeError, match="handoff template rendering failed"):
+                await auth._oidc_protected_redirect(
+                    request, action="reauth", account=member,
+                    proof_action="add_password",
+                )
+            failed_state = dict(provider.redirect_kwargs)
+            assert auth.OIDC_PROTECTED_ATTEMPT_KEY not in request.session
+            assert "oidc_action_proof_nonce" not in request.session
+            assert request.session["account_id"] == member_id
+            assert not any(key.startswith("_state_pocketid_") for key in request.session)
+            async with pools.control.connection() as conn:
+                assert await consume_oidc_attempt(
+                    conn, action="reauth", state=failed_state["state"],
+                    nonce=failed_state["nonce"],
+                    browser_nonce=request.session["oidc_browser_nonce"],
+                    account_id=member_id, auth_version=member["auth_version"],
+                ) is None
+            request.app.state.templates = templates
 
             user = await auth.require_user(request)
             response = await _endpoint("/settings/account/oidc/reauth", "POST")(
