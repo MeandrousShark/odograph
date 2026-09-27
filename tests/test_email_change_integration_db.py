@@ -10,6 +10,8 @@ import pytest
 from psycopg import errors
 
 from app import application_roles, db as db_module
+from app import auth
+from app.account_context import AccountPool, AccountPrincipal
 from app.accounts import get_account_by_email
 from app.application_roles import application_role_pools, prepare_application_roles
 from app.db import MIGRATIONS_DIR, make_pool, run_migrations
@@ -20,7 +22,10 @@ from app.email_challenges import (
     is_current_email_verified,
     issue_email_challenge,
 )
-from conftest import drop_and_recreate_schema, full_schema_reset
+from app.oidc_identities import resolve_identity_account
+from app.tracking import authenticate_ingest, create_device
+from conftest import close_restricted_role_pools, drop_and_recreate_schema, full_schema_reset, restricted_role_pools
+from tests.auth_db_fixtures import auth_config
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS")
@@ -226,3 +231,143 @@ async def _schema_29_upgrade_and_email_change(tmp_path):
 
 def test_schema_29_upgrade_preserves_admin_and_email_change_switches_login(tmp_path):
     asyncio.run(_schema_29_upgrade_and_email_change(tmp_path))
+
+
+async def _schema_29_populated_upgrade(tmp_path):
+    owner = make_pool(TEST_DB)
+    await owner.open(wait=True)
+    original_migrations_dir = db_module.MIGRATIONS_DIR
+    account_id = 41
+    issuer = "https://upgrade-idp.example"
+    subject = "pre-037-stable-subject"
+    try:
+        await drop_and_recreate_schema(owner)
+        db_module.MIGRATIONS_DIR = _migrations_through(tmp_path, 29)
+        await run_migrations(owner)
+        config = auth_config(TEST_DB, initial_admin_signup=False, dev_no_auth=False)
+
+        async with owner.connection() as conn:
+            await conn.execute(
+                "INSERT INTO accounts(id,email,password_hash,is_admin) "
+                "VALUES (%s,%s,%s,true)",
+                (account_id, OLD_EMAIL, PASSWORD_HASH),
+            )
+            await conn.execute(
+                "SELECT setval(pg_get_serial_sequence('accounts','id'), %s, true)",
+                (account_id,),
+            )
+            await conn.execute(
+                "INSERT INTO account_settings(account_id,display_tz,email_to) "
+                "VALUES (%s,'America/Los_Angeles','upgrade-notices@example.invalid')",
+                (account_id,),
+            )
+            await conn.execute(
+                "INSERT INTO oidc_identities(account_id,issuer,subject,provider_email) "
+                "VALUES (%s,%s,%s,'provider-contact@example.invalid')",
+                (account_id, issuer, subject),
+            )
+            vehicle_id = (await (await conn.execute(
+                "INSERT INTO vehicles(account_id,name,is_default) VALUES (%s,'Upgrade car',true) "
+                "RETURNING id", (account_id,),
+            )).fetchone())[0]
+            trip_id = (await (await conn.execute(
+                "INSERT INTO trips(account_id,device,source,started_at,ended_at,distance_m,notes) "
+                "VALUES (%s,'upgrade-phone','manual','2026-08-01T10:00:00Z',"
+                "'2026-08-01T11:00:00Z',4321,'schema-29-trip') RETURNING id", (account_id,),
+            )).fetchone())[0]
+            expense_id = (await (await conn.execute(
+                "INSERT INTO expenses(account_id,vehicle_id,incurred_on,category,amount,treatment,notes) "
+                "VALUES (%s,%s,'2026-08-01','fuel',45.67,'business_use_allocated',"
+                "'schema-29-expense') RETURNING id", (account_id, vehicle_id),
+            )).fetchone())[0]
+
+        await _provision_schema_29_roles()
+        pools = await restricted_role_pools(owner)
+        try:
+            bound = AccountPool(pools.runtime, AccountPrincipal(account_id, True, 1))
+            async with bound.connection() as conn:
+                credential = await create_device(conn, "Upgrade phone")
+
+            # Capture a real signed browser session at the old schema/version.
+            from tests.test_admin_routes_db import _app, _client
+
+            old_app = _app(pools, config=config)
+            async with await _client(old_app) as old_client:
+                assert (await old_client.post(f"/test/session/{account_id}/1")).status_code == 204
+                old_cookie = old_client.cookies.get("session")
+                assert old_cookie
+        finally:
+            await close_restricted_role_pools(owner)
+
+        async with owner.connection() as conn:
+            await conn.execute("GRANT UPDATE ON public.accounts TO odograph_control")
+        db_module.MIGRATIONS_DIR = original_migrations_dir
+        await run_migrations(owner)
+        await prepare_application_roles(TEST_DB)
+
+        async with owner.connection() as conn:
+            assert await (await conn.execute("SELECT max(version) FROM schema_migrations")).fetchone() == (37,)
+            assert await (await conn.execute(
+                "SELECT id,email,password_hash,is_admin,auth_version FROM accounts WHERE id=%s",
+                (account_id,),
+            )).fetchone() == (account_id, OLD_EMAIL, PASSWORD_HASH, True, 1)
+            assert await (await conn.execute(
+                "SELECT display_tz,email_to FROM account_settings WHERE account_id=%s",
+                (account_id,),
+            )).fetchone() == ("America/Los_Angeles", "upgrade-notices@example.invalid")
+            assert await (await conn.execute(
+                "SELECT issuer,subject,provider_email FROM oidc_identities WHERE account_id=%s",
+                (account_id,),
+            )).fetchone() == (issuer, subject, "provider-contact@example.invalid")
+            assert await (await conn.execute(
+                "SELECT account_id,device,source,distance_m,notes FROM trips WHERE id=%s", (trip_id,),
+            )).fetchone() == (account_id, "upgrade-phone", "manual", 4321, "schema-29-trip")
+            assert await (await conn.execute(
+                "SELECT account_id,vehicle_id,amount::text,notes FROM expenses WHERE id=%s", (expense_id,),
+            )).fetchone() == (account_id, vehicle_id, "45.67", "schema-29-expense")
+            assert await (await conn.execute(
+                "SELECT to_regclass('public.accounts_singleton_idx'), "
+                "EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.accounts'::regclass "
+                "AND conname='accounts_is_admin_check')",
+            )).fetchone() == ("accounts_singleton_idx", True)
+            with pytest.raises(errors.UniqueViolation):
+                async with conn.transaction():
+                    await conn.execute(
+                        "INSERT INTO accounts(email,password_hash,is_admin) "
+                        "VALUES ('upgrade-second@example.invalid','other-hash',true)"
+                    )
+            with pytest.raises(errors.CheckViolation):
+                async with conn.transaction():
+                    await conn.execute(
+                        "UPDATE accounts SET is_admin=false WHERE id=%s", (account_id,)
+                    )
+
+        async with application_role_pools(TEST_DB) as pools:
+            async with pools.control.connection() as conn:
+                linked = await resolve_identity_account(conn, issuer, subject)
+                assert linked is not None and linked["id"] == account_id
+                assert linked["email"] == OLD_EMAIL
+            ingest = await authenticate_ingest(
+                pools.control, credential.username, credential.secret,
+                legacy_username="", legacy_password="",
+            )
+            assert ingest is not None
+            assert ingest.account.account_id == account_id
+            assert ingest.tracking_device_id == credential.tracking_device_id
+
+            app = _app(pools, config=config)
+            app.include_router(auth.make_router())
+            async with await _client(app) as client:
+                client.cookies.set("session", old_cookie, domain="testserver.local", path="/")
+                response = await client.get("/settings/account")
+                assert response.status_code == 200
+                assert OLD_EMAIL in response.text
+
+    finally:
+        db_module.MIGRATIONS_DIR = original_migrations_dir
+        await full_schema_reset(owner)
+        await owner.close()
+
+
+def test_populated_schema_29_upgrade_preserves_oidc_device_ledger_settings_session_and_singleton(tmp_path):
+    asyncio.run(_schema_29_populated_upgrade(tmp_path))
