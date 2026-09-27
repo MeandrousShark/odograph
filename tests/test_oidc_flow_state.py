@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import pytest
 from fastapi import HTTPException
@@ -14,23 +15,36 @@ from app.auth import (
     _oidc_protected_redirect,
 )
 import app.auth as auth
+from app.main import make_templates
+from tests.oidc_test_helpers import oidc_authorization_url
 
 
 class _OAuthClient:
     def __init__(self):
         self.kwargs = None
+        self.location = None
 
     async def authorize_redirect(self, request, redirect_uri, **kwargs):
         self.kwargs = kwargs
-        return RedirectResponse("https://idp.example/authorize")
+        if self.location is not None:
+            return RedirectResponse(self.location)
+        query = urlencode({"redirect_uri": redirect_uri, **kwargs})
+        return RedirectResponse(f"https://idp.example/authorize?{query}")
 
 
 def _request(session=None):
     client = _OAuthClient()
+    config = SimpleNamespace(display_tz="UTC", app_version="test")
     request = SimpleNamespace(
         app=SimpleNamespace(
-            state=SimpleNamespace(oauth=SimpleNamespace(pocketid=client))
+            state=SimpleNamespace(
+                oauth=SimpleNamespace(pocketid=client),
+                templates=make_templates(config),
+                control_pool=object(),
+                config=config,
+            )
         ),
+        state=SimpleNamespace(csp_nonce="test-nonce", config=config),
         session=session if session is not None else {},
         url_for=lambda name: "https://app.example/auth/callback",
     )
@@ -59,7 +73,9 @@ def test_link_authorization_uses_server_pending_state_bound_to_current_account(m
         _oidc_protected_redirect(request, action="link", account=account)
     )
 
-    assert response.status_code == 307
+    destination = oidc_authorization_url(response)
+    assert urlsplit(destination).netloc == "idp.example"
+    assert parse_qs(urlsplit(destination).query)["state"] == [client.kwargs["state"]]
     assert client.kwargs["state"].startswith("link.")
     assert client.kwargs["nonce"]
     assert attempts[0]["action"] == "link"
@@ -98,9 +114,15 @@ def test_link_restart_reuses_browser_binding_and_replaces_cookie_attempt(monkeyp
     monkeypatch.setattr(auth, "control_connection", connection)
     monkeypatch.setattr(auth, "start_oidc_attempt", start)
     account = {"id": 1, "auth_version": 4}
-    asyncio.run(_oidc_protected_redirect(request, action="link", account=account))
+    first_response = asyncio.run(
+        _oidc_protected_redirect(request, action="link", account=account)
+    )
+    assert oidc_authorization_url(first_response)
     old_state = client.kwargs["state"]
-    asyncio.run(_oidc_protected_redirect(request, action="link", account=account))
+    second_response = asyncio.run(
+        _oidc_protected_redirect(request, action="link", account=account)
+    )
+    assert oidc_authorization_url(second_response)
 
     assert client.kwargs["state"] != old_state
     assert attempts[0]["browser_nonce"] == attempts[1]["browser_nonce"]
@@ -182,14 +204,23 @@ def test_protected_invitation_keeps_bearer_out_of_session_and_provider(monkeypat
     monkeypatch.setattr(auth, "control_connection", connection)
     monkeypatch.setattr(auth, "start_oidc_attempt", start)
     token = "private-invitation-token"
-    asyncio.run(_oidc_protected_redirect(
+    client.location = (
+        'https://idp.example/authorize?state=protected&value="'
+        '><script>alert(1)</script>'
+    )
+    response = asyncio.run(_oidc_protected_redirect(
         request, action="invite", invite_token=token, timezone_name="UTC"
     ))
 
+    destination = oidc_authorization_url(response)
     assert attempts[0]["invite_token"] == token
     assert attempts[0]["target"] == "UTC"
     assert token not in repr(request.session)
     assert token not in repr(client.kwargs)
+    assert token not in response.body.decode("utf-8")
+    assert "private-invitation-token" not in destination
+    assert b"<script>alert(1)" not in response.body
+    assert response.body.count(b"<script") == 1
     assert "account_id" not in request.session
     assert client.kwargs["state"].startswith("invite.")
     assert client.kwargs["nonce"]
@@ -212,15 +243,20 @@ def test_fresh_action_requests_max_age_and_reuses_browser_binding(monkeypatch):
     monkeypatch.setattr(auth, "control_connection", connection)
     monkeypatch.setattr(auth, "start_oidc_attempt", start)
     account = {"id": 7, "auth_version": 2}
-    asyncio.run(_oidc_protected_redirect(
+    first_response = asyncio.run(_oidc_protected_redirect(
         request, action="reauth", account=account,
         proof_action="change_email", target="new@example.com",
     ))
+    destination = oidc_authorization_url(first_response)
+    destination_params = parse_qs(urlsplit(destination).query)
+    assert destination_params["max_age"] == ["0"]
+    assert destination_params["prompt"] == ["login"]
     first_state = client.kwargs["state"]
-    asyncio.run(_oidc_protected_redirect(
+    second_response = asyncio.run(_oidc_protected_redirect(
         request, action="reauth", account=account,
         proof_action="change_email", target="new@example.com",
     ))
+    assert oidc_authorization_url(second_response)
 
     assert client.kwargs["max_age"] == 0
     assert client.kwargs["prompt"] == "login"

@@ -510,9 +510,19 @@ async def _oidc_protected_redirect(
         "auth_version": account["auth_version"] if account else None,
     }
     try:
-        return await request.app.state.oauth.pocketid.authorize_redirect(
+        redirect = await request.app.state.oauth.pocketid.authorize_redirect(
             request, str(request.url_for("auth_callback")), state=state, nonce=nonce,
             **({"max_age": 0, "prompt": "login"} if action == "reauth" else {}),
+        )
+        return request.app.state.templates.TemplateResponse(
+            request,
+            "oidc_handoff.html",
+            {"authorization_url": redirect.headers["location"]},
+            status_code=200,
+            headers={
+                "Cache-Control": "no-store, private",
+                "Referrer-Policy": "no-referrer",
+            },
         )
     except Exception:
         request.session.pop(OIDC_PROTECTED_ATTEMPT_KEY, None)

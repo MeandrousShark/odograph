@@ -5,6 +5,7 @@ import asyncio
 import os
 import time
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import pytest
 from authlib.integrations.base_client import OAuthError
@@ -22,6 +23,7 @@ from app.main import make_templates
 from app.oidc_identities import create_identity_link
 from tests.auth_db_fixtures import auth_config
 from conftest import full_schema_reset
+from tests.oidc_test_helpers import oidc_authorization_url
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS")
@@ -43,7 +45,10 @@ class _Provider:
 
     async def authorize_redirect(self, _request, _redirect_uri, **kwargs):
         self.redirect_kwargs = kwargs
-        return RedirectResponse("https://idp.example/authorize", status_code=303)
+        query = urlencode({"redirect_uri": _redirect_uri, **kwargs})
+        return RedirectResponse(
+            f"https://idp.example/authorize?{query}", status_code=303
+        )
 
     async def authorize_access_token(self, _request):
         self.token_calls += 1
@@ -101,11 +106,14 @@ async def _run_route_scenario(monkeypatch):
             async def begin_invite():
                 request.session["csrf"] = "csrf"
                 response = await _endpoint("/invite/oidc", "POST")(request)
-                assert response.status_code == 303
+                destination = oidc_authorization_url(response)
+                assert token not in response.body.decode("utf-8")
                 assert provider.redirect_kwargs["state"].startswith("invite.")
                 assert token not in repr(request.session)
-                assert token not in response.headers["location"]
-                request.query_params = {"state": provider.redirect_kwargs["state"], "code": "valid"}
+                assert token not in destination
+                params = parse_qs(urlsplit(destination).query)
+                assert params["state"] == [provider.redirect_kwargs["state"]]
+                request.query_params = {"state": params["state"][0], "code": "valid"}
 
             async def invite_unconsumed():
                 async with owner.connection() as conn:
@@ -154,10 +162,13 @@ async def _run_route_scenario(monkeypatch):
                 request, action="add_password", target="", target_confirm="",
                 csrf_token=request.session["csrf"], user=user,
             )
-            assert response.status_code == 303
+            destination = oidc_authorization_url(response)
             assert provider.redirect_kwargs["max_age"] == 0
             assert provider.redirect_kwargs["prompt"] == "login"
-            request.query_params = {"state": provider.redirect_kwargs["state"], "code": "valid"}
+            params = parse_qs(urlsplit(destination).query)
+            assert params["max_age"] == ["0"]
+            assert params["prompt"] == ["login"]
+            request.query_params = {"state": params["state"][0], "code": "valid"}
             provider.userinfo = {"sub": "fresh-subject", "auth_time": time.time()}
             checked = await _endpoint("/auth/callback", "GET")(request)
             assert checked.status_code == 303

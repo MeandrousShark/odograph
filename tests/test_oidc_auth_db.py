@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlencode, urlsplit
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -19,6 +20,7 @@ from app.local_auth import hash_password
 from app.main import make_templates
 from app.oidc_identities import IdentityLinkRejectedError
 from conftest import reset_db
+from tests.oidc_test_helpers import oidc_authorization_url
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -42,7 +44,10 @@ class _OAuthClient:
 
     async def authorize_redirect(self, request, redirect_uri, **kwargs):
         self.authorize_kwargs = kwargs
-        return RedirectResponse("https://idp.example/authorize", status_code=303)
+        query = urlencode({"redirect_uri": redirect_uri, **kwargs})
+        return RedirectResponse(
+            f"https://idp.example/authorize?{query}", status_code=303
+        )
 
     async def authorize_access_token(self, request):
         self.token_calls += 1
@@ -148,8 +153,9 @@ async def _link_and_exact_login_scenario():
             csrf_token="csrf",
             user=user,
         )
-        assert response.status_code == 303
-        state = oauth_client.authorize_kwargs["state"]
+        handoff_url = oidc_authorization_url(response)
+        state = parse_qs(urlsplit(handoff_url).query)["state"][0]
+        assert urlsplit(handoff_url).netloc == "idp.example"
         assert state.startswith("link.")
         assert oauth_client.authorize_kwargs["nonce"]
 
@@ -247,13 +253,16 @@ async def _link_and_unlink_failures_scenario():
             session={"account_id": 1, "auth_version": 1, "csrf": "csrf"},
         )
         await require_user(link_request)
-        await _endpoint("/settings/account/oidc/link", "POST")(
+        handoff = await _endpoint("/settings/account/oidc/link", "POST")(
             link_request,
             current_password="local password",
             csrf_token="csrf",
             user=user,
         )
-        link_request.query_params = {"state": oauth_client.authorize_kwargs["state"]}
+        handoff_url = oidc_authorization_url(handoff)
+        link_request.query_params = {
+            "state": parse_qs(urlsplit(handoff_url).query)["state"][0]
+        }
         await _endpoint("/auth/callback", "GET")(link_request)
 
         duplicate = _request(
