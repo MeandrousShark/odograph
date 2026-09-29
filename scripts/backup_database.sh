@@ -121,31 +121,84 @@ if [ "$output_dir" != "." ]; then
     chmod 700 "$output_dir"
 fi
 
+# Use a deterministic, short reservation name based on the resolved output
+# location. mkdir is atomic, so exactly one invocation can own this artifact
+# set even when default timestamps collide within a second.
+archive_basename="$(basename -- "$archive")"
+canonical_output_dir="$(cd "$output_dir" && pwd -P)"
+reservation_id="$(printf '%s/%s\n' "$canonical_output_dir" "$archive_basename" | cksum | awk '{print $1 "-" $2}')"
+reservation_dir="${canonical_output_dir}/.odograph-backup-${reservation_id}.lock"
+if ! mkdir "$reservation_dir" 2>/dev/null; then
+    echo "error: the output set for $archive is already reserved; refusing to overlap another backup." >&2
+    exit 1
+fi
+
+tmp_archive=""
+tmp_sidecar=""
+tmp_manifest=""
+
+owned_link() {
+    [ -f "$2" ] && [ ! -L "$2" ] && [ "$1" -ef "$2" ]
+}
+
+remove_owned_link() {
+    local staged_path="$1" final_path="$2" nested_path
+    if owned_link "$staged_path" "$final_path"; then
+        rm -f -- "$final_path" || true
+    fi
+    # ln can interpret a directory (including a symlink to one) as its
+    # destination. A signal may interrupt before publish_no_clobber checks it.
+    if [ -d "$final_path" ]; then
+        nested_path="${final_path}/$(basename -- "$staged_path")"
+        if owned_link "$staged_path" "$nested_path"; then
+            rm -f -- "$nested_path" || true
+        fi
+    fi
+}
+
+cleanup() {
+    local exit_code=$?
+    local archive_complete=0
+    trap - EXIT HUP INT TERM
+
+    # A signal can arrive after ln succeeds but before its caller resumes. The
+    # staged inode proves ownership independently of the interrupted step.
+    if [ -n "$tmp_archive" ] && [ -n "$tmp_sidecar" ] && [ -n "$tmp_manifest" ] \
+        && owned_link "$tmp_archive" "$archive" \
+        && owned_link "$tmp_sidecar" "$sidecar" \
+        && owned_link "$tmp_manifest" "$manifest"; then
+        archive_complete=1
+    fi
+
+    if [ "$archive_complete" -ne 1 ]; then
+        if [ -n "$tmp_archive" ]; then remove_owned_link "$tmp_archive" "$archive"; fi
+        if [ -n "$tmp_sidecar" ]; then remove_owned_link "$tmp_sidecar" "$sidecar"; fi
+        if [ -n "$tmp_manifest" ]; then remove_owned_link "$tmp_manifest" "$manifest"; fi
+    fi
+    if [ -n "$tmp_archive" ]; then rm -f -- "$tmp_archive" || true; fi
+    if [ -n "$tmp_sidecar" ]; then rm -f -- "$tmp_sidecar" || true; fi
+    if [ -n "$tmp_manifest" ]; then rm -f -- "$tmp_manifest" || true; fi
+    rmdir "$reservation_dir" 2>/dev/null || true
+    exit "$exit_code"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 for existing in "$archive" "$sidecar" "$manifest"; do
-    if [ -e "$existing" ]; then
+    if [ -e "$existing" ] || [ -L "$existing" ]; then
         echo "error: $existing already exists; refusing to overwrite a previous backup. Pick a different --output or remove it first." >&2
         exit 1
     fi
 done
 
-# mktemp in the same directory as the final archive keeps the eventual
-# publish a same-filesystem rename, so it's atomic instead of a
-# copy-then-delete that could leave a half-written file behind.
-tmp_archive="$(mktemp "${output_dir}/.mileage-backup.XXXXXX")"
-archive_published=0
-
-cleanup() {
-    # Once the archive is renamed into place, tmp_archive no longer exists
-    # at this path, so this rm is a harmless no-op on the success path.
-    rm -f -- "$tmp_archive"
-    if [ "$archive_published" -ne 1 ]; then
-        # The archive's presence is the sole success signal; any failure
-        # before the final rename must not leave an orphaned sidecar or
-        # manifest that looks like a completed backup.
-        rm -f -- "$sidecar" "$manifest"
-    fi
-}
-trap cleanup EXIT
+# Stage privately on the same filesystem as the published files. Final links
+# are exclusive (ln never replaces an existing destination), and the archive
+# remains the last publication step and sole completion signal.
+tmp_archive="$(mktemp "${reservation_dir}/archive.XXXXXX")"
+tmp_sidecar="${reservation_dir}/sidecar"
+tmp_manifest="${reservation_dir}/manifest"
 
 exec_db() {
     if [ -n "$CONTAINER_NAME" ]; then
@@ -206,10 +259,9 @@ else
     exit 1
 fi
 
-archive_basename="$(basename -- "$archive")"
 # Two spaces matches the sha256sum/shasum sidecar format so "-c" can verify
 # this file directly from within the archive's directory.
-printf '%s  %s\n' "$checksum_hex" "$archive_basename" > "$sidecar"
+printf '%s  %s\n' "$checksum_hex" "$archive_basename" > "$tmp_sidecar"
 
 # A pre-migration database is still a valid backup target, so a missing
 # schema_migrations table records 0 instead of aborting the backup.
@@ -239,13 +291,43 @@ created_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf 'postgres_version=%s\n' "$postgres_version"
     printf 'postgis_version=%s\n' "$postgis_version"
     printf 'source_ref=%s\n' "$source_ref"
-} > "$manifest"
+} > "$tmp_manifest"
 
-# Sidecar and manifest are already at their final names; the archive
-# rename is the last thing that can fail, and it's a same-filesystem
-# rename so it's atomic.
-mv -- "$tmp_archive" "$archive"
-archive_published=1
+publish_no_clobber() {
+    local staged_path="$1" final_path="$2" link_path="$2" nested_path
+    case "$link_path" in
+        -*) link_path="./$link_path" ;;
+    esac
+    if ! ln "$staged_path" "$link_path"; then
+        return 1
+    fi
+    if owned_link "$staged_path" "$final_path"; then
+        return 0
+    fi
+
+    # ln treats an existing directory target as a destination directory.
+    # Remove only the hard link this call may have placed inside it.
+    nested_path="${link_path}/$(basename -- "$staged_path")"
+    if owned_link "$staged_path" "$nested_path"; then
+        rm -f -- "$nested_path"
+    fi
+    return 1
+}
+
+# Publish metadata first, then the archive as the success signal. Hard links
+# provide atomic no-clobber publication on the same filesystem.
+if ! publish_no_clobber "$tmp_sidecar" "$sidecar"; then
+    echo "error: could not publish checksum sidecar without overwriting an existing path." >&2
+    exit 1
+fi
+if ! publish_no_clobber "$tmp_manifest" "$manifest"; then
+    echo "error: could not publish manifest without overwriting an existing path." >&2
+    exit 1
+fi
+if ! publish_no_clobber "$tmp_archive" "$archive"; then
+    echo "error: could not publish archive without overwriting an existing path." >&2
+    exit 1
+fi
 
 echo "Backup complete: $archive"
 echo "Reminder: an unencrypted local file is not an off-host backup."
