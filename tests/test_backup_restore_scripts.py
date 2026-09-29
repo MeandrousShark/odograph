@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -43,7 +45,50 @@ case "$cmd" in
         ;;
     ps)
         log_line "ps $*"
-        printf '%s\n' "${FAKE_APP_STATUS:-app  Exited (0) 3 minutes ago}"
+        code="${FAKE_PS_EXIT:-0}"
+        if [ "$code" -ne 0 ]; then
+            exit "$code"
+        fi
+        if [ "${FAKE_PS_OUTPUT+x}" = x ]; then
+            printf '%s\n' "$FAKE_PS_OUTPUT"
+        elif [[ " $* " == *" --quiet "* ]]; then
+            printf '%s\n' "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        else
+            printf 'project-db-1|running|db\n'
+            printf '%s|%s|%s\n' \
+                "${FAKE_APP_NAME:-project-app-1}" \
+                "${FAKE_APP_STATE:-exited}" \
+                "${FAKE_APP_SERVICE:-app}"
+        fi
+        exit 0
+        ;;
+    config)
+        log_line "config $*"
+        code="${FAKE_CONFIG_EXIT:-0}"
+        if [ "$code" -ne 0 ]; then
+            exit "$code"
+        fi
+        if [ "$*" = "--services" ]; then
+            if [ "${FAKE_COMPOSE_SERVICES+x}" = x ]; then
+                printf '%s\n' "$FAKE_COMPOSE_SERVICES"
+            else
+                printf 'db\napp\n'
+            fi
+            exit 0
+        fi
+        exit 99
+        ;;
+    inspect)
+        log_line "inspect $*"
+        code="${FAKE_INSPECT_EXIT:-0}"
+        if [ "$code" -ne 0 ]; then
+            exit "$code"
+        fi
+        if [ "${FAKE_INSPECT_OUTPUT+x}" = x ]; then
+            printf '%s\n' "$FAKE_INSPECT_OUTPUT"
+        else
+            printf '%s\n' "${FAKE_INSPECT_STATUS:-exited}"
+        fi
         exit 0
         ;;
     run)
@@ -74,6 +119,12 @@ case "$cmd" in
         fi
         case "$tool" in
             pg_dump)
+                if [ -n "${FAKE_PG_DUMP_STARTED:-}" ]; then
+                    : > "$FAKE_PG_DUMP_STARTED"
+                fi
+                if [ -n "${FAKE_PG_DUMP_WAIT_FOR:-}" ]; then
+                    while [ ! -e "$FAKE_PG_DUMP_WAIT_FOR" ]; do sleep 0.02; done
+                fi
                 code="${FAKE_PG_DUMP_EXIT:-0}"
                 if [ "$code" -ne 0 ]; then
                     exit "$code"
@@ -245,6 +296,42 @@ def install_scripts(tmp_path: Path) -> tuple[Path, Path]:
     restore_path = _write_executable(scripts_dir / "restore_database.sh", RESTORE_SCRIPT.read_text())
     (tmp_path / "compose.yaml").write_text("services: {}\n")
     return backup_path, restore_path
+
+
+def install_signalling_ln(bin_dir: Path) -> Path:
+    real_ln = shutil.which("ln", path=_inherited_path())
+    assert real_ln
+    return _write_executable(
+        bin_dir / "ln",
+        "#!/usr/bin/env bash\n"
+        "set -u\n"
+        'target="${2-}"\n'
+        'case "$target" in\n'
+        '    *.sha256) link_kind=sidecar ;;\n'
+        '    *.manifest) link_kind=manifest ;;\n'
+        '    *.dump) link_kind=archive ;;\n'
+        '    *) link_kind=none ;;\n'
+        'esac\n'
+        'if [ "$link_kind" = "${RACE_DIRECTORY_AT_LINK:-}" ]; then\n'
+        '    if [ "${RACE_DIRECTORY_KIND:-}" = symlink ]; then\n'
+        '        "$REAL_LN" -s "${FOREIGN_DIRECTORY:?}" "$target"\n'
+        '    else\n'
+        '        mkdir -- "$target"\n'
+        '        printf "FOREIGN OUTPUT\\n" > "$target/preserve-me"\n'
+        '    fi\n'
+        'fi\n'
+        '"$REAL_LN" "$@"\n'
+        "result=$?\n"
+        '[ "$result" -eq 0 ] || exit "$result"\n'
+        'if [ "$link_kind" = "${SIGNAL_AFTER_LINK:-}" ]; then\n'
+        '    if [ "${REPLACE_LINK_WITH_FOREIGN:-}" = "$link_kind" ]; then\n'
+        '        rm -f -- "$target"\n'
+        "        printf 'FOREIGN OUTPUT\\n' > \"$target\"\n"
+        "    fi\n"
+        '    kill -TERM "$PPID"\n'
+        "fi\n"
+        'exit "$result"\n',
+    )
 
 
 def base_env(
@@ -663,6 +750,246 @@ def test_backup_default_naming_and_directory_permissions(tmp_path):
     assert_successful_backup(matches[0], FAKE_ARCHIVE_BYTES)
 
 
+@pytest.mark.parametrize("default_name", [False, True], ids=["explicit", "same-second-default"])
+@pytest.mark.parametrize("dump_exit", ["0", "3"], ids=["winner-succeeds", "winner-fails"])
+def test_backup_concurrent_reservation_preserves_only_owned_outputs(
+    tmp_path, default_name, dump_exit
+):
+    backup_script, _ = install_scripts(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = install_single_word_fake(bin_dir)
+    if default_name:
+        real_date = shutil.which("date", path=_inherited_path())
+        assert real_date
+        _write_executable(
+            bin_dir / "date",
+            "#!/usr/bin/env bash\n"
+            'if [ "$*" = "-u +%Y%m%dT%H%M%SZ" ]; then\n'
+            "    printf '20260927T030405Z\\n'\n"
+            "else\n"
+            f'    exec "{real_date}" "$@"\n'
+            "fi\n",
+        )
+
+    output_dir = tmp_path / "backups"
+    archive = (
+        output_dir / "mileage-20260927T030405Z.dump"
+        if default_name
+        else output_dir / "concurrent.dump"
+    )
+    first_bytes = FAKE_ARCHIVE_BYTES
+    second_bytes = bytes(reversed(range(256))) * 4
+    first_source = make_archive_source(tmp_path, first_bytes, "first-dump.bin")
+    second_source = make_archive_source(tmp_path, second_bytes, "second-dump.bin")
+    first_log = tmp_path / "first.log"
+    second_log = tmp_path / "second.log"
+    started = tmp_path / "pg-dump-started"
+    release = tmp_path / "release-pg-dump"
+
+    first_env = base_env(
+        bin_dir,
+        first_log,
+        str(fake),
+        FAKE_ARCHIVE_FILE=str(first_source),
+        FAKE_PG_DUMP_STARTED=str(started),
+        FAKE_PG_DUMP_WAIT_FOR=str(release),
+        FAKE_PG_DUMP_EXIT=dump_exit,
+    )
+    second_env = base_env(
+        bin_dir,
+        second_log,
+        str(fake),
+        FAKE_ARCHIVE_FILE=str(second_source),
+    )
+    first_args = [] if default_name else ["--output", str(archive)]
+    second_args = [] if default_name else ["--output", str(archive)]
+
+    first = subprocess.Popen(
+        ["bash", str(backup_script), *first_args],
+        cwd=tmp_path,
+        env=first_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    second = None
+    try:
+        deadline = time.monotonic() + 10
+        while not started.exists():
+            if first.poll() is not None:
+                stdout, stderr = first.communicate()
+                raise AssertionError(f"first backup exited before pg_dump: {stdout}\n{stderr}")
+            if time.monotonic() >= deadline:
+                raise AssertionError("first backup did not reach pg_dump")
+            time.sleep(0.01)
+
+        second = run_script(backup_script, second_args, tmp_path, second_env)
+    finally:
+        release.touch()
+        first_stdout, first_stderr = first.communicate(timeout=30)
+
+    assert second is not None
+    assert second.returncode != 0
+    assert "already reserved" in second.stderr
+    assert read_log(second_log) == []
+
+    if dump_exit == "0":
+        assert first.returncode == 0, first_stderr
+        assert_successful_backup(archive, first_bytes)
+        assert {path.name for path in output_dir.iterdir()} == {
+            archive.name,
+            f"{archive.name}.sha256",
+            f"{archive.name}.manifest",
+        }
+    else:
+        assert first.returncode != 0
+        assert "pg_dump failed" in first_stderr
+        _assert_no_backup_artifacts(output_dir)
+
+
+@pytest.mark.parametrize("published_member", ["sidecar", "manifest", "archive"])
+def test_backup_term_after_link_uses_staged_inode_as_publication_proof(
+    tmp_path, published_member
+):
+    backup_script, _ = install_scripts(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = install_single_word_fake(bin_dir)
+    install_signalling_ln(bin_dir)
+    log_path = tmp_path / "fake.log"
+    archive_src = make_archive_source(tmp_path, FAKE_ARCHIVE_BYTES)
+    archive = tmp_path / "backups" / "interrupted.dump"
+
+    env = base_env(
+        bin_dir,
+        log_path,
+        str(fake),
+        FAKE_ARCHIVE_FILE=str(archive_src),
+        REAL_LN=shutil.which("ln", path=_inherited_path()),
+        SIGNAL_AFTER_LINK=published_member,
+    )
+    result = run_script(
+        backup_script,
+        ["--output", str(archive)],
+        tmp_path,
+        env,
+    )
+
+    assert result.returncode == 143
+    if published_member == "archive":
+        assert_successful_backup(archive, FAKE_ARCHIVE_BYTES)
+    else:
+        _assert_no_backup_artifacts(archive.parent)
+
+
+def test_backup_term_cleanup_preserves_replaced_foreign_member(tmp_path):
+    backup_script, _ = install_scripts(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = install_single_word_fake(bin_dir)
+    install_signalling_ln(bin_dir)
+    log_path = tmp_path / "fake.log"
+    archive_src = make_archive_source(tmp_path, FAKE_ARCHIVE_BYTES)
+    archive = tmp_path / "backups" / "foreign.dump"
+
+    env = base_env(
+        bin_dir,
+        log_path,
+        str(fake),
+        FAKE_ARCHIVE_FILE=str(archive_src),
+        REAL_LN=shutil.which("ln", path=_inherited_path()),
+        SIGNAL_AFTER_LINK="sidecar",
+        REPLACE_LINK_WITH_FOREIGN="sidecar",
+    )
+    result = run_script(
+        backup_script,
+        ["--output", str(archive)],
+        tmp_path,
+        env,
+    )
+
+    assert result.returncode == 143
+    assert not archive.exists()
+    assert not archive.with_name(archive.name + ".manifest").exists()
+    assert archive.with_name(archive.name + ".sha256").read_text() == "FOREIGN OUTPUT\n"
+    assert {path.name for path in archive.parent.iterdir()} == {f"{archive.name}.sha256"}
+
+
+@pytest.mark.parametrize("published_member", ["sidecar", "manifest", "archive"])
+@pytest.mark.parametrize("directory_kind", ["directory", "symlink"])
+def test_backup_term_after_directory_target_link_removes_only_own_inode(
+    tmp_path, published_member, directory_kind
+):
+    backup_script, _ = install_scripts(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = install_single_word_fake(bin_dir)
+    install_signalling_ln(bin_dir)
+    archive_src = make_archive_source(tmp_path, FAKE_ARCHIVE_BYTES)
+    archive = tmp_path / "backups" / "directory-race.dump"
+    final = {
+        "sidecar": archive.with_name(f"{archive.name}.sha256"),
+        "manifest": archive.with_name(f"{archive.name}.manifest"),
+        "archive": archive,
+    }[published_member]
+    foreign_dir = tmp_path / "foreign-directory"
+    if directory_kind == "symlink":
+        foreign_dir.mkdir()
+        (foreign_dir / "preserve-me").write_text("FOREIGN OUTPUT\n")
+    env = base_env(
+        bin_dir,
+        tmp_path / "fake.log",
+        str(fake),
+        FAKE_ARCHIVE_FILE=str(archive_src),
+        REAL_LN=shutil.which("ln", path=_inherited_path()),
+        RACE_DIRECTORY_AT_LINK=published_member,
+        RACE_DIRECTORY_KIND=directory_kind,
+        FOREIGN_DIRECTORY=str(foreign_dir),
+        SIGNAL_AFTER_LINK=published_member,
+    )
+
+    result = run_script(backup_script, ["--output", str(archive)], tmp_path, env)
+
+    assert result.returncode == 143, result.stderr
+    assert final.is_symlink() == (directory_kind == "symlink")
+    assert final.is_dir()
+    assert {p.name for p in final.iterdir()} == {"preserve-me"}
+    assert (final / "preserve-me").read_text() == "FOREIGN OUTPUT\n"
+    assert {p.name for p in archive.parent.iterdir()} == {final.name}
+
+
+def test_backup_does_not_delete_an_existing_reservation(tmp_path):
+    backup_script, _ = install_scripts(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = install_single_word_fake(bin_dir)
+    log_path = tmp_path / "fake.log"
+    archive = tmp_path / "backups" / "reserved.dump"
+    archive.parent.mkdir()
+    reservation_input = f"{archive.parent.resolve()}/{archive.name}\n"
+    cksum = subprocess.run(
+        ["cksum"], input=reservation_input, capture_output=True, text=True, check=True
+    ).stdout.split()
+    reservation = archive.parent / f".odograph-backup-{cksum[0]}-{cksum[1]}.lock"
+    reservation.mkdir()
+    marker = reservation / "preserve-me"
+    marker.write_text("existing reservation owner data\n")
+
+    env = base_env(bin_dir, log_path, str(fake))
+    result = run_script(
+        backup_script,
+        ["--output", str(archive)],
+        tmp_path,
+        env,
+    )
+
+    assert result.returncode != 0
+    assert "already reserved" in result.stderr
+    assert marker.read_text() == "existing reservation owner data\n"
+    assert read_log(log_path) == []
+
+
 def test_backup_bare_filename_output_skips_directory_chmod(tmp_path):
     # Deliberate deviation: chmod 700 on "." would lock the whole install
     # checkout, not just the backup, so a bare --output filename skips it.
@@ -680,6 +1007,23 @@ def test_backup_bare_filename_output_skips_directory_chmod(tmp_path):
     assert result.returncode == 0, result.stderr
     assert mode_bits(tmp_path) == mode_before
     assert_successful_backup(tmp_path / "bare.dump", FAKE_ARCHIVE_BYTES)
+
+
+def test_backup_output_starting_with_dash_keeps_the_requested_path(tmp_path):
+    backup_script, _ = install_scripts(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = install_single_word_fake(bin_dir)
+    log_path = tmp_path / "fake.log"
+    archive_src = make_archive_source(tmp_path, FAKE_ARCHIVE_BYTES)
+    archive = tmp_path / "-bare.dump"
+
+    env = base_env(bin_dir, log_path, str(fake), FAKE_ARCHIVE_FILE=str(archive_src))
+    result = run_script(backup_script, ["--output", "-bare.dump"], tmp_path, env)
+
+    assert result.returncode == 0, result.stderr
+    assert "Backup complete: -bare.dump" in result.stdout
+    assert_successful_backup(archive, FAKE_ARCHIVE_BYTES)
 
 
 # ---------------------------------------------------------------------------
@@ -909,7 +1253,7 @@ def test_backup_every_exec_invocation_uses_dash_T(tmp_path):
 
 
 def restore_env(bin_dir: Path, log_path: Path, **overrides: str) -> dict:
-    fake = install_single_word_fake(bin_dir)
+    fake = install_podman_compose_fake(bin_dir)
     return base_env(bin_dir, log_path, str(fake), **overrides)
 
 
@@ -1128,15 +1472,25 @@ def test_restore_corrupt_archive_refused_before_pg_restore_dash_d(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("app_status", ["app   Up 5 minutes", "app  running (healthy)"])
-def test_restore_refuses_when_app_is_running(tmp_path, app_status):
+@pytest.mark.parametrize(
+    "app_listing",
+    [
+        "project-app-1|running|app",
+        "custom-container-name|running|app",
+    ],
+)
+def test_restore_refuses_when_app_is_running(tmp_path, app_listing):
     _, restore_script = install_scripts(tmp_path)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     log_path = tmp_path / "fake.log"
     archive, _ = write_archive_with_sidecar(tmp_path / "d", "mileage-x.dump", FAKE_ARCHIVE_BYTES)
 
-    env = restore_env(bin_dir, log_path, FAKE_APP_STATUS=app_status)
+    env = restore_env(
+        bin_dir,
+        log_path,
+        FAKE_PS_OUTPUT=f"project-db-1|running|db\n{app_listing}",
+    )
     result = run_script(restore_script, [str(archive)], tmp_path, env)
 
     assert result.returncode != 0
@@ -1146,9 +1500,178 @@ def test_restore_refuses_when_app_is_running(tmp_path, app_status):
     assert pg_isready_calls == [
         "exec -T db pg_isready -h 127.0.0.1 -p 5432 -U mileage -d mileage"
     ]
-    assert any(line.startswith("ps ") for line in read_log(log_path))
+    assert any(line.startswith("ps --format ") for line in read_log(log_path))
     assert not any("psql" in line for line in execs)
     assert not any("pg_restore" in line for line in execs)
+
+
+@pytest.mark.parametrize(
+    ("ps_exit", "ps_output", "expected_error"),
+    [
+        ("17", "project-app-1|exited|app", "podman-compose ps failed"),
+        ("0", "db-container|running|db\nproject-app-1 image command app Exited (0)", "structured container state"),
+        ("0", "db-container|running|db\nproject-app-1|paused|app", "structured container state"),
+        ("0", "db-container|running|db\nproject-app-1|restarting|app", "structured container state"),
+        ("0", "db-container|running|db\nproject-app-1|paused|app|Exited", "structured container state"),
+        ("0", "db-container|running|db\ncontainer Exited command|paused|app", "structured container state"),
+        ("0", "db-container|not-a-state|db", "structured container state"),
+        ("0", "db-container|running|db\nproject-app-1|running|app", "appears to be running"),
+        ("0", "", "structured container state"),
+    ],
+    ids=[
+        "command-failure",
+        "malformed-status",
+        "paused",
+        "restarting",
+        "extra-field",
+        "conflicting-row-text",
+        "unknown-db-state",
+        "running",
+        "empty-listing",
+    ],
+)
+def test_restore_podman_structured_status_fails_before_sql(
+    tmp_path, ps_exit, ps_output, expected_error
+):
+    _, restore_script = install_scripts(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    compose_cmd = str(install_podman_compose_fake(bin_dir))
+    log_path = tmp_path / "fake.log"
+    archive, _ = write_archive_with_sidecar(
+        tmp_path / "d", "mileage-x.dump", FAKE_ARCHIVE_BYTES
+    )
+
+    env = base_env(
+        bin_dir,
+        log_path,
+        compose_cmd=compose_cmd,
+        FAKE_PS_EXIT=ps_exit,
+        FAKE_PS_OUTPUT=ps_output,
+    )
+    result = run_script(restore_script, [str(archive)], tmp_path, env)
+
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+    log = read_log(log_path)
+    assert any(line.startswith("ps ") for line in log)
+    assert not any("psql" in line for line in exec_lines(log_path))
+    assert not any("pg_restore" in line for line in exec_lines(log_path))
+
+
+@pytest.mark.parametrize(
+    "app_listing",
+    [
+        "db-container|running|db\ncustom-app-container|exited|app",
+        "db-container|running|db",
+    ],
+    ids=["stopped-app", "db-only-target"],
+)
+def test_restore_accepts_stopped_or_absent_podman_app(tmp_path, app_listing):
+    _, restore_script = install_scripts(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    compose_cmd = str(install_podman_compose_fake(bin_dir))
+    log_path = tmp_path / "fake.log"
+    archive, _ = write_archive_with_sidecar(
+        tmp_path / "d", "mileage-x.dump", FAKE_ARCHIVE_BYTES
+    )
+    env = base_env(
+        bin_dir,
+        log_path,
+        compose_cmd=compose_cmd,
+        FAKE_PS_OUTPUT=app_listing,
+    )
+
+    result = run_script(restore_script, [str(archive)], tmp_path, env)
+
+    assert result.returncode == 0, result.stderr
+    log = read_log(log_path)
+    assert any(line.startswith("ps ") for line in log)
+    assert any("psql -X --single-transaction" in line for line in exec_lines(log_path))
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_error"),
+    [
+        ({"FAKE_CONFIG_EXIT": "17"}, "docker compose config failed"),
+        ({"FAKE_COMPOSE_SERVICES": "db app"}, "structured container state"),
+        ({"FAKE_PS_EXIT": "17"}, "docker compose ps failed"),
+        ({"FAKE_PS_OUTPUT": "Exited (0)"}, "structured container state"),
+        ({"FAKE_INSPECT_EXIT": "17"}, "structured container state"),
+        ({"FAKE_INSPECT_OUTPUT": "Exited (0)"}, "structured container state"),
+        ({"FAKE_INSPECT_STATUS": "paused"}, "structured container state"),
+        ({"FAKE_INSPECT_STATUS": "restarting"}, "structured container state"),
+        ({"FAKE_INSPECT_STATUS": "unknown"}, "structured container state"),
+        ({"FAKE_INSPECT_STATUS": "running"}, "app service appears to be running"),
+    ],
+    ids=[
+        "config-failure",
+        "malformed-config",
+        "ps-failure",
+        "malformed-ids",
+        "inspect-failure",
+        "malformed-inspect",
+        "paused",
+        "restarting",
+        "unknown-state",
+        "running",
+    ],
+)
+def test_restore_docker_inspect_state_fails_closed(tmp_path, overrides, expected_error):
+    _, restore_script = install_scripts(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    install_docker_fake(bin_dir)
+    log_path = tmp_path / "fake.log"
+    archive, _ = write_archive_with_sidecar(
+        tmp_path / "d", "mileage-x.dump", FAKE_ARCHIVE_BYTES
+    )
+    env = base_env(
+        bin_dir,
+        log_path,
+        compose_cmd="docker compose",
+        **overrides,
+    )
+
+    result = run_script(restore_script, [str(archive)], tmp_path, env)
+
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+    assert not any("psql" in line for line in exec_lines(log_path))
+    assert not any("pg_restore" in line for line in exec_lines(log_path))
+
+
+@pytest.mark.parametrize(
+    ("frontend", "overrides"),
+    [
+        ("docker", {"FAKE_COMPOSE_SERVICES": "db"}),
+        ("docker", {"FAKE_PS_OUTPUT": ""}),
+        ("docker", {"FAKE_INSPECT_STATUS": "exited"}),
+        ("podman-compose", {"FAKE_PS_OUTPUT": "db-container|running|db"}),
+        ("podman-compose", {"FAKE_PS_OUTPUT": "db-container|running|db\ncustom-app|exited|app"}),
+    ],
+    ids=["docker-db-only", "docker-uncreated-app", "docker-stopped-app", "podman-db-only", "podman-stopped-app"],
+)
+def test_restore_accepts_db_only_or_known_stopped_target(tmp_path, frontend, overrides):
+    _, restore_script = install_scripts(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    if frontend == "docker":
+        install_docker_fake(bin_dir)
+        compose_cmd = "docker compose"
+    else:
+        compose_cmd = str(install_podman_compose_fake(bin_dir))
+    log_path = tmp_path / "fake.log"
+    archive, _ = write_archive_with_sidecar(
+        tmp_path / "d", "mileage-x.dump", FAKE_ARCHIVE_BYTES
+    )
+    env = base_env(bin_dir, log_path, compose_cmd=compose_cmd, **overrides)
+
+    result = run_script(restore_script, [str(archive)], tmp_path, env)
+
+    assert result.returncode == 0, result.stderr
+    assert any("psql -X --single-transaction" in line for line in exec_lines(log_path))
 
 
 # ---------------------------------------------------------------------------

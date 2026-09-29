@@ -181,23 +181,23 @@ async def _send_invitation_email(
     link = f"{link_base}/invite#token={quote(token, safe='')}"
     message = _invitation_message(mailer, link, token)
     admission = request.app.state.security_mail
-    async with control_connection(request.app.state.control_pool) as conn:
-        @asynccontextmanager
-        async def admit():
+    @asynccontextmanager
+    async def admit():
+        async with control_connection(request.app.state.control_pool) as conn:
             async with invitation_mail_admission(conn, actor, invitation_id) as target_email:
                 yield bool(target_email and target_email == email)
 
-        try:
-            admitted = await admission.send(
-                mailer, message, wait=False, admit=admit,
-                lease=lambda: external_account_work(request.app.state.control_pool, actor["id"]),
-            )
-            return "sent" if admitted else "not_sent"
-        except Exception as exc:
-            # SMTP exceptions can include transport details. Do not log the
-            # token, message, recipient or exception text.
-            log.warning("administrator invitation delivery failed (%s)", type(exc).__name__)
-            return "unknown"
+    try:
+        admitted = await admission.send(
+            mailer, message, wait=False, admit=admit,
+            lease=lambda: external_account_work(request.app.state.control_pool, actor["id"]),
+        )
+        return "sent" if admitted else "not_sent"
+    except Exception as exc:
+        # SMTP exceptions can include transport details. Do not log the
+        # token, message, recipient or exception text.
+        log.warning("administrator invitation delivery failed (%s)", type(exc).__name__)
+        return "unknown"
 
 
 async def _checked_invitation_result(
