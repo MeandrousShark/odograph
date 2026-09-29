@@ -156,7 +156,10 @@ Every network-reachable route, and what actually guards it:
   password, so the sole sign-in method cannot be removed. Email verification
   and login-email change also require delivery configured with `SMTP_HOST`,
   `EMAIL_FROM`, and `APP_URL`. Challenges expire after 30 minutes and are
-  single-use. A login-email change takes effect only after the new address is
+  single-use. OIDC-only accounts enter a new address and its confirmation once
+  before provider reauthentication; the callback sends the challenge
+  automatically after confirming the exact linked identity and fresh proof.
+  A login-email change takes effect only after the new address is
   confirmed; the current email remains usable until then. A confirmed change
   invalidates other app sessions. It leaves the exact OIDC issuer and subject
   binding and saved notification destinations unchanged. Email verification

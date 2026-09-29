@@ -63,6 +63,7 @@ def _request(*, session=None, oauth=None, userinfo=None):
         config=cfg, oauth=oauth if oauth is not None else SimpleNamespace(pocketid=client),
         control_pool=object(), login_limiter=FailedAuthLimiter(100, 900),
         templates=SimpleNamespace(TemplateResponse=response),
+        security_mail=None,
     )
     request = SimpleNamespace(
         app=SimpleNamespace(state=state), session=session if session is not None else {},
@@ -72,14 +73,411 @@ def _request(*, session=None, oauth=None, userinfo=None):
     return request, client
 
 
-def _protected_session(state="reauth.valid"):
+def _protected_session(state="reauth.valid", *, proof_action=None, target=""):
     return {
         "account_id": 7, "auth_version": 2, "csrf": "csrf",
         auth.OIDC_PROTECTED_ATTEMPT_KEY: {
             "action": "reauth", "state": state, "nonce": "nonce",
-            "browser_nonce": "browser", "account_id": 7, "auth_version": 2,
+            "browser_nonce": "browser", "proof_action": proof_action,
+            "target": target, "account_id": 7, "auth_version": 2,
         },
     }
+
+
+class _SecurityMail:
+    async def send(self, mailer, message, *, admit, lease):
+        async with lease():
+            async with admit() as allowed:
+                if not allowed:
+                    return False
+                await mailer.send(message)
+        return True
+
+
+@pytest.mark.parametrize(
+    "purpose,target",
+    [
+        (auth.PURPOSE_CURRENT, "old@example.com"),
+        (auth.PURPOSE_CHANGE, "new@example.com"),
+    ],
+)
+def test_email_reauth_callback_consumes_bound_proof_sends_and_redirects(
+    monkeypatch, purpose, target,
+):
+    request, client = _request(
+        session=_protected_session(proof_action=purpose, target=target),
+        userinfo={"sub": "exact-subject", "auth_time": time.time()},
+    )
+    request.query_params = {"state": "reauth.valid", "code": "provider-code"}
+    request.app.state.security_mail = _SecurityMail()
+    proof_calls, issue_calls, sent = [], [], []
+
+    async def require_user(req):
+        req.state.principal = SimpleNamespace(auth_version=2)
+        return {"id": 7}
+
+    async def get_account(_conn, account_id):
+        assert account_id == 7
+        return _account()
+
+    async def finish(_conn, **kwargs):
+        assert kwargs["subject"] == "exact-subject"
+        return True
+
+    async def consume(_conn, **kwargs):
+        proof_calls.append(kwargs)
+        return True
+
+    async def issue(_conn, account_id, auth_version, action, exact_target):
+        issue_calls.append((account_id, auth_version, action, exact_target))
+        return "secret-token"
+
+    async def send_usable(_conn, account_id, auth_version, action, token):
+        assert (account_id, auth_version, action, token) == (7, 2, purpose, "secret-token")
+        return True
+
+    @asynccontextmanager
+    async def lease(*_args):
+        yield
+
+    class Mailer:
+        def __init__(self, *args):
+            self.target = args[-1]
+
+        def compose(self, subject, body):
+            return body
+
+        async def send(self, message):
+            sent.append((self.target, message))
+
+    monkeypatch.setattr(auth, "require_user", require_user)
+    monkeypatch.setattr(auth, "control_connection", _connection)
+    monkeypatch.setattr(auth, "get_account", get_account)
+    monkeypatch.setattr(auth, "finish_oidc_reauth", finish)
+    monkeypatch.setattr(auth, "consume_action_proof", consume)
+    monkeypatch.setattr(auth, "issue_email_challenge", issue)
+    monkeypatch.setattr(auth, "email_challenge_send_usable", send_usable)
+    monkeypatch.setattr(auth, "external_account_work", lease)
+    monkeypatch.setattr(auth, "Mailer", Mailer)
+
+    response = asyncio.run(_endpoint("/auth/callback", "GET")(request))
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/settings/account"
+    assert "provider-code" not in response.headers["location"]
+    assert request.session["account_notice"] == auth.EMAIL_REQUEST_NOTICE
+    assert "oidc_action_proof_nonce" not in request.session
+    assert proof_calls == [{
+        "account_id": 7, "auth_version": 2, "action": purpose,
+        "target": target, "browser_nonce": "browser",
+    }]
+    assert issue_calls == [(7, 2, purpose, target)]
+    assert len(sent) == 1 and sent[0][0] == target
+    assert "#purpose=" + purpose + "&token=secret-token" in sent[0][1]
+    assert client.calls == 1
+    with pytest.raises(HTTPException) as replay:
+        asyncio.run(_endpoint("/auth/callback", "GET")(request))
+    assert replay.value.status_code == 401
+    assert len(sent) == 1
+
+
+@pytest.mark.parametrize(
+    "account_changes",
+    [
+        {"is_enabled": False},
+        {"auth_version": 3},
+        {"password_hash": "added-locally"},
+    ],
+    ids=["disabled", "stale-version", "password-added"],
+)
+def test_email_reauth_callback_rechecks_enabled_version_and_password_state(
+    monkeypatch, account_changes,
+):
+    request, _ = _request(
+        session=_protected_session(
+            proof_action=auth.PURPOSE_CHANGE, target="new@example.com",
+        ),
+        userinfo={"sub": "exact-subject", "auth_time": time.time()},
+    )
+    request.query_params = {"state": "reauth.valid"}
+    events = []
+
+    async def require_user(req):
+        req.state.principal = SimpleNamespace(auth_version=2)
+        return {"id": 7}
+
+    async def get_account(_conn, _account_id):
+        return {**_account(), **account_changes}
+
+    async def finish(_conn, **_kwargs):
+        return True
+
+    async def consume(_conn, **_kwargs):
+        events.append("consume")
+        return True
+
+    async def unexpected_issue(*_args):
+        events.append("issue")
+        raise AssertionError("issued after account state changed")
+
+    monkeypatch.setattr(auth, "require_user", require_user)
+    monkeypatch.setattr(auth, "control_connection", _connection)
+    monkeypatch.setattr(auth, "get_account", get_account)
+    monkeypatch.setattr(auth, "finish_oidc_reauth", finish)
+    monkeypatch.setattr(auth, "consume_action_proof", consume)
+    monkeypatch.setattr(auth, "issue_email_challenge", unexpected_issue)
+
+    with pytest.raises(HTTPException) as rejected:
+        asyncio.run(_endpoint("/auth/callback", "GET")(request))
+    assert rejected.value.status_code == 401
+    assert events == ["consume"]
+
+
+def test_email_reauth_identity_failure_never_consumes_or_issues(monkeypatch):
+    request, _ = _request(
+        session=_protected_session(
+            proof_action=auth.PURPOSE_CHANGE, target="new@example.com",
+        ),
+        userinfo={"sub": "wrong-subject", "auth_time": time.time()},
+    )
+    request.query_params = {"state": "reauth.valid"}
+    events = []
+
+    async def require_user(req):
+        req.state.principal = SimpleNamespace(auth_version=2)
+        return {"id": 7}
+
+    async def finish(_conn, **_kwargs):
+        return False
+
+    async def unexpected(*_args, **_kwargs):
+        events.append("called")
+        raise AssertionError("email flow started after identity failure")
+
+    monkeypatch.setattr(auth, "require_user", require_user)
+    monkeypatch.setattr(auth, "control_connection", _connection)
+    monkeypatch.setattr(auth, "finish_oidc_reauth", finish)
+    monkeypatch.setattr(auth, "consume_action_proof", unexpected)
+    monkeypatch.setattr(auth, "issue_email_challenge", unexpected)
+
+    with pytest.raises(HTTPException) as rejected:
+        asyncio.run(_endpoint("/auth/callback", "GET")(request))
+    assert rejected.value.status_code == 401
+    assert events == []
+
+
+def test_email_reauth_callback_rejects_another_signed_in_account(monkeypatch):
+    request, client = _request(
+        session=_protected_session(
+            proof_action=auth.PURPOSE_CHANGE, target="new@example.com",
+        ),
+        userinfo={"sub": "exact-subject", "auth_time": time.time()},
+    )
+    request.query_params = {"state": "reauth.valid"}
+    attempts = []
+
+    async def require_other_account(req):
+        req.state.principal = SimpleNamespace(auth_version=2)
+        return {"id": 8}
+
+    async def consume(_conn, **kwargs):
+        attempts.append(kwargs)
+        return None
+
+    async def unexpected(*_args, **_kwargs):
+        raise AssertionError("email action started for the wrong account")
+
+    monkeypatch.setattr(auth, "require_user", require_other_account)
+    monkeypatch.setattr(auth, "control_connection", _connection)
+    monkeypatch.setattr(auth, "consume_oidc_attempt", consume)
+    monkeypatch.setattr(auth, "consume_action_proof", unexpected)
+    monkeypatch.setattr(auth, "issue_email_challenge", unexpected)
+
+    with pytest.raises(HTTPException) as rejected:
+        asyncio.run(_endpoint("/auth/callback", "GET")(request))
+    assert rejected.value.status_code == 401
+    assert client.calls == 0
+    assert len(attempts) == 1
+    assert attempts[0]["account_id"] == 7
+
+
+def test_oidc_email_reauth_is_not_started_without_delivery_configuration(monkeypatch):
+    request, client = _request(session={"account_id": 7, "auth_version": 2, "csrf": "csrf"})
+    request.app.state.config.smtp_host = ""
+
+    async def get_account(_conn, _account_id):
+        return _account()
+
+    async def identity(_conn, _account_id, _issuer):
+        return {
+            "issuer": "https://idp.example", "subject": "exact",
+            "provider_email": None, "provider_display_name": None,
+        }
+
+    async def unverified(_conn, _account_id):
+        return False
+
+    monkeypatch.setattr(auth, "control_connection", _connection)
+    monkeypatch.setattr(auth, "get_account", get_account)
+    monkeypatch.setattr(auth, "get_identity_for_account", identity)
+    monkeypatch.setattr(auth, "is_current_email_verified", unverified)
+
+    response = asyncio.run(_endpoint("/settings/account/oidc/reauth", "POST")(
+        request, action=auth.PURPOSE_CHANGE, target="new@example.com",
+        target_confirm="new@example.com", csrf_token="csrf", user={"id": 7},
+    ))
+    assert response.status_code == 503
+    assert client.calls == 0
+    assert auth.OIDC_PROTECTED_ATTEMPT_KEY not in request.session
+
+
+def test_cancelled_email_callback_keeps_owning_issuance_and_delivery(monkeypatch):
+    request, _ = _request(
+        session=_protected_session(
+            proof_action=auth.PURPOSE_CHANGE, target="new@example.com",
+        ),
+        userinfo={"sub": "exact-subject", "auth_time": time.time()},
+    )
+    request.query_params = {"state": "reauth.valid"}
+    request.app.state.security_mail = _SecurityMail()
+    issue_started, release_issue, delivered = (
+        asyncio.Event(), asyncio.Event(), asyncio.Event()
+    )
+
+    async def require_user(req):
+        req.state.principal = SimpleNamespace(auth_version=2)
+        return {"id": 7}
+
+    async def get_account(_conn, _account_id):
+        return _account()
+
+    async def finish(_conn, **_kwargs):
+        return True
+
+    async def consume(_conn, **_kwargs):
+        return True
+
+    async def issue(*_args):
+        issue_started.set()
+        await release_issue.wait()
+        return "secret-token"
+
+    async def send_usable(*_args):
+        return True
+
+    @asynccontextmanager
+    async def lease(*_args):
+        yield
+
+    class Mailer:
+        def __init__(self, *_args):
+            pass
+
+        def compose(self, _subject, body):
+            return body
+
+        async def send(self, message):
+            assert "secret-token" in message
+            delivered.set()
+
+    monkeypatch.setattr(auth, "require_user", require_user)
+    monkeypatch.setattr(auth, "control_connection", _connection)
+    monkeypatch.setattr(auth, "get_account", get_account)
+    monkeypatch.setattr(auth, "finish_oidc_reauth", finish)
+    monkeypatch.setattr(auth, "consume_action_proof", consume)
+    monkeypatch.setattr(auth, "issue_email_challenge", issue)
+    monkeypatch.setattr(auth, "email_challenge_send_usable", send_usable)
+    monkeypatch.setattr(auth, "external_account_work", lease)
+    monkeypatch.setattr(auth, "Mailer", Mailer)
+
+    async def run():
+        caller = asyncio.create_task(_endpoint("/auth/callback", "GET")(request))
+        await asyncio.wait_for(issue_started.wait(), 2)
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        release_issue.set()
+        await asyncio.wait_for(delivered.wait(), 2)
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("proof_succeeds", [False, True])
+def test_email_reauth_callback_never_issues_after_failed_proof_or_missing_smtp(
+    monkeypatch, proof_succeeds,
+):
+    request, _ = _request(
+        session=_protected_session(
+            proof_action=auth.PURPOSE_CHANGE, target="new@example.com",
+        ),
+        userinfo={"sub": "exact-subject", "auth_time": time.time()},
+    )
+    request.query_params = {"state": "reauth.valid"}
+    request.app.state.security_mail = _SecurityMail()
+    if proof_succeeds:
+        request.app.state.config.smtp_host = ""
+    events = []
+
+    async def require_user(req):
+        req.state.principal = SimpleNamespace(auth_version=2)
+        return {"id": 7}
+
+    async def get_account(_conn, _account_id):
+        return _account()
+
+    async def finish(_conn, **_kwargs):
+        return True
+
+    async def consume(_conn, **_kwargs):
+        events.append("consume")
+        return True
+
+    async def issue(*_args):
+        events.append("issue")
+        return "secret-token"
+
+    async def send_usable(*_args):
+        return True
+
+    @asynccontextmanager
+    async def lease(*_args):
+        yield
+
+    class Mailer:
+        def __init__(self, *_args):
+            pass
+
+        def compose(self, *_args):
+            return "message"
+
+        async def send(self, _message):
+            events.append("send")
+
+    monkeypatch.setattr(auth, "require_user", require_user)
+    monkeypatch.setattr(auth, "control_connection", _connection)
+    monkeypatch.setattr(auth, "get_account", get_account)
+    monkeypatch.setattr(auth, "finish_oidc_reauth", finish)
+    monkeypatch.setattr(auth, "consume_action_proof", consume)
+    monkeypatch.setattr(auth, "issue_email_challenge", issue)
+    monkeypatch.setattr(auth, "email_challenge_send_usable", send_usable)
+    monkeypatch.setattr(auth, "external_account_work", lease)
+    monkeypatch.setattr(auth, "Mailer", Mailer)
+
+    if not proof_succeeds:
+        async def rejected_proof(_conn, **_kwargs):
+            events.append("consume")
+            return False
+
+        monkeypatch.setattr(auth, "consume_action_proof", rejected_proof)
+        with pytest.raises(HTTPException) as rejected:
+            asyncio.run(_endpoint("/auth/callback", "GET")(request))
+        assert rejected.value.status_code == 401
+        assert events == ["consume"]
+    else:
+        response = asyncio.run(_endpoint("/auth/callback", "GET")(request))
+        assert response.status_code == 303
+        assert request.session["account_error"] == auth.GENERIC_EMAIL_ERROR
+        assert events == ["consume"]
 
 
 def test_session_refresh_rebinds_request_context_after_method_change():

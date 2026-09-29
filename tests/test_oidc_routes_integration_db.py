@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import time
+from dataclasses import replace
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlencode, urlsplit
 
@@ -22,6 +24,7 @@ from app.local_auth import verify_password
 from app.main import make_templates
 from app.oidc_identities import create_identity_link
 from app.oidc_attempts import consume_oidc_attempt
+from app.password_reset import SecurityMailAdmission
 from tests.auth_db_fixtures import auth_config
 from conftest import full_schema_reset
 from tests.oidc_test_helpers import oidc_authorization_url
@@ -219,6 +222,70 @@ async def _run_route_scenario(monkeypatch):
                     account_id=member_id, auth_version=member["auth_version"],
                 ) is None
             request.app.state.templates = templates
+
+            request.app.state.config = replace(
+                request.app.state.config,
+                smtp_host="smtp.example.invalid",
+                email_from="odograph@example.invalid",
+                app_url="https://app.example.invalid",
+            )
+            request.app.state.security_mail = SecurityMailAdmission()
+            sent_mail = []
+
+            class CapturingMailer:
+                def __init__(self, *args):
+                    self.target = args[-1]
+
+                def compose(self, subject, body):
+                    return body
+
+                async def send(self, message):
+                    sent_mail.append((self.target, message))
+
+            monkeypatch.setattr(auth, "Mailer", CapturingMailer)
+            user = await auth.require_user(request)
+            target = "new-invitee@example.invalid"
+            started = await _endpoint("/settings/account/oidc/reauth", "POST")(
+                request, action=auth.PURPOSE_CHANGE, target=target,
+                target_confirm=target, csrf_token=request.session["csrf"], user=user,
+            )
+            destination = oidc_authorization_url(started)
+            state = provider.redirect_kwargs["state"]
+            assert request.session[auth.OIDC_PROTECTED_ATTEMPT_KEY]["target"] == target
+            assert target not in destination
+            request.query_params = {"state": state, "code": "valid"}
+            provider.userinfo = {
+                "sub": "fresh-subject", "email": "provider-metadata@example.invalid",
+                "auth_time": time.time(),
+            }
+            continued = await _endpoint("/auth/callback", "GET")(request)
+            assert continued.status_code == 303
+            assert continued.headers["location"] == "/settings/account"
+            assert request.session["account_notice"] == auth.EMAIL_REQUEST_NOTICE
+            assert "oidc_action_proof_nonce" not in request.session
+            assert len(sent_mail) == 1
+            recipient, message = sent_mail[0]
+            assert recipient == target
+            assert "#purpose=change_email&token=" in message
+            assert "provider-metadata@example.invalid" not in message
+            assert "token=" not in continued.headers["location"]
+            token = re.search(r"#purpose=change_email&token=([A-Za-z0-9_-]{43})", message)
+            assert token is not None
+            async with owner.connection() as conn:
+                row = await (await conn.execute(
+                    "SELECT purpose,target_email,issued_email,issued_auth_version,"
+                    "consumed_at IS NULL,revoked_at IS NULL FROM email_challenges "
+                    "WHERE account_id=%s AND purpose=%s ORDER BY id DESC LIMIT 1",
+                    (member_id, auth.PURPOSE_CHANGE),
+                )).fetchone()
+                assert row == (
+                    auth.PURPOSE_CHANGE, target, "invitee@example.invalid",
+                    member["auth_version"], True, True,
+                )
+                assert await (await conn.execute(
+                    "SELECT count(*) FROM oidc_action_proofs WHERE account_id=%s",
+                    (member_id,),
+                )).fetchone() == (0,)
 
             user = await auth.require_user(request)
             response = await _endpoint("/settings/account/oidc/reauth", "POST")(

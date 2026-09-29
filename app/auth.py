@@ -137,6 +137,13 @@ def check_form_csrf(request: Request, token: str) -> None:
         raise HTTPException(status_code=403, detail="CSRF token missing or invalid")
 
 
+def _email_challenge_delivery_available(config) -> bool:
+    return bool(
+        config.smtp_host and config.email_from
+        and security_link_base(config.app_url) and not config.dev_no_auth
+    )
+
+
 def require_csrf(request: Request) -> None:
     expected = request.session.get("csrf") or ""
     provided = request.headers.get("x-csrf-token") or ""
@@ -572,6 +579,12 @@ async def _oidc_protected_redirect(
     invite_token: str | None = None, timezone_name: str | None = None,
     proof_action: str | None = None, target: str | None = None,
 ):
+    bound_target = (
+        target if target is not None else timezone_name
+        if timezone_name is not None else
+        normalize_issuer(request.app.state.config.oidc_issuer)
+        if action == "link" else ""
+    )
     state = f"{action}.{secrets.token_urlsafe(32)}"
     nonce = secrets.token_urlsafe(32)
     browser_nonce = request.session.get("oidc_browser_nonce")
@@ -585,10 +598,7 @@ async def _oidc_protected_redirect(
             account_id=account["id"] if account else None,
             auth_version=account["auth_version"] if account else None,
             invite_token=invite_token, proof_action=proof_action,
-            target=(target if target is not None else timezone_name
-                    if timezone_name is not None else
-                    normalize_issuer(request.app.state.config.oidc_issuer)
-                    if action == "link" else ""),
+            target=bound_target,
         )
     if not started:
         raise HTTPException(status_code=400, detail=GENERIC_OIDC_ERROR)
@@ -599,6 +609,7 @@ async def _oidc_protected_redirect(
     request.session[OIDC_PROTECTED_ATTEMPT_KEY] = {
         "action": action, "state": state, "nonce": nonce,
         "browser_nonce": browser_nonce, "proof_action": proof_action,
+        "target": bound_target,
         "account_id": account["id"] if account else None,
         "auth_version": account["auth_version"] if account else None,
     }
@@ -778,6 +789,9 @@ def make_router() -> APIRouter:
                     "email": identity["provider_email"],
                     "display_name": identity["provider_display_name"],
                 }
+        flashed_error = request.session.pop("account_error", None)
+        if error is None:
+            error = flashed_error
         if success is None:
             success = request.session.pop("account_notice", None)
         # getattr, not cfg.account_avatar_max_bytes directly: a number of
@@ -1110,6 +1124,15 @@ def make_router() -> APIRouter:
                 or not isinstance(protected_attempt.get("browser_nonce"), str)):
                 limiter.record_failure(ip)
                 raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
+            if (protected_action == "reauth"
+                and protected_attempt.get("proof_action") in (PURPOSE_CURRENT, PURPOSE_CHANGE)
+                and not isinstance(protected_attempt.get("target"), str)):
+                await _finish_protected_attempt(
+                    request, "reauth", callback_state, protected_attempt,
+                    clear_authorization=True,
+                )
+                limiter.record_failure(ip)
+                raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
             request.session.pop(OIDC_PROTECTED_ATTEMPT_KEY, None)
             if protected_action in ("link", "reauth"):
                 try:
@@ -1181,22 +1204,63 @@ def make_router() -> APIRouter:
                 await _finish_protected_attempt(request, "reauth", callback_state, protected_attempt)
                 limiter.record_failure(ip)
                 raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
+            proof_action = protected_attempt.get("proof_action")
+            email_action = proof_action in (PURPOSE_CURRENT, PURPOSE_CHANGE)
+
             async def finish_reauth():
                 async with control_connection(request.app.state.control_pool) as conn:
-                    return await finish_oidc_reauth(
+                    verified = await finish_oidc_reauth(
                         conn, state=callback_state, nonce=protected_attempt["nonce"],
                         browser_nonce=protected_attempt["browser_nonce"],
                         account_id=protected_attempt["account_id"],
                         auth_version=protected_attempt["auth_version"],
                         issuer=issuer, subject=subject, auth_time=auth_time,
                     )
+                if not verified or not email_action:
+                    return verified, None
+
+                target = protected_attempt["target"]
+                async with control_connection(request.app.state.control_pool) as conn:
+                    account = await get_account(conn, protected_attempt["account_id"])
+                valid_target = False
+                if account is not None and isinstance(target, str):
+                    current_email = normalize_email(account["email"])
+                    if proof_action == PURPOSE_CURRENT:
+                        valid_target = target == current_email
+                    else:
+                        valid_target = (
+                            _safe_delivery_email(target) and target != current_email
+                        )
+                if (account is None or not account["is_enabled"]
+                    or account["auth_version"] != protected_attempt["auth_version"]
+                    or account["password_hash"] is not None or not valid_target):
+                    if isinstance(target, str):
+                        await _consume_email_action_proof(
+                            request, protected_attempt["account_id"],
+                            protected_attempt["auth_version"], proof_action,
+                            target, protected_attempt["browser_nonce"],
+                        )
+                    return True, None
+                result = await _issue_and_deliver_email_challenge(
+                    request, account, proof_action, target,
+                    proof_nonce=protected_attempt["browser_nonce"],
+                )
+                return True, result
 
             finishing = asyncio.create_task(finish_reauth())
             finishing.add_done_callback(lambda completed: completed.exception() if not completed.cancelled() else None)
-            verified = await asyncio.shield(finishing)
+            verified, email_result = await asyncio.shield(finishing)
             if not verified:
                 limiter.record_failure(ip)
                 raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
+            if email_action:
+                if email_result is None:
+                    limiter.record_failure(ip)
+                    raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
+                request.session["account_notice" if email_result else "account_error"] = (
+                    EMAIL_REQUEST_NOTICE if email_result else GENERIC_EMAIL_ERROR
+                )
+                return RedirectResponse("/settings/account", status_code=303)
             request.session["oidc_action_proof_nonce"] = protected_attempt["browser_nonce"]
             request.session["account_notice"] = OIDC_REAUTH_NOTICE
             return RedirectResponse("/admin/accounts" if protected_attempt.get("proof_action") == "purge_account" else "/settings/account", status_code=303)
@@ -1423,6 +1487,9 @@ def make_router() -> APIRouter:
         if (account is None or (account["password_hash"] is not None and action != "purge_account")
             or identity is None or action not in (PURPOSE_CURRENT, PURPOSE_CHANGE, "add_password", "purge_account")):
             raise HTTPException(status_code=403, detail=GENERIC_OIDC_ERROR)
+        if (action in (PURPOSE_CURRENT, PURPOSE_CHANGE)
+            and not _email_challenge_delivery_available(request.app.state.config)):
+            return await _render_account_unavailable(request, user)
         if action == "purge_account":
             if (not account["is_admin"] or len(target) > 19 or not target.isascii()
                 or not target.isdecimal() or not 1 <= int(target) <= 2**63 - 1):
@@ -1513,13 +1580,104 @@ def make_router() -> APIRouter:
             headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
         )
 
+    async def _consume_email_action_proof(
+        request: Request, account_id: int, auth_version: int, purpose: str,
+        target: str, browser_nonce: str,
+    ) -> bool:
+        async with control_connection(request.app.state.control_pool) as conn:
+            async with conn.transaction():
+                return await consume_action_proof(
+                    conn, account_id=account_id, auth_version=auth_version,
+                    action=purpose, target=target, browser_nonce=browser_nonce,
+                )
+
+    async def _issue_and_deliver_email_challenge(
+        request: Request, account: dict, purpose: str, target: str,
+        *, proof_nonce: str | None = None,
+    ) -> bool | None:
+        cfg = request.app.state.config
+        link_base = security_link_base(cfg.app_url)
+        if not _email_challenge_delivery_available(cfg):
+            if proof_nonce is not None:
+                await _consume_email_action_proof(
+                    request, account["id"], request.state.principal.auth_version,
+                    purpose, target, proof_nonce,
+                )
+            return False
+
+        async with control_connection(request.app.state.control_pool) as conn:
+            if proof_nonce is not None:
+                async with conn.transaction():
+                    proven = await consume_action_proof(
+                        conn, account_id=account["id"],
+                        auth_version=request.state.principal.auth_version,
+                        action=purpose, target=target, browser_nonce=proof_nonce,
+                    )
+                    token = await issue_email_challenge(
+                        conn, account["id"], request.state.principal.auth_version,
+                        purpose, target,
+                    ) if proven else None
+            else:
+                proven = True
+                token = await issue_email_challenge(
+                    conn, account["id"], request.state.principal.auth_version,
+                    purpose, target,
+                )
+        if not proven:
+            return None
+        if token is None:
+            return True
+
+        mailer = Mailer(
+            cfg.smtp_host, cfg.smtp_port, cfg.smtp_username, cfg.smtp_password,
+            cfg.smtp_security, cfg.smtp_tls_insecure, cfg.email_from, target,
+        )
+        link = f"{link_base}/settings/account/email/confirm#purpose={purpose}&token={token}"
+
+        @asynccontextmanager
+        async def admit():
+            async with control_connection(request.app.state.control_pool) as conn:
+                async with conn.transaction():
+                    yield await email_challenge_send_usable(
+                        conn, account["id"], request.state.principal.auth_version,
+                        purpose, token,
+                    )
+
+        async def deliver():
+            try:
+                message = mailer.compose(
+                    "Confirm your Odograph email address",
+                    "To confirm your email address, open this link while signed in:\n"
+                    f"{link}\n\nIf the link does not fill the form, choose {purpose} "
+                    f"and enter this code manually: {token}\n\n"
+                    "The code expires in 30 minutes. If you did not request this, ignore this email.",
+                )
+                admitted = await request.app.state.security_mail.send(
+                    mailer, message, admit=admit,
+                    lease=lambda: external_account_work(
+                        request.app.state.control_pool, account["id"]
+                    ),
+                )
+                if admitted:
+                    return True
+            except Exception:
+                pass
+            async with control_connection(request.app.state.control_pool) as conn:
+                await revoke_email_challenge(conn, account["id"], purpose, token)
+            return False
+
+        delivery = asyncio.create_task(deliver())
+        delivery.add_done_callback(
+            lambda completed: completed.exception() if not completed.cancelled() else None
+        )
+        return await asyncio.shield(delivery)
+
     async def _request_email_challenge(
         request: Request, user: dict, values: dict[str, str], purpose: str, form_account: dict,
     ):
         check_form_csrf(request, values["csrf_token"])
         cfg = request.app.state.config
-        link_base = security_link_base(cfg.app_url)
-        if not (cfg.smtp_host and cfg.email_from and link_base) or cfg.dev_no_auth:
+        if not _email_challenge_delivery_available(cfg):
             return await _render_account_unavailable(request, user)
         limiter: FailedAuthLimiter = request.app.state.login_limiter
         async with control_connection(request.app.state.control_pool) as conn:
@@ -1550,67 +1708,22 @@ def make_router() -> APIRouter:
             return await _render_account(request, account, user, error="Enter a valid email address.", status_code=400)
         if purpose == PURPOSE_CHANGE and target == account["email"]:
             return await _render_account(request, account, user, error="Enter a different email address.", status_code=400)
-        async with control_connection(request.app.state.control_pool) as conn:
-            if account["password_hash"] is None:
-                async with conn.transaction():
-                    proof_nonce = request.session.pop("oidc_action_proof_nonce", None)
-                    proven = bool(proof_nonce) and await consume_action_proof(
-                        conn, account_id=account["id"],
-                        auth_version=request.state.principal.auth_version,
-                        action=purpose, target=target, browser_nonce=proof_nonce,
-                    )
-                    token = await issue_email_challenge(
-                        conn, account["id"], request.state.principal.auth_version,
-                        purpose, target,
-                    ) if proven else None
-            else:
-                proven = True
-                token = await issue_email_challenge(
-                    conn, account["id"], request.state.principal.auth_version, purpose, target
+        proof_nonce = None
+        if account["password_hash"] is None:
+            proof_nonce = request.session.pop("oidc_action_proof_nonce", None)
+            if not proof_nonce:
+                return await _render_account(
+                    request, account, user, error=GENERIC_EMAIL_ERROR, status_code=401
                 )
-        if not proven:
+        delivered = await _issue_and_deliver_email_challenge(
+            request, account, purpose, target, proof_nonce=proof_nonce,
+        )
+        if delivered is None:
             return await _render_account(request, account, user, error=GENERIC_EMAIL_ERROR, status_code=401)
-        if token is not None:
-            mailer = Mailer(
-                cfg.smtp_host, cfg.smtp_port, cfg.smtp_username, cfg.smtp_password,
-                cfg.smtp_security, cfg.smtp_tls_insecure, cfg.email_from, target,
+        if not delivered:
+            return await _render_account(
+                request, account, user, error=GENERIC_EMAIL_ERROR, status_code=503
             )
-            link = f"{link_base}/settings/account/email/confirm#purpose={purpose}&token={token}"
-
-            @asynccontextmanager
-            async def admit():
-                async with control_connection(request.app.state.control_pool) as conn:
-                    async with conn.transaction():
-                        yield await email_challenge_send_usable(
-                            conn, account["id"], request.state.principal.auth_version,
-                            purpose, token,
-                        )
-
-            async def deliver():
-                try:
-                    message = mailer.compose(
-                        "Confirm your Odograph email address",
-                        "To confirm your email address, open this link while signed in:\n"
-                        f"{link}\n\nIf the link does not fill the form, choose {purpose} "
-                        f"and enter this code manually: {token}\n\n"
-                        "The code expires in 30 minutes. If you did not request this, ignore this email.",
-                    )
-                    admitted = await request.app.state.security_mail.send(
-                        mailer, message, admit=admit,
-                        lease=lambda: external_account_work(request.app.state.control_pool, account["id"]),
-                    )
-                    if admitted:
-                        return True
-                except Exception:
-                    pass
-                async with control_connection(request.app.state.control_pool) as conn:
-                    await revoke_email_challenge(conn, account["id"], purpose, token)
-                return False
-
-            delivery = asyncio.create_task(deliver())
-            delivery.add_done_callback(lambda completed: completed.exception() if not completed.cancelled() else None)
-            if not await asyncio.shield(delivery):
-                return await _render_account(request, account, user, error=GENERIC_EMAIL_ERROR, status_code=503)
         return await _render_account(request, account, user, success=EMAIL_REQUEST_NOTICE)
 
     async def _render_account_unavailable(request: Request, user: dict, *, status_code: int = 503):
