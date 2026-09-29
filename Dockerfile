@@ -80,4 +80,4 @@ EXPOSE 8000
 # set by Caddy's X-Forwarded-* headers.
 CMD ["uvicorn", "app.main:create_app", "--factory", \
      "--host", "0.0.0.0", "--port", "8000", \
-     "--proxy-headers"]
+     "--proxy-headers", "--log-config", "app/logging_config.json"]

@@ -81,6 +81,7 @@ docker run -d --name "$app" --network "$network" \
     -e FORWARDED_ALLOW_IPS=127.0.0.1 \
     "$IMAGE" uvicorn app.main:create_app --factory \
     --host 0.0.0.0 --port 8443 --proxy-headers \
+    --log-config /srv/odograph/app/logging_config.json \
     --ssl-keyfile /tls/key.pem --ssl-certfile /tls/cert.pem >/dev/null
 
 deadline=$(( $(date +%s) + 240 ))

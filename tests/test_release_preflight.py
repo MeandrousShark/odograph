@@ -27,6 +27,31 @@ def steps_by_name(job: dict) -> dict:
     return {step.get("name"): step for step in job["steps"] if step.get("name")}
 
 
+def test_all_uvicorn_entrypoints_load_query_redaction_config():
+    config_path = "app/logging_config.json"
+    config = json.loads((ROOT / config_path).read_text())
+    access_logger = config["loggers"]["uvicorn.access"]
+    access_handler = config["handlers"][access_logger["handlers"][0]]
+
+    assert config["filters"]["redact_query"]["()"] == (
+        "app.access_log.QueryStringRedactionFilter"
+    )
+    assert access_handler["filters"] == ["redact_query"]
+    assert config["formatters"]["access"]["fmt"] == (
+        '%(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s'
+    )
+
+    dockerfile = (ROOT / "Dockerfile").read_text()
+    assert "COPY app/ app/" in dockerfile
+    assert f'"--log-config", "{config_path}"' in dockerfile
+
+    devsite = (ROOT / "scripts" / "devsite.sh").read_text()
+    assert '--log-config "$REPO_ROOT/app/logging_config.json"' in devsite
+
+    smoke = (ROOT / "scripts" / "release_preflight_smoke.sh").read_text()
+    assert "--log-config /srv/odograph/app/logging_config.json" in smoke
+
+
 def test_derives_exact_version_from_repository_compose_image():
     compose = "services:\n  app:\n    image: ghcr.io/example/odograph:v1.2.3\n"
 
