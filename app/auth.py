@@ -94,7 +94,7 @@ PASSWORD_SAVED_NOTICE = "Password saved. Other sessions have been signed out."
 MAX_INVITE_FORM_BYTES = 8192
 MAX_EMAIL_FORM_BYTES = 8192
 GENERIC_EMAIL_ERROR = "Unable to process email request. Please try again."
-EMAIL_REQUEST_NOTICE = "If the request is eligible, a verification email has been sent."
+EMAIL_REQUEST_NOTICE = "Check your email for a confirmation link. Open it while signed in to finish."
 RESET_REQUEST_NOTICE = (
     "If an enabled account with a verified email address matches, a password reset "
     "link is on its way. It expires in 30 minutes."
