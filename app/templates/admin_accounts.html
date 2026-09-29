@@ -60,7 +60,7 @@
 <section class="settings-section" aria-labelledby="accounts-heading">
   <h3 id="accounts-heading">Account metadata</h3>
   <div class="table-wrapper">
-  <table>
+  <table class="admin-accounts-table">
     <thead><tr>
       <th>ID</th><th>Login email</th><th>Email verified</th><th>Role</th>
       <th>Access</th><th>Login methods</th><th>Deletion</th><th>Recovery</th>
@@ -68,11 +68,11 @@
     <tbody>
     {% for account in accounts %}
       <tr>
-        <td class="num">{{ account.id }}</td>
-        <td>{{ account.email }}</td>
-        <td>{{ "Yes" if account.email_verified else "No" }}</td>
-        <td>{{ "Administrator" if account.is_admin else "Member" }}</td>
-        <td>
+        <td class="num" data-label="ID">{{ account.id }}</td>
+        <td data-label="Login email">{{ account.email }}</td>
+        <td data-label="Email verified">{{ "Yes" if account.email_verified else "No" }}</td>
+        <td data-label="Role">{{ "Administrator" if account.is_admin else "Member" }}</td>
+        <td data-label="Access">
           {{ "Enabled" if account.is_enabled else "Disabled" }}
           {% if multiuser_available and account.id != user.id %}
           {% if account.is_enabled %}
@@ -88,8 +88,8 @@
           {% endif %}
           {% elif account.id == user.id %}<span class="muted">Current account</span>{% endif %}
         </td>
-        <td>{% if account.has_password and account.has_oidc %}Password, OIDC{% elif account.has_password %}Password{% elif account.has_oidc %}OIDC{% else %}None{% endif %}</td>
-        <td>
+        <td data-label="Login methods">{% if account.has_password and account.has_oidc %}Password, OIDC{% elif account.has_password %}Password{% elif account.has_oidc %}OIDC{% else %}None{% endif %}</td>
+        <td data-label="Deletion">
           {% if account.deletion_deadline %}{{ account.deletion_deadline|local_dt }}{% else %}Not scheduled{% endif %}
           {% if multiuser_available and account.id != user.id %}
           {% if not account.deletion_deadline %}
@@ -130,7 +130,7 @@
           {% endif %}
           {% endif %}
         </td>
-        <td>
+        <td data-label="Recovery">
           {% if account.email_verified and account.is_enabled %}
           <form method="post" action="/admin/accounts/{{ account.id }}/recovery">
             <input type="hidden" name="csrf_token" value="{{ csrf }}">

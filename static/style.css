@@ -2793,6 +2793,31 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 
 @media (max-width: 760px) {
   .settings-page-header { align-items: flex-start; }
+  .admin-accounts-table,
+  .admin-accounts-table tbody,
+  .admin-accounts-table tr { display: block; width: 100%; }
+  .admin-accounts-table thead {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap;
+  }
+  .admin-accounts-table tbody tr {
+    margin-bottom: var(--space-3); padding: var(--space-2);
+    border: 1px solid var(--border); border-radius: var(--radius-md);
+  }
+  .admin-accounts-table tbody td {
+    display: block; min-width: 0; padding: var(--space-2) 0;
+    overflow-wrap: anywhere;
+  }
+  .admin-accounts-table tbody td:last-child { border-bottom: 0; }
+  .admin-accounts-table tbody td[data-label]::before {
+    display: block; margin-bottom: var(--space-1);
+    color: var(--fg-muted); font-size: .8rem; font-weight: 600;
+    text-transform: uppercase; content: attr(data-label);
+  }
+  .admin-accounts-table tbody td form { margin-top: var(--space-2); }
+  .admin-accounts-table tbody td .control {
+    width: 100%; white-space: normal; text-align: left;
+  }
   .settings-page .settings-preference-grid,
   .settings-page .settings-preference-checks { grid-template-columns: minmax(0, 1fr); }
   .settings-page .settings-preferences-form { gap: var(--space-4); }
