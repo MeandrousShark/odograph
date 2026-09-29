@@ -203,7 +203,7 @@ def test_missing_smtp_and_issuance_rejection_do_not_expose_target_status(monkeyp
     assert rejected.status_code == 200
     assert issued == [True]
     assert "busy@example.com" not in rejected.text
-    assert "eligible" in rejected.text
+    assert "Check your email for a confirmation link" in rejected.text
 
 
 def test_oversize_form_is_rejected_before_issuance(monkeypatch):
