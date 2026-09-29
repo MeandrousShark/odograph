@@ -1,12 +1,12 @@
 """Node-harness tests for base.html's cross-tab "odograph-account" marker.
 
 Every signed-in page writes its account id to a shared localStorage marker
-and reloads itself if another tab changes it -- the mechanism that hides
+and navigates to a clean GET if another tab changes it -- the mechanism that hides
 stale private data the moment a sign-out or account switch happens in
 another tab. Sign-in and signup pages extend the same base.html shell with
 no account, so merely opening one must not touch the marker, or opening it
 in a new tab would make every already-signed-in tab believe the account
-changed and reload. A real sign-out (POST /logout) still has to change the
+changed and navigate away. A real sign-out (POST /logout) still has to change the
 marker so those other tabs notice; app/auth.py's logout redirects to
 /login with a `signed_out` query marker for exactly that, read only by
 this script, never by the server.
