@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import threading
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
@@ -99,6 +100,62 @@ def test_session_refresh_rebinds_request_context_after_method_change():
     assert request.state.detector_runner[1] is request.state.account_pool
 
 
+@pytest.mark.parametrize("path", [
+    "/settings/account/oidc/link", "/settings/account/oidc/unlink",
+])
+def test_method_routes_hold_bounded_verification_after_cancellation(monkeypatch, path):
+    request, _ = _request(session={"csrf": "csrf"})
+    request.app.state.login_limiter = FailedAuthLimiter(10, 900, max_concurrent_auth=1)
+    started, release = threading.Event(), threading.Event()
+
+    def verify(_submitted, _hash):
+        started.set()
+        release.wait(5)
+        return False
+
+    async def account(_conn, _id):
+        return _account(password_hash="stored")
+
+    async def identity(*_args):
+        return None
+
+    async def verified(*_args):
+        return False
+
+    monkeypatch.setattr(auth, "control_connection", _connection)
+    monkeypatch.setattr(auth, "get_account", account)
+    monkeypatch.setattr(auth, "verify_password", verify)
+    monkeypatch.setattr(auth, "get_identity_for_account", identity)
+    monkeypatch.setattr(auth, "is_current_email_verified", verified)
+    endpoint = _endpoint(path, "POST")
+
+    async def call():
+        args = dict(current_password="wrong", csrf_token="csrf", user={"id": 7})
+        if path.endswith("/unlink"):
+            args["confirm_unlink"] = "yes"
+        return await endpoint(request, **args)
+
+    async def run():
+        first = asyncio.create_task(call())
+        try:
+            assert await asyncio.to_thread(started.wait, 2)
+            first.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await first
+            assert len(request.app.state.login_limiter._auth_tasks) == 1
+            saturated = await call()
+            assert saturated.status_code == 503
+            assert not request.app.state.login_limiter.blocked(request.client.host)
+        finally:
+            release.set()
+        await asyncio.gather(*request.app.state.login_limiter._auth_tasks, return_exceptions=True)
+        assert request.app.state.login_limiter.blocked(request.client.host) is False
+        assert len(request.app.state.login_limiter._failures[request.client.host]) == 1
+        assert (await call()).status_code == 401
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("callback_state", ["invite.valid", "reauth.other"])
 def test_callback_rejects_swapped_or_mismatched_state_before_token_exchange(
     monkeypatch, callback_state,
@@ -173,6 +230,85 @@ def test_reauth_callback_rejects_wrong_nonce(monkeypatch):
     assert rejected.value.status_code == 401
     assert client.calls == 1
     assert "oidc_action_proof_nonce" not in request.session
+
+
+def test_cancelled_reauth_token_exchange_consumes_exact_attempt(monkeypatch):
+    request, client = _request(session=_protected_session())
+    request.query_params = {"state": "reauth.valid"}
+    entered, release, consumed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def require_user(req):
+        req.state.principal = SimpleNamespace(auth_version=2)
+        return {"id": 7}
+
+    async def exchange(_request):
+        entered.set()
+        await asyncio.Event().wait()
+
+    async def consume(_conn, **kwargs):
+        assert kwargs == {
+            "action": "reauth", "state": "reauth.valid", "nonce": "nonce",
+            "browser_nonce": "browser", "account_id": 7, "auth_version": 2,
+        }
+        await release.wait()
+        consumed.set()
+
+    client.authorize_access_token = exchange
+    monkeypatch.setattr(auth, "require_user", require_user)
+    monkeypatch.setattr(auth, "control_connection", _connection)
+    monkeypatch.setattr(auth, "consume_oidc_attempt", consume)
+
+    async def run():
+        caller = asyncio.create_task(_endpoint("/auth/callback", "GET")(request))
+        await entered.wait()
+        caller.cancel()
+        await asyncio.sleep(0)
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        assert "oidc_action_proof_nonce" not in request.session
+        release.set()
+        await asyncio.wait_for(consumed.wait(), 2)
+
+    asyncio.run(run())
+
+
+def test_successful_reauth_finishing_is_not_aborted_with_cancelled_caller(monkeypatch):
+    request, _ = _request(session=_protected_session(), userinfo={
+        "sub": "exact", "auth_time": time.time(),
+    })
+    request.query_params = {"state": "reauth.valid"}
+    entered, release, finished = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def require_user(req):
+        req.state.principal = SimpleNamespace(auth_version=2)
+        return {"id": 7}
+
+    async def finish(_conn, **kwargs):
+        assert kwargs["subject"] == "exact"
+        entered.set()
+        await release.wait()
+        finished.set()
+        return True
+
+    async def no_consume(*args, **kwargs):
+        raise AssertionError("successful proof was consumed")
+
+    monkeypatch.setattr(auth, "require_user", require_user)
+    monkeypatch.setattr(auth, "control_connection", _connection)
+    monkeypatch.setattr(auth, "finish_oidc_reauth", finish)
+    monkeypatch.setattr(auth, "consume_oidc_attempt", no_consume)
+
+    async def run():
+        caller = asyncio.create_task(_endpoint("/auth/callback", "GET")(request))
+        await entered.wait()
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        release.set()
+        await asyncio.wait_for(finished.wait(), 2)
+
+    asyncio.run(run())
 
 
 def test_oidc_only_password_post_without_proof_never_hashes(monkeypatch):

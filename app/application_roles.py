@@ -10,6 +10,7 @@ from __future__ import annotations
 import secrets
 import re
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
@@ -54,64 +55,8 @@ COLUMN_SELECT = {
 ACCOUNT_CONTROL_UPDATE_COLUMNS = (
     "updated_at", "avatar_bytes", "avatar_mime", "avatar_updated_at",
 )
-EMAIL_CHALLENGE_FUNCTIONS = (
-    "public.issue_email_challenge(bigint,bigint,text,text,text)",
-    "public.revoke_email_challenge(bigint,text,text)",
-    "public.consume_email_challenge(bigint,bigint,text,text)",
-    "public.email_challenge_send_usable(bigint,bigint,text,text)",
-)
-PASSWORD_RESET_FUNCTIONS = (
-    "public.issue_password_reset(bigint,text,text,text)",
-    "public.issue_admin_password_reset(bigint,bigint,bigint,text)",
-    "public.revoke_password_reset(text)",
-    "public.password_reset_usable(text,boolean)",
-    "public.password_reset_send_usable(text,bigint,bigint)",
-    "public.consume_password_reset(text,text)",
-    "public.host_reset_password(bigint,text)",
-)
-# Each protected challenge function's current definition lives in the
-# migration that last created or replaced it.
-CHALLENGE_FUNCTION_SOURCES = {
-    EMAIL_CHALLENGE_FUNCTIONS[0]: "031_password_reset.sql",
-    EMAIL_CHALLENGE_FUNCTIONS[1]: "030_email_challenges.sql",
-    EMAIL_CHALLENGE_FUNCTIONS[2]: "030_email_challenges.sql",
-    EMAIL_CHALLENGE_FUNCTIONS[3]: "035_admin_recovery.sql",
-    **{function: "031_password_reset.sql" for function in PASSWORD_RESET_FUNCTIONS},
-    PASSWORD_RESET_FUNCTIONS[0]: "035_admin_recovery.sql",
-    PASSWORD_RESET_FUNCTIONS[1]: "035_admin_recovery.sql",
-    PASSWORD_RESET_FUNCTIONS[4]: "035_admin_recovery.sql",
-}
 BOOTSTRAP_INSERT_TABLES = ("accounts", "account_settings", "vehicles", "tag_rules", "mileage_rates")
 BOOTSTRAP_LOCK_TABLES = ("accounts", "ingest_credentials", "tracking_devices", "tracking_device_aliases")
-INVITATION_FUNCTIONS = (
-    "public.issue_member_invitation(bigint,bigint,text,text)",
-    "public.resend_member_invitation(bigint,bigint,bigint,text)",
-    "public.revoke_member_invitation(bigint,bigint,bigint)",
-    "public.list_member_invitations(bigint,bigint)",
-    "public.admit_member_invitation_send(bigint,bigint,bigint)",
-    "public.redeem_member_invitation(text,text,text)",
-    "public.redeem_oidc_member_invitation(text,text,text,text,text,text)",
-)
-OIDC_ATTEMPT_FUNCTIONS = (
-    "public.start_oidc_attempt(text,text,text,text,bigint,bigint,text,text,text)",
-    "public.consume_oidc_attempt(text,text,text,text,bigint,bigint)",
-    "public.finish_oidc_reauth(text,text,text,bigint,bigint,text,text,timestamptz)",
-    "public.consume_oidc_action_proof(bigint,bigint,text,text,text)",
-)
-OIDC_METHOD_FUNCTIONS = (
-    "public.link_oidc_identity(bigint,bigint,text,text,text,text)",
-    "public.unlink_oidc_identity(bigint,bigint,text,text)",
-    "public.replace_account_password(bigint,bigint,text)",
-    "public.sign_out_account_everywhere(bigint,bigint)",
-)
-ACCOUNT_LIFECYCLE_FUNCTIONS = (
-    "public.admin_set_account_enabled(bigint,bigint,bigint,boolean)",
-    "public.list_account_security_audit(bigint,bigint)",
-    "public.prune_account_security_audit()",
-    "public.admin_request_account_deletion(bigint,bigint,bigint,text,boolean)",
-    "public.admin_cancel_account_deletion(bigint,bigint,bigint)",
-    "public.admin_purge_account(bigint,bigint,bigint,text,boolean,text,text)",
-)
 SQL_DIR = Path(__file__).resolve().parents[1] / "scripts" / "sql"
 MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
 FUNCTION_FILES = (
@@ -121,17 +66,59 @@ FUNCTION_FILES = (
     "oidc_methods.sql",
     "account_lifecycle.sql",
 )
-FUNCTIONS = {
-    "public.bootstrap_first_account(text,text,text)": CONTROL_ROLE,
-    "public.assert_account_active(bigint,bigint)": RUNTIME_ROLE,
-    "public.assert_tracking_credential(text,bigint,bigint,bigint,text)": RUNTIME_ROLE,
-    **{function: CONTROL_ROLE for function in INVITATION_FUNCTIONS},
-    **{function: CONTROL_ROLE for function in OIDC_ATTEMPT_FUNCTIONS},
-    **{function: CONTROL_ROLE for function in OIDC_METHOD_FUNCTIONS},
-    **{function: CONTROL_ROLE for function in EMAIL_CHALLENGE_FUNCTIONS},
-    **{function: CONTROL_ROLE for function in PASSWORD_RESET_FUNCTIONS},
-    **{function: CONTROL_ROLE for function in ACCOUNT_LIFECYCLE_FUNCTIONS},
-}
+@dataclass(frozen=True)
+class FunctionSpec:
+    signature: str
+    caller: str
+    source: str
+
+
+FUNCTION_SPECS = (
+    FunctionSpec("public.bootstrap_first_account(text,text,text)", CONTROL_ROLE, "account_bootstrap.sql"),
+    FunctionSpec("public.assert_account_active(bigint,bigint)", RUNTIME_ROLE, "account_admission.sql"),
+    FunctionSpec("public.assert_tracking_credential(text,bigint,bigint,bigint,text)", RUNTIME_ROLE, "tracking_admission.sql"),
+    FunctionSpec("public.issue_member_invitation(bigint,bigint,text,text)", CONTROL_ROLE, "member_invitations.sql"),
+    FunctionSpec("public.resend_member_invitation(bigint,bigint,bigint,text)", CONTROL_ROLE, "member_invitations.sql"),
+    FunctionSpec("public.revoke_member_invitation(bigint,bigint,bigint)", CONTROL_ROLE, "member_invitations.sql"),
+    FunctionSpec("public.list_member_invitations(bigint,bigint)", CONTROL_ROLE, "member_invitations.sql"),
+    FunctionSpec("public.admit_member_invitation_send(bigint,bigint,bigint)", CONTROL_ROLE, "member_invitations.sql"),
+    FunctionSpec("public.redeem_member_invitation(text,text,text)", CONTROL_ROLE, "member_invitations.sql"),
+    FunctionSpec("public.redeem_oidc_member_invitation(text,text,text,text,text,text)", CONTROL_ROLE, "member_invitations.sql"),
+    FunctionSpec("public.start_oidc_attempt(text,text,text,text,bigint,bigint,text,text,text)", CONTROL_ROLE, "oidc_attempts.sql"),
+    FunctionSpec("public.consume_oidc_attempt(text,text,text,text,bigint,bigint)", CONTROL_ROLE, "oidc_attempts.sql"),
+    FunctionSpec("public.finish_oidc_reauth(text,text,text,bigint,bigint,text,text,timestamptz)", CONTROL_ROLE, "oidc_attempts.sql"),
+    FunctionSpec("public.consume_oidc_action_proof(bigint,bigint,text,text,text)", CONTROL_ROLE, "oidc_attempts.sql"),
+    FunctionSpec("public.link_oidc_identity(bigint,bigint,text,text,text,text)", CONTROL_ROLE, "oidc_methods.sql"),
+    FunctionSpec("public.unlink_oidc_identity(bigint,bigint,text,text)", CONTROL_ROLE, "oidc_methods.sql"),
+    FunctionSpec("public.replace_account_password(bigint,bigint,text)", CONTROL_ROLE, "oidc_methods.sql"),
+    FunctionSpec("public.sign_out_account_everywhere(bigint,bigint)", CONTROL_ROLE, "oidc_methods.sql"),
+    FunctionSpec("public.issue_email_challenge(bigint,bigint,text,text,text)", CONTROL_ROLE, "031_password_reset.sql"),
+    FunctionSpec("public.revoke_email_challenge(bigint,text,text)", CONTROL_ROLE, "030_email_challenges.sql"),
+    FunctionSpec("public.consume_email_challenge(bigint,bigint,text,text)", CONTROL_ROLE, "030_email_challenges.sql"),
+    FunctionSpec("public.email_challenge_send_usable(bigint,bigint,text,text)", CONTROL_ROLE, "035_admin_recovery.sql"),
+    FunctionSpec("public.issue_password_reset(bigint,text,text,text)", CONTROL_ROLE, "035_admin_recovery.sql"),
+    FunctionSpec("public.issue_admin_password_reset(bigint,bigint,bigint,text)", CONTROL_ROLE, "035_admin_recovery.sql"),
+    FunctionSpec("public.revoke_password_reset(text)", CONTROL_ROLE, "031_password_reset.sql"),
+    FunctionSpec("public.password_reset_usable(text,boolean)", CONTROL_ROLE, "031_password_reset.sql"),
+    FunctionSpec("public.password_reset_send_usable(text,bigint,bigint)", CONTROL_ROLE, "035_admin_recovery.sql"),
+    FunctionSpec("public.consume_password_reset(text,text)", CONTROL_ROLE, "031_password_reset.sql"),
+    FunctionSpec("public.host_reset_password(bigint,text)", CONTROL_ROLE, "031_password_reset.sql"),
+    FunctionSpec("public.admin_set_account_enabled(bigint,bigint,bigint,boolean)", CONTROL_ROLE, "account_lifecycle.sql"),
+    FunctionSpec("public.list_account_security_audit(bigint,bigint)", CONTROL_ROLE, "account_lifecycle.sql"),
+    FunctionSpec("public.prune_account_security_audit()", CONTROL_ROLE, "account_lifecycle.sql"),
+    FunctionSpec("public.admin_request_account_deletion(bigint,bigint,bigint,text,boolean)", CONTROL_ROLE, "account_lifecycle.sql"),
+    FunctionSpec("public.admin_cancel_account_deletion(bigint,bigint,bigint)", CONTROL_ROLE, "account_lifecycle.sql"),
+    FunctionSpec("public.admin_purge_account(bigint,bigint,bigint,text,boolean,text,text)", CONTROL_ROLE, "account_lifecycle.sql"),
+)
+# Compatibility views for older-schema upgrade fixtures and focused tests.
+INVITATION_FUNCTIONS = tuple(s.signature for s in FUNCTION_SPECS if s.source == "member_invitations.sql")
+OIDC_ATTEMPT_FUNCTIONS = tuple(s.signature for s in FUNCTION_SPECS if s.source == "oidc_attempts.sql")
+OIDC_METHOD_FUNCTIONS = tuple(s.signature for s in FUNCTION_SPECS if s.source == "oidc_methods.sql")
+ACCOUNT_LIFECYCLE_FUNCTIONS = tuple(s.signature for s in FUNCTION_SPECS if s.source == "account_lifecycle.sql")
+EMAIL_CHALLENGE_FUNCTIONS = tuple(s.signature for s in FUNCTION_SPECS if "email_challenge" in s.signature)
+PASSWORD_RESET_FUNCTIONS = tuple(s.signature for s in FUNCTION_SPECS
+                                 if s.source[0].isdigit() and s.signature not in EMAIL_CHALLENGE_FUNCTIONS)
+FUNCTIONS = {spec.signature: spec.caller for spec in FUNCTION_SPECS}
 RESTORE_AUTH_VERSION_STEP = 1_000_000_000
 PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER")
 
@@ -152,6 +139,14 @@ class _ContractMismatch(RoleSetupError):
 def _require_contract(ok: bool, cause: str) -> None:
     if not ok:
         raise _ContractMismatch(f"application database security contract mismatch: {cause}")
+
+
+async def _check_contract_functions_exist(conn, signatures) -> None:
+    cur = await conn.execute(
+        "SELECT signature FROM unnest(%s::text[]) signature "
+        "WHERE to_regprocedure(signature) IS NULL", (list(signatures),))
+    missing = [row[0] for row in await cur.fetchall()]
+    _require_contract(not missing, f"missing contract function: {missing}")
 
 
 async def _check_role_database_ownership(conn) -> None:
@@ -348,8 +343,9 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
         f"relation set: unexpected {sorted(found_tables - set(TABLES))} missing {sorted(set(TABLES) - found_tables)}")
     bad_relations = sorted(row[0] for row in rows
                            if row[1:] != (MIGRATE_ROLE, row[0] in OWNED_TABLES + PROTECTED_TABLES,
-                                         row[0] in OWNED_TABLES + PROTECTED_TABLES))
+                                          row[0] in OWNED_TABLES + PROTECTED_TABLES))
     _require_contract(not bad_relations, f"relation ownership or RLS flags: {bad_relations}")
+    await _check_contract_functions_exist(conn, FUNCTIONS)
     cur = await conn.execute(
         "SELECT p.oid::regprocedure::text FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace "
         "WHERE p.prosecdef AND p.oid <> ALL(%s::regprocedure[]) "
@@ -397,10 +393,18 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
         " SELECT c.relname AS name,c.relowner AS owner,c.relacl AS acl FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
         " WHERE (n.nspname='public' AND c.relname=ANY(%s)) OR n.nspname='odograph_service'"
         " UNION ALL SELECT c.relname||'.'||a.attname,c.relowner,a.attacl FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid "
-        " JOIN pg_namespace n ON n.oid=c.relnamespace WHERE (n.nspname='public' AND c.relname=ANY(%s)) OR n.nspname='odograph_service')"
+        " JOIN pg_namespace n ON n.oid=c.relnamespace WHERE (n.nspname='public' AND c.relname=ANY(%s)) OR n.nspname='odograph_service'"
+        " UNION ALL SELECT s.relname,s.relowner,s.relacl FROM pg_class s "
+        " JOIN pg_namespace sn ON sn.oid=s.relnamespace "
+        " JOIN pg_depend d ON d.objid=s.oid AND d.deptype IN ('a','i') "
+        " JOIN pg_class t ON t.oid=d.refobjid JOIN pg_namespace tn ON tn.oid=t.relnamespace "
+        " WHERE s.relkind='S' AND sn.nspname='public' AND tn.nspname='public' AND t.relname=ANY(%s)"
+        " UNION ALL SELECT p.oid::regprocedure::text,p.proowner,p.proacl FROM pg_proc p "
+        " WHERE p.oid=ANY(%s::regprocedure[]))"
         " SELECT DISTINCT o.name FROM objects o CROSS JOIN LATERAL aclexplode(o.acl) x"
         " WHERE x.grantee=0 OR x.grantee NOT IN (SELECT oid FROM pg_roles WHERE rolname=ANY(%s))"
-        " OR (x.is_grantable AND x.grantee<>o.owner)", (list(TABLES), list(TABLES), list(ALL_ROLES)))
+        " OR (x.is_grantable AND x.grantee<>o.owner)",
+        (list(TABLES), list(TABLES), list(TABLES), list(FUNCTIONS), list(ALL_ROLES)))
     extra_grants = [row[0] for row in await cur.fetchall()]
     _require_contract(not extra_grants, f"table/column/sequence/function privilege: unexpected grant on {extra_grants}")
     cur = await conn.execute("SELECT tablename,policyname,roles,cmd,qual,with_check,permissive FROM pg_policies WHERE schemaname='public'")
@@ -436,7 +440,7 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
                 expected_allowed = privilege in rights or (
                     privilege == "SELECT" and column in COLUMN_SELECT.get((role, table), ()))
                 if privilege == "UPDATE" and role == CONTROL_ROLE and table == "accounts":
-                    expected_allowed = column in ACCOUNT_CONTROL_UPDATE_COLUMNS
+                    expected_allowed = "UPDATE" in rights or column in ACCOUNT_CONTROL_UPDATE_COLUMNS
                 if allowed != expected_allowed:
                     bad_columns.append((column, privilege))
             _require_contract(not bad_columns, f"column privilege: {role} public.{table} {bad_columns}")
@@ -458,53 +462,20 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
             bad_privileges = [privilege for privilege, allowed in await cur.fetchall()
                               if allowed != (privilege == "SELECT" and table == "recovery_metadata" and role in (RUNTIME_ROLE, CONTROL_ROLE))]
             _require_contract(not bad_privileges, f"table privilege: {role} {STATE_SCHEMA}.{table} {bad_privileges}")
-    for function, filename in zip(tuple(FUNCTIONS)[:3], FUNCTION_FILES[:3], strict=True):
-        cur = await conn.execute(
-            "SELECT pg_get_userbyid(proowner),prosecdef,proconfig,prosrc FROM pg_proc WHERE oid=%s::regprocedure", (function,))
-        row = await cur.fetchone()
-        source = (SQL_DIR / filename).read_text()
-        body = re.search(r"AS\s+(\$[a-z_]*\$)(.*?)\1", source, re.S | re.I).group(2)
-        _require_contract(row == (BOOTSTRAP_ROLE, True, ["search_path=pg_catalog, pg_temp"], body),
-            f"function definition: {function}")
-    invitation_source = (SQL_DIR / "member_invitations.sql").read_text()
-    for function in INVITATION_FUNCTIONS:
+    for spec in FUNCTION_SPECS:
+        function = spec.signature
+        if function not in FUNCTIONS:
+            continue
         name = function.split("(", 1)[0]
         cur = await conn.execute(
             "SELECT pg_get_userbyid(proowner),prosecdef,proconfig,prosrc FROM pg_proc WHERE oid=%s::regprocedure",
             (function,))
         row = await cur.fetchone()
+        source_dir = MIGRATIONS_DIR if spec.source.endswith(".sql") and spec.source[0].isdigit() else SQL_DIR
+        source = (source_dir / spec.source).read_text()
         body = re.search(
-            rf"CREATE OR REPLACE FUNCTION {re.escape(name)}\(.*?AS\s+(\$body\$)(.*?)\1",
-            invitation_source, re.S | re.I).group(2)
-        _require_contract(row == (BOOTSTRAP_ROLE, True, ["search_path=pg_catalog, pg_temp"], body),
-            f"function definition: {function}")
-    for functions, filename in (
-        (OIDC_ATTEMPT_FUNCTIONS, "oidc_attempts.sql"),
-        (OIDC_METHOD_FUNCTIONS, "oidc_methods.sql"),
-        (ACCOUNT_LIFECYCLE_FUNCTIONS, "account_lifecycle.sql"),
-    ):
-        source = (SQL_DIR / filename).read_text()
-        for function in functions:
-            name = function.split("(", 1)[0]
-            cur = await conn.execute(
-                "SELECT pg_get_userbyid(proowner),prosecdef,proconfig,prosrc FROM pg_proc WHERE oid=%s::regprocedure",
-                (function,))
-            row = await cur.fetchone()
-            body = re.search(
-                rf"CREATE OR REPLACE FUNCTION {re.escape(name)}\(.*?AS\s+(\$body\$)(.*?)\1",
-                source, re.S | re.I).group(2)
-            _require_contract(row == (BOOTSTRAP_ROLE, True, ["search_path=pg_catalog, pg_temp"], body),
-                f"function definition: {function}")
-    for function in EMAIL_CHALLENGE_FUNCTIONS + PASSWORD_RESET_FUNCTIONS:
-        name = function.split("(", 1)[0]
-        cur = await conn.execute(
-            "SELECT pg_get_userbyid(proowner),prosecdef,proconfig,prosrc FROM pg_proc WHERE oid=%s::regprocedure",
-            (function,))
-        row = await cur.fetchone()
-        challenge_source = (MIGRATIONS_DIR / CHALLENGE_FUNCTION_SOURCES[function]).read_text()
-        body = re.search(
-            rf"CREATE (?:OR REPLACE )?FUNCTION {re.escape(name)}\(.*?AS\s+(\$body\$)(.*?)\1",
-            challenge_source, re.S | re.I).group(2)
+            rf"CREATE (?:OR REPLACE )?FUNCTION {re.escape(name)}\(.*?AS\s+(\$[a-z_]*\$)(.*?)\1",
+            source, re.S | re.I).group(2)
         _require_contract(row == (BOOTSTRAP_ROLE, True, ["search_path=pg_catalog, pg_temp"], body),
             f"function definition: {function}")
 
@@ -539,6 +510,10 @@ async def prepare_application_roles(database_url: str, *, restoring: bool = Fals
                 # ALTER ROLE locks shared catalog rows. Recheck after any
                 # concurrent setup commits, before changing its credentials.
                 await _check_role_database_ownership(conn)
+                if restoring:
+                    await _check_contract_functions_exist(
+                        conn, (spec.signature for spec in FUNCTION_SPECS
+                               if spec.signature in FUNCTIONS and spec.source not in FUNCTION_FILES))
                 for role, password in ((CONTROL_ROLE, state.control_password), (RUNTIME_ROLE, state.runtime_password)):
                     verifier = conn.pgconn.encrypt_password(password.encode(), role.encode(), b"scram-sha-256").decode()
                     await conn.execute(sql.SQL("ALTER ROLE {} LOGIN PASSWORD {}").format(sql.Identifier(role), sql.Literal(verifier)))

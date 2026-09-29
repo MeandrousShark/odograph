@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from psycopg import Rollback
+from psycopg.errors import SerializationFailure
 from starlette.datastructures import UploadFile
 from starlette.responses import JSONResponse, Response
 
@@ -76,25 +77,37 @@ def _reject_oversized_import_upload(request: Request) -> None:
         )
 
 
+async def _read_export_bundle(pool) -> dict:
+    for attempt in range(2):
+        try:
+            async with pool.connection(consistent_snapshot=True) as conn:
+                return build_export_bundle(
+                    vehicles=await _fetch_export_vehicles(conn),
+                    places=await _fetch_export_places(conn),
+                    tag_rules=await _fetch_export_tag_rules(conn),
+                    mileage_rates=await _fetch_export_mileage_rates(conn),
+                    trips=await _fetch_export_trips(conn),
+                    expenses=await _fetch_export_expenses(conn),
+                    odometer_readings=await _fetch_export_odometer_readings(conn),
+                    settings=await _fetch_export_settings(conn),
+                    schema_version=await _fetch_schema_version(conn),
+                    exported_at=datetime.now(timezone.utc),
+                )
+        except SerializationFailure:
+            if attempt:
+                raise
+            log.info("portable export: retrying after concurrent account change")
+
+    raise AssertionError("unreachable")
+
+
 def make_router() -> APIRouter:
     router = APIRouter()
 
     @router.get("/settings/export/data")
     async def export_data(request: Request, user: dict = Depends(require_user)):
         pool = request.state.account_pool
-        async with pool.connection() as conn:
-            bundle = build_export_bundle(
-                vehicles=await _fetch_export_vehicles(conn),
-                places=await _fetch_export_places(conn),
-                tag_rules=await _fetch_export_tag_rules(conn),
-                mileage_rates=await _fetch_export_mileage_rates(conn),
-                trips=await _fetch_export_trips(conn),
-                expenses=await _fetch_export_expenses(conn),
-                odometer_readings=await _fetch_export_odometer_readings(conn),
-                settings=await _fetch_export_settings(conn),
-                schema_version=await _fetch_schema_version(conn),
-                exported_at=datetime.now(timezone.utc),
-            )
+        bundle = await _read_export_bundle(pool)
 
         def _serialize_bundle() -> bytes:
             # allow_nan=False: json.dumps otherwise writes a bare NaN/Infinity
