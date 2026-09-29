@@ -141,6 +141,50 @@ def test_link_restart_reuses_browser_binding_and_replaces_cookie_attempt(monkeyp
     assert request.session[OIDC_PROTECTED_ATTEMPT_KEY]["state"] == client.kwargs["state"]
 
 
+def test_cancelled_protected_redirect_consumes_attempt_after_caller_leaves(monkeypatch):
+    request, client = _request({"account_id": 1, "auth_version": 4, "csrf": "csrf"})
+    request.app.state.config = SimpleNamespace(oidc_issuer="https://idp.example")
+    entered, release, consumed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    @asynccontextmanager
+    async def connection(_pool):
+        yield object()
+
+    async def start(_conn, **_kwargs):
+        return True
+
+    async def consume(_conn, **kwargs):
+        assert kwargs["action"] == "reauth"
+        await release.wait()
+        consumed.set()
+
+    async def waiting_redirect(*_args, **_kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(auth, "control_connection", connection)
+    monkeypatch.setattr(auth, "start_oidc_attempt", start)
+    monkeypatch.setattr(auth, "consume_oidc_attempt", consume)
+    client.authorize_redirect = waiting_redirect
+
+    async def run():
+        caller = asyncio.create_task(_oidc_protected_redirect(
+            request, action="reauth", account={"id": 1, "auth_version": 4},
+            proof_action="add_password", target="",
+        ))
+        await entered.wait()
+        caller.cancel()
+        await asyncio.sleep(0)
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        assert OIDC_PROTECTED_ATTEMPT_KEY not in request.session
+        release.set()
+        await asyncio.wait_for(consumed.wait(), 2)
+
+    asyncio.run(run())
+
+
 def test_rejected_link_start_does_not_replace_existing_cookie_attempt(monkeypatch):
     request, client = _request({"account_id": 1, "auth_version": 4, "csrf": "csrf"})
     request.app.state.config = SimpleNamespace(oidc_issuer="https://idp.example")
