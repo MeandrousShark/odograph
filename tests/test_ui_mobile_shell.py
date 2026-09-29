@@ -88,6 +88,9 @@ def test_authenticated_mobile_shell_has_account_fallback_and_post_logout():
     member_account = member.split('<details class="mobile-account-menu"', 1)[1].split("</details>", 1)[0]
     assert 'href="/settings" class="mobile-account-item"' in member_account
     assert 'href="/settings/account" class="mobile-account-item"' in member_account
+    accounts = _render(path="/admin/accounts")
+    assert '<details class="mobile-account-menu is-active" data-header-disclosure="account">' in accounts
+    assert 'href="/admin/accounts" class="mobile-account-item is-active" aria-current="page"' in accounts
 
 
 def test_mobile_account_trigger_avatar_image_replaces_initials_when_uploaded():

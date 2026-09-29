@@ -1,12 +1,12 @@
 """Node-harness tests for base.html's cross-tab "odograph-account" marker.
 
 Every signed-in page writes its account id to a shared localStorage marker
-and reloads itself if another tab changes it -- the mechanism that hides
+and navigates to a clean GET if another tab changes it -- the mechanism that hides
 stale private data the moment a sign-out or account switch happens in
 another tab. Sign-in and signup pages extend the same base.html shell with
 no account, so merely opening one must not touch the marker, or opening it
 in a new tab would make every already-signed-in tab believe the account
-changed and reload. A real sign-out (POST /logout) still has to change the
+changed and navigate away. A real sign-out (POST /logout) still has to change the
 marker so those other tabs notice; app/auth.py's logout redirects to
 /login with a `signed_out` query marker for exactly that, read only by
 this script, never by the server.
@@ -110,6 +110,7 @@ const document = {
 };
 
 let reloadCount = 0;
+const replacedUrls = [];
 const replaceStateCalls = [];
 const window = {
   localStorage,
@@ -118,6 +119,7 @@ const window = {
     pathname: scenario.pathname || "/login",
     hash: scenario.hash || "",
     reload() { reloadCount += 1; },
+    replace(url) { replacedUrls.push(url); },
   },
   history: {
     replaceState(state, title, url) {
@@ -176,6 +178,7 @@ process.stdout.write(JSON.stringify({
   store,
   removed,
   reloadCount,
+  replacedUrls,
   hiddenCount,
   replaceStateCalls,
   hasStorageListener: windowListeners.has("storage"),
@@ -249,22 +252,22 @@ def test_sign_out_signal_preserves_other_query_params_and_the_hash():
     ]
 
 
-def test_restored_private_page_reloads_even_when_storage_is_blocked():
+def test_restored_private_page_navigates_even_when_storage_is_blocked():
     result = _run(accountId="42", blockStorage=True, emitPageShow=True)
     assert result["hiddenCount"] == 1
-    assert result["reloadCount"] == 1
+    assert result["replacedUrls"] == ["/"]
 
 
-def test_pagehide_restoration_reloads_without_persisted_flag():
+def test_pagehide_restoration_navigates_without_persisted_flag():
     result = _run(accountId="42", emitPageHide=True, emitPageShow=False)
     assert result["hiddenCount"] >= 1
-    assert result["reloadCount"] == 1
+    assert result["replacedUrls"] == ["/"]
 
 
 def test_blocked_storage_revalidates_when_tab_regains_focus():
     result = _run(accountId="42", blockStorage=True, emitBlurFocus=True)
     assert result["hiddenCount"] == 1
-    assert result["reloadCount"] == 1
+    assert result["replacedUrls"] == ["/"]
 
 
 def test_blocked_storage_prevents_request_from_tab_that_left_before_focus():
@@ -272,15 +275,15 @@ def test_blocked_storage_prevents_request_from_tab_that_left_before_focus():
         accountId="42", blockStorage=True, emitBlurOnly=True, emitBeforeRequest=True,
     )
     assert result["prevented"] is True
-    assert result["reloadCount"] == 1
+    assert result["replacedUrls"] == ["/"]
 
 
-def test_request_cannot_start_after_focus_has_scheduled_a_reload():
+def test_request_cannot_start_after_focus_has_scheduled_navigation():
     result = _run(
         accountId="42", blockStorage=True, emitBlurFocus=True, emitBeforeRequest=True,
     )
     assert result["prevented"] is True
-    assert result["reloadCount"] == 1
+    assert result["replacedUrls"] == ["/"]
 
 
 def test_blocked_storage_does_not_disable_requests_on_a_fresh_page():
@@ -296,7 +299,7 @@ def test_stale_htmx_response_without_matching_account_cannot_swap():
         )
         assert result["prevented"] is True
         assert result["hiddenCount"] == 1
-        assert result["reloadCount"] == 1
+        assert result["replacedUrls"] == ["/"]
 
 
 def test_matching_htmx_response_and_app_redirect_remain_usable():
@@ -315,13 +318,22 @@ def test_old_tab_cannot_submit_after_another_account_changes_marker():
         emitBeforeRequest=True, emitStorageNewValue="99",
     )
     assert result["prevented"] is True
-    assert result["reloadCount"] == 1
+    assert result["replacedUrls"] == ["/"]
 
 
-def test_a_stale_marker_still_reloads_the_tab_once_notified():
-    """Sanity check that the surrounding reload mechanism the fix leaves
-    alone still works: a signed-in tab reloads when another tab's write
-    changes the marker to something else."""
+def test_a_stale_marker_navigates_the_tab_once_notified():
+    """A signed-in tab leaves stale content when another account changes the marker."""
     result = _run(accountId="42", search="", initialStorage={}, emitStorageNewValue="99")
-    assert result["reloadCount"] == 1
+    assert result["replacedUrls"] == ["/"]
     assert result["hiddenCount"] >= 1
+
+
+def test_account_switch_after_admin_invite_post_navigates_with_a_clean_get():
+    result = _run(
+        accountId="42", pathname="/admin/invitations",
+        initialStorage={"odograph-account": "42"},
+        emitStorageNewValue="99",
+    )
+    assert result["replacedUrls"] == ["/"]
+    assert result["reloadCount"] == 0
+    assert result["hiddenCount"] == 1

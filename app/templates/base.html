@@ -67,7 +67,7 @@
     {% set more_active = active_page in ("expenses", "stats") %}
     {% set settings_active = current_path == "/settings" %}
     {% set account_settings_active = current_path == "/settings/account" %}
-    {% set account_menu_active = current_path == "/settings" or current_path.startswith("/settings/") %}
+    {% set account_menu_active = current_path == "/settings" or current_path.startswith("/settings/") or active_page == "accounts" %}
     {% set display_name = user.name or user.email or user.sub or "User" %}
     {% set avatar_seed = display_name.split("@", 1)[0] %}
     {% set name_parts = avatar_seed.split() %}
@@ -88,7 +88,6 @@
       <a href="/report"{% if active_page == "report" %} aria-current="page"{% endif %}>Report</a>
       <a href="/expenses"{% if active_page == "expenses" %} aria-current="page"{% endif %}>Expenses</a>
       <a href="/stats"{% if active_page == "stats" %} aria-current="page"{% endif %}>Stats</a>
-      {% if user.is_admin %}<a href="/admin/accounts"{% if active_page == "accounts" %} aria-current="page"{% endif %}>Accounts</a>{% endif %}
     </nav>
     <div class="header-account">
       {% if user.id %}
@@ -103,6 +102,7 @@
       </span>
       {% endif %}
       <a href="/settings" class="header-action settings-link header-control" aria-label="Settings" title="Settings"{% if settings_active %} aria-current="page"{% endif %}>{{ icon("gear", extra_class="header-action-icon") }}Settings</a>
+      {% if user.is_admin %}<a href="/admin/accounts" class="header-action accounts-link header-control" aria-label="Accounts" title="Accounts"{% if active_page == "accounts" %} aria-current="page"{% endif %}>{{ icon("list-dashes", extra_class="header-action-icon") }}Accounts</a>{% endif %}
       <form class="logout-form" hx-post="/logout" hx-swap="none"><button type="submit" class="link-button header-action header-control" aria-label="Log out" title="Log out">{{ icon("sign-out", extra_class="header-action-icon") }}Log out</button></form>
     </div>
     <details class="mobile-account-menu{% if account_menu_active %} is-active{% endif %}" data-header-disclosure="account">
@@ -246,12 +246,12 @@
     (() => {
       const account = document.body.dataset.accountId;
       const marker = "odograph-account";
-      let reloading = false;
-      const reloadPrivatePage = () => {
-        if (reloading) return;
-        reloading = true;
+      let navigating = false;
+      const leavePrivatePage = () => {
+        if (navigating) return;
+        navigating = true;
         document.documentElement.style.visibility = "hidden";
-        window.location.reload();
+        window.location.replace("/");
       };
       try {
         localStorage.removeItem("htmx-history-cache");
@@ -259,9 +259,9 @@
 
       // Signing out redirects here with this query marker so a real
       // sign-out still changes the shared marker and every other
-      // signed-in tab still hides and reloads. Merely landing on a page
+      // signed-in tab still hides and navigates away. Merely landing on a page
       // with no account -- opening the sign-in or account-creation page
-      // in a new tab -- must not touch it, or that alone would reload
+      // in a new tab -- must not touch it, or that alone would navigate away from
       // every tab that already had one open.
       const params = new URLSearchParams(window.location.search);
       if (params.has("signed_out")) {
@@ -283,18 +283,18 @@
         markerAvailable = localStorage.getItem(marker) === account;
       } catch (_) {}
       window.addEventListener("storage", (event) => {
-        if (event.key === marker && event.newValue !== account) reloadPrivatePage();
+        if (event.key === marker && event.newValue !== account) leavePrivatePage();
       });
       window.addEventListener("pagehide", () => {
         document.documentElement.style.visibility = "hidden";
       });
       window.addEventListener("pageshow", (event) => {
         if (event.persisted || document.documentElement.style.visibility === "hidden") {
-          reloadPrivatePage();
+          leavePrivatePage();
           return;
         }
         try {
-          if (markerAvailable && localStorage.getItem(marker) !== account) reloadPrivatePage();
+          if (markerAvailable && localStorage.getItem(marker) !== account) leavePrivatePage();
         } catch (_) {}
       });
       let leftTab = false;
@@ -303,26 +303,26 @@
         if (!leftTab) return;
         leftTab = false;
         if (!markerAvailable) {
-          reloadPrivatePage();
+          leavePrivatePage();
           return;
         }
         try {
-          if (localStorage.getItem(marker) !== account) reloadPrivatePage();
+          if (localStorage.getItem(marker) !== account) leavePrivatePage();
         } catch (_) {
-          reloadPrivatePage();
+          leavePrivatePage();
         }
       });
       document.addEventListener("htmx:beforeRequest", (event) => {
-        if (reloading || document.documentElement.style.visibility === "hidden" ||
+        if (navigating || document.documentElement.style.visibility === "hidden" ||
             (!markerAvailable && leftTab)) {
           event.preventDefault();
-          reloadPrivatePage();
+          leavePrivatePage();
           return;
         }
         try {
           if (localStorage.getItem(marker) !== account) {
             event.preventDefault();
-            reloadPrivatePage();
+            leavePrivatePage();
           }
         } catch (_) {}
       });
@@ -333,7 +333,7 @@
         if ((!responseAccount && !redirect) ||
             (responseAccount && responseAccount !== account)) {
           event.preventDefault();
-          reloadPrivatePage();
+          leavePrivatePage();
         }
       });
     })();

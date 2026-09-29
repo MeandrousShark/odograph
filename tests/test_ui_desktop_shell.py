@@ -78,6 +78,9 @@ def test_authenticated_shell_keeps_account_identity_and_conditional_account_secu
     assert ">Test User</span>" in account
     assert 'class="header-action account-security"' not in account
     assert 'class="header-action settings-link header-control"' in account
+    assert 'class="header-action accounts-link header-control"' in account
+    assert 'href="/admin/accounts"' in account
+    assert 'href="/admin/accounts"' not in _nav(body)
     assert 'title="Settings"' in account
     assert 'href="/static/icons.svg?v=v1#gear"' in account
     assert 'href="/static/icons.svg?v=v1#sign-out"' in account
@@ -87,6 +90,7 @@ def test_authenticated_shell_keeps_account_identity_and_conditional_account_secu
     assert 'class="account-identity account-identity-link"' not in non_admin
     non_admin_account = non_admin.split('class="header-account"', 1)[1].split("</div>", 1)[0]
     assert 'class="account-identity account-identity-link header-control"' in non_admin_account
+    assert 'href="/admin/accounts"' not in non_admin_account
 
     no_id = _render("/", {"id": None, "name": "Admin Legacy", "is_admin": True})
     assert 'href="/settings/account"' not in no_id
@@ -107,7 +111,7 @@ def test_authenticated_shell_account_identity_link_has_aria_current_on_own_page(
     assert 'class="header-action settings-link header-control" aria-label="Settings" title="Settings" aria-current="page"' in account_elsewhere
 
 
-def test_settings_and_account_settings_are_the_only_account_destination_states():
+def test_account_controls_have_independent_active_states():
     settings = _render("/settings")
     account = settings.split('class="header-account"', 1)[1].split("</div>", 1)[0]
     assert account.count('aria-current="page"') == 1
@@ -119,6 +123,12 @@ def test_settings_and_account_settings_are_the_only_account_destination_states()
     assert account.count('aria-current="page"') == 1
     assert 'account-identity-link header-control" aria-label="Account Settings, Test User" aria-current="page"' in account
     assert 'settings-link header-control" aria-label="Settings" title="Settings" aria-current="page"' not in account
+
+    accounts = _render("/admin/accounts")
+    account = accounts.split('class="header-account"', 1)[1].split("</div>", 1)[0]
+    assert account.count('aria-current="page"') == 1
+    assert 'accounts-link header-control" aria-label="Accounts" title="Accounts" aria-current="page"' in account
+    assert 'aria-current="page"' not in _nav(accounts)
 
 
 def test_authenticated_actions_are_named_local_icon_controls_and_logout_is_post_only():
@@ -184,7 +194,7 @@ def test_desktop_header_uses_compact_nocturne_rule_and_active_accent_indicator()
     assert "header nav { flex-wrap: nowrap; gap: var(--space-2); }" in CSS
     assert "header nav a { padding-inline: 0; }" in CSS
     assert ".header-account .account-name { display: none; }" in CSS
-    assert ".header-account .settings-link, .header-account .logout-form .header-action { font-size: 0; }" in CSS
+    assert ".header-account .settings-link, .header-account .accounts-link," in CSS
     assert "bottom: calc(-1 * var(--space-1))" in CSS
     assert 'background: var(--accent-primary)' in CSS
     assert "var(--control-height)" in CSS
