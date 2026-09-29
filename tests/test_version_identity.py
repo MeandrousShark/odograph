@@ -12,6 +12,7 @@ import app.ui.settings as ui_settings
 from app.config import Config
 from app.account_context import AccountConnection, AccountPrincipal
 from app.account_settings import AccountSettings
+from app.application_roles import FUNCTION_FILES
 from app.db import _fetch_schema_version
 from app.detector.runner import DETECTOR_VERSION
 from app.main import create_app, make_templates
@@ -109,6 +110,24 @@ def test_docker_base_is_pinned_to_the_verified_multi_arch_index():
     assert "skopeo inspect --raw docker://docker.io/library/python:3.13-slim" in source
     assert "application/vnd.oci.image.index.v1+json" in source
     assert "podman image inspect --format '{{index .RepoDigests 0}}'" not in source
+
+
+def test_docker_image_includes_runtime_function_sql():
+    source = (ROOT / "Dockerfile").read_text().replace("\\\n", " ")
+    copied = set()
+    for line in source.splitlines():
+        parts = line.split()
+        if parts[:1] == ["COPY"] and parts[-1:] == ["scripts/sql/"]:
+            copied.update(Path(path).name for path in parts[1:-1]
+                          if path.startswith("scripts/sql/"))
+
+    allowed = {
+        Path(line[1:]).name
+        for line in (ROOT / ".dockerignore").read_text().splitlines()
+        if line.startswith("!scripts/sql/") and line != "!scripts/sql/"
+    }
+    assert copied == set(FUNCTION_FILES)
+    assert allowed == set(FUNCTION_FILES)
 
 
 def test_settings_diagnostics_render_all_runtime_versions():

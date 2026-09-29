@@ -105,6 +105,30 @@ def test_final_email_challenge_send_admission_checks_token_and_account_version()
     asyncio.run(_scenario(check))
 
 
+def test_failed_old_delivery_cannot_revoke_a_replacement_challenge():
+    async def check(owner, pools, account):
+        account_id = account["id"]
+        async with pools.control.connection() as conn:
+            old = await issue_email_challenge(
+                conn, account_id, 1, PURPOSE_CURRENT, "old@example.invalid",
+            )
+        async with owner.connection() as conn:
+            await conn.execute(
+                "UPDATE email_challenges SET created_at=now()-interval '2 minutes' "
+                "WHERE account_id=%s", (account_id,),
+            )
+        async with pools.control.connection() as conn:
+            replacement = await issue_email_challenge(
+                conn, account_id, 1, PURPOSE_CURRENT, "old@example.invalid",
+            )
+            assert replacement and replacement != old
+            await revoke_email_challenge(conn, account_id, PURPOSE_CURRENT, old)
+            assert not await email_challenge_send_usable(conn, account_id, 1, PURPOSE_CURRENT, old)
+            assert await email_challenge_send_usable(conn, account_id, 1, PURPOSE_CURRENT, replacement)
+
+    asyncio.run(_scenario(check))
+
+
 def test_change_revokes_old_verification_and_old_sessions():
     async def check(owner, pools, account):
         account_id = account["id"]

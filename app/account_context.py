@@ -140,8 +140,13 @@ class AccountPool:
     principal: AccountPrincipal
 
     @asynccontextmanager
-    async def connection(self, *, timeout=None) -> AsyncIterator[AccountConnection]:
-        async with _account_connection(self.runtime_pool, self.principal, timeout=timeout) as conn:
+    async def connection(
+        self, *, timeout=None, consistent_snapshot: bool = False,
+    ) -> AsyncIterator[AccountConnection]:
+        async with _account_connection(
+            self.runtime_pool, self.principal, timeout=timeout,
+            consistent_snapshot=consistent_snapshot,
+        ) as conn:
             # A shared row lock blocks disablement/password version changes
             # until this unit of work commits. Runtime cannot mutate accounts.
             await conn.execute(
@@ -225,6 +230,7 @@ async def account_connection(
 @asynccontextmanager
 async def _account_connection(
     pool: AsyncConnectionPool, principal: AccountPrincipal, *, timeout=None,
+    consistent_snapshot: bool = False,
 ) -> AsyncIterator[AsyncConnection]:
     """Borrow a connection, open a transaction, and scope it to one account.
 
@@ -245,6 +251,13 @@ async def _account_connection(
         )
     async with pool.connection(**({"timeout": timeout} if timeout is not None else {})) as conn:
         async with conn.transaction():
+            if consistent_snapshot:
+                # SET TRANSACTION must precede the first query, including
+                # transaction-local account context and admission. Portable
+                # export opts in so its separate reads share one snapshot.
+                await conn.execute(
+                    "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"
+                )
             await apply_account_context(conn, principal)
             yield conn
 
