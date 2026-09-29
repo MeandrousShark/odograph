@@ -152,15 +152,127 @@ if [ "$db_ready" -ne 1 ]; then
     exit 1
 fi
 
-# podman-compose's `ps` (unlike docker compose's) accepts no positional
-# service filter -- `ps app` exits with a usage error under podman-compose,
-# which the `2>/dev/null` here would otherwise silently turn into "app is
-# not running" even when it is. List every service instead and match app's
-# own row by its container-name segment, which both frontends render as
-# either `..._app_<n>` or `..-app-<n>`.
-app_status="$($compose_cmd ps 2>/dev/null | grep -E '(^|[-_])app([-_][0-9]+)?([[:space:]]|$)')" || app_status=""
-if printf '%s\n' "$app_status" | grep -iqE 'up|running'; then
+app_state="stopped"
+compose_words=()
+read -r -a compose_words <<< "$compose_cmd"
+compose_program="${compose_words[0]:-}"
+compose_program_name="$(basename -- "$compose_program")"
+
+classify_app_container_state() {
+    case "$1" in
+        running) app_state="running" ;;
+        exited|created|configured|stopped) ;;
+        *) app_state="unknown" ;;
+    esac
+}
+
+case "$compose_program_name" in
+    podman-compose)
+        # podman-compose ps has no service filter. Its format option is passed
+        # to podman ps, so request service label and container state as fields.
+        if ! app_listing="$($compose_cmd ps --format '{{.Names}}|{{.State}}|{{.Label "io.podman.compose.service"}}' 2>/dev/null)"; then
+            echo "error: unable to determine whether the app service is stopped; podman-compose ps failed." >&2
+            exit 1
+        fi
+        if [ -n "$app_listing" ]; then
+            database_service_present=0
+            while IFS= read -r app_row; do
+                case "$app_row" in
+                    *'|'*'|'*) ;;
+                    *) app_state="unknown"; break ;;
+                esac
+                container_name="${app_row%%|*}"
+                state_and_service="${app_row#*|}"
+                container_state="${state_and_service%%|*}"
+                container_service="${state_and_service#*|}"
+                case "$container_name" in
+                    ""|*[![:alnum:]_.-]*) app_state="unknown"; break ;;
+                esac
+                case "$container_state" in
+                    ""|*[![:alpha:]_-]*) app_state="unknown"; break ;;
+                esac
+                case "$container_state" in
+                    running|exited|created|configured|stopped|paused|restarting|removing|dead) ;;
+                    *) app_state="unknown"; break ;;
+                esac
+                case "$container_service" in
+                    ""|*[![:alnum:]_.-]*) app_state="unknown"; break ;;
+                esac
+                if [ "$container_service" = "db" ]; then
+                    database_service_present=1
+                elif [ "$container_service" = "app" ]; then
+                    classify_app_container_state "$container_state"
+                    if [ "$app_state" = "running" ] || [ "$app_state" = "unknown" ]; then
+                        break
+                    fi
+                fi
+            done <<< "$app_listing"
+            if [ "$app_state" != "unknown" ] && [ "$database_service_present" -ne 1 ]; then
+                app_state="unknown"
+            fi
+        else
+            app_state="unknown"
+        fi
+        ;;
+    docker)
+        if [ "${compose_words[1]:-}" != "compose" ]; then
+            echo "error: unsupported Compose command; use docker compose or podman-compose for a full restore." >&2
+            exit 1
+        fi
+        if ! compose_services="$($compose_cmd config --services 2>/dev/null)"; then
+            echo "error: unable to determine whether the app service is stopped; docker compose config failed." >&2
+            exit 1
+        fi
+        if [ -z "$compose_services" ]; then
+            app_state="unknown"
+        else
+            app_service_present=0
+            database_service_present=0
+            while IFS= read -r service_name; do
+                case "$service_name" in
+                    ""|*[![:alnum:]_.-]*) app_state="unknown"; break ;;
+                    app) app_service_present=1 ;;
+                    db) database_service_present=1 ;;
+                esac
+            done <<< "$compose_services"
+            if [ "$database_service_present" -ne 1 ]; then
+                app_state="unknown"
+            elif [ "$app_service_present" -eq 1 ]; then
+                if ! app_ids="$($compose_cmd ps --all --quiet app 2>/dev/null)"; then
+                    echo "error: unable to determine whether the app service is stopped; docker compose ps failed." >&2
+                    exit 1
+                fi
+                if [ -n "$app_ids" ]; then
+                    while IFS= read -r app_id; do
+                        if [[ ! "$app_id" =~ ^[[:xdigit:]]{12,64}$ ]]; then
+                            app_state="unknown"
+                            break
+                        fi
+                        if ! container_state="$("$compose_program" inspect --format '{{.State.Status}}' "$app_id" 2>/dev/null)"; then
+                            app_state="unknown"
+                            break
+                        fi
+                        classify_app_container_state "$container_state"
+                        if [ "$app_state" = "running" ] || [ "$app_state" = "unknown" ]; then
+                            break
+                        fi
+                    done <<< "$app_ids"
+                fi
+            fi
+        fi
+        ;;
+    *)
+        echo "error: unsupported Compose command; use docker compose or podman-compose for a full restore." >&2
+        exit 1
+        ;;
+esac
+
+if [ "$app_state" = "running" ]; then
     echo "error: the app service appears to be running. Stop it first (e.g. $compose_cmd stop app) -- a live app must not race the restore." >&2
+    exit 1
+fi
+if [ "$app_state" = "unknown" ]; then
+    echo "error: unable to determine whether the app service is stopped from Compose's structured container state; refusing restore." >&2
     exit 1
 fi
 

@@ -2795,6 +2795,35 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 
 @media (max-width: 760px) {
   .settings-page-header { align-items: flex-start; }
+  .admin-card-table,
+  .admin-card-table tbody,
+  .admin-card-table tr { display: block; width: 100%; }
+  .admin-card-table thead {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap;
+  }
+  .admin-card-table tbody tr {
+    margin-bottom: var(--space-3); padding: var(--space-2);
+    border: 1px solid var(--border); border-radius: var(--radius-md);
+  }
+  .admin-card-table tbody td {
+    display: block; min-width: 0; padding: var(--space-2) 0;
+    overflow-wrap: anywhere;
+  }
+  .admin-card-table tbody td:last-child { border-bottom: 0; }
+  .admin-card-table tbody td[data-label]::before {
+    display: block; margin-bottom: var(--space-1);
+    color: var(--fg-muted); font-size: .8rem; font-weight: 600;
+    text-transform: uppercase; content: attr(data-label);
+  }
+  .admin-card-table tbody td form { margin-top: var(--space-2); }
+  .admin-card-table tbody td[data-label="Actions"] form label {
+    display: flex; align-items: center; gap: var(--space-2);
+    min-height: var(--control-height);
+  }
+  .admin-card-table tbody td .control {
+    width: 100%; white-space: normal; text-align: left;
+  }
   .settings-page .settings-preference-grid,
   .settings-page .settings-preference-checks { grid-template-columns: minmax(0, 1fr); }
   .settings-page .settings-preferences-form { gap: var(--space-4); }
@@ -2836,6 +2865,21 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
     align-items: center; flex-direction: row; width: 100%;
   }
   .settings-page .settings-import-form button { width: 100%; }
+  .settings-page .admin-invitation-form {
+    display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); min-width: 0;
+  }
+  .settings-page .admin-invitation-form > label:first-of-type {
+    display: flex; min-width: 0; flex-direction: column; align-items: stretch; gap: var(--space-1);
+  }
+  .settings-page .admin-invitation-form > label:first-of-type input {
+    width: 100%; min-width: 0;
+  }
+  .settings-page .admin-invitation-form .admin-send-checkbox {
+    display: flex; align-items: center; gap: var(--space-2);
+    width: 100%; min-height: var(--control-height); margin: 0;
+  }
+  .settings-page .admin-invitation-form .admin-send-checkbox input { flex: none; margin: 0; }
+  .settings-page .admin-invitation-form button { width: 100%; }
 }
 
 @media (max-width: 760px) {

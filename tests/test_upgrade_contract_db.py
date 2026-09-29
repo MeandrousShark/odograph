@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -28,6 +29,8 @@ from app.application_roles import (
 )
 from app.db import MIGRATIONS_DIR, make_pool, run_migrations
 from app.role_setup import RoleSetupError
+from app.account_context import CONTROL_ROLE, RUNTIME_ROLE
+from app.role_setup import BOOTSTRAP_ROLE
 from conftest import drop_and_recreate_schema, full_schema_reset
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -36,11 +39,38 @@ pytestmark = pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS
 PREPARED_SCHEMA = 26
 ACTIVATED_SCHEMA = 28
 PROVISIONED_SCHEMAS = pytest.mark.parametrize("provisioned_schema", [PREPARED_SCHEMA, ACTIVATED_SCHEMA])
+HISTORICAL_SQL = Path(__file__).parent / "fixtures" / "schema26_roles"
+
+
+def _historical_table_rights(role, table):
+    # Frozen schema-26 rights from source 25b6f9d, before bootstrap purge and
+    # account update grants were narrowed by later migrations.
+    if role == RUNTIME_ROLE:
+        if table in OWNED_TABLES:
+            return {"INSERT", "UPDATE", "DELETE"} | ({"SELECT"} if table != "ingest_credentials" else set())
+        if table in application_roles.REFERENCE_TABLES:
+            return {"SELECT"}
+    if role == CONTROL_ROLE:
+        if table == "accounts":
+            return {"SELECT", "UPDATE"}
+        if table == "oidc_identities":
+            return {"SELECT", "INSERT", "UPDATE", "DELETE"}
+        if table in ("instance_state", "schema_migrations"):
+            return {"SELECT"}
+    if role == BOOTSTRAP_ROLE:
+        rights = set()
+        if table in application_roles.BOOTSTRAP_INSERT_TABLES:
+            rights.add("INSERT")
+        if table in application_roles.BOOTSTRAP_LOCK_TABLES or table == "instance_state":
+            rights.update(("SELECT", "UPDATE"))
+        if table == "reference_mileage_rates":
+            rights.add("SELECT")
+        return rights
+    return set()
 
 
 async def _provision(pool, monkeypatch, schema):
-    # Reproduce the role contract that existed before invitations and email
-    # challenges were added.
+    # Reproduce schema-26/28 functions and grants, not today's provisioning.
     owned_tables = OWNED_TABLES
     with monkeypatch.context() as patch:
         control_tables = tuple(table for table in application_roles.CONTROL_TABLES
@@ -60,6 +90,8 @@ async def _provision(pool, monkeypatch, schema):
             if key not in future_functions
         })
         patch.setattr(application_roles, "FUNCTION_FILES", application_roles.FUNCTION_FILES[:3])
+        patch.setattr(application_roles, "SQL_DIR", HISTORICAL_SQL)
+        patch.setattr(application_roles, "_table_rights", _historical_table_rights)
         patch.setattr(application_roles, "INVITATION_FUNCTIONS", ())
         patch.setattr(application_roles, "EMAIL_CHALLENGE_FUNCTIONS", ())
         patch.setattr(application_roles, "PASSWORD_RESET_FUNCTIONS", ())
@@ -69,6 +101,12 @@ async def _provision(pool, monkeypatch, schema):
         if schema < ACTIVATED_SCHEMA:
             patch.setattr(application_roles, "CONTRACT_VERSION", "ownership-prepared-v1")
         await prepare_application_roles(TEST_DB)
+    # The current provisioner adds column UPDATE grants that did not exist in
+    # schema 26/28; remove them before replaying historical forward migrations.
+    async with pool.connection() as conn:
+        await conn.execute(
+            "REVOKE UPDATE (updated_at,avatar_bytes,avatar_mime,avatar_updated_at) "
+            "ON public.accounts FROM odograph_control")
     if schema >= ACTIVATED_SCHEMA:
         return
     # Schema 26 had every account policy prepared but not yet enforced.
@@ -153,6 +191,32 @@ def test_table_added_without_its_contract_refuses_upgraded_start(monkeypatch, tm
         tmp_path, "upgraded", extra={"999_contract_probe.sql": "CREATE TABLE contract_probe(id int);"})
     asyncio.run(_upgrade_after_provisioning(
         monkeypatch, provisioned_schema, provisioned, upgraded, start_again))
+
+
+@pytest.mark.parametrize("omission,cause", [
+    ("grant", "function privilege: odograph_control public.resend_member_invitation"),
+    ("replacement", "function definition: public.bootstrap_first_account"),
+])
+def test_historical_upgrade_needs_forward_function_contract(monkeypatch, tmp_path, omission, cause):
+    async def start_again(pool):
+        with pytest.raises(RoleSetupError, match=cause):
+            await prepare_application_roles(TEST_DB)
+
+    if omission == "grant":
+        filename = "034_admin_invitations.sql"
+        original = (MIGRATIONS_DIR / filename).read_text()
+        statement = "GRANT EXECUTE ON FUNCTION public.resend_member_invitation(bigint,bigint,bigint,text) TO odograph_control;"
+        assert original.count(statement) == 1
+        changed = original.replace(statement, "")
+    else:
+        filename = "037_account_deletion.sql"
+        original = (MIGRATIONS_DIR / filename).read_text()
+        start = original.index("CREATE OR REPLACE FUNCTION public.bootstrap_first_account(")
+        end = original.index("REVOKE ALL ON FUNCTION public.bootstrap_first_account", start)
+        changed = original[:start] + original[end:]
+    provisioned = _migration_dir(tmp_path, "provisioned", through=PREPARED_SCHEMA)
+    upgraded = _migration_dir(tmp_path, "upgraded", extra={filename: changed})
+    asyncio.run(_upgrade_after_provisioning(monkeypatch, PREPARED_SCHEMA, provisioned, upgraded, start_again))
 
 
 def test_failed_029_rolls_back_objects_and_grants(monkeypatch, tmp_path):

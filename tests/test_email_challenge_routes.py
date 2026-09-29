@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import httpx
+import pytest
 from fastapi import FastAPI, Request
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import PlainTextResponse
@@ -202,7 +203,7 @@ def test_missing_smtp_and_issuance_rejection_do_not_expose_target_status(monkeyp
     assert rejected.status_code == 200
     assert issued == [True]
     assert "busy@example.com" not in rejected.text
-    assert "eligible" in rejected.text
+    assert "Check your email for a confirmation link" in rejected.text
 
 
 def test_oversize_form_is_rejected_before_issuance(monkeypatch):
@@ -258,6 +259,152 @@ def test_delivery_failure_revokes_challenge_without_exposing_token(monkeypatch):
     assert response.status_code == 503
     assert "secret-token" not in response.text
     assert revoked == [(7, auth.PURPOSE_CURRENT, "secret-token")]
+
+
+@pytest.mark.parametrize("path,extra", [
+    ("/settings/account/email/verify/request", {}),
+    ("/settings/account/email/change/request", {
+        "new_email": "new@example.com", "new_email_confirm": "new@example.com",
+    }),
+])
+@pytest.mark.parametrize("new_version", [3, 4])
+def test_password_added_between_form_selection_and_preparation_is_rejected(monkeypatch, path, extra, new_version):
+    app = _app(monkeypatch)
+    reads = 0
+
+    async def changing_account(_conn, _account_id):
+        nonlocal reads
+        reads += 1
+        if reads == 1:
+            return {**ACCOUNT, "password_hash": None}
+        return {**ACCOUNT, "auth_version": new_version}
+
+    async def no_issue(*_args):
+        raise AssertionError("stale form issued a challenge")
+
+    monkeypatch.setattr(auth, "get_account", changing_account)
+    monkeypatch.setattr(auth, "issue_email_challenge", no_issue)
+
+    async def run():
+        async with await _client(app) as client:
+            await client.get("/seed")
+            return await client.post(path, data={"csrf_token": "csrf-test", **extra})
+
+    response = asyncio.run(run())
+    assert response.status_code == 409
+    assert "current_password" not in response.text
+    assert reads == 2
+
+
+@pytest.mark.parametrize("fails", [True, False])
+def test_cancelled_delivery_owns_exact_token_cleanup(monkeypatch, fails):
+    live = {"new-token", "replacement-token"}
+    revoked = []
+    cleaned = asyncio.Event()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def issue(*_args):
+        return "new-token"
+
+    async def revoke(_conn, _account_id, _purpose, token):
+        revoked.append(token)
+        live.discard(token)
+        cleaned.set()
+
+    class DelayedMailer:
+        def __init__(self, *args):
+            pass
+
+        def compose(self, subject, body):
+            return body
+
+        async def send(self, message):
+            entered.set()
+            await release.wait()
+            if fails:
+                raise OSError("SMTP failed")
+
+    monkeypatch.setattr(auth, "issue_email_challenge", issue)
+    monkeypatch.setattr(auth, "revoke_email_challenge", revoke)
+    monkeypatch.setattr(auth, "Mailer", DelayedMailer)
+    app = _app(monkeypatch)
+
+    async def run():
+        async with await _client(app) as client:
+            await client.get("/seed")
+            caller = asyncio.create_task(client.post("/settings/account/email/verify/request", data={
+                "current_password": "correct", "csrf_token": "csrf-test",
+            }))
+            await asyncio.wait_for(entered.wait(), 2)
+            caller.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await caller
+            release.set()
+            await app.state.security_mail.drain()
+            if fails:
+                await asyncio.wait_for(cleaned.wait(), 2)
+            else:
+                await asyncio.sleep(0)
+            assert revoked == (["new-token"] if fails else [])
+
+    asyncio.run(run())
+    assert live == ({"replacement-token"} if fails else {"new-token", "replacement-token"})
+
+
+def test_cancelled_challenge_waiting_for_mail_slot_still_revokes_failed_send(monkeypatch):
+    issued = asyncio.Event()
+    revoked = asyncio.Event()
+    sent = []
+
+    async def issue(*_args):
+        issued.set()
+        return "pending-token"
+
+    async def revoke(_conn, _account_id, _purpose, token):
+        assert token == "pending-token"
+        revoked.set()
+
+    class FailingMailer:
+        def __init__(self, *args):
+            pass
+
+        def compose(self, subject, body):
+            return body
+
+        async def send(self, message):
+            sent.append(message)
+            raise OSError("transport failed")
+
+    monkeypatch.setattr(auth, "issue_email_challenge", issue)
+    monkeypatch.setattr(auth, "revoke_email_challenge", revoke)
+    monkeypatch.setattr(auth, "Mailer", FailingMailer)
+    app = _app(monkeypatch)
+
+    async def run():
+        admission = app.state.security_mail
+        await admission._slots.acquire()
+        await admission._slots.acquire()
+        try:
+            async with await _client(app) as client:
+                await client.get("/seed")
+                caller = asyncio.create_task(client.post("/settings/account/email/verify/request", data={
+                    "current_password": "correct", "csrf_token": "csrf-test",
+                }))
+                await asyncio.wait_for(issued.wait(), 2)
+                await asyncio.sleep(0)
+                caller.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await caller
+                assert not sent and not revoked.is_set()
+        finally:
+            admission._slots.release()
+            admission._slots.release()
+        await asyncio.wait_for(revoked.wait(), 2)
+        await admission.drain()
+
+    asyncio.run(run())
+    assert len(sent) == 1
 
 
 def test_confirmation_requires_session_and_csrf_and_renews_change_session(monkeypatch):
