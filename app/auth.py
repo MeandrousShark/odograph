@@ -541,6 +541,32 @@ async def _clear_oidc_authorization_state(request: Request, state: str) -> None:
     request.session.pop(f"_state_{provider_name}_{state}", None)
 
 
+async def _consume_protected_attempt(request: Request, action: str, state: str, attempt: Mapping) -> None:
+    async with control_connection(request.app.state.control_pool) as conn:
+        await consume_oidc_attempt(
+            conn, action=action, state=state, nonce=attempt["nonce"],
+            browser_nonce=attempt["browser_nonce"],
+            account_id=attempt.get("account_id"), auth_version=attempt.get("auth_version"),
+        )
+
+
+async def _finish_protected_attempt(request: Request, action: str, state: str, attempt: Mapping,
+                                    *, clear_authorization: bool = False) -> None:
+    """Own terminal cleanup independently of a cancelled browser request."""
+    request.session.pop(OIDC_PROTECTED_ATTEMPT_KEY, None)
+
+    async def finish():
+        try:
+            if clear_authorization:
+                await _clear_oidc_authorization_state(request, state)
+        finally:
+            await _consume_protected_attempt(request, action, state, attempt)
+
+    task = asyncio.create_task(finish())
+    task.add_done_callback(lambda completed: completed.exception() if not completed.cancelled() else None)
+    await asyncio.shield(task)
+
+
 async def _oidc_protected_redirect(
     request: Request, *, action: str, account: dict | None = None,
     invite_token: str | None = None, timezone_name: str | None = None,
@@ -597,18 +623,14 @@ async def _oidc_protected_redirect(
                 "Referrer-Policy": "no-referrer",
             },
         )
-    except Exception:
-        request.session.pop(OIDC_PROTECTED_ATTEMPT_KEY, None)
-        try:
-            await _clear_oidc_authorization_state(request, state)
-        finally:
-            async with control_connection(request.app.state.control_pool) as conn:
-                await consume_oidc_attempt(
-                    conn, action=action, state=state, nonce=nonce,
-                    browser_nonce=browser_nonce,
-                    account_id=account["id"] if account else None,
-                    auth_version=account["auth_version"] if account else None,
-                )
+    except BaseException:
+        await _finish_protected_attempt(
+            request, action, state,
+            {"nonce": nonce, "browser_nonce": browser_nonce,
+             "account_id": account["id"] if account else None,
+             "auth_version": account["auth_version"] if account else None},
+            clear_authorization=True,
+        )
         raise
 
 
@@ -1093,10 +1115,18 @@ def make_router() -> APIRouter:
                 try:
                     actor = await require_user(request)
                 except (AuthRedirect, HTTPException):
+                    if protected_action == "reauth":
+                        await _finish_protected_attempt(request, "reauth", callback_state, protected_attempt)
                     limiter.record_failure(ip)
                     raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
+                except asyncio.CancelledError:
+                    if protected_action == "reauth":
+                        await _finish_protected_attempt(request, "reauth", callback_state, protected_attempt)
+                    raise
                 if (actor["id"] != protected_attempt.get("account_id")
                     or request.state.principal.auth_version != protected_attempt.get("auth_version")):
+                    if protected_action == "reauth":
+                        await _finish_protected_attempt(request, "reauth", callback_state, protected_attempt)
                     limiter.record_failure(ip)
                     raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
             else:
@@ -1119,16 +1149,13 @@ def make_router() -> APIRouter:
         oauth = request.app.state.oauth
         try:
             token = await oauth.pocketid.authorize_access_token(request)
+        except asyncio.CancelledError:
+            if protected_action == "reauth":
+                await _finish_protected_attempt(request, "reauth", callback_state, protected_attempt)
+            raise
         except OAuthError as exc:
             if protected_action == "reauth":
-                async with control_connection(request.app.state.control_pool) as conn:
-                    await consume_oidc_attempt(
-                        conn, action="reauth", state=callback_state,
-                        nonce=protected_attempt["nonce"],
-                        browser_nonce=protected_attempt["browser_nonce"],
-                        account_id=protected_attempt["account_id"],
-                        auth_version=protected_attempt["auth_version"],
-                    )
+                await _finish_protected_attempt(request, "reauth", callback_state, protected_attempt)
             limiter.record_failure(ip)
             log.warning(
                 "auth callback: token exchange rejected (%s)", type(exc).__name__
@@ -1141,14 +1168,7 @@ def make_router() -> APIRouter:
         subject = userinfo.get("sub")
         if not isinstance(subject, str) or not subject:
             if protected_action == "reauth":
-                async with control_connection(request.app.state.control_pool) as conn:
-                    await consume_oidc_attempt(
-                        conn, action="reauth", state=callback_state,
-                        nonce=protected_attempt["nonce"],
-                        browser_nonce=protected_attempt["browser_nonce"],
-                        account_id=protected_attempt["account_id"],
-                        auth_version=protected_attempt["auth_version"],
-                    )
+                await _finish_protected_attempt(request, "reauth", callback_state, protected_attempt)
             limiter.record_failure(ip)
             raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
         provider_email, display_name = _safe_oidc_metadata(userinfo)
@@ -1158,24 +1178,22 @@ def make_router() -> APIRouter:
         if protected_action == "reauth":
             auth_time = userinfo.get("auth_time")
             if type(auth_time) not in (int, float):
+                await _finish_protected_attempt(request, "reauth", callback_state, protected_attempt)
+                limiter.record_failure(ip)
+                raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
+            async def finish_reauth():
                 async with control_connection(request.app.state.control_pool) as conn:
-                    await consume_oidc_attempt(
-                        conn, action="reauth", state=callback_state,
-                        nonce=protected_attempt["nonce"],
+                    return await finish_oidc_reauth(
+                        conn, state=callback_state, nonce=protected_attempt["nonce"],
                         browser_nonce=protected_attempt["browser_nonce"],
                         account_id=protected_attempt["account_id"],
                         auth_version=protected_attempt["auth_version"],
+                        issuer=issuer, subject=subject, auth_time=auth_time,
                     )
-                limiter.record_failure(ip)
-                raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
-            async with control_connection(request.app.state.control_pool) as conn:
-                verified = await finish_oidc_reauth(
-                    conn, state=callback_state, nonce=protected_attempt["nonce"],
-                    browser_nonce=protected_attempt["browser_nonce"],
-                    account_id=protected_attempt["account_id"],
-                    auth_version=protected_attempt["auth_version"],
-                    issuer=issuer, subject=subject, auth_time=auth_time,
-                )
+
+            finishing = asyncio.create_task(finish_reauth())
+            finishing.add_done_callback(lambda completed: completed.exception() if not completed.cancelled() else None)
+            verified = await asyncio.shield(finishing)
             if not verified:
                 limiter.record_failure(ip)
                 raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
@@ -1362,9 +1380,11 @@ def make_router() -> APIRouter:
         _require_oidc_enabled(request)
         check_form_csrf(request, csrf_token)
         try:
-            account = await _verified_account(
+            account = await request.app.state.login_limiter.run_bounded(lambda: _verified_account(
                 request, user, current_password, generic_error=GENERIC_LINK_ERROR
-            )
+            ))
+        except _AuthSaturated:
+            return await _render_account_unavailable(request, user, status_code=503)
         except _AccountActionRejected as rejected:
             return await _render_rejection(request, user, rejected)
         async with control_connection(request.app.state.control_pool) as conn:
@@ -1434,7 +1454,7 @@ def make_router() -> APIRouter:
         _require_oidc_enabled(request)
         check_form_csrf(request, csrf_token)
         try:
-            account = await _verified_account(
+            account = await request.app.state.login_limiter.run_bounded(lambda: _verified_account(
                 request,
                 user,
                 current_password,
@@ -1442,7 +1462,9 @@ def make_router() -> APIRouter:
                 precheck_error=(
                     GENERIC_UNLINK_ERROR if confirm_unlink != "yes" else None
                 ),
-            )
+            ))
+        except _AuthSaturated:
+            return await _render_account_unavailable(request, user, status_code=503)
         except _AccountActionRejected as rejected:
             return await _render_rejection(request, user, rejected)
         async with control_connection(request.app.state.control_pool) as conn:
@@ -1492,7 +1514,7 @@ def make_router() -> APIRouter:
         )
 
     async def _request_email_challenge(
-        request: Request, user: dict, values: dict[str, str], purpose: str,
+        request: Request, user: dict, values: dict[str, str], purpose: str, form_account: dict,
     ):
         check_form_csrf(request, values["csrf_token"])
         cfg = request.app.state.config
@@ -1505,6 +1527,11 @@ def make_router() -> APIRouter:
         if account is None:
             request.session.clear()
             raise AuthRedirect()
+        if (not account["is_enabled"]
+            or account["auth_version"] != request.state.principal.auth_version
+            or account["auth_version"] != form_account["auth_version"]
+            or (account["password_hash"] is None) != (form_account["password_hash"] is None)):
+            return await _render_account(request, account, user, error=GENERIC_EMAIL_ERROR, status_code=409)
         if account["password_hash"] is not None:
             try:
                 account = await limiter.run_bounded(lambda: _verified_account(
@@ -1549,33 +1576,40 @@ def make_router() -> APIRouter:
                 cfg.smtp_security, cfg.smtp_tls_insecure, cfg.email_from, target,
             )
             link = f"{link_base}/settings/account/email/confirm#purpose={purpose}&token={token}"
-            try:
-                message = mailer.compose(
-                    "Confirm your Odograph email address",
-                    "To confirm your email address, open this link while signed in:\n"
-                    f"{link}\n\nIf the link does not fill the form, choose {purpose} "
-                    f"and enter this code manually: {token}\n\n"
-                    "The code expires in 30 minutes. If you did not request this, ignore this email.",
-                )
 
-                @asynccontextmanager
-                async def admit():
-                    async with control_connection(request.app.state.control_pool) as conn:
-                        async with conn.transaction():
-                            yield await email_challenge_send_usable(
-                                conn, account["id"], request.state.principal.auth_version,
-                                purpose, token,
-                            )
+            @asynccontextmanager
+            async def admit():
+                async with control_connection(request.app.state.control_pool) as conn:
+                    async with conn.transaction():
+                        yield await email_challenge_send_usable(
+                            conn, account["id"], request.state.principal.auth_version,
+                            purpose, token,
+                        )
 
-                admitted = await request.app.state.security_mail.send(
-                    mailer, message, admit=admit,
-                    lease=lambda: external_account_work(request.app.state.control_pool, account["id"]),
-                )
-                if not admitted:
-                    raise RuntimeError("email challenge no longer eligible for delivery")
-            except Exception:
+            async def deliver():
+                try:
+                    message = mailer.compose(
+                        "Confirm your Odograph email address",
+                        "To confirm your email address, open this link while signed in:\n"
+                        f"{link}\n\nIf the link does not fill the form, choose {purpose} "
+                        f"and enter this code manually: {token}\n\n"
+                        "The code expires in 30 minutes. If you did not request this, ignore this email.",
+                    )
+                    admitted = await request.app.state.security_mail.send(
+                        mailer, message, admit=admit,
+                        lease=lambda: external_account_work(request.app.state.control_pool, account["id"]),
+                    )
+                    if admitted:
+                        return True
+                except Exception:
+                    pass
                 async with control_connection(request.app.state.control_pool) as conn:
                     await revoke_email_challenge(conn, account["id"], purpose, token)
+                return False
+
+            delivery = asyncio.create_task(deliver())
+            delivery.add_done_callback(lambda completed: completed.exception() if not completed.cancelled() else None)
+            if not await asyncio.shield(delivery):
                 return await _render_account(request, account, user, error=GENERIC_EMAIL_ERROR, status_code=503)
         return await _render_account(request, account, user, success=EMAIL_REQUEST_NOTICE)
 
@@ -1595,7 +1629,7 @@ def make_router() -> APIRouter:
             raise AuthRedirect()
         fields = {"current_password", "csrf_token"} if account["password_hash"] else {"csrf_token"}
         values = await _email_form(request, fields)
-        return await _request_email_challenge(request, user, values, PURPOSE_CURRENT)
+        return await _request_email_challenge(request, user, values, PURPOSE_CURRENT, account)
 
     @router.post("/settings/account/email/change/request")
     async def request_change_email(request: Request, user: dict = Depends(require_user)):
@@ -1607,7 +1641,7 @@ def make_router() -> APIRouter:
         if account["password_hash"]:
             fields.add("current_password")
         values = await _email_form(request, fields)
-        return await _request_email_challenge(request, user, values, PURPOSE_CHANGE)
+        return await _request_email_challenge(request, user, values, PURPOSE_CHANGE, account)
 
     @router.get("/settings/account/email/confirm")
     async def email_confirmation(request: Request):

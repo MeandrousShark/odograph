@@ -89,9 +89,21 @@ writes `backups/mileage-<UTC timestamp>.dump` plus a `.sha256` checksum
 sidecar and a non-secret `.manifest` file (creation time, schema version,
 Postgres/PostGIS versions, source ref), and sets the `backups/` directory to
 mode `700`. It refuses to overwrite an existing archive, sidecar, or
-manifest, and it never puts a password on the command line or prints
-anything from `.env`. If any step fails, cleanup removes the partial output.
-There's never an archive on disk that looks successful but isn't.
+manifest, and it never puts a password on the command line or prints anything
+from `.env`. Concurrent backups targeting the same output are refused, even
+when default timestamp-based names collide within the same second. Retry after
+the other backup finishes, or choose a different `--output`.
+
+The script reserves each output set with a private `.odograph-backup-*.lock`
+directory and stages its files there. Ordinary failures clean up the staging
+files and reservation, but `SIGKILL` or power loss can leave either behind;
+there is no automatic stale-reservation cleanup. Before recovering one, confirm
+no backup process still owns it, including a scheduler or another host using
+the same storage. Inspect the staged files and any final archive, checksum,
+and manifest for completeness and integrity. Prefer retrying with a new output.
+Never blindly remove matching locks or use a broad cleanup glob. Remove only a
+specific reservation proven stale, and its owned incomplete output only when
+safe. Preserve any complete, validated backup.
 
 Pick your own output path with `--output`:
 
@@ -137,8 +149,12 @@ opened by a fresh application database.
 Restores are deliberately fresh-target-only: the script refuses to run while
 the `app` service is up, and refuses any target database that already
 contains application relations (including a pre-existing `schema_migrations`
-table). There is no in-place overwrite and no `--replace` flag. Restoring
-into a used database means creating a new, empty one first (see
+table). It supports a fresh database-only Compose project as well as a stopped
+app service. Before restoring, it checks service/container state using
+structured Compose output and refuses inspection failures, malformed or
+unknown states, and states such as paused or restarting. There is no in-place
+overwrite and no `--replace` flag. Restoring into a used database means
+creating a new, empty one first (see
 [Disaster recovery](#disaster-recovery) below for the case where the old data
 needs to survive alongside it).
 

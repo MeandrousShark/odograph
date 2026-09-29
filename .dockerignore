@@ -1,5 +1,5 @@
-# Keep the build context small and exclude local secrets. Only the three
-# account setup functions from scripts/ are needed in the runtime image.
+# Keep the build context small and exclude local secrets. Only the runtime
+# account setup functions from scripts/ are needed in the image.
 .env*
 !.env.example
 
@@ -19,6 +19,10 @@ scripts/sql/*
 !scripts/sql/account_bootstrap.sql
 !scripts/sql/account_admission.sql
 !scripts/sql/tracking_admission.sql
+!scripts/sql/member_invitations.sql
+!scripts/sql/oidc_attempts.sql
+!scripts/sql/oidc_methods.sql
+!scripts/sql/account_lifecycle.sql
 .pgdump/
 backups/
 

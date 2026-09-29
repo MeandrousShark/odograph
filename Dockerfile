@@ -63,7 +63,10 @@ RUN pip install --no-cache-dir -r requirements.lock \
 COPY app/ app/
 COPY migrations/ migrations/
 COPY static/ static/
-COPY scripts/sql/account_bootstrap.sql scripts/sql/account_admission.sql scripts/sql/tracking_admission.sql scripts/sql/
+COPY scripts/sql/account_bootstrap.sql scripts/sql/account_admission.sql \
+    scripts/sql/tracking_admission.sql scripts/sql/member_invitations.sql \
+    scripts/sql/oidc_attempts.sql scripts/sql/oidc_methods.sql \
+    scripts/sql/account_lifecycle.sql scripts/sql/
 
 # Fixed numeric UID/GID, not a named user: rootless Podman and rootful Docker
 # both map a numeric identity the same way, while a name would need an
@@ -80,4 +83,4 @@ EXPOSE 8000
 # set by Caddy's X-Forwarded-* headers.
 CMD ["uvicorn", "app.main:create_app", "--factory", \
      "--host", "0.0.0.0", "--port", "8000", \
-     "--proxy-headers"]
+     "--proxy-headers", "--log-config", "app/logging_config.json"]

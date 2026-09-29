@@ -60,19 +60,19 @@
 <section class="settings-section" aria-labelledby="accounts-heading">
   <h3 id="accounts-heading">Account metadata</h3>
   <div class="table-wrapper">
-  <table>
-    <thead><tr>
-      <th>ID</th><th>Login email</th><th>Email verified</th><th>Role</th>
-      <th>Access</th><th>Login methods</th><th>Deletion</th><th>Recovery</th>
+  <table class="admin-card-table" role="table" aria-labelledby="accounts-heading">
+    <thead role="rowgroup"><tr role="row">
+      <th scope="col" role="columnheader">ID</th><th scope="col" role="columnheader">Login email</th><th scope="col" role="columnheader">Email verified</th><th scope="col" role="columnheader">Role</th>
+      <th scope="col" role="columnheader">Access</th><th scope="col" role="columnheader">Login methods</th><th scope="col" role="columnheader">Deletion</th><th scope="col" role="columnheader">Recovery</th>
     </tr></thead>
-    <tbody>
+    <tbody role="rowgroup">
     {% for account in accounts %}
-      <tr>
-        <td class="num">{{ account.id }}</td>
-        <td>{{ account.email }}</td>
-        <td>{{ "Yes" if account.email_verified else "No" }}</td>
-        <td>{{ "Administrator" if account.is_admin else "Member" }}</td>
-        <td>
+      <tr role="row">
+        <td role="cell" class="num" data-label="ID">{{ account.id }}</td>
+        <td role="cell" data-label="Login email">{{ account.email }}</td>
+        <td role="cell" data-label="Email verified">{{ "Yes" if account.email_verified else "No" }}</td>
+        <td role="cell" data-label="Role">{{ "Administrator" if account.is_admin else "Member" }}</td>
+        <td role="cell" data-label="Access">
           {{ "Enabled" if account.is_enabled else "Disabled" }}
           {% if multiuser_available and account.id != user.id %}
           {% if account.is_enabled %}
@@ -88,8 +88,8 @@
           {% endif %}
           {% elif account.id == user.id %}<span class="muted">Current account</span>{% endif %}
         </td>
-        <td>{% if account.has_password and account.has_oidc %}Password, OIDC{% elif account.has_password %}Password{% elif account.has_oidc %}OIDC{% else %}None{% endif %}</td>
-        <td>
+        <td role="cell" data-label="Login methods">{% if account.has_password and account.has_oidc %}Password, OIDC{% elif account.has_password %}Password{% elif account.has_oidc %}OIDC{% else %}None{% endif %}</td>
+        <td role="cell" data-label="Deletion">
           {% if account.deletion_deadline %}{{ account.deletion_deadline|local_dt }}{% else %}Not scheduled{% endif %}
           {% if multiuser_available and account.id != user.id %}
           {% if not account.deletion_deadline %}
@@ -130,7 +130,7 @@
           {% endif %}
           {% endif %}
         </td>
-        <td>
+        <td role="cell" data-label="Recovery">
           {% if account.email_verified and account.is_enabled %}
           <form method="post" action="/admin/accounts/{{ account.id }}/recovery">
             <input type="hidden" name="csrf_token" value="{{ csrf }}">
@@ -141,7 +141,7 @@
         </td>
       </tr>
     {% else %}
-      <tr><td colspan="8" class="muted">No accounts.</td></tr>
+      <tr role="row"><td role="cell" colspan="8" class="muted">No accounts.</td></tr>
     {% endfor %}
     </tbody>
   </table>
@@ -159,19 +159,19 @@
   <h3 id="security-audit-heading">Recent security audit</h3>
   <p class="muted">Latest 50 account access events. Times are shown in your local time zone.</p>
   <div class="table-wrapper">
-  <table>
-    <thead><tr><th>Time</th><th>Actor ID</th><th>Target ID</th><th>Action</th><th>Outcome</th></tr></thead>
-    <tbody>
+  <table class="admin-card-table" role="table" aria-labelledby="security-audit-heading">
+    <thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Time</th><th scope="col" role="columnheader">Actor ID</th><th scope="col" role="columnheader">Target ID</th><th scope="col" role="columnheader">Action</th><th scope="col" role="columnheader">Outcome</th></tr></thead>
+    <tbody role="rowgroup">
     {% for event in audit_events %}
-      <tr>
-        <td>{{ event.occurred_at|local_dt }}</td>
-        <td class="num">{{ event.actor_account_id }}</td>
-        <td class="num">{{ event.target_account_id }}</td>
-        <td>{{ event.action }}</td>
-        <td>{{ event.outcome }}</td>
+      <tr role="row">
+        <td role="cell" data-label="Time">{{ event.occurred_at|local_dt }}</td>
+        <td role="cell" class="num" data-label="Actor ID">{{ event.actor_account_id }}</td>
+        <td role="cell" class="num" data-label="Target ID">{{ event.target_account_id }}</td>
+        <td role="cell" data-label="Action">{{ event.action }}</td>
+        <td role="cell" data-label="Outcome">{{ event.outcome }}</td>
       </tr>
     {% else %}
-      <tr><td colspan="5" class="muted">No account access events.</td></tr>
+      <tr role="row"><td role="cell" colspan="5" class="muted">No account access events.</td></tr>
     {% endfor %}
     </tbody>
   </table>
@@ -194,15 +194,15 @@
   {% endif %}
   <p class="muted">Invitation email does not verify the recipient's login email. Open invitations expire after 48 hours.</p>
   <div class="table-wrapper">
-  <table>
-    <thead><tr><th>Invitee</th><th>Status</th><th>Expires</th><th>Actions</th></tr></thead>
-    <tbody>
+  <table class="admin-card-table" role="table" aria-labelledby="invitations-heading">
+    <thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Invitee</th><th scope="col" role="columnheader">Status</th><th scope="col" role="columnheader">Expires</th><th scope="col" role="columnheader">Actions</th></tr></thead>
+    <tbody role="rowgroup">
     {% for invitation in invitations %}
-      <tr>
-        <td>{{ invitation.email }}</td>
-        <td>{{ invitation.status }}</td>
-        <td>{{ invitation.expires_at|local_dt }}</td>
-        <td>
+      <tr role="row">
+        <td role="cell" data-label="Invitee">{{ invitation.email }}</td>
+        <td role="cell" data-label="Status">{{ invitation.status }}</td>
+        <td role="cell" data-label="Expires">{{ invitation.expires_at|local_dt }}</td>
+        <td role="cell" data-label="Actions">
           {% if multiuser_available and invitation.status == "Open" %}
           <form method="post" action="/admin/invitations/{{ invitation.id }}/resend">
             <input type="hidden" name="csrf_token" value="{{ csrf }}">
@@ -219,7 +219,7 @@
         </td>
       </tr>
     {% else %}
-      <tr><td colspan="4" class="muted">No invitations.</td></tr>
+      <tr role="row"><td role="cell" colspan="4" class="muted">No invitations.</td></tr>
     {% endfor %}
     </tbody>
   </table>

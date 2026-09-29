@@ -300,6 +300,7 @@ ensure_uvicorn_running() {
         # need to track.
         nohup "$UVICORN_BIN" app.main:create_app --factory \
             --host "$BIND_HOST" --port "$APP_PORT" --reload \
+            --log-config "$REPO_ROOT/app/logging_config.json" \
             >>"$LOG_FILE" 2>&1 &
         echo $! > "$PID_FILE"
     )
