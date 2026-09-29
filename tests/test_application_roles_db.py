@@ -82,6 +82,64 @@ def test_activated_validator_rejects_policy_or_activation_drift():
     asyncio.run(_scenario(check))
 
 
+ACL_DRIFT = (
+    ("GRANT EXECUTE ON FUNCTION public.host_reset_password(bigint,text) TO PUBLIC", "host_reset_password"),
+    ("GRANT EXECUTE ON FUNCTION public.host_reset_password(bigint,text) TO contract_outsider", "host_reset_password"),
+    ("GRANT EXECUTE ON FUNCTION public.host_reset_password(bigint,text) TO odograph_control WITH GRANT OPTION", "host_reset_password"),
+    ("GRANT USAGE ON SEQUENCE public.accounts_id_seq TO contract_outsider", "accounts_id_seq"),
+    ("GRANT USAGE ON SEQUENCE public.accounts_id_seq TO PUBLIC", "accounts_id_seq"),
+    ("GRANT USAGE ON SEQUENCE public.accounts_id_seq TO odograph_bootstrap WITH GRANT OPTION", "accounts_id_seq"),
+)
+
+
+@pytest.mark.parametrize("statement,object_name", ACL_DRIFT)
+def test_function_and_sequence_acl_drift_refuses_start_and_restricted_validation(statement, object_name):
+    async def check(owner, pools, state):
+        async with owner.connection() as conn:
+            await conn.execute("CREATE ROLE contract_outsider NOLOGIN")
+            await conn.execute(statement)
+        try:
+            with pytest.raises(RoleSetupError, match=object_name):
+                await prepare_application_roles(TEST_DB)
+            for pool in (pools.control, pools.runtime):
+                async with pool.connection() as restricted:
+                    with pytest.raises(RoleSetupError, match=object_name):
+                        await validate_application_contract(restricted, state)
+        finally:
+            async with owner.connection() as conn:
+                await conn.execute("REVOKE ALL ON FUNCTION public.host_reset_password(bigint,text) FROM PUBLIC,contract_outsider,odograph_control")
+                await conn.execute("GRANT EXECUTE ON FUNCTION public.host_reset_password(bigint,text) TO odograph_control")
+                await conn.execute("REVOKE ALL ON SEQUENCE public.accounts_id_seq FROM PUBLIC,contract_outsider,odograph_bootstrap")
+                await conn.execute("GRANT USAGE ON SEQUENCE public.accounts_id_seq TO odograph_bootstrap")
+                await conn.execute("DROP ROLE contract_outsider")
+    asyncio.run(_scenario(check))
+
+
+def test_outsider_acl_and_missing_function_refuse_restore():
+    async def check(owner, pools, state):
+        async with owner.connection() as conn:
+            await conn.execute("CREATE ROLE contract_outsider NOLOGIN")
+            await conn.execute("GRANT USAGE ON SEQUENCE public.accounts_id_seq TO contract_outsider")
+        try:
+            with pytest.raises(RoleSetupError, match="accounts_id_seq"):
+                await application_roles.finalize_application_restore(TEST_DB)
+            async with owner.connection() as conn:
+                await conn.execute("REVOKE USAGE ON SEQUENCE public.accounts_id_seq FROM contract_outsider")
+                await conn.execute("DROP FUNCTION public.host_reset_password(bigint,text)")
+            for pool in (pools.control, pools.runtime):
+                async with pool.connection() as restricted:
+                    with pytest.raises(RoleSetupError, match=r"missing contract function: .*host_reset_password"):
+                        await validate_application_contract(restricted, state)
+            with pytest.raises(RoleSetupError, match=r"missing contract function: .*host_reset_password"):
+                await prepare_application_roles(TEST_DB)
+            with pytest.raises(RoleSetupError, match=r"missing contract function: .*host_reset_password"):
+                await application_roles.finalize_application_restore(TEST_DB)
+        finally:
+            async with owner.connection() as conn:
+                await conn.execute("DROP ROLE contract_outsider")
+    asyncio.run(_scenario(check))
+
+
 def test_provisioning_failure_stays_generic_without_leaking_the_cause(monkeypatch):
     async def broken_provision(conn):
         raise RuntimeError("scram-secret-should-never-leak")
