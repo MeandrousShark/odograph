@@ -49,7 +49,9 @@ def test_all_uvicorn_entrypoints_load_query_redaction_config():
     assert '--log-config "$REPO_ROOT/app/logging_config.json"' in devsite
 
     smoke = (ROOT / "scripts" / "release_preflight_smoke.sh").read_text()
-    assert "--log-config /srv/odograph/app/logging_config.json" in smoke
+    assert 'docker run --rm --entrypoint test "$IMAGE" -f /srv/odograph/app/logging_config.json' in smoke
+    assert 'log_config_args=(--log-config /srv/odograph/app/logging_config.json)' in smoke
+    assert '"${log_config_args[@]}"' in smoke
 
 
 def test_derives_exact_version_from_repository_compose_image():

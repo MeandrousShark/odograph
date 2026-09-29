@@ -69,6 +69,17 @@ until docker exec "$db" pg_isready -h 127.0.0.1 -U mileage -d mileage >/dev/null
     sleep 2
 done
 
+log_config_args=()
+if docker run --rm --entrypoint test "$IMAGE" -f /srv/odograph/app/logging_config.json; then
+    log_config_args=(--log-config /srv/odograph/app/logging_config.json)
+else
+    probe_status=$?
+    if [ "$probe_status" -ne 1 ]; then
+        echo "could not inspect image logging configuration (docker exit $probe_status)" >&2
+        exit 1
+    fi
+fi
+
 docker run -d --name "$app" --network "$network" \
     -p 127.0.0.1:18443:8443 \
     --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges:true \
@@ -81,7 +92,7 @@ docker run -d --name "$app" --network "$network" \
     -e FORWARDED_ALLOW_IPS=127.0.0.1 \
     "$IMAGE" uvicorn app.main:create_app --factory \
     --host 0.0.0.0 --port 8443 --proxy-headers \
-    --log-config /srv/odograph/app/logging_config.json \
+    "${log_config_args[@]}" \
     --ssl-keyfile /tls/key.pem --ssl-certfile /tls/cert.pem >/dev/null
 
 deadline=$(( $(date +%s) + 240 ))
