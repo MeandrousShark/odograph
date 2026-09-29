@@ -504,11 +504,13 @@ textarea:focus-visible, summary:focus-visible {
   .header-account .account-name { display: none; }
   .header-account .account-identity,
   .header-account .settings-link,
+  .header-account .accounts-link,
   .header-account .logout-form .header-action {
     width: var(--control-height); min-width: var(--control-height); padding-inline: 0;
     justify-content: center; gap: 0;
   }
-  .header-account .settings-link, .header-account .logout-form .header-action { font-size: 0; }
+  .header-account .settings-link, .header-account .accounts-link,
+  .header-account .logout-form .header-action { font-size: 0; }
   .header-account .header-action-icon { width: 1.25rem; height: 1.25rem; }
 }
 
