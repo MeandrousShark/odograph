@@ -112,16 +112,16 @@
       <input type="hidden" name="action" value="verify_current">
       <button type="submit" class="control control-primary auth-submit">Confirm with sign-in provider</button>
     </form>
-    {% endif %}
+    <p class="muted">After confirming, we'll send the verification link automatically.</p>
+    {% else %}
     <form method="post" action="/settings/account/email/verify/request" class="auth-form">
       <input type="hidden" name="csrf_token" value="{{ csrf }}">
-      {% if has_password|default(true) %}
       <label>Current password
         <input type="password" name="current_password" required autocomplete="current-password">
       </label>
-      {% endif %}
       <button type="submit" class="control control-primary auth-submit">Send verification link</button>
     </form>
+    {% endif %}
     {% endif %}
     <h5>Change login email</h5>
     <p>We'll send a confirmation link to the new address. Your current login email stays active until you confirm it.</p>
@@ -137,8 +137,8 @@
       </label>
       <button type="submit" class="control control-primary auth-submit">Confirm with sign-in provider</button>
     </form>
-    <p class="muted">After confirming, enter the same address below within 10 minutes.</p>
-    {% endif %}
+    <p class="muted">After confirming, we'll send the confirmation link to this address automatically.</p>
+    {% else %}
     <form method="post" action="/settings/account/email/change/request" class="auth-form">
       <input type="hidden" name="csrf_token" value="{{ csrf }}">
       <label>New email address
@@ -154,6 +154,7 @@
       {% endif %}
       <button type="submit" class="control control-primary auth-submit">Send confirmation link</button>
     </form>
+    {% endif %}
   {% else %}
   <p class="muted">Email challenge delivery isn't available right now.</p>
   {% endif %}

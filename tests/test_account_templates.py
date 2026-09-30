@@ -203,6 +203,20 @@ def test_account_email_forms_require_password_and_collect_twice_entered_new_addr
     assert "current login email stays active until you confirm it" in body
 
 
+def test_oidc_only_email_forms_collect_address_once_before_provider_reauthentication():
+    body = _render_account_security(
+        oidc_configured=True, has_password=False, account_email_verified=False,
+    )
+
+    assert body.count('name="target"') == 1
+    assert body.count('name="target_confirm"') == 1
+    assert 'name="action" value="change_email"' in body
+    assert 'name="action" value="verify_current"' in body
+    assert 'action="/settings/account/email/verify/request"' not in body
+    assert 'action="/settings/account/email/change/request"' not in body
+    assert body.count("After confirming, we'll send") == 2
+
+
 def test_account_email_verified_state_and_smtp_availability_gate_request_forms():
     verified = _render_account_security(account_email_verified=True)
     assert "Your current login email is verified." in verified
