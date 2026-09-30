@@ -588,6 +588,38 @@ h2 { font-size: 1.05rem; margin: 1.5rem 0 .25rem; }
    Scoping summaries back to normal wrapping here keeps the action word
    intact and lets the table grow past its wrapper instead of its cells. */
 .table-wrapper summary { overflow-wrap: normal; white-space: nowrap; }
+.table-wrapper .admin-account-deletion > summary {
+  display: list-item; width: fit-content; max-width: 100%; white-space: normal;
+  overflow-wrap: anywhere; padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--control-border); border-radius: var(--radius-sm);
+  background: var(--control-bg); color: var(--control-fg);
+}
+.table-wrapper .admin-account-deletion > summary:hover {
+  border-color: var(--accent-hover); background: var(--accent-soft);
+}
+.admin-account-deletion[open] > summary { margin-bottom: var(--space-3); }
+.admin-account-deletion-panel {
+  width: 100%; max-width: 42rem; padding: var(--space-3);
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+.admin-account-deletion-target { margin: 0 0 var(--space-3); overflow-wrap: anywhere; }
+.admin-deletion-form { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); margin: 0; }
+.admin-deletion-form > label:not(.admin-deletion-checkbox) {
+  display: flex; width: 100%; max-width: 28rem; min-width: 0;
+  flex-direction: column; gap: var(--space-1); font-size: .85rem;
+}
+.admin-deletion-form > label:not(.admin-deletion-checkbox) input { width: 100%; min-width: 0; }
+.admin-deletion-form > p { max-width: 60ch; margin: 0; }
+.admin-deletion-form .admin-deletion-checkbox {
+  display: flex; min-height: var(--control-height); align-items: flex-start; gap: var(--space-2);
+  max-width: 100%; font-size: .9rem;
+}
+.admin-deletion-form .admin-deletion-checkbox input { flex: none; margin: .2rem 0 0; }
+.admin-deletion-form .admin-deletion-checkbox span { min-width: 0; overflow-wrap: anywhere; }
+.admin-deletion-form .control { max-width: 100%; overflow-wrap: normal; }
+.admin-deletion-reauth { margin: 0 0 var(--space-4); }
+.admin-card-table .control { overflow-wrap: normal; }
 table { border-collapse: collapse; width: 100%; font-size: .9rem; }
 th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid var(--border); }
 /* No left padding on the first column, so a table's first column lines
@@ -2806,10 +2838,17 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
     margin-bottom: var(--space-3); padding: var(--space-2);
     border: 1px solid var(--border); border-radius: var(--radius-md);
   }
+  .admin-card-table tbody tr.admin-account-row-with-deletion {
+    margin-bottom: 0; border-bottom: 0; border-radius: var(--radius-md) var(--radius-md) 0 0;
+  }
+  .admin-card-table tbody tr.admin-account-deletion-row {
+    margin-top: 0; border-top: 0; border-radius: 0 0 var(--radius-md) var(--radius-md);
+  }
   .admin-card-table tbody td {
     display: block; min-width: 0; padding: var(--space-2) 0;
     overflow-wrap: anywhere;
   }
+  .admin-card-table tbody tr.admin-account-deletion-row td[colspan] { padding-top: 0; }
   .admin-card-table tbody td:last-child { border-bottom: 0; }
   .admin-card-table tbody td[data-label]::before {
     display: block; margin-bottom: var(--space-1);
@@ -2824,6 +2863,12 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
   .admin-card-table tbody td .control {
     width: 100%; white-space: normal; text-align: left;
   }
+  .table-wrapper .admin-account-deletion > summary { width: 100%; }
+  .admin-account-deletion-panel { padding: var(--space-3); }
+  .admin-deletion-form { align-items: stretch; }
+  .admin-deletion-form > label:not(.admin-deletion-checkbox) { max-width: none; }
+  .admin-deletion-form .control { width: 100%; text-align: left; }
+  .admin-deletion-reauth .control { width: 100%; text-align: left; }
   .settings-page .settings-preference-grid,
   .settings-page .settings-preference-checks { grid-template-columns: minmax(0, 1fr); }
   .settings-page .settings-preferences-form { gap: var(--space-4); }
