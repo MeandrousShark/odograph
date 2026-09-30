@@ -67,7 +67,7 @@
     </tr></thead>
     <tbody role="rowgroup">
     {% for account in accounts %}
-      <tr role="row">
+      <tr role="row" class="admin-account-row{% if multiuser_available and account.id != user.id %} admin-account-row-with-deletion{% endif %}">
         <td role="cell" class="num" data-label="ID">{{ account.id }}</td>
         <td role="cell" data-label="Login email">{{ account.email }}</td>
         <td role="cell" data-label="Email verified">{{ "Yes" if account.email_verified else "No" }}</td>
@@ -91,44 +91,6 @@
         <td role="cell" data-label="Login methods">{% if account.has_password and account.has_oidc %}Password, OIDC{% elif account.has_password %}Password{% elif account.has_oidc %}OIDC{% else %}None{% endif %}</td>
         <td role="cell" data-label="Deletion">
           {% if account.deletion_deadline %}{{ account.deletion_deadline|local_dt }}{% else %}Not scheduled{% endif %}
-          {% if multiuser_available and account.id != user.id %}
-          {% if not account.deletion_deadline %}
-          <details><summary>Schedule deletion</summary>
-            <form method="post" action="/admin/accounts/{{ account.id }}/deletion">
-              <input type="hidden" name="csrf_token" value="{{ csrf }}">
-              <label>Type target login email <input name="target_email" required autocomplete="off"></label>
-              <label><input type="checkbox" name="acknowledge" value="1" required> I understand the export and backup effects below.</label>
-              <button type="submit" class="control">Disable and start 30-day deletion window</button>
-            </form>
-          </details>
-          {% elif not account.purge_available %}
-          <form method="post" action="/admin/accounts/{{ account.id }}/deletion/cancel">
-            <input type="hidden" name="csrf_token" value="{{ csrf }}">
-            <button type="submit" class="control">Cancel deletion and re-enable</button>
-          </form>
-          {% else %}
-          <details><summary>Permanently purge account</summary>
-            {% if actor_account.has_oidc and oidc_purge_available %}
-            <form method="post" action="/settings/account/oidc/reauth">
-              <input type="hidden" name="csrf_token" value="{{ csrf }}">
-              <input type="hidden" name="action" value="purge_account">
-              <input type="hidden" name="target" value="{{ account.id }}">
-              <button type="submit" class="control">Reauthenticate with OIDC for this purge</button>
-            </form>
-            {% endif %}
-            <form method="post" action="/admin/accounts/{{ account.id }}/purge">
-              <input type="hidden" name="csrf_token" value="{{ csrf }}">
-              <label>Type target login email <input name="target_email" required autocomplete="off"></label>
-              {% if actor_account.has_password %}
-              <label>Your current administrator password <input type="password" name="current_password" autocomplete="current-password"></label>
-              {% endif %}
-              <p>Enter your password or first reauthenticate with the exact linked OIDC identity. OIDC proof is one-use and expires within 10 minutes.</p>
-              <label><input type="checkbox" name="confirm_purge" value="1" required> I confirm permanent deletion from the live database.</label>
-              <button type="submit" class="control">Permanently purge</button>
-            </form>
-          </details>
-          {% endif %}
-          {% endif %}
         </td>
         <td role="cell" data-label="Recovery">
           {% if account.email_verified and account.is_enabled %}
@@ -140,6 +102,59 @@
           {% else %}<span class="muted">Account disabled</span>{% endif %}
         </td>
       </tr>
+      {% if multiuser_available and account.id != user.id %}
+      <tr role="row" class="admin-account-deletion-row">
+        <td role="cell" colspan="8">
+          {% if not account.deletion_deadline %}
+          <details class="admin-account-deletion">
+            <summary>Schedule deletion for {{ account.email }}</summary>
+            <div class="admin-account-deletion-panel">
+              <p class="admin-account-deletion-target">Target account: <strong>{{ account.email }}</strong></p>
+              <form method="post" action="/admin/accounts/{{ account.id }}/deletion" class="admin-deletion-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf }}">
+                <label>Confirm target login email <input name="target_email" required autocomplete="off"></label>
+                <label class="admin-deletion-checkbox"><input type="checkbox" name="acknowledge" value="1" required><span>I understand the export and backup effects below.</span></label>
+                <button type="submit" class="control control-destructive">Disable account and start the 30-day deletion window</button>
+              </form>
+            </div>
+          </details>
+          {% elif not account.purge_available %}
+          <div class="admin-account-deletion-panel">
+            <p class="admin-account-deletion-target">Target account: <strong>{{ account.email }}</strong></p>
+              <form method="post" action="/admin/accounts/{{ account.id }}/deletion/cancel" class="admin-deletion-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf }}">
+                <button type="submit" class="control control-secondary">Cancel deletion and re-enable</button>
+              </form>
+          </div>
+          {% else %}
+          <details class="admin-account-deletion">
+            <summary>Permanently purge {{ account.email }}</summary>
+            <div class="admin-account-deletion-panel">
+              <p class="admin-account-deletion-target">Target account: <strong>{{ account.email }}</strong></p>
+              {% if actor_account.has_oidc and oidc_purge_available %}
+              <form method="post" action="/settings/account/oidc/reauth" class="admin-deletion-reauth">
+                <input type="hidden" name="csrf_token" value="{{ csrf }}">
+                <input type="hidden" name="action" value="purge_account">
+                <input type="hidden" name="target" value="{{ account.id }}">
+                <button type="submit" class="control control-secondary">Reauthenticate with OIDC for this purge</button>
+              </form>
+              {% endif %}
+              <form method="post" action="/admin/accounts/{{ account.id }}/purge" class="admin-deletion-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf }}">
+                <label>Confirm target login email <input name="target_email" required autocomplete="off"></label>
+                {% if actor_account.has_password %}
+                <label>Your current administrator password <input type="password" name="current_password" autocomplete="current-password"></label>
+                {% endif %}
+                <p>Enter your password or first reauthenticate with the exact linked OIDC identity. OIDC proof is one-use and expires within 10 minutes.</p>
+                <label class="admin-deletion-checkbox"><input type="checkbox" name="confirm_purge" value="1" required><span>I confirm permanent deletion from the live database.</span></label>
+                <button type="submit" class="control control-destructive">Permanently purge account</button>
+              </form>
+            </div>
+          </details>
+          {% endif %}
+        </td>
+      </tr>
+      {% endif %}
     {% else %}
       <tr role="row"><td role="cell" colspan="8" class="muted">No accounts.</td></tr>
     {% endfor %}
