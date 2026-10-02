@@ -10,6 +10,7 @@ import asyncio
 import os
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import pytest
 from psycopg.rows import dict_row
 
@@ -26,6 +27,45 @@ pytestmark = pytest.mark.skipif(
 
 DEVICE = "TESTDEV"
 T0 = datetime(2026, 7, 1, 8, 0, 0, tzinfo=timezone.utc)
+
+
+def test_geocode_batch_counts_retryable_failures_and_completed_cache_rows():
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                await seed_tracking_device(conn, DEVICE, device_id=1)
+                await _insert_trip(conn, T0, T0 + timedelta(minutes=1), 47.1, -122.1)
+                await _insert_trip(conn, T0 + timedelta(hours=1), T0 + timedelta(hours=1, minutes=1),
+                                   47.2, -122.2)
+
+            class Provider:
+                failed = True
+
+                async def reverse(self, client, lat, lon):
+                    if lat == 47.1 and self.failed:
+                        raise httpx.ConnectError("private provider URL")
+                    return None
+
+            provider = Provider()
+            worker = GeocodeWorker(pool, None, provider, 0)
+            mixed = await worker.run_once()
+            assert (mixed.attempted, mixed.completed, mixed.retriable_failures,
+                    mixed.failure_type) == (2, 1, 1, "ConnectError")
+            provider.failed = False
+            success = await worker.run_once()
+            empty = await worker.run_once()
+            assert (success.attempted, success.completed, success.retriable_failures) == (1, 1, 0)
+            assert (empty.attempted, empty.completed, empty.retriable_failures) == (0, 0, 0)
+            async with pool.connection() as conn:
+                assert (await (await conn.execute(
+                    "SELECT count(*) FROM geocode_cache WHERE account_id=%s", (account_id(conn),)
+                )).fetchone())[0] == 2
+        finally:
+            await raw.close()
+    asyncio.run(scenario())
 
 
 async def _insert_trip(

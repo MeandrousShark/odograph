@@ -51,6 +51,24 @@ def _utcnow() -> datetime:
 RUN_SKIPPED = object()
 
 
+@dataclass(frozen=True)
+class BatchOutcome:
+    """Counts for one batch; a retryable failure remains eligible for later work."""
+
+    attempted: int = 0
+    completed: int = 0
+    retriable_failures: int = 0
+    failure_type: str | None = None
+
+    def __add__(self, other: BatchOutcome) -> BatchOutcome:
+        return BatchOutcome(
+            self.attempted + other.attempted,
+            self.completed + other.completed,
+            self.retriable_failures + other.retriable_failures,
+            self.failure_type or other.failure_type,
+        )
+
+
 @dataclass
 class WorkerStatus:
     """In-memory run history for one worker -- diagnostics-only, reset on
@@ -79,8 +97,11 @@ class WorkerStatus:
         self.last_skip_at = _utcnow()
 
     def record_failure(self, exc: BaseException) -> None:
+        self.record_failure_type(type(exc).__name__)
+
+    def record_failure_type(self, failure_type: str) -> None:
         self.last_failure_at = _utcnow()
-        self.last_failure_type = type(exc).__name__
+        self.last_failure_type = failure_type
 
 
 class _LoopWorker:

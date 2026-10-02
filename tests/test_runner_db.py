@@ -129,13 +129,23 @@ async def _run_unchanged_full_reprocess_preserves_snap_scenario():
             trip_ids = [row[0] for row in await _trip_counts(conn)]
             assert len(trip_ids) == 2
             await _mark_terminally_snapped(conn, trip_ids)
+            await conn.execute(
+                "UPDATE trips SET snap_attempted_at='2026-07-01T11:59:00Z' WHERE id=ANY(%s)",
+                (trip_ids,),
+            )
             before = await _snap_rows(conn)
 
         await runner.reprocess_device_now(await _stream_id(pool))
 
         async with pool.connection() as conn:
             after = await _snap_rows(conn)
+            attempts = await (await conn.execute(
+                "SELECT snap_attempted_at FROM trips WHERE id=ANY(%s) ORDER BY id",
+                (trip_ids,),
+            )).fetchall()
         assert after == before
+        assert all(row[0] == datetime(2026, 7, 1, 11, 59, tzinfo=timezone.utc)
+                   for row in attempts)
     finally:
         await raw_pool.close()
 
@@ -435,6 +445,10 @@ async def _run_merge_via_override_scenario():
 
         async with pool.connection() as conn:
             await _mark_terminally_snapped(conn, [row[0] for row in before])
+            await conn.execute(
+                "UPDATE trips SET snap_attempted_at='2026-07-01T11:59:00Z' "
+                "WHERE id=ANY(%s)", ([row[0] for row in before],),
+            )
 
         async with pool.connection() as conn:
             cur = await conn.execute(
@@ -453,10 +467,14 @@ async def _run_merge_via_override_scenario():
         async with pool.connection() as conn:
             after = await _trip_counts(conn)
             snap_after = await _snap_rows(conn)
+            attempts = await (await conn.execute(
+                "SELECT snap_attempted_at FROM trips WHERE source='detected'"
+            )).fetchall()
         assert len(after) == 1, f"expected the override to merge into one trip, got {after}"
         tid, pc, live = after[0]
         assert live == pc
         assert snap_after == [(tid, "pending", None, None, None)]
+        assert attempts == [(None,)]
     finally:
         await raw_pool.close()
 

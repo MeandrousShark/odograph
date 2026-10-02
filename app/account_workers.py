@@ -6,7 +6,7 @@ import logging
 from app.account_context import AccountPool, AccountPrincipal, control_connection
 from app.account_work import external_account_work
 from app.account_settings import config_for_account, load_account_settings
-from app.worker import PokeSweepWorker, RUN_SKIPPED
+from app.worker import BatchOutcome, PokeSweepWorker, RUN_SKIPPED
 
 log = logging.getLogger(__name__)
 _PARTIAL_FAILURE = object()
@@ -50,10 +50,14 @@ class AccountWorker(PokeSweepWorker):
         self.config = config
         self.factory = factory
         self.after_run = after_run
+        self.last_outcome = BatchOutcome()
+        self._produced_work = False
 
     async def run_once(self):
         ran = False
         failed = False
+        self.last_outcome = BatchOutcome()
+        self._produced_work = False
         for principal in await enabled_principals(self.pools.control):
             try:
                 async with external_account_work(self.pools.control, principal.account_id):
@@ -66,6 +70,12 @@ class AccountWorker(PokeSweepWorker):
                         continue
                     result = await worker.run_once()
                     ran |= not _did_not_run(result)
+                    if isinstance(result, BatchOutcome):
+                        self.last_outcome += result
+                        if result.retriable_failures:
+                            failed = True
+                            self.status.record_failure_type(result.failure_type or "RetriableFailure")
+                    self._produced_work |= bool(getattr(worker, "produced_work", False))
                     # Not every wrapped job is a _LoopWorker: DetectorRunner owns
                     # no WorkerStatus and reports failure by raising, which the
                     # clause below already records. Reading `.status` off it
@@ -99,5 +109,5 @@ class AccountWorker(PokeSweepWorker):
                 self.status.record_success()
 
     async def after_run_once(self, result):
-        if self.after_run is not None:
+        if self.after_run is not None and self._produced_work:
             self.after_run()
