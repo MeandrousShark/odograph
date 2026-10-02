@@ -29,13 +29,14 @@ from psycopg import sql
 from psycopg_pool import AsyncConnectionPool
 import pytest
 
-from app.db import make_pool, run_migrations
+from app.db import MIGRATIONS_DIR, make_pool, run_migrations
 from app.account_context import (
     CONTROL_ROLE, RUNTIME_ROLE, AccountPool, AccountPrincipal, account_id,
 )
 from app.role_setup import RolePools, role_conninfo
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
+LATEST_SCHEMA_VERSION = max(int(path.name.split("_", 1)[0]) for path in MIGRATIONS_DIR.glob("*.sql"))
 
 # A persistent QA database, `mileage_devsite`, lives on the same machine and
 # holds hand-built data that is expensive to recreate. A stray

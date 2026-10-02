@@ -27,7 +27,7 @@ from app.portable import routes as portable_routes
 from app.portable.importer import _apply_import
 from app.portable.normalize import normalize_bundle
 from app.vehicles import create_vehicle
-from conftest import add_test_account, reset_account_db
+from conftest import LATEST_SCHEMA_VERSION, add_test_account, reset_account_db
 from personal_support import configure_personal_app
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -161,7 +161,7 @@ def test_export_on_a_freshly_migrated_instance_reflects_seed_state():
         bundle = await _export(pool)
         assert bundle["format"] == FORMAT
         assert bundle["format_version"] == FORMAT_VERSION
-        assert bundle["schema_version"] == 37
+        assert bundle["schema_version"] == LATEST_SCHEMA_VERSION
         assert len(bundle["vehicles"]) == 1
         assert bundle["vehicles"][0]["name"] == "My Car"
         assert bundle["vehicles"][0]["is_default"] is True

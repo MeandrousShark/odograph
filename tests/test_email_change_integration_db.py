@@ -24,7 +24,7 @@ from app.email_challenges import (
 )
 from app.oidc_identities import resolve_identity_account
 from app.tracking import authenticate_ingest, create_device
-from conftest import close_restricted_role_pools, drop_and_recreate_schema, full_schema_reset, restricted_role_pools
+from conftest import LATEST_SCHEMA_VERSION, close_restricted_role_pools, drop_and_recreate_schema, full_schema_reset, restricted_role_pools
 from tests.auth_db_fixtures import auth_config
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -129,7 +129,7 @@ async def _schema_29_upgrade_and_email_change(tmp_path):
             )).fetchone() == (False,)
             assert await (await conn.execute(
                 "SELECT max(version) FROM schema_migrations"
-            )).fetchone() == (37,)
+            )).fetchone() == (LATEST_SCHEMA_VERSION,)
             assert await (await conn.execute(
                 "SELECT id,email,password_hash,is_admin,auth_version "
                 "FROM accounts WHERE id=%s", (ADMIN_ID,),
@@ -306,7 +306,7 @@ async def _schema_29_populated_upgrade(tmp_path):
         await prepare_application_roles(TEST_DB)
 
         async with owner.connection() as conn:
-            assert await (await conn.execute("SELECT max(version) FROM schema_migrations")).fetchone() == (37,)
+            assert await (await conn.execute("SELECT max(version) FROM schema_migrations")).fetchone() == (LATEST_SCHEMA_VERSION,)
             assert await (await conn.execute(
                 "SELECT id,email,password_hash,is_admin,auth_version FROM accounts WHERE id=%s",
                 (account_id,),

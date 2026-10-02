@@ -16,7 +16,7 @@ from psycopg.types.json import Jsonb
 import app.db as db_module
 from app.accounts import create_admin
 from app.db import MIGRATIONS_DIR, make_pool, run_migrations
-from conftest import drop_and_recreate_schema, full_schema_reset
+from conftest import LATEST_SCHEMA_VERSION, drop_and_recreate_schema, full_schema_reset
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS")
@@ -69,7 +69,7 @@ def test_027_deletes_only_dump_and_configuration_rows(tmp_path, monkeypatch):
                 cur = await conn.execute("SELECT id, payload FROM raw_messages ORDER BY id")
                 after = await cur.fetchall()
                 cur = await conn.execute("SELECT max(version) FROM schema_migrations")
-                assert (await cur.fetchone())[0] == 37
+                assert (await cur.fetchone())[0] == LATEST_SCHEMA_VERSION
         finally:
             await full_schema_reset(pool)
             await pool.close()
