@@ -316,7 +316,7 @@ def test_stale_or_revoked_trip_is_not_admitted_to_provider(mutation):
                     pytest.fail("stale work reached provider")
 
             outcome = await Probe(pool, HTTP(), "http://osrm", 0.5, 250).run_once()
-            assert outcome.attempted == 1 and outcome.completed == 0
+            assert outcome.attempted == 0 and outcome.completed == 0
             async with pool.connection() as conn:
                 row = await (await conn.execute(
                     "SELECT snap_attempted_at,snap_status::text FROM trips WHERE id=%s", (trip,)

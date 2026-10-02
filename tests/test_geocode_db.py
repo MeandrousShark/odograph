@@ -68,6 +68,24 @@ def test_geocode_batch_counts_retryable_failures_and_completed_cache_rows():
     asyncio.run(scenario())
 
 
+def test_geocode_source_disappearing_before_provider_call_is_not_attempted():
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+
+            class Provider:
+                async def reverse(self, client, lat, lon):
+                    pytest.fail("missing source reached provider")
+
+            outcome = await GeocodeWorker(pool, None, Provider(), 0)._geocode_one(47.1, -122.1)
+            assert (outcome.attempted, outcome.completed, outcome.retriable_failures) == (0, 0, 0)
+        finally:
+            await raw.close()
+    asyncio.run(scenario())
+
+
 async def _insert_trip(
     conn, started_at, ended_at, lat, lon, end_lat=None, end_lon=None,
     start_place_id=None, end_place_id=None,

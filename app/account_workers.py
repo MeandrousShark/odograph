@@ -68,14 +68,18 @@ class AccountWorker(PokeSweepWorker):
                     worker = self.factory(pool, config)
                     if worker is None:
                         continue
-                    result = await worker.run_once()
+                    try:
+                        result = await worker.run_once()
+                    finally:
+                        # A detector may commit one stream before another
+                        # fails. Keep its downstream poke even when it raises.
+                        self._produced_work |= bool(getattr(worker, "produced_work", False))
                     ran |= not _did_not_run(result)
                     if isinstance(result, BatchOutcome):
                         self.last_outcome += result
                         if result.retriable_failures:
                             failed = True
                             self.status.record_failure_type(result.failure_type or "RetriableFailure")
-                    self._produced_work |= bool(getattr(worker, "produced_work", False))
                     # Not every wrapped job is a _LoopWorker: DetectorRunner owns
                     # no WorkerStatus and reports failure by raising, which the
                     # clause below already records. Reading `.status` off it

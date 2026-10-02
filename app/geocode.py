@@ -353,7 +353,7 @@ class GeocodeWorker:
             coords = [(float(r[0]), float(r[1])) for r in await cur.fetchall()]
         if not coords:
             return BatchOutcome()
-        outcome = BatchOutcome(attempted=len(coords))
+        outcome = BatchOutcome()
         for i, (lat, lon) in enumerate(coords):
             if i > 0:
                 await asyncio.sleep(self.min_interval_s)
@@ -394,7 +394,7 @@ class GeocodeWorker:
             # "misconfigured" apart without putting the key or a precise
             # location in logs.
             log.warning("geocode: lookup failed (%s), leaving uncached", type(e).__name__)
-            return BatchOutcome(retriable_failures=1, failure_type=type(e).__name__)
+            return BatchOutcome(attempted=1, retriable_failures=1, failure_type=type(e).__name__)
         async with self.pool.connection() as conn:
             current_sources = set(await self._sources(conn, lat, lon, lock=True))
             eligible = False
@@ -411,7 +411,7 @@ class GeocodeWorker:
                     eligible = True
                     break
             if not eligible:
-                return BatchOutcome()
+                return BatchOutcome(attempted=1)
             await conn.execute(
                 "INSERT INTO geocode_cache (account_id, lat, lon, address) VALUES (%s, %s, %s, %s) "
                 "ON CONFLICT (account_id, lat, lon) DO NOTHING",
@@ -419,4 +419,4 @@ class GeocodeWorker:
             )
         if address is None:
             log.info("geocode: lookup complete, no address found")
-        return BatchOutcome(completed=1)
+        return BatchOutcome(attempted=1, completed=1)

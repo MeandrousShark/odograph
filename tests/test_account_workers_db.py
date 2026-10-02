@@ -23,6 +23,7 @@ from app.nudge import NudgeWorker
 from app.snap import SnapWorker
 from app.worker import BatchOutcome, WorkerStatus
 from conftest import account_pool, reset_account_db, seed_tracking_device
+from tests.synth import Drive, Stationary, build_track
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL for disposable DB tests")
@@ -444,6 +445,64 @@ def test_idle_detector_sweep_succeeds_without_poking_downstream():
             assert worker.status.last_success_at is not None
             assert worker.status.last_skip_at is None
             assert poked == []
+        finally:
+            await raw.close()
+    asyncio.run(scenario())
+
+
+def test_detector_pokes_for_committed_stream_when_later_stream_fails():
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                first = await seed_tracking_device(conn, "first")
+                second = await seed_tracking_device(conn, "second")
+                for point in build_track([Stationary(900), Drive(km=2), Stationary(900)]):
+                    await conn.execute(
+                        "INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom,"
+                        "accuracy_m,velocity_kmh) "
+                        "VALUES(%s,%s,'first',%s,ST_SetSRID(ST_MakePoint(%s,%s),4326)::geography,%s,%s)",
+                        (account_id(conn), first, point.t, point.lon, point.lat,
+                         point.accuracy_m, point.velocity_kmh),
+                    )
+                await conn.execute(
+                    "INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom) "
+                    "VALUES(%s,%s,'second',now(),ST_SetSRID(ST_MakePoint(10,20),4326)::geography)",
+                    (account_id(conn), second),
+                )
+
+            class PartlyFailingRunner(DetectorRunner):
+                async def _run(self, conn, device):
+                    if device == second:
+                        raise RuntimeError("synthetic stream failure")
+                    return await super()._run(conn, device)
+
+            poked = []
+            worker = AccountWorker(
+                SimpleNamespace(control=pool.control_pool, runtime=pool.runtime_pool),
+                AccountSettings(ZoneInfo("UTC")),
+                lambda account_pool, config: PartlyFailingRunner(account_pool, Params()),
+                label="detector-scheduler", debounce_s=0, sweep_s=60,
+                after_run=lambda: poked.append("poked"),
+            )
+            await worker._run_guarded()
+            assert poked == ["poked"]
+            assert worker.status.last_failure_type == "RuntimeError"
+            assert worker.status.last_success_at is None
+            async with pool.connection() as conn:
+                checkpoints = await (await conn.execute(
+                    "SELECT tracking_device_id,last_run_at IS NOT NULL FROM detector_state "
+                    "WHERE account_id=%s ORDER BY tracking_device_id", (account_id(conn),)
+                )).fetchall()
+            assert checkpoints == [(first, True), (second, False)]
+            async with pool.connection() as conn:
+                count = (await (await conn.execute(
+                    "SELECT count(*) FROM trips WHERE account_id=%s AND tracking_device_id=%s "
+                    "AND source='detected'", (account_id(conn), first),
+                )).fetchone())[0]
+            assert count == 1
         finally:
             await raw.close()
     asyncio.run(scenario())
