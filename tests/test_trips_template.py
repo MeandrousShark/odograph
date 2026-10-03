@@ -118,7 +118,11 @@ def test_selection_action_bar_renders_bar_and_no_combined_form():
 
     assert 'id="selection-action-bar" class="selection-action-bar" hidden' in body
     assert 'id="selection-count" aria-live="polite"' in body
-    assert 'id="category-dialog-open"' in body and ">Category</button>" in body
+    assert 'id="category-business" class="control control-secondary" disabled>Business</button>' in body
+    assert 'id="category-personal" class="control control-secondary" disabled>Personal</button>' in body
+    assert 'id="category-action-error" class="selection-action-error" role="alert" hidden' in body
+    assert 'id="category-clear" class="control control-secondary" disabled>Clear category</button>' in body
+    assert 'id="category-dialog"' not in body
     assert 'id="purpose-dialog-open"' in body and ">Purpose</button>" in body
     assert 'id="vehicle-dialog-open"' in body and ">Vehicle</button>" in body
     assert 'class="selection-more"' in body and "<summary>More</summary>" in body
@@ -158,19 +162,10 @@ def test_mobile_selection_uses_compact_strip_and_native_action_sheet():
     assert "display: contents" not in narrow
 
 
-def test_five_bulk_action_dialogs_render_expected_fields():
+def test_remaining_bulk_action_dialogs_render_expected_fields():
     body = _render_index([
         {"id": 1, "name": "Car A", "active": True, "is_default": False},
     ])
-
-    category_dialog = body.split('id="category-dialog"')[1].split("</dialog>")[0]
-    assert 'aria-labelledby="category-dialog-title"' in category_dialog
-    assert '<input type="radio" name="category" value="business">' in category_dialog
-    assert '<input type="radio" name="category" value="personal">' in category_dialog
-    assert '<input type="radio" name="category" value="unclassified">' in category_dialog
-    assert 'checked' not in category_dialog
-    assert 'id="category-dialog-confirm" disabled' in category_dialog
-    assert 'role="alert"' in category_dialog
 
     exclusion_dialog = body.split('id="exclusion-dialog"')[1].split("</dialog>")[0]
     assert '<input type="radio" name="exclusion" value=""> Normal trip' in exclusion_dialog
@@ -211,14 +206,18 @@ def test_five_bulk_action_dialogs_render_expected_fields():
     assert 'id="delete-selected-confirm"' in delete_dialog
 
 
-def test_dialog_submitters_each_send_only_their_own_field():
+def test_direct_category_actions_and_dialog_submitters_send_only_their_own_fields():
     body = _render_index()
 
-    category_handler = body.split("categoryConfirm.addEventListener('click'")[1].split(
-        "purposeDialog"
+    category_handler = body.split("for (const [trigger, category] of [", 1)[1].split(
+        "const exclusionDialog", 1
     )[0]
     assert "fetch('/trips/batch_update'" in body
-    assert "body.append('category', chosen.value)" in category_handler
+    assert "[categoryBusiness, 'business']" in category_handler
+    assert "[categoryPersonal, 'personal']" in category_handler
+    assert "[categoryClear, 'unclassified']" in category_handler
+    assert "categoryAction.append('category', category)" in category_handler
+    assert "submitBatchUpdate(null, categoryAction, true, trigger)" in category_handler
     assert "set_purpose" not in category_handler
     assert "vehicle_id" not in category_handler
 
@@ -247,7 +246,6 @@ def test_dialog_submitters_each_send_only_their_own_field():
     assert "window.location.href = '/trips/' + data.trip_id" in merge_handler
     assert "if (selection.size < 2) return" in merge_handler
 
-    assert "submitBatchUpdate(categoryDialog, body)" in body
     assert "submitBatchUpdate(vehicleDialog, body)" in body
     delete_handler = body.split("deleteSelectedConfirm.addEventListener('click'")[1]
     assert "fetch('/trips/batch_delete'" in delete_handler
@@ -259,7 +257,7 @@ def test_dialog_submitters_each_send_only_their_own_field():
     # document, which is what lets the selection and the action bar survive
     # it. The only reload left on the page is the bfcache guard.
     batch = body.split("async function submitBatchUpdate", 1)[1].split(
-        "const categoryDialog", 1
+        "const deleteSelectedDialog", 1
     )[0]
     assert "window.location.reload()" not in batch
     assert "window.archiveController.finishWrite(true)" in batch
@@ -282,7 +280,6 @@ def test_dialog_forms_guard_against_implicit_enter_submission():
     body = _render_index()
 
     for form_marker, confirm_id in (
-        ('data-selection-dialog-confirm="category-dialog-confirm"', "category-dialog-confirm"),
         ('data-selection-dialog-confirm="purpose-dialog-confirm"', "purpose-dialog-confirm"),
         ('data-selection-dialog-confirm="vehicle-dialog-confirm"', "vehicle-dialog-confirm"),
         ('data-selection-dialog-confirm="merge-dialog-confirm"', "merge-dialog-confirm"),
@@ -346,7 +343,10 @@ def test_selection_has_no_mode_bar_follows_selection_size_and_escape_clears():
     # it appears on the first check and leaves once the last one clears.
     assert "selectionBar.hidden = selection.size < 1;" in body
     assert "card.classList.toggle('is-selected', selected)" in body
-    assert "categoryOpen.disabled = !hasSelection" in body
+    assert "categoryBusiness.disabled = !hasSelection || actionsUnavailable" in body
+    assert "categoryPersonal.disabled = !hasSelection || actionsUnavailable" in body
+    assert "categoryClear.disabled = !hasSelection || actionsUnavailable" in body
+    assert "selectionClear.disabled = writeBusy" in body
     assert "purposeOpen.disabled = !hasSelection" in body
     assert "vehicleOpen.disabled = !hasSelection" in body
     # Merge also needs every selected trip on screen, since eligibility is
@@ -373,7 +373,7 @@ def test_selection_has_no_mode_bar_follows_selection_size_and_escape_clears():
     # An id whose row is not rendered is no longer dropped on sight: a batch
     # update can move a selected trip outside the current filters without
     # deleting it. Deletion prunes on its own path instead.
-    assert "selection.delete(parseInt(deleted[1], 10));" in body
+    assert "if (selection.delete(parseInt(deleted[1], 10))) clearCategoryActionError();" in body
     assert "checkbox.checked = selected" in body
     assert "document.addEventListener('htmx:afterSwap'" in body
     assert "document.addEventListener('htmx:afterRequest'" in body
@@ -1231,7 +1231,7 @@ def test_archive_serializes_filter_and_pager_requests_against_a_batch_write():
 def test_batch_dialog_write_holds_its_confirm_button_and_closes_before_refreshing():
     body = _render_index()
     batch = body.split("async function submitBatchUpdate", 1)[1].split(
-        "const categoryDialog", 1
+        "const deleteSelectedDialog", 1
     )[0]
 
     assert "confirmButton.disabled = true;" in batch
@@ -1243,12 +1243,16 @@ def test_batch_dialog_write_holds_its_confirm_button_and_closes_before_refreshin
     assert "document.addEventListener('cancel'" in body
     # Closing is what returns focus to the triggering button, through the
     # dialog's own close handler.
-    assert batch.index("dialog.close();") < batch.index(
+    assert batch.index("else dialog.close();") < batch.index(
         "window.archiveController.finishWrite(true)"
     )
     # A failed write keeps the dialog and the selection, and reads nothing.
     assert "window.archiveController.finishWrite(false);" in batch
+    assert batch.index("const err = await resp.json()") < batch.rindex(
+        "window.archiveController.finishWrite(false);"
+    )
     assert "showDialogError(dialog, err.detail || 'Batch update failed.');" in batch
+    assert "showCategoryActionError(err.detail || 'Batch update failed.');" in batch
     assert "window.archiveController.announce('The update could not be saved.');" in batch
 
     # Merge participates in the same global guard and restores interaction
@@ -1285,7 +1289,7 @@ def test_deletion_is_the_only_missing_row_that_leaves_the_selection():
 
     assert "const TRIP_DELETE_PATH = /^\\/trips\\/(\\d+)\\/delete$/;" in selection
     prune = selection.split("const deleted = TRIP_DELETE_PATH.exec(config.path || '');", 1)[1]
-    assert "selection.delete(parseInt(deleted[1], 10));" in prune
+    assert "if (selection.delete(parseInt(deleted[1], 10))) clearCategoryActionError();" in prune
 
     reconcile = selection.split("function reconcileSelection() {", 1)[1].split("}", 1)[0]
     assert "selection.delete" not in reconcile
