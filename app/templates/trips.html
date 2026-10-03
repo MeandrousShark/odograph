@@ -1318,7 +1318,9 @@
     if (!actionsUnavailable && pendingSelectionFocus) {
       const target = pendingSelectionFocus;
       pendingSelectionFocus = null;
-      if (target.isConnected && !target.disabled) target.focus();
+      const active = document.activeElement;
+      const focusWasLost = active === document.body || active === document.documentElement;
+      if (target.isConnected && !target.disabled && (focusWasLost || active === target)) target.focus();
     }
 
     // The dialogs describe the write, which applies to the whole selection,
@@ -1655,7 +1657,7 @@
       selectionActionsDialog.close('category-action');
       return;
     }
-    if (trigger === categoryClear && moreSummary?.isConnected) moreSummary.focus();
+    if (trigger === categoryClear && moreSummary?.isConnected) pendingSelectionFocus = moreSummary;
     else if (trigger?.isConnected) pendingSelectionFocus = trigger;
   }
 

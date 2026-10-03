@@ -51,6 +51,7 @@ const state = Object.assign({
 }, scenario.state || {});
 const location = { href: "/trips" };
 const localStorage = { removed: [], removeItem(key) { this.removed.push(key); } };
+let activeElement = null;
 const history = {
   state: {},
   replaceState(next) { this.state = next; },
@@ -91,6 +92,7 @@ function makeElement(name, options = {}) {
     remove() { this.removed = true; },
     focus() {
       this.focusCount = (this.focusCount || 0) + 1;
+      activeElement = this;
       options.onFocus?.(this);
     },
     showModal() { this.open = true; },
@@ -306,6 +308,8 @@ for (const id of [
 const document = {
   title: "Trips",
   body: makeElement("body"),
+  documentElement: makeElement("document-element"),
+  get activeElement() { return activeElement || this.body; },
   addEventListener(type, callback) {
     const callbacks = listeners.get(type) || [];
     callbacks.push(callback);
@@ -760,6 +764,7 @@ function completeCategoryRefresh() {
         actionDisabled: trigger.disabled,
         sheetOpen: selectionActionsDialog.open,
       };
+      if (scenario.preserveSearchFocus) activeElement = fields.q;
       completeCategoryRefresh();
       await settle();
       result.afterRefresh = {
@@ -768,6 +773,7 @@ function completeCategoryRefresh() {
         actionDisabled: trigger.disabled,
         focusLog: focusLog.slice(),
         afterPostCount,
+        activeElement: document.activeElement.name,
       };
     } else if (scenario.action === "category-action-http-retry") {
       await settle();
@@ -1197,6 +1203,20 @@ def test_category_action_duplicate_and_selection_escape_are_blocked_through_refr
     assert result["focusLog"][-1] == "actions"
     assert result["writeBegins"] == [True]
     assert result["writeFinishes"] == [True]
+
+
+@pytest.mark.parametrize("category", ["business", "unclassified"])
+def test_category_refresh_does_not_steal_search_focus(category):
+    result = _run(
+        "category-action-duplicate", category=category, outsideView=True,
+        preserveSearchFocus=True, selection=True,
+    )
+
+    assert result["afterRefresh"]["activeElement"] == "q"
+    assert result["selection"] == [1, 99]
+    assert result["writeBusy"] is False
+    assert "business" not in result["focusLog"]
+    assert "more" not in result["focusLog"]
 
 
 def test_category_action_waits_for_literal_server_error_then_can_retry():
