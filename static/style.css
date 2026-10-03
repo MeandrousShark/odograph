@@ -1494,6 +1494,11 @@ details.add-manual .route-mode-option { flex-direction: row; align-items: center
 .selection-action-controls {
   display: flex; min-width: 0; gap: .75rem; align-items: center; flex-wrap: wrap;
 }
+.selection-category-actions {
+  display: flex; min-width: 0; gap: var(--space-2); align-items: center; flex-wrap: wrap;
+}
+.selection-category-actions > .control { white-space: nowrap; }
+.selection-action-error { flex-basis: 100%; margin: 0; color: var(--danger); font-size: .85rem; }
 .selection-actions-open { display: none; }
 .selection-actions-sheet-content { padding: var(--space-4); }
 .selection-actions-sheet-heading {
@@ -2640,6 +2645,11 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
   }
   .selection-actions-sheet .selection-action-controls > :is(button, details) { width: 100%; }
   .selection-actions-sheet .selection-action-controls > button { justify-content: center; }
+  .selection-actions-sheet .selection-category-actions {
+    grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .selection-actions-sheet .selection-category-actions > .control { width: 100%; justify-content: center; }
+  .selection-actions-sheet .selection-action-error { grid-column: 1 / -1; }
   .selection-actions-sheet .selection-more { grid-column: 1 / -1; }
   .selection-actions-sheet .selection-more > summary { width: 100%; }
   .selection-actions-sheet .selection-more-menu {

@@ -1098,8 +1098,11 @@
   <button type="button" id="selection-actions-open" class="control control-secondary selection-actions-open"
           aria-haspopup="dialog" aria-controls="selection-actions-dialog">Actions</button>
   <div id="selection-action-controls" class="selection-action-controls">
-    <button type="button" id="category-dialog-open" class="control control-secondary" disabled
-            aria-haspopup="dialog" aria-controls="category-dialog">Category</button>
+    <div class="selection-category-actions" role="group" aria-label="Set category for selected trips">
+      <button type="button" id="category-business" class="control control-secondary" disabled>Business</button>
+      <button type="button" id="category-personal" class="control control-secondary" disabled>Personal</button>
+      <p id="category-action-error" class="selection-action-error" role="alert" hidden></p>
+    </div>
     <button type="button" id="purpose-dialog-open" class="control control-secondary" disabled
             aria-haspopup="dialog" aria-controls="purpose-dialog">Purpose</button>
     <button type="button" id="vehicle-dialog-open" class="control control-secondary" disabled
@@ -1109,6 +1112,7 @@
     <details class="selection-more">
       <summary>More</summary>
       <div class="selection-more-menu">
+        <button type="button" id="category-clear" class="control control-secondary" disabled>Clear category</button>
         <button type="button" id="merge-dialog-open" class="control control-secondary" disabled
                 aria-haspopup="dialog" aria-controls="merge-dialog">Merge selected...</button>
         {# Covers both reasons Merge can be unavailable: too few trips, and a
@@ -1132,19 +1136,6 @@
     </div>
     <div id="selection-actions-mount" class="selection-actions-mount"></div>
   </div>
-</dialog>
-
-<dialog id="category-dialog" class="app-dialog selection-dialog" aria-labelledby="category-dialog-title">
-  <form class="selection-dialog-content" data-selection-dialog-confirm="category-dialog-confirm">
-    <h2 id="category-dialog-title">Set category for <span data-selection-count>0 trips</span></h2>
-    <fieldset class="selection-dialog-fieldset">
-      <legend>Category</legend>
-      <label><input type="radio" name="category" value="business"> Business</label>
-      <label><input type="radio" name="category" value="personal"> Personal</label>
-      <label><input type="radio" name="category" value="unclassified"> Unclassified</label>
-    </fieldset>
-    {{ selection_dialog_footer('category-dialog-confirm', 'Set category') }}
-  </form>
 </dialog>
 
 <dialog id="exclusion-dialog" class="app-dialog selection-dialog" aria-labelledby="exclusion-dialog-title">
@@ -1252,7 +1243,10 @@
   const selectionActionsDialog = document.getElementById('selection-actions-dialog');
   const selectionActionControls = document.getElementById('selection-action-controls');
   const selectionActionsMount = document.getElementById('selection-actions-mount');
-  const categoryOpen = document.getElementById('category-dialog-open');
+  const categoryBusiness = document.getElementById('category-business');
+  const categoryPersonal = document.getElementById('category-personal');
+  const categoryClear = document.getElementById('category-clear');
+  const categoryActionError = document.getElementById('category-action-error');
   const purposeOpen = document.getElementById('purpose-dialog-open');
   const vehicleOpen = document.getElementById('vehicle-dialog-open');
   const exclusionOpen = document.getElementById('exclusion-dialog-open');
@@ -1265,6 +1259,7 @@
   let selectionGeneration = 0;
   let selectionAbortController = null;
   let actionsSheetTransition = null;
+  let pendingSelectionFocus = null;
 
   function tripCountLabel(n) {
     return `${n} ${n === 1 ? 'trip' : 'trips'}`;
@@ -1306,7 +1301,10 @@
     selectionSelectAll.disabled = selectionLoading || writeBusy || archiveUnavailable || readBusy;
     selectionSelectAll.textContent = selectionLoading ? 'Selecting matching trips...' : 'Select all matching';
     selectionActionsOpen.disabled = !hasSelection || actionsUnavailable;
-    categoryOpen.disabled = !hasSelection || actionsUnavailable;
+    categoryBusiness.disabled = !hasSelection || actionsUnavailable;
+    categoryPersonal.disabled = !hasSelection || actionsUnavailable;
+    categoryClear.disabled = !hasSelection || actionsUnavailable;
+    selectionClear.disabled = writeBusy;
     purposeOpen.disabled = !hasSelection || actionsUnavailable;
     vehicleOpen.disabled = !hasSelection || actionsUnavailable;
     exclusionOpen.disabled = !hasSelection || actionsUnavailable;
@@ -1316,6 +1314,12 @@
     const canMerge = selectionHelpers.canMergeSelection(counts);
     mergeOpen.disabled = !canMerge || actionsUnavailable;
     mergeMinimum.hidden = canMerge;
+
+    if (!actionsUnavailable && pendingSelectionFocus) {
+      const target = pendingSelectionFocus;
+      pendingSelectionFocus = null;
+      if (target.isConnected && !target.disabled) target.focus();
+    }
 
     // The dialogs describe the write, which applies to the whole selection,
     // so they keep the plain total. The bar itself has to say when part of
@@ -1346,6 +1350,8 @@
   // Clear selection means all of it, including ids whose rows are no longer
   // rendered. Filter and history navigation call this as soon as they start.
   function clearSelection() {
+    if (window.archiveController?.isWriteBusy?.()) return;
+    clearCategoryActionError();
     cancelSelectionRequest();
     actionsSheetTransition = null;
     updateSelectionShell('navigate');
@@ -1393,6 +1399,7 @@
       if (ids === null) throw new Error('invalid response');
       selection.clear();
       ids.forEach((id) => selection.add(id));
+      clearCategoryActionError();
       selectionLoading = false;
       selectionAbortController = null;
       updateSelectionShell();
@@ -1413,6 +1420,7 @@
   // current selection (which hides the bar) when no dialog is open.
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
+    if (window.archiveController?.isWriteBusy?.()) return;
     if (document.querySelector('dialog[open]')) return;
     if (selection.size >= 1) clearSelection();
   });
@@ -1438,6 +1446,7 @@
     } else {
       selection.delete(id);
     }
+    clearCategoryActionError();
     updateSelectionShell();
   });
 
@@ -1460,7 +1469,7 @@
     if (!event.detail.successful || !config) return;
     const deleted = TRIP_DELETE_PATH.exec(config.path || '');
     if (!deleted) return;
-    selection.delete(parseInt(deleted[1], 10));
+    if (selection.delete(parseInt(deleted[1], 10))) clearCategoryActionError();
     updateSelectionShell();
   });
 
@@ -1511,6 +1520,8 @@
     }
     if (selectionBar.hidden) {
       document.getElementById('trip-archive-header')?.focus();
+    } else if (window.archiveController?.isWriteBusy?.()) {
+      pendingSelectionFocus = selectionActionsOpen;
     } else if (selectionActionsOpen.isConnected) {
       selectionActionsOpen.focus();
     }
@@ -1524,6 +1535,7 @@
 
   document.addEventListener('click', (e) => {
     if (!e.target.closest('[data-selection-actions-close]')) return;
+    if (window.archiveController?.isWriteBusy?.()) return;
     selectionActionsDialog.close('close');
   });
 
@@ -1617,12 +1629,44 @@
   // refresh are one operation as far as the rest of the archive is
   // concerned, and the confirm button is held down for the write so a
   // second press cannot repeat it.
-  async function submitBatchUpdate(dialog, body) {
-    clearDialogError(dialog);
+  function setCategoryActionBusy(busy) {
+    selectionActionControls.dataset.archiveBusy = busy ? 'true' : 'false';
+    selectionActionControls.setAttribute('aria-busy', busy ? 'true' : 'false');
+    selectionActionsDialog.dataset.archiveBusy = busy ? 'true' : 'false';
+    selectionActionsDialog.setAttribute('aria-busy', busy ? 'true' : 'false');
+  }
+
+  function showCategoryActionError(message) {
+    categoryActionError.textContent = message;
+    categoryActionError.hidden = false;
+  }
+
+  function clearCategoryActionError() {
+    categoryActionError.textContent = '';
+    categoryActionError.hidden = true;
+  }
+
+  function closeCategoryActionSurface(trigger) {
+    const more = selectionActionControls.querySelector('.selection-more');
+    const moreSummary = more && more.querySelector('summary');
+    if (more) more.open = false;
+    if (selectionActionsDialog.open) {
+      pendingSelectionFocus = selectionActionsOpen;
+      selectionActionsDialog.close('category-action');
+      return;
+    }
+    if (trigger === categoryClear && moreSummary?.isConnected) moreSummary.focus();
+    else if (trigger?.isConnected) pendingSelectionFocus = trigger;
+  }
+
+  async function submitBatchUpdate(dialog, body, categoryAction = false, trigger = null) {
+    if (categoryAction) clearCategoryActionError();
+    else clearDialogError(dialog);
     if (!window.archiveController.beginWrite()) return;
-    const confirmButton = dialogConfirmButton(dialog);
+    const confirmButton = dialog ? dialogConfirmButton(dialog) : null;
     if (confirmButton) confirmButton.disabled = true;
-    setDialogBusy(dialog, true);
+    if (categoryAction) setCategoryActionBusy(true);
+    else setDialogBusy(dialog, true);
     let resp;
     try {
       resp = await fetch('/trips/batch_update', {
@@ -1631,10 +1675,12 @@
         body,
       });
     } catch (error) {
-      setDialogBusy(dialog, false);
+      if (categoryAction) setCategoryActionBusy(false);
+      else setDialogBusy(dialog, false);
       if (confirmButton) confirmButton.disabled = false;
       window.archiveController.finishWrite(false);
-      showDialogError(dialog, 'Batch update failed.');
+      if (categoryAction) showCategoryActionError('Batch update failed.');
+      else showDialogError(dialog, 'Batch update failed.');
       window.archiveController.announce('The update could not be saved.');
       return;
     }
@@ -1642,19 +1688,21 @@
       window.invalidateArchiveHistoryCache?.();
       // Restore the dialog controls before closing. The write guard remains
       // active through the archive refresh, but a later reopen must be usable.
-      setDialogBusy(dialog, false);
+      if (categoryAction) setCategoryActionBusy(false);
+      else setDialogBusy(dialog, false);
       if (confirmButton) confirmButton.disabled = false;
-      // Closing before the refresh is what returns focus to the button that
-      // opened the dialog, through the dialog's own close handler.
-      dialog.close();
+      if (categoryAction) closeCategoryActionSurface(trigger);
+      else dialog.close();
       window.archiveController.finishWrite(true);
       return;
     }
-    setDialogBusy(dialog, false);
-    if (confirmButton) confirmButton.disabled = false;
-    window.archiveController.finishWrite(false);
     const err = await resp.json().catch(() => ({}));
-    showDialogError(dialog, err.detail || 'Batch update failed.');
+    if (categoryAction) setCategoryActionBusy(false);
+    else setDialogBusy(dialog, false);
+    if (confirmButton) confirmButton.disabled = false;
+    if (categoryAction) showCategoryActionError(err.detail || 'Batch update failed.');
+    else showDialogError(dialog, err.detail || 'Batch update failed.');
+    window.archiveController.finishWrite(false);
     window.archiveController.announce('The update could not be saved.');
   }
 
@@ -1713,30 +1761,20 @@
     window.archiveController.announce('The selected trips could not be deleted.');
   });
 
-  const categoryDialog = document.getElementById('category-dialog');
-  const categoryConfirm = document.getElementById('category-dialog-confirm');
-
-  categoryDialog.addEventListener('change', (e) => {
-    if (dialogIsBusy(categoryDialog)) return;
-    if (e.target.name === 'category') categoryConfirm.disabled = false;
-  });
-
-  categoryOpen.addEventListener('click', () => {
-    if (categoryOpen.disabled || window.archiveController.isWriteBusy()) return;
-    categoryDialog.querySelectorAll('input[name="category"]').forEach((r) => { r.checked = false; });
-    categoryConfirm.disabled = true;
-    clearDialogError(categoryDialog);
-    openActionDialog(categoryDialog, categoryOpen);
-  });
-
-  categoryConfirm.addEventListener('click', async () => {
-    const chosen = categoryDialog.querySelector('input[name="category"]:checked');
-    if (!chosen) return;
-    const body = new URLSearchParams();
-    for (const id of selection) body.append('trip_ids', id);
-    body.append('category', chosen.value);
-    await submitBatchUpdate(categoryDialog, body);
-  });
+  for (const [trigger, category] of [
+    [categoryBusiness, 'business'],
+    [categoryPersonal, 'personal'],
+    [categoryClear, 'unclassified'],
+  ]) {
+    trigger.addEventListener('click', async () => {
+      if (trigger.disabled || window.archiveController.isWriteBusy()) return;
+      if (selection.size < 1) return;
+      const categoryAction = new URLSearchParams();
+      for (const id of selection) categoryAction.append('trip_ids', id);
+      categoryAction.append('category', category);
+      await submitBatchUpdate(null, categoryAction, true, trigger);
+    });
+  }
 
   const exclusionDialog = document.getElementById('exclusion-dialog');
   const exclusionConfirm = document.getElementById('exclusion-dialog-confirm');

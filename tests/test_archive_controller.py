@@ -172,7 +172,10 @@ const filterToggle = makeElement("filter-toggle", {
 });
 const filterControls = makeElement("filter-controls");
 const status = makeElement("status");
-const retry = makeElement("retry");
+const retry = makeElement("retry", {
+  hidden: true,
+  closest(selector) { return selector === "#archive-status-retry" ? this : null; },
+});
 const stateNode = makeElement("archive-state", { dataset: { archiveState: JSON.stringify(state) } });
 const results = makeElement("results", {
   querySelector(selector) {
@@ -215,15 +218,27 @@ const selectionSelectAll = makeElement("selection-select-all");
 const selectionActionsOpen = makeElement("selection-actions-open", {
   onFocus() { focusLog.push("actions"); },
 });
-const selectionMore = makeElement("selection-more");
+const selectionMoreSummary = makeElement("more-summary", { onFocus() { focusLog.push("more"); } });
+const selectionMore = makeElement("selection-more", {
+  querySelector(selector) { return selector === "summary" ? selectionMoreSummary : null; },
+});
+selectionMore.open = false;
 const selectionActionControls = makeElement("selection-action-controls", {
   querySelector(selector) { return selector === ".selection-more" ? selectionMore : null; },
 });
 const selectionActionsMount = makeElement("selection-actions-mount");
 const selectionActionsDialog = makeElement("selection-actions-dialog", {
-  id: "selection-actions-dialog", deferClose: true,
+  id: "selection-actions-dialog", deferClose: true, open: false,
+  matches(selector) { return selector === "dialog"; },
 });
-const categoryOpen = makeElement("category-open");
+selectionActionsDialog.open = false;
+const categoryBusiness = makeElement("category-business", { onFocus() { focusLog.push("business"); } });
+const categoryPersonal = makeElement("category-personal", { onFocus() { focusLog.push("personal"); } });
+const categoryClear = makeElement("category-clear");
+const categoryActionError = makeElement("category-action-error", { hidden: true });
+const selectionActionsClose = makeElement("selection-actions-close", {
+  closest(selector) { return selector === "[data-selection-actions-close]" ? this : null; },
+});
 const purposeOpen = makeElement("purpose-open");
 const vehicleOpen = makeElement("vehicle-open");
 const exclusionOpen = makeElement("exclusion-open");
@@ -260,7 +275,10 @@ const controls = {
   "selection-actions-dialog": selectionActionsDialog,
   "selection-action-controls": selectionActionControls,
   "selection-actions-mount": selectionActionsMount,
-  "category-dialog-open": categoryOpen,
+  "category-business": categoryBusiness,
+  "category-personal": categoryPersonal,
+  "category-clear": categoryClear,
+  "category-action-error": categoryActionError,
   "purpose-dialog-open": purposeOpen,
   "vehicle-dialog-open": vehicleOpen,
   "exclusion-dialog-open": exclusionOpen,
@@ -271,7 +289,7 @@ const controls = {
   "delete-selected-confirm": deleteSelectedConfirm,
   "trip-archive-header": archiveHeader,
 };
-for (const id of ["category-dialog", "exclusion-dialog", "purpose-dialog", "vehicle-dialog", "merge-dialog"]) {
+for (const id of ["exclusion-dialog", "purpose-dialog", "vehicle-dialog", "merge-dialog"]) {
   controls[id] = makeElement(id, {
     id,
     querySelector() { return makeElement("dialog-child"); },
@@ -279,7 +297,7 @@ for (const id of ["category-dialog", "exclusion-dialog", "purpose-dialog", "vehi
   });
 }
 for (const id of [
-  "category-dialog-confirm", "exclusion-dialog-confirm", "purpose-dialog-confirm",
+  "exclusion-dialog-confirm", "purpose-dialog-confirm",
   "vehicle-dialog-confirm", "merge-dialog-confirm", "vehicle-dialog-select",
   "purpose-dialog-input", "merge-dialog-category", "merge-dialog-purpose",
   "merge-dialog-notes", "merge-dialog-vehicle",
@@ -307,7 +325,7 @@ const document = {
     if (selector === "#trip-archive-results") return results;
     if (selector === "#trip-archive-results [data-archive-state]") return stateNode;
     if (selector === '[data-archive-filter-form] .trip-filter-secondary') return secondary;
-    if (selector === 'dialog[open]') return null;
+    if (selector === 'dialog[open]') return selectionActionsDialog.open ? selectionActionsDialog : null;
     return null;
   },
   querySelectorAll(selector) {
@@ -365,6 +383,8 @@ const htmx = {
 };
 const bulkFetchCalls = [];
 let resolveBulkFetch = null;
+let resolveCategoryErrorJson = null;
+let categoryPostCount = 0;
 let resolveSelectionFetch = null;
 let selectionFetchCount = 0;
 const writeBegins = [];
@@ -379,11 +399,15 @@ const bulkArchiveController = {
     }
     writeBusy = true;
     writeBegins.push(true);
+    window.archiveSelectionBusyChanged?.();
     return true;
   },
   finishWrite(refresh) {
-    writeBusy = false;
     writeFinishes.push(refresh);
+    if (!(scenario.action.startsWith("category-action") && refresh)) {
+      writeBusy = false;
+      window.archiveSelectionBusyChanged?.();
+    }
   },
   announce(message) { announcements.push(message); },
   isWriteBusy() { return writeBusy; },
@@ -391,7 +415,8 @@ const bulkArchiveController = {
   isReadBusy() { return false; },
   selectionQuery() { return scenario.selectionQuery || ""; },
 };
-if ((scenario.action || "").startsWith("bulk-delete")) {
+if ((scenario.action || "").startsWith("bulk-delete")
+    || (scenario.action || "").startsWith("category-action")) {
   window.archiveController = bulkArchiveController;
 }
 window.invalidateArchiveHistoryCache = () => {
@@ -400,6 +425,28 @@ window.invalidateArchiveHistoryCache = () => {
 
 function fetch(url, options) {
   bulkFetchCalls.push({ url, options });
+  if (url === "/trips/batch_update") {
+    categoryPostCount += 1;
+    if (scenario.action === "category-action-duplicate" && categoryPostCount === 1) {
+      return new Promise((resolve) => { resolveBulkFetch = resolve; });
+    }
+    if (scenario.action === "category-action-network-retry" && categoryPostCount === 1) {
+      return Promise.reject(new Error("network down"));
+    }
+    if (scenario.action === "category-action-http-retry" && categoryPostCount === 1) {
+      return Promise.resolve({
+        ok: false,
+        json: async () => new Promise((resolve) => { resolveCategoryErrorJson = resolve; }),
+      });
+    }
+    if (scenario.action === "category-action-mobile-failure" && categoryPostCount === 1) {
+      return Promise.resolve({
+        ok: false,
+        json: async () => ({ detail: "<b>Mobile update failed</b>" }),
+      });
+    }
+    return Promise.resolve({ ok: true, json: async () => ({ updated: 2 }) });
+  }
   if (url.startsWith("/trips/selection")) {
     selectionFetchCount += 1;
     if ((scenario.action.startsWith("selection-stale")
@@ -448,7 +495,8 @@ const context = {
 window.window = window;
 vm.createContext(context);
 vm.runInContext(process.argv[2], context, { filename: "trips-archive-inline.js" });
-if ((scenario.action || "").startsWith("bulk-delete")) {
+if ((scenario.action || "").startsWith("bulk-delete")
+    || (scenario.action || "").startsWith("category-action")) {
   window.archiveController = bulkArchiveController;
   window.invalidateArchiveHistoryCache = () => {
     localStorage.removed.push("archive-history");
@@ -515,6 +563,11 @@ function completeRefresh(call, nextState = state, successful = true) {
   });
 }
 
+function completeCategoryRefresh() {
+  writeBusy = false;
+  window.archiveSelectionBusyChanged?.();
+}
+
 (async () => {
   const result = {
     requests,
@@ -542,6 +595,27 @@ function completeRefresh(call, nextState = state, successful = true) {
     result.busyAfterWrite = window.archiveController.isWriteBusy();
     completeRefresh(requests.at(-1));
     result.busyAfterRefresh = window.archiveController.isWriteBusy();
+  } else if (scenario.action === "write-refresh-retry") {
+    const item = beginMutation("/trips/1/tag");
+    await finishMutation(item);
+    const firstRefresh = requests.at(-1);
+    completeRefresh(firstRefresh, state, false);
+    result.afterFailure = {
+      requestCount: requests.length,
+      retryVisible: !retry.hidden,
+      busy: window.archiveController.isWriteBusy(),
+      statusText: status.textContent,
+    };
+    emit("click", { target: retry });
+    const retryCall = requests.at(-1);
+    result.retryMethod = retryCall.method;
+    completeRefresh(retryCall, state, true);
+    result.afterRetry = {
+      requestCount: requests.length,
+      retryVisible: !retry.hidden,
+      busy: window.archiveController.isWriteBusy(),
+      statusText: status.textContent,
+    };
   } else if (scenario.action === "validation") {
     const item = beginMutation("/trips/1/edit");
     const outcome = await finishMutation(item, { marker: false });
@@ -643,6 +717,142 @@ function completeRefresh(call, nextState = state, successful = true) {
     result.errorHidden = deleteDialogError.hidden;
     result.confirmDisabled = deleteSelectedConfirm.disabled;
     result.writeBusy = writeBusy;
+  } else if ((scenario.action || "").startsWith("category-action")) {
+    const selectedIds = scenario.outsideView ? [1, 99] : [1, 2, 3];
+    for (const id of selectedIds.filter((value) => value <= 3)) {
+      const checkbox = selectionCheckboxes[id - 1];
+      checkbox.checked = true;
+      emit("change", { target: checkbox });
+    }
+    if (selectedIds.includes(99)) window.__selection.add(99);
+    window.archiveSelectionBusyChanged();
+    if (scenario.mobile) await click(selectionActionsOpen);
+    const trigger = scenario.category === "personal"
+      ? categoryPersonal
+      : scenario.category === "unclassified" ? categoryClear : categoryBusiness;
+    if (trigger === categoryClear) selectionMore.open = true;
+
+    const first = click(trigger);
+    await settle();
+    if (scenario.action === "category-action-duplicate") {
+      await click(trigger);
+      selectionClear.dispatch("click", { target: selectionClear });
+      emit("keydown", { key: "Escape" });
+      if (scenario.mobile) {
+        emit("click", { target: selectionActionsClose });
+        result.cancelPrevented = emit("cancel", { target: selectionActionsDialog }).defaultPrevented;
+      }
+      result.duringPost = {
+        postCount: categoryPostCount,
+        selection: Array.from(window.__selection),
+        selectionClearDisabled: selectionClear.disabled,
+        sheetOpen: selectionActionsDialog.open,
+        writeBusy,
+      };
+      resolveBulkFetch({ ok: true, json: async () => ({ updated: 2 }) });
+      await first;
+      await settle();
+      const afterPostCount = categoryPostCount;
+      await click(trigger);
+      result.duringRefresh = {
+        postCount: categoryPostCount,
+        writeBusy,
+        actionDisabled: trigger.disabled,
+        sheetOpen: selectionActionsDialog.open,
+      };
+      completeCategoryRefresh();
+      await settle();
+      result.afterRefresh = {
+        postCount: categoryPostCount,
+        writeBusy,
+        actionDisabled: trigger.disabled,
+        focusLog: focusLog.slice(),
+        afterPostCount,
+      };
+    } else if (scenario.action === "category-action-http-retry") {
+      await settle();
+      await click(trigger);
+      result.whileErrorBodyPending = {
+        postCount: categoryPostCount,
+        selection: Array.from(window.__selection),
+        writeBusy,
+        errorHidden: categoryActionError.hidden,
+      };
+      resolveCategoryErrorJson({ detail: "<b>Try again</b>" });
+      await first;
+      await settle();
+      result.afterError = {
+        errorText: categoryActionError.textContent,
+        errorHidden: categoryActionError.hidden,
+        selection: Array.from(window.__selection),
+        writeBusy,
+        sheetOpen: selectionActionsDialog.open,
+      };
+      if (scenario.retryAfterFailure) {
+        await click(trigger);
+        await settle();
+        result.afterRetry = {
+          postCount: categoryPostCount,
+          errorHidden: categoryActionError.hidden,
+          selection: Array.from(window.__selection),
+          sheetOpen: selectionActionsDialog.open,
+          writeBusy,
+        };
+        completeCategoryRefresh();
+        await settle();
+        result.focusLog = focusLog.slice();
+      }
+    } else {
+      await first;
+      await settle();
+      result.afterFirst = {
+        postCount: categoryPostCount,
+        errorText: categoryActionError.textContent,
+        errorHidden: categoryActionError.hidden,
+        selection: Array.from(window.__selection),
+        writeBusy,
+        sheetOpen: selectionActionsDialog.open,
+        moreOpen: selectionMore.open,
+      };
+      if (scenario.retryAfterFailure && !writeBusy) {
+        await click(trigger);
+        await settle();
+        result.afterRetry = {
+          postCount: categoryPostCount,
+          errorHidden: categoryActionError.hidden,
+          selection: Array.from(window.__selection),
+          sheetOpen: selectionActionsDialog.open,
+          moreOpen: selectionMore.open,
+          writeBusy,
+        };
+        completeCategoryRefresh();
+        await settle();
+        result.focusLog = focusLog.slice();
+      } else if (!writeBusy && categoryPostCount > 0 && !categoryActionError.hidden) {
+        completeCategoryRefresh();
+      } else if (writeBusy) {
+        completeCategoryRefresh();
+        await settle();
+      }
+    }
+    result.request = bulkFetchCalls.map((call) => ({
+      url: call.url,
+      method: call.options.method,
+      csrf: call.options.headers["X-CSRF-Token"],
+      ids: Array.from(call.options.body.getAll("trip_ids"), (id) => Number(id)),
+      category: call.options.body.get("category"),
+    }));
+    result.selection = Array.from(window.__selection);
+    result.selectionCount = selectionCount.textContent;
+    result.selectionHidden = selectionBar.hidden;
+    result.errorText = categoryActionError.textContent;
+    result.errorHidden = categoryActionError.hidden;
+    result.sheetOpen = selectionActionsDialog.open;
+    result.moreOpen = selectionMore.open;
+    result.writeBusy = writeBusy;
+    result.writeBegins = writeBegins.slice();
+    result.writeFinishes = writeFinishes.slice();
+    result.focusLog = result.focusLog || focusLog.slice();
   } else if (scenario.action === "selection-read-queued") {
     values.vehicle = "7";
     fields.vehicle.value = "7";
@@ -666,7 +876,7 @@ function completeRefresh(call, nextState = state, successful = true) {
       checkboxDisabled: selectionCheckbox.disabled,
       checkboxChecked: selectionCheckbox.checked,
       changePrevented: attemptedChange.defaultPrevented,
-      categoryDisabled: categoryOpen.disabled,
+      categoryDisabled: categoryBusiness.disabled || categoryPersonal.disabled || categoryClear.disabled,
       deleteDisabled: deleteSelectedOpen.disabled,
       inlineWritePrevented: inlineWriteAttempt.defaultPrevented,
     };
@@ -748,17 +958,17 @@ function completeRefresh(call, nextState = state, successful = true) {
     result.sheetOpened = selectionActionsDialog.open;
     result.controlsMounted = selectionActionsMount.child === selectionActionControls;
     if (scenario.action === "sheet-transition") {
-      await click(categoryOpen);
+      await click(purposeOpen);
       await settle();
       result.sheetOpenAfterAction = selectionActionsDialog.open;
-      result.actionDialogOpen = controls["category-dialog"].open;
-      controls["category-dialog"].close();
+      result.actionDialogOpen = controls["purpose-dialog"].open;
+      controls["purpose-dialog"].close();
     } else if (scenario.action === "sheet-stale-transition") {
-      categoryOpen.dispatch("click", { target: categoryOpen });
+      purposeOpen.dispatch("click", { target: purposeOpen });
       window.archiveSelectionNavigationStarted();
       await settle();
       result.sheetOpenAfterAction = selectionActionsDialog.open;
-      result.actionDialogOpen = Boolean(controls["category-dialog"].open);
+      result.actionDialogOpen = Boolean(controls["purpose-dialog"].open);
     } else {
       selectionActionsDialog.close('escape');
     }
@@ -782,6 +992,7 @@ def _run(action, **extra):
     needs_selection = (
         action == "selected-delete" or action.startswith("bulk-delete")
         or action.startswith("selection-") or action.startswith("sheet-")
+        or action.startswith("category-action")
     )
     args = [
         node,
@@ -808,6 +1019,24 @@ def test_inline_controller_refreshes_only_after_marked_write():
     assert result["requests"][-1]["method"] == "GET"
     assert result["busyAfterWrite"] is True
     assert result["busyAfterRefresh"] is False
+
+
+def test_failed_post_write_refresh_exposes_read_only_retry():
+    result = _run("write-refresh-retry")
+
+    assert result["afterFailure"] == {
+        "requestCount": 1,
+        "retryVisible": True,
+        "busy": True,
+        "statusText": "The update was saved, but the trip list could not be refreshed.",
+    }
+    assert result["retryMethod"] == "GET"
+    assert result["afterRetry"] == {
+        "requestCount": 2,
+        "retryVisible": False,
+        "busy": False,
+        "statusText": "Trips updated",
+    }
 
 
 def test_inline_controller_keeps_validation_html_and_releases_write():
@@ -917,6 +1146,123 @@ def test_selected_delete_duplicate_submit_is_blocked_while_request_is_in_flight(
     assert result["selection"] == []
     assert result["dialogOpen"] is False
     assert result["writeFinishes"] == [True]
+
+
+@pytest.mark.parametrize("category", ["business", "personal", "unclassified"])
+def test_direct_category_actions_post_the_explicit_selection_and_keep_outside_view_ids(category):
+    result = _run("category-action-success", category=category, outsideView=True, selection=True)
+
+    assert result["request"] == [{
+        "url": "/trips/batch_update",
+        "method": "POST",
+        "csrf": "token",
+        "ids": [1, 99],
+        "category": category,
+    }]
+    assert result["selection"] == [1, 99]
+    assert result["selectionCount"] == "2 trips selected (1 outside this view)"
+    assert result["selectionHidden"] is False
+    assert result["errorHidden"] is True
+    assert result["writeBegins"] == [True]
+    assert result["writeFinishes"] == [True]
+    assert result["writeBusy"] is False
+    assert result["moreOpen"] is False
+    assert result["localStorage"]["removed"] == ["archive-history"]
+
+
+def test_category_action_duplicate_and_selection_escape_are_blocked_through_refresh():
+    result = _run(
+        "category-action-duplicate", category="personal", outsideView=True, mobile=True,
+        selection=True,
+    )
+
+    assert result["duringPost"] == {
+        "postCount": 1,
+        "selection": [1, 99],
+        "selectionClearDisabled": True,
+        "sheetOpen": True,
+        "writeBusy": True,
+    }
+    assert result["cancelPrevented"] is True
+    assert result["duringRefresh"] == {
+        "postCount": 1,
+        "writeBusy": True,
+        "actionDisabled": True,
+        "sheetOpen": False,
+    }
+    assert result["afterRefresh"]["postCount"] == 1
+    assert result["afterRefresh"]["writeBusy"] is False
+    assert result["afterRefresh"]["actionDisabled"] is False
+    assert result["selection"] == [1, 99]
+    assert result["focusLog"][-1] == "actions"
+    assert result["writeBegins"] == [True]
+    assert result["writeFinishes"] == [True]
+
+
+def test_category_action_waits_for_literal_server_error_then_can_retry():
+    result = _run(
+        "category-action-http-retry", category="business", outsideView=True,
+        retryAfterFailure=True,
+        selection=True,
+    )
+
+    assert result["whileErrorBodyPending"] == {
+        "postCount": 1,
+        "selection": [1, 99],
+        "writeBusy": True,
+        "errorHidden": True,
+    }
+    assert result["afterError"] == {
+        "errorText": "<b>Try again</b>",
+        "errorHidden": False,
+        "selection": [1, 99],
+        "writeBusy": False,
+        "sheetOpen": False,
+    }
+    assert result["afterRetry"] == {
+        "postCount": 2,
+        "errorHidden": True,
+        "selection": [1, 99],
+        "sheetOpen": False,
+        "writeBusy": True,
+    }
+    assert result["writeBegins"] == [True, True]
+    assert result["writeFinishes"] == [False, True]
+
+
+def test_category_action_network_failure_can_retry():
+    result = _run(
+        "category-action-network-retry", category="unclassified", retryAfterFailure=True,
+        selection=True,
+    )
+
+    assert result["afterFirst"]["errorText"] == "Batch update failed."
+    assert result["afterFirst"]["errorHidden"] is False
+    assert result["afterFirst"]["selection"] == [1, 2, 3]
+    assert result["afterFirst"]["writeBusy"] is False
+    assert result["afterRetry"]["postCount"] == 2
+    assert result["afterRetry"]["errorHidden"] is True
+    assert result["afterRetry"]["selection"] == [1, 2, 3]
+    assert result["afterRetry"]["moreOpen"] is False
+    assert result["writeBegins"] == [True, True]
+    assert result["writeFinishes"] == [False, True]
+
+
+def test_mobile_category_error_stays_in_sheet_and_retry_closes_it():
+    result = _run(
+        "category-action-mobile-failure", category="personal", outsideView=True,
+        mobile=True, retryAfterFailure=True,
+        selection=True,
+    )
+
+    assert result["afterFirst"]["sheetOpen"] is True
+    assert result["afterFirst"]["errorText"] == "<b>Mobile update failed</b>"
+    assert result["afterFirst"]["errorHidden"] is False
+    assert result["afterFirst"]["selection"] == [1, 99]
+    assert result["afterRetry"]["sheetOpen"] is False
+    assert result["afterRetry"]["errorHidden"] is True
+    assert result["afterRetry"]["selection"] == [1, 99]
+    assert result["focusLog"][-1] == "actions"
 
 
 def test_select_all_matching_fetches_the_canonical_applied_snapshot_without_cache():
@@ -1051,7 +1397,7 @@ def test_snapshot_selection_posts_every_explicit_id_and_clears_only_after_delete
     assert result["selectionHidden"] is True
 
 
-def test_mobile_action_sheet_restores_focus_and_reuses_the_existing_action_dialog():
+def test_mobile_action_sheet_restores_focus_and_reuses_the_existing_purpose_dialog():
     result = _run("sheet-transition", selection=True)
 
     assert result["sheetOpened"] is True
