@@ -63,6 +63,7 @@ class DetectorRunner:
         self.pool = pool
         self.params = params
         self.full_reprocess_warn_points = full_reprocess_warn_points
+        self.produced_work = False
 
     async def run_once(self) -> bool:
         """Process each owned stream in its own transaction.
@@ -71,6 +72,7 @@ class DetectorRunner:
         commit. The same global transaction lock continues to exclude imports
         and structural mutations across each stream's protected reads and writes.
         """
+        self.produced_work = False
         async with self.pool.connection() as conn:
             owner = account_id(conn)
             # Registering an unused device must not manufacture checkpoint
@@ -106,8 +108,9 @@ class DetectorRunner:
                         continue
                     if await self._admit_device(conn, device) is None:
                         continue
-                    await self._run(conn, device)
+                    processed = await self._run(conn, device)
                 ran = True
+                self.produced_work |= bool(processed)
             except Exception as exc:
                 log.warning("detector: stream failed: %s", type(exc).__name__)
                 failure = failure or exc
@@ -166,7 +169,7 @@ class DetectorRunner:
         async with self.pool.connection() as conn:
             await self.reprocess_device_in(conn, device)
 
-    async def _run(self, conn, device: int) -> None:
+    async def _run(self, conn, device: int) -> bool:
         owner = account_id(conn)
         cur = await conn.execute(
             "SELECT last_run_at, detector_version FROM detector_state "
@@ -196,6 +199,7 @@ class DetectorRunner:
             "WHERE account_id = %s AND tracking_device_id = %s",
             (run_started - RUN_OVERLAP_MARGIN, DETECTOR_VERSION, owner, device),
         )
+        return dirty_from is not None
 
     async def _process_device(self, conn, device: int, dirty_from: datetime, full: bool) -> None:
         owner = account_id(conn)
@@ -452,6 +456,8 @@ class DetectorRunner:
                 " detector_version = %s, updated_at = now(), path = prior.path, "
                 " snap_status = CASE WHEN prior.preserve_snap "
                 "   THEN t.snap_status ELSE 'pending'::snap_state END, "
+                " snap_attempted_at = CASE WHEN prior.preserve_snap "
+                "   THEN t.snap_attempted_at ELSE NULL END, "
                 " path_snapped = CASE WHEN prior.preserve_snap THEN t.path_snapped ELSE NULL END, "
                 " distance_snapped_m = CASE WHEN prior.preserve_snap "
                 "   THEN t.distance_snapped_m ELSE NULL END, "

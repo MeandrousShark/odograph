@@ -18,6 +18,7 @@ from psycopg_pool import AsyncConnectionPool
 
 from app.detector.runner import load_trip_points
 from app.validation import parse_finite_number
+from app.worker import BatchOutcome
 
 log = logging.getLogger(__name__)
 
@@ -348,21 +349,23 @@ class SnapWorker:
         self.max_coords = max_coords
         self.batch_size = batch_size
 
-    async def run_once(self) -> None:
+    async def run_once(self) -> BatchOutcome:
         async with self.pool.connection() as conn:
             cur = await conn.execute(
                 "SELECT t.id FROM trips t JOIN tracking_devices d "
                 "ON d.account_id=t.account_id AND d.id=t.tracking_device_id "
                 "WHERE t.account_id=%s AND t.snap_status='pending' "
                 "AND t.source='detected' AND NOT t.imported AND d.enabled AND d.revoked_at IS NULL "
-                "ORDER BY t.id LIMIT %s",
+                "ORDER BY COALESCE(t.snap_attempted_at, t.created_at), t.id LIMIT %s",
                 (account_id(conn), self.batch_size),
             )
             trip_ids = [r[0] for r in await cur.fetchall()]
         if not trip_ids:
-            return
+            return BatchOutcome()
+        outcome = BatchOutcome()
         for trip_id in trip_ids:
-            await self._snap_one(trip_id)
+            outcome += await self._snap_one(trip_id)
+        return outcome
 
     async def _load_points(self, conn, trip_id: int) -> list[MatchPoint]:
         """Adapts the shared time-range point query (`load_trip_points`,
@@ -373,7 +376,7 @@ class SnapWorker:
         rows = await load_trip_points(conn, trip_id)
         return [MatchPoint(t=r[1], lat=r[2], lon=r[3], accuracy_m=r[4]) for r in rows]
 
-    async def _snap_one(self, trip_id: int) -> None:
+    async def _snap_one(self, trip_id: int) -> BatchOutcome:
         async with self.pool.connection() as conn:
             # Read BEFORE loading points, not after: the pool runs at READ
             # COMMITTED, so each statement on this connection gets its own
@@ -402,7 +405,7 @@ class SnapWorker:
             )
             row = await cur.fetchone()
             if row is None:
-                return
+                return BatchOutcome()
             generation, raw_distance_m, device_id, device_generation = row
             points = await self._load_points(conn, trip_id)
         if len(points) < 2:
@@ -414,7 +417,7 @@ class SnapWorker:
             # (e.g. the rewrite's own point set is >= 2), so don't clobber it.
             async with self.pool.connection() as conn:
                 if not await lock_device_generation(conn, device_id, device_generation):
-                    return
+                    return BatchOutcome()
                 cur = await conn.execute(
                     "UPDATE trips SET snap_status = 'failed', snapped_at = now() "
                     "WHERE account_id = %s AND id = %s AND updated_at = %s",
@@ -425,9 +428,9 @@ class SnapWorker:
                     "snap: trip %s was rewritten mid-snap, discarding stale "
                     "<2-point result", trip_id,
                 )
-                return
+                return BatchOutcome()
             log.warning("snap: trip %s has < 2 usable points, marking failed", trip_id)
-            return
+            return BatchOutcome(attempted=1, completed=1)
 
         sampled = downsample(points, self.max_coords)
         coords = ";".join(f"{p.lon:.6f},{p.lat:.6f}" for p in sampled)
@@ -449,6 +452,18 @@ class SnapWorker:
             f"?geometries=geojson&overview=full&steps=false&annotations=false"
             f"&gaps=split&tidy=false&timestamps={timestamps}&radiuses={radii}"
         )
+        async with self.pool.connection() as conn:
+            if not await lock_device_generation(conn, device_id, device_generation):
+                return BatchOutcome()
+            cur = await conn.execute(
+                "UPDATE trips SET snap_attempted_at = now() "
+                "WHERE account_id = %s AND id = %s AND tracking_device_id = %s "
+                "AND snap_status = 'pending' AND source = 'detected' AND NOT imported "
+                "AND updated_at = %s",
+                (account_id(conn), trip_id, device_id, generation),
+            )
+        if cur.rowcount == 0:
+            return BatchOutcome()
         try:
             resp = await self.http.get(url)
             body = resp.json()
@@ -463,15 +478,15 @@ class SnapWorker:
             # every sweep, same NoMatch every time) instead of landing on
             # the correct terminal 'failed' via parse_match_response below.
             log.warning("snap: trip %s OSRM call failed (%s), leaving pending", trip_id, type(e).__name__)
-            return
+            return BatchOutcome(attempted=1, retriable_failures=1, failure_type=type(e).__name__)
         if not isinstance(body, dict) or "code" not in body:
             log.warning("snap: trip %s got an unrecognized OSRM response, leaving pending", trip_id)
-            return
+            return BatchOutcome(attempted=1, retriable_failures=1, failure_type="UnrecognizedResponse")
 
         result = parse_match_response(body, self.min_confidence, len(sampled), raw_distance_m)
         async with self.pool.connection() as conn:
             if not await lock_device_generation(conn, device_id, device_generation):
-                return
+                return BatchOutcome(attempted=1)
             cur = await conn.execute(
                 "UPDATE trips SET path_snapped = ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326), "
                 " distance_snapped_m = %s, snap_status = %s, snapped_at = now() "
@@ -491,6 +506,7 @@ class SnapWorker:
                 "snap: trip %s was rewritten mid-snap, discarding stale result "
                 "(would have been %s)", trip_id, result.status,
             )
-            return
+            return BatchOutcome(attempted=1)
         if result.status != "ok":
             log.info("snap: trip %s -> %s (%s)", trip_id, result.status, result.reason)
+        return BatchOutcome(attempted=1, completed=1)

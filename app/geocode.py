@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from app.account_context import account_id
 from app.account_jobs import lock_device_generation
+from app.worker import BatchOutcome
 
 import asyncio
 import logging
@@ -323,7 +324,7 @@ class GeocodeWorker:
         self.min_interval_s = min_interval_s
         self.batch_size = batch_size
 
-    async def run_once(self) -> None:
+    async def run_once(self) -> BatchOutcome:
         async with self.pool.connection() as conn:
             cur = await conn.execute(
                 f"""
@@ -351,11 +352,15 @@ class GeocodeWorker:
             )
             coords = [(float(r[0]), float(r[1])) for r in await cur.fetchall()]
         if not coords:
-            return
+            return BatchOutcome()
+        outcome = BatchOutcome()
         for i, (lat, lon) in enumerate(coords):
             if i > 0:
                 await asyncio.sleep(self.min_interval_s)
-            await self._geocode_one(lat, lon)
+            item = await self._geocode_one(lat, lon)
+            if item is not None:
+                outcome += item
+        return outcome
 
     async def _sources(self, conn, lat: float, lon: float, *, lock=False):
         cur = await conn.execute(
@@ -373,11 +378,11 @@ class GeocodeWorker:
         )
         return await cur.fetchall()
 
-    async def _geocode_one(self, lat: float, lon: float) -> None:
+    async def _geocode_one(self, lat: float, lon: float) -> BatchOutcome:
         async with self.pool.connection() as conn:
             sources = await self._sources(conn, lat, lon)
         if not sources:
-            return
+            return BatchOutcome()
         try:
             address = await self.provider.reverse(self.http, lat, lon)
         except (httpx.HTTPError, ValueError) as e:
@@ -389,7 +394,7 @@ class GeocodeWorker:
             # "misconfigured" apart without putting the key or a precise
             # location in logs.
             log.warning("geocode: lookup failed (%s), leaving uncached", type(e).__name__)
-            return
+            return BatchOutcome(attempted=1, retriable_failures=1, failure_type=type(e).__name__)
         async with self.pool.connection() as conn:
             current_sources = set(await self._sources(conn, lat, lon, lock=True))
             eligible = False
@@ -406,7 +411,7 @@ class GeocodeWorker:
                     eligible = True
                     break
             if not eligible:
-                return
+                return BatchOutcome(attempted=1)
             await conn.execute(
                 "INSERT INTO geocode_cache (account_id, lat, lon, address) VALUES (%s, %s, %s, %s) "
                 "ON CONFLICT (account_id, lat, lon) DO NOTHING",
@@ -414,3 +419,4 @@ class GeocodeWorker:
             )
         if address is None:
             log.info("geocode: lookup complete, no address found")
+        return BatchOutcome(attempted=1, completed=1)

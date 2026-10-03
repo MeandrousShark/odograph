@@ -34,7 +34,7 @@ from app.vehicles import (
     set_default_vehicle,
     update_vehicle,
 )
-from conftest import reset_account_db
+from conftest import LATEST_SCHEMA_VERSION, reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -185,7 +185,7 @@ async def _app_settings_scenario():
             versions = await conn.execute(
                 "SELECT COALESCE(max(version), 0) FROM schema_migrations"
             )
-            assert (await versions.fetchone())[0] == 37
+            assert (await versions.fetchone())[0] == LATEST_SCHEMA_VERSION
 
             row = await conn.execute("SELECT count(*) FROM account_settings")
             assert (await row.fetchone())[0] == 1

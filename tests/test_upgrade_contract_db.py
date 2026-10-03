@@ -160,6 +160,57 @@ def test_every_later_migration_keeps_the_upgraded_contract(monkeypatch, tmp_path
         monkeypatch, provisioned_schema, provisioned, MIGRATIONS_DIR, start_again))
 
 
+def test_snap_attempt_upgrade_preserves_existing_trip_results(monkeypatch, tmp_path):
+    async def scenario():
+        pool = make_pool(TEST_DB)
+        await pool.open(wait=True)
+        try:
+            await drop_and_recreate_schema(pool)
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", _migration_dir(tmp_path, "before_038", through=37))
+            await run_migrations(pool)
+            await prepare_application_roles(TEST_DB)
+            async with pool.connection() as conn:
+                await conn.execute(
+                    "INSERT INTO accounts(id,email,password_hash,is_admin) "
+                    "VALUES(41,'upgrade@example.invalid','unused',true)")
+                await conn.execute(
+                    "INSERT INTO tracking_devices(account_id,label) VALUES(41,'phone')")
+                device = (await (await conn.execute(
+                    "SELECT id FROM tracking_devices WHERE account_id=41"
+                )).fetchone())[0]
+                for status in ("pending", "ok"):
+                    await conn.execute(
+                        "INSERT INTO trips(account_id,tracking_device_id,device,source,started_at,ended_at,"
+                        "distance_m,snap_status,snapped_at) "
+                        "VALUES(41,%s,'phone','detected','2026-07-01T10:00:00Z',"
+                        "'2026-07-01T10:15:00Z',1000,%s,"
+                        "CASE WHEN %s='ok' THEN '2026-07-01T11:00:00Z'::timestamptz ELSE NULL END)",
+                        (device, status, status),
+                    )
+                before = await (await conn.execute(
+                    "SELECT id,snap_status::text,snapped_at,created_at FROM trips ORDER BY id"
+                )).fetchall()
+
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", _migration_dir(tmp_path, "through_038", through=38))
+            await run_migrations(pool)
+            await prepare_application_roles(TEST_DB)
+            async with pool.connection() as conn:
+                assert (await (await conn.execute(
+                    "SELECT max(version) FROM schema_migrations"
+                )).fetchone()) == (38,)
+                after = await (await conn.execute(
+                    "SELECT id,snap_status::text,snapped_at,created_at,snap_attempted_at "
+                    "FROM trips ORDER BY id"
+                )).fetchall()
+            assert [row[:4] for row in after] == before
+            assert all(row[4] is None for row in after)
+        finally:
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
+            await full_schema_reset(pool)
+            await pool.close()
+    asyncio.run(scenario())
+
+
 def test_prepared_contract_without_activation_refuses_start_and_restore(monkeypatch, tmp_path):
     """A prepared-contract database, such as a restored schema-27 archive,
     names the contract mismatch instead of failing generically."""
