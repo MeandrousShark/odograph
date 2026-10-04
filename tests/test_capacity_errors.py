@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from fastapi import Request
 
 from app.account_context import AccountPool, AccountPrincipal
 from app.auth import require_user
@@ -31,7 +32,7 @@ def test_routine_pressure_is_retryable_before_any_connection(endpoint, accept):
         app.state.control_pool = manager.manage_pool(NoBorrowPool(), "control")
         app.state.runtime_pool = manager.manage_pool(NoBorrowPool(), "runtime")
 
-        async def account(request):
+        async def account(request: Request):
             principal = AccountPrincipal(3, True, 1)
             request.state.principal = principal
             request.state.account_pool = AccountPool(app.state.runtime_pool, principal)

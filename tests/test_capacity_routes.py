@@ -657,6 +657,7 @@ def test_repeated_ingest_cancellation_retains_auth_owner_until_verifier_finishes
         app = FastAPI()
         manager = app.state.capacity = _manager(capacity_auth_ingest_slots=1)
         app.state.config = SimpleNamespace(ingest_username='', ingest_password='')
+        app.state.control_pool = object()
         limiter = app.state.ingest_limiter = FailedAuthLimiter(10, 900)
         entered, finish = asyncio.Event(), asyncio.Event()
         calls = []
@@ -670,7 +671,7 @@ def test_repeated_ingest_cancellation_retains_auth_owner_until_verifier_finishes
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
             caller = asyncio.create_task(client.post('/ingest', auth=('user', 'password')))
             try:
-                await entered.wait()
+                await asyncio.wait_for(entered.wait(), 2)
                 caller.cancel()
                 await asyncio.sleep(0)
                 caller.cancel()

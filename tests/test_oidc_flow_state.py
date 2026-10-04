@@ -172,14 +172,16 @@ def test_cancelled_protected_redirect_consumes_attempt_after_caller_leaves(monke
             request, action="reauth", account={"id": 1, "auth_version": 4},
             proof_action="add_password", target="",
         ))
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(), 2)
         caller.cancel()
         await asyncio.sleep(0)
         caller.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await caller
+        await asyncio.sleep(0)
+        assert not caller.done()
         assert OIDC_PROTECTED_ATTEMPT_KEY not in request.session
         release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(caller, 2)
         await asyncio.wait_for(consumed.wait(), 2)
 
     asyncio.run(run())

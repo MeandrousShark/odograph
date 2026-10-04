@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from datetime import timedelta
 
 import pytest
 from psycopg import errors
@@ -71,7 +72,11 @@ def test_deletion_requires_exact_confirmation_cannot_bypass_grace_and_cancellati
             await request_account_deletion(conn, actor, target, email="member@example.invalid", acknowledge=True)
         async with owner.connection() as conn:
             deadline = (await (await conn.execute("SELECT deletion_deadline FROM accounts WHERE id=%s", (target,))).fetchone())[0]
-            assert 30 * 86400 - 5 < deadline.timestamp() - time.time() <= 30 * 86400
+            requested_at = (await (await conn.execute(
+                "SELECT max(occurred_at) FROM account_security_audit "
+                "WHERE target_account_id=%s AND action='request_deletion'", (target,),
+            )).fetchone())[0]
+            assert deadline == requested_at + timedelta(days=30)
         await _elapsed(owner, target)
         async with pools.control.connection() as conn:
             with pytest.raises(AccountLifecycleUnavailable):

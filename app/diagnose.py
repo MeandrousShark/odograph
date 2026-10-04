@@ -30,7 +30,7 @@ import httpx
 from psycopg_pool import AsyncConnectionPool
 
 from app.config import Config
-from app.capacity import owned_thread
+from app.capacity import CapacityBusy, owned_thread
 from app.account_context import AccountPool
 from app.db import MIGRATIONS_DIR, MIGRATION_FILENAME_RE
 from app.application_roles import application_role_pools
@@ -155,6 +155,8 @@ async def _check_database(pool: AsyncConnectionPool) -> PoolReport:
         async with pool.connection(timeout=CONNECTIVITY_TIMEOUT_S) as conn:
             await conn.execute("SELECT 1")
         return PoolReport(ok=True, stats=pool.get_stats())
+    except CapacityBusy:
+        raise
     except Exception as exc:
         return PoolReport(ok=False, error_type=type(exc).__name__, stats=pool.get_stats())
 
@@ -165,6 +167,8 @@ async def _check_migrations(pool: AsyncConnectionPool) -> MigrationReport:
         async with pool.connection(timeout=CONNECTIVITY_TIMEOUT_S) as conn:
             cur = await conn.execute("SELECT version FROM schema_migrations ORDER BY version")
             applied = [row[0] for row in await cur.fetchall()]
+    except CapacityBusy:
+        raise
     except Exception:
         applied = None
     return MigrationReport(applied=applied, expected=expected)
