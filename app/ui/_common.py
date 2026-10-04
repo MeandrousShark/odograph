@@ -39,7 +39,7 @@ _END_ADDRESS_SQL = (
 # trip and its distance was declined (app/snap.py's min_coverage). The trip
 # page labels and draws that case differently, and COALESCE alone can't
 # distinguish it from a trip that was never snapped.
-TRIP_COLUMNS = f"""
+REPORT_TRIP_COLUMNS = f"""
     id, device, tracking_device_id, source::text AS source, started_at, ended_at, distance_m,
     distance_snapped_m,
     {DISPLAY_DISTANCE_SQL} AS display_distance_m,
@@ -71,7 +71,13 @@ TRIP_COLUMNS = f"""
     (SELECT count(*) FROM expenses WHERE expenses.account_id = trips.account_id AND expenses.trip_id = trips.id) AS expense_count,
     (path IS NOT NULL OR path_snapped IS NOT NULL) AS has_route_geometry,
     {_START_ADDRESS_SQL} AS start_address,
-    {_END_ADDRESS_SQL} AS end_address,
+    {_END_ADDRESS_SQL} AS end_address
+"""
+
+# Report consumers don't render continuity badges. Keep their source rows
+# free of the predecessor/overlap lookups while trip and review queries
+# retain the complete projection.
+TRIP_COLUMNS = f"""{REPORT_TRIP_COLUMNS},
     -- Missing-trip detection: four near-identical subselects for the
     -- previous included trip, because one SELECT item can't reference
     -- another's alias (and a LATERAL join would mean touching every FROM
