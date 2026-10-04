@@ -80,7 +80,8 @@ async def _provision(pool, monkeypatch, schema):
                             + application_roles.PASSWORD_RESET_FUNCTIONS
                             + application_roles.OIDC_ATTEMPT_FUNCTIONS
                             + application_roles.OIDC_METHOD_FUNCTIONS
-                            + application_roles.ACCOUNT_LIFECYCLE_FUNCTIONS)
+                            + application_roles.ACCOUNT_LIFECYCLE_FUNCTIONS
+                            + application_roles.IMPORT_ADMISSION_FUNCTIONS)
         patch.setattr(application_roles, "OWNED_TABLES", owned_tables)
         patch.setattr(application_roles, "PROTECTED_TABLES", ())
         patch.setattr(application_roles, "CONTROL_TABLES", control_tables)
@@ -115,6 +116,15 @@ async def _provision(pool, monkeypatch, schema):
             ident = sql.Identifier(table)
             await conn.execute(sql.SQL("ALTER TABLE {} NO FORCE ROW LEVEL SECURITY").format(ident))
             await conn.execute(sql.SQL("ALTER TABLE {} DISABLE ROW LEVEL SECURITY").format(ident))
+
+
+async def _prepare_before_039(monkeypatch):
+    with monkeypatch.context() as patch:
+        patch.setattr(application_roles, "FUNCTIONS", {
+            key: value for key, value in application_roles.FUNCTIONS.items()
+            if key not in application_roles.IMPORT_ADMISSION_FUNCTIONS
+        })
+        await prepare_application_roles(TEST_DB)
 
 
 def _migration_dir(tmp_path, name, *, through=None, extra=None):
@@ -168,7 +178,7 @@ def test_snap_attempt_upgrade_preserves_existing_trip_results(monkeypatch, tmp_p
             await drop_and_recreate_schema(pool)
             monkeypatch.setattr(db_module, "MIGRATIONS_DIR", _migration_dir(tmp_path, "before_038", through=37))
             await run_migrations(pool)
-            await prepare_application_roles(TEST_DB)
+            await _prepare_before_039(monkeypatch)
             async with pool.connection() as conn:
                 await conn.execute(
                     "INSERT INTO accounts(id,email,password_hash,is_admin) "
@@ -193,7 +203,7 @@ def test_snap_attempt_upgrade_preserves_existing_trip_results(monkeypatch, tmp_p
 
             monkeypatch.setattr(db_module, "MIGRATIONS_DIR", _migration_dir(tmp_path, "through_038", through=38))
             await run_migrations(pool)
-            await prepare_application_roles(TEST_DB)
+            await _prepare_before_039(monkeypatch)
             async with pool.connection() as conn:
                 assert (await (await conn.execute(
                     "SELECT max(version) FROM schema_migrations"

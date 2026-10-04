@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from app.account_context import account_id
 from app.account_settings import AccountSettings, load_account_settings
 from app.accounts import get_account
-from app.auth import _ensure_csrf, require_user
+from app.auth import _ensure_csrf, require_import_user, require_user
 from conftest import seed_tracking_device
 
 
@@ -56,6 +56,7 @@ def configure_personal_app(app, pool) -> None:
         }
 
     app.dependency_overrides[require_user] = synthetic_account
+    app.dependency_overrides[require_import_user] = synthetic_account
 
 
 def personal_request(request):

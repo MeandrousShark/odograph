@@ -24,14 +24,15 @@ log = logging.getLogger(__name__)
 # carries at all, so each listed transition is lossless. Schema 25 adds
 # nullable trips.start_label and trips.end_label; a bundle from any older
 # schema simply has no value for either, so both default to null on import.
-# Schemas 27 through 38 change no column a bundle carries: 27 deletes stored
+# Schemas 27 through 39 change no column a bundle carries: 27 deletes stored
 # configuration dumps, 28 enforces row-level security, 29 adds invitations,
 # 30 adds email challenges, 31 adds password reset challenges, 32 adds
 # OIDC-only account methods and protected OIDC attempts, and 33 adds an
 # account-scoped sign-out function and protected-proof cleanup. Schema 34 adds
 # invitation metadata, 35 adds administrator recovery functions, and 36 adds
 # account administration and audit state; 37 adds deletion lifecycle state.
-# Schema 38 adds internal snap retry state. None changes the portable bundle.
+# Schema 38 adds internal snap retry state, and 39 adds import admission.
+# None changes the portable bundle.
 # Keep the tuples explicit so a future migration never becomes cross-schema
 # compatible merely because its version is adjacent.
 _COMPATIBLE_SCHEMA_TRANSITIONS = {
@@ -65,6 +66,10 @@ _COMPATIBLE_SCHEMA_TRANSITIONS = {
     (3, 26, 38), (3, 27, 38), (3, 28, 38), (3, 29, 38), (3, 30, 38),
     (3, 31, 38), (3, 32, 38), (3, 33, 38), (3, 34, 38), (3, 35, 38),
     (3, 36, 38), (3, 37, 38), (3, 38, 38),
+    (1, 21, 39), (2, 22, 39), (2, 23, 39), (2, 24, 39), (2, 25, 39),
+    (3, 26, 39), (3, 27, 39), (3, 28, 39), (3, 29, 39), (3, 30, 39),
+    (3, 31, 39), (3, 32, 39), (3, 33, 39), (3, 34, 39), (3, 35, 39),
+    (3, 36, 39), (3, 37, 39), (3, 38, 39), (3, 39, 39),
 }
 
 
@@ -339,14 +344,12 @@ async def _apply_import(conn, bundle: dict) -> dict:
             f"instance's schema_version {target_schema_version}.",
         )
 
-    # Ordinary personal creates do not take the detector lock. Freeze tables
-    # used by the clean-target check so their writes cannot cross its window.
-    # Reads remain available; these brief instance-wide write locks are kept
-    # within the existing single-account import transaction.
+    # Every personal writer first holds a shared lock on its account row.
+    # Upgrade this transaction's lock to exclude only this account's work
+    # through the clean-target check and import commit.
     await conn.execute(
-        "LOCK TABLE detector_state, expenses, mileage_rates, odometer_readings, "
-        "places, points, stays, tag_rules, trip_boundary_overrides, trips, vehicles "
-        "IN SHARE ROW EXCLUSIVE MODE"
+        "SELECT public.assert_import_account_exclusive(%s, %s)",
+        (account_id(conn), conn.principal.auth_version),
     )
     conflicts = await _check_clean_target(conn)
     if conflicts:

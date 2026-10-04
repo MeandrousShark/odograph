@@ -71,11 +71,14 @@ class FunctionSpec:
     signature: str
     caller: str
     source: str
+    owner: str = BOOTSTRAP_ROLE
 
 
 FUNCTION_SPECS = (
     FunctionSpec("public.bootstrap_first_account(text,text,text)", CONTROL_ROLE, "account_bootstrap.sql"),
     FunctionSpec("public.assert_account_active(bigint,bigint)", RUNTIME_ROLE, "account_admission.sql"),
+    FunctionSpec("public.assert_import_account_exclusive(bigint,bigint)", RUNTIME_ROLE,
+                 "039_import_account_admission.sql", MIGRATE_ROLE),
     FunctionSpec("public.assert_tracking_credential(text,bigint,bigint,bigint,text)", RUNTIME_ROLE, "tracking_admission.sql"),
     FunctionSpec("public.issue_member_invitation(bigint,bigint,text,text)", CONTROL_ROLE, "member_invitations.sql"),
     FunctionSpec("public.resend_member_invitation(bigint,bigint,bigint,text)", CONTROL_ROLE, "member_invitations.sql"),
@@ -115,10 +118,14 @@ INVITATION_FUNCTIONS = tuple(s.signature for s in FUNCTION_SPECS if s.source == 
 OIDC_ATTEMPT_FUNCTIONS = tuple(s.signature for s in FUNCTION_SPECS if s.source == "oidc_attempts.sql")
 OIDC_METHOD_FUNCTIONS = tuple(s.signature for s in FUNCTION_SPECS if s.source == "oidc_methods.sql")
 ACCOUNT_LIFECYCLE_FUNCTIONS = tuple(s.signature for s in FUNCTION_SPECS if s.source == "account_lifecycle.sql")
+IMPORT_ADMISSION_FUNCTIONS = tuple(s.signature for s in FUNCTION_SPECS
+                                   if s.source == "039_import_account_admission.sql")
 EMAIL_CHALLENGE_FUNCTIONS = tuple(s.signature for s in FUNCTION_SPECS if "email_challenge" in s.signature)
 PASSWORD_RESET_FUNCTIONS = tuple(s.signature for s in FUNCTION_SPECS
-                                 if s.source[0].isdigit() and s.signature not in EMAIL_CHALLENGE_FUNCTIONS)
+                                 if s.source in ("031_password_reset.sql", "035_admin_recovery.sql")
+                                 and s.signature not in EMAIL_CHALLENGE_FUNCTIONS)
 FUNCTIONS = {spec.signature: spec.caller for spec in FUNCTION_SPECS}
+FUNCTION_OWNERS = {spec.signature: spec.owner for spec in FUNCTION_SPECS}
 RESTORE_AUTH_VERSION_STEP = 1_000_000_000
 PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER")
 
@@ -293,8 +300,13 @@ async def _provision(conn) -> None:
     for filename in FUNCTION_FILES:
         await conn.execute((SQL_DIR / filename).read_text())
     for function, role in FUNCTIONS.items():
-        await conn.execute(sql.SQL("ALTER FUNCTION {} OWNER TO odograph_bootstrap").format(sql.SQL(function)))
-        await conn.execute(sql.SQL("REVOKE ALL ON FUNCTION {} FROM PUBLIC,odograph_control,odograph_runtime").format(sql.SQL(function)))
+        owner = FUNCTION_OWNERS[function]
+        await conn.execute(sql.SQL("ALTER FUNCTION {} OWNER TO {}").format(
+            sql.SQL(function), sql.Identifier(owner)))
+        revoked = "PUBLIC,odograph_control,odograph_runtime"
+        if owner != BOOTSTRAP_ROLE:
+            revoked += ",odograph_bootstrap"
+        await conn.execute(sql.SQL("REVOKE ALL ON FUNCTION {} FROM " + revoked).format(sql.SQL(function)))
         await conn.execute(sql.SQL("GRANT EXECUTE ON FUNCTION {} TO {}").format(sql.SQL(function), sql.Identifier(role)))
     for table in ("managed_role_state", "recovery_metadata"):
         ident = sql.Identifier(STATE_SCHEMA, table)
@@ -447,7 +459,8 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
         for function, caller in FUNCTIONS.items():
             cur = await conn.execute("SELECT has_function_privilege(%s,%s,'EXECUTE')", (role, function))
             allowed = (await cur.fetchone())[0]
-            _require_contract(allowed == (role in (caller, BOOTSTRAP_ROLE)), f"function privilege: {role} {function}")
+            _require_contract(allowed == (role in (caller, FUNCTION_OWNERS[function])),
+                              f"function privilege: {role} {function}")
         for table, sequence in await _sequences(conn):
             cur = await conn.execute(
                 "SELECT p,has_sequence_privilege(%s,%s,p) FROM unnest(ARRAY['USAGE','SELECT','UPDATE']) p",
@@ -476,7 +489,7 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
         body = re.search(
             rf"CREATE (?:OR REPLACE )?FUNCTION {re.escape(name)}\(.*?AS\s+(\$[a-z_]*\$)(.*?)\1",
             source, re.S | re.I).group(2)
-        _require_contract(row == (BOOTSTRAP_ROLE, True, ["search_path=pg_catalog, pg_temp"], body),
+        _require_contract(row == (spec.owner, True, ["search_path=pg_catalog, pg_temp"], body),
             f"function definition: {function}")
 
 

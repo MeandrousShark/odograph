@@ -82,6 +82,37 @@ def test_activated_validator_rejects_policy_or_activation_drift():
     asyncio.run(_scenario(check))
 
 
+@pytest.mark.parametrize("statement,cause", [
+    ("ALTER FUNCTION public.assert_import_account_exclusive(bigint,bigint) "
+     "OWNER TO odograph_bootstrap", "public.assert_import_account_exclusive"),
+    ("GRANT EXECUTE ON FUNCTION public.assert_import_account_exclusive(bigint,bigint) "
+     "TO odograph_control", "function privilege: odograph_control public.assert_import_account_exclusive"),
+    ("CREATE OR REPLACE FUNCTION public.assert_import_account_exclusive(account bigint, version bigint) "
+     "RETURNS void LANGUAGE plpgsql SECURITY DEFINER "
+     "SET search_path = pg_catalog, pg_temp AS $body$ BEGIN RETURN; END $body$",
+     "function definition: public.assert_import_account_exclusive"),
+])
+def test_import_admission_function_contract_rejects_drift(statement, cause):
+    async def check(owner, pools, state):
+        function = "public.assert_import_account_exclusive(bigint,bigint)"
+        async with owner.connection() as conn:
+            assert await (await conn.execute(
+                "SELECT pg_get_userbyid(proowner) FROM pg_proc WHERE oid=%s::regprocedure",
+                (function,),
+            )).fetchone() == ("odograph_migrate",)
+            for role, allowed in (("odograph_runtime", True), ("odograph_control", False),
+                                  ("odograph_bootstrap", False)):
+                assert await (await conn.execute(
+                    "SELECT has_function_privilege(%s,%s,'EXECUTE')", (role, function),
+                )).fetchone() == (allowed,)
+            with pytest.raises(RoleSetupError, match=cause):
+                async with conn.transaction(force_rollback=True):
+                    await conn.execute(statement)
+                    await validate_application_contract(conn, state)
+
+    asyncio.run(_scenario(check))
+
+
 ACL_DRIFT = (
     ("GRANT EXECUTE ON FUNCTION public.host_reset_password(bigint,text) TO PUBLIC", "host_reset_password"),
     ("GRANT EXECUTE ON FUNCTION public.host_reset_password(bigint,text) TO contract_outsider", "host_reset_password"),

@@ -13,11 +13,11 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from psycopg import Rollback
-from psycopg.errors import SerializationFailure
+from psycopg.errors import LockNotAvailable, SerializationFailure
 from starlette.datastructures import UploadFile
 from starlette.responses import JSONResponse, Response
 
-from app.auth import check_form_csrf, require_user
+from app.auth import check_form_csrf, import_busy_response, require_import_user, require_user
 from app.db import _fetch_schema_version
 from app.portable.export import (
     _fetch_export_expenses,
@@ -141,7 +141,11 @@ def make_router() -> APIRouter:
         "/settings/import/data",
         dependencies=[Depends(_reject_oversized_import_upload)],
     )
-    async def import_data(request: Request, user: dict = Depends(require_user)):
+    async def import_data(
+        request: Request, user: dict | JSONResponse = Depends(require_import_user),
+    ):
+        if isinstance(user, JSONResponse):
+            return user
         # file/dry_run/csrf_token are read from the parsed form by hand, not
         # declared as File()/Form() parameters on this function -- see
         # _reject_oversized_import_upload's docstring for why that's load-
@@ -182,7 +186,7 @@ def make_router() -> APIRouter:
         is_dry_run = dry_run == "1"
         pool = request.state.account_pool
         try:
-            async with pool.connection() as conn:
+            async with pool.connection(import_lock_timeout=True) as conn:
                 async with conn.transaction():
                     summary = await _apply_import(conn, normalized)
                     if is_dry_run:
@@ -192,6 +196,8 @@ def make_router() -> APIRouter:
                         raise Rollback()
         except PortableImportError as exc:
             return JSONResponse(exc.to_response(), status_code=exc.status_code)
+        except LockNotAvailable:
+            return import_busy_response()
 
         return JSONResponse({"ok": True, "dry_run": is_dry_run, "counts": summary})
 
