@@ -124,6 +124,7 @@ async def _render_review_card(
                 "undo_notice": "",
                 **extra,
             },
+            conn=conn,
         )
     return await render_template(
         request, template,
