@@ -28,6 +28,7 @@ from app.report import (
 
 from app.ui._common import (
     EXPORT_MEDIA_TYPES,
+    REPORT_TRIP_COLUMNS,
     TRIP_COLUMNS,
     _parse_range_query_dates,
     _parse_vehicle_id,
@@ -101,7 +102,7 @@ async def _fetch_range_trips_in(conn, tz: ZoneInfo, start: date, end: date) -> t
     range_end = datetime(next_day.year, next_day.month, next_day.day, tzinfo=tz)
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
-        f"SELECT {TRIP_COLUMNS} FROM trips WHERE started_at >= %s AND started_at < %s"
+        f"SELECT {REPORT_TRIP_COLUMNS} FROM trips WHERE started_at >= %s AND started_at < %s"
         " AND account_id = %s ORDER BY started_at",
         (range_start, range_end, account_id(conn)),
     )

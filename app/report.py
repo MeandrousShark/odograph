@@ -3,7 +3,7 @@ ranges. `build_range_report` is the one fold -- pure, no I/O, no DB/openpyxl
 imports -- so it's unit-testable the same way `app.export.build_export_rows`
 is; `build_annual_report` is a thin Jan 1-Dec 31 wrapper around it, kept as
 its own function so its existing signature/output type are untouched.
-`app/ui/reports.py` fetches trips with `TRIP_COLUMNS` and hands them here;
+`app/ui/reports.py` fetches trips with `REPORT_TRIP_COLUMNS` and hands them here;
 `app/export.py`'s `to_report_xlsx` renders the result.
 """
 from __future__ import annotations
@@ -246,7 +246,7 @@ def build_range_report(
     trips: list[dict], rates: dict[int, YearRate], tz: ZoneInfo, start: date, end: date
 ) -> RangeReport:
     """Fold already-fetched trips (one row per trip, the same shape
-    `TRIP_COLUMNS` selects -- `started_at` still UTC) into the report shape,
+    `REPORT_TRIP_COLUMNS` selects -- `started_at` still UTC) into the report shape,
     for any `start`..`end` span within a single calendar year (quarterly
     estimate, mid-year check, or -- via `build_annual_report` -- the full
     year). Date attribution uses each trip's *local* start, converting here
