@@ -350,6 +350,9 @@ Use the output that matches the job:
   supported schema-version transitions are accepted, including some older
   bundles. Use **Dry run** to validate without writing.
 
+An import temporarily pauses other work for that account. If an import is
+busy, wait briefly and submit it again. Imports are never retried automatically.
+
 In controlled activated fixtures, scheduling deletion disables the account
 immediately. Its owner can download this bundle before the account is disabled
 or after an administrator cancels during the 30-day grace period.

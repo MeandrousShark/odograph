@@ -17,7 +17,7 @@ from authlib.integrations.starlette_client import OAuth
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
 from psycopg import errors
 from starlette.datastructures import UploadFile
-from starlette.responses import RedirectResponse
+from starlette.responses import JSONResponse, RedirectResponse
 
 from app.accounts import (
     account_exists,
@@ -332,10 +332,12 @@ async def _oidc_login_available(request: Request) -> bool:
     return not getattr(cfg, "initial_admin_signup", False)
 
 
-async def _bind_account(request: Request, account: dict) -> dict:
+async def _bind_account(
+    request: Request, account: dict, *, import_lock_timeout: bool = False,
+) -> dict:
     principal = AccountPrincipal(account["id"], account["is_enabled"], account["auth_version"])
     pool = AccountPool(request.app.state.runtime_pool, principal)
-    async with pool.connection() as conn:
+    async with pool.connection(import_lock_timeout=import_lock_timeout) as conn:
         settings = await load_account_settings(conn)
     request.state.principal = principal
     request.state.account_pool = pool
@@ -347,6 +349,25 @@ async def _bind_account(request: Request, account: dict) -> dict:
 
 
 async def require_user(request: Request) -> dict:
+    return await _require_user(request)
+
+
+def import_busy_response() -> JSONResponse:
+    return JSONResponse(
+        {"ok": False, "error": "import_busy",
+         "detail": "Import is busy for this account. Please retry manually."},
+        status_code=503, headers={"Retry-After": "1"},
+    )
+
+
+async def require_import_user(request: Request) -> dict | JSONResponse:
+    try:
+        return await _require_user(request, import_lock_timeout=True)
+    except errors.LockNotAvailable:
+        return import_busy_response()
+
+
+async def _require_user(request: Request, *, import_lock_timeout: bool = False) -> dict:
     cfg = request.app.state.config
     if cfg.dev_no_auth:
         principal = request.app.state.dev_principal
@@ -354,7 +375,9 @@ async def require_user(request: Request) -> dict:
             account = await get_account(conn, principal.account_id)
         if account is None or not account["is_enabled"]:
             raise AuthRedirect()
-        return await _bind_account(request, account)
+        return await _bind_account(
+            request, account, **({"import_lock_timeout": True} if import_lock_timeout else {})
+        )
 
     has_account_id = "account_id" in request.session
     has_auth_version = "auth_version" in request.session
@@ -379,7 +402,9 @@ async def require_user(request: Request) -> dict:
             page_account = getattr(request, "headers", {}).get("X-Odograph-Account")
             if page_account is not None and page_account != str(account_id):
                 raise HTTPException(status_code=409, detail="Account changed. Reload the page.")
-            return await _bind_account(request, account)
+            return await _bind_account(
+                request, account, **({"import_lock_timeout": True} if import_lock_timeout else {})
+            )
         request.session.clear()
         raise AuthRedirect()
 

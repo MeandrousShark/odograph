@@ -142,11 +142,14 @@ class AccountPool:
     @asynccontextmanager
     async def connection(
         self, *, timeout=None, consistent_snapshot: bool = False,
+        import_lock_timeout: bool = False,
     ) -> AsyncIterator[AccountConnection]:
         async with _account_connection(
             self.runtime_pool, self.principal, timeout=timeout,
             consistent_snapshot=consistent_snapshot,
         ) as conn:
+            if import_lock_timeout:
+                await conn.execute("SET LOCAL lock_timeout = '1s'")
             # A shared row lock blocks disablement/password version changes
             # until this unit of work commits. Runtime cannot mutate accounts.
             await conn.execute(

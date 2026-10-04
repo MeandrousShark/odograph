@@ -6,6 +6,7 @@ import os
 from types import SimpleNamespace
 
 import pytest
+from psycopg.errors import LockNotAvailable
 
 from app.account_context import RUNTIME_ROLE, account_id
 from app.portable import importer
@@ -40,12 +41,11 @@ async def _finish_tasks(*tasks):
     await asyncio.gather(*pending, return_exceptions=True)
 
 
-def test_import_waits_for_inflight_manual_insert_then_refuses_dirty_target(monkeypatch):
+def test_import_is_busy_while_inflight_manual_insert_holds_account_barrier(monkeypatch):
     async def scenario():
         async with _fixture() as (owner, _pools, _state, account, _other):
             checked, started = asyncio.Event(), asyncio.Event()
             original_check = importer._check_clean_target
-            import_pid = None
             task = None
 
             async def check(conn):
@@ -53,28 +53,22 @@ def test_import_waits_for_inflight_manual_insert_then_refuses_dirty_target(monke
                 return await original_check(conn)
 
             async def importing():
-                nonlocal import_pid
                 async with account.connection() as conn:
-                    import_pid = await _pid(conn)
+                    await _pid(conn)
                     started.set()
                     return await importer._apply_import(conn, _bundle())
 
             monkeypatch.setattr(importer, "_check_clean_target", check)
             try:
                 async with account.connection() as conn:
-                    writer_pid = await _pid(conn)
+                    await _pid(conn)
                     trip_id = await _manual_trip(conn)
                     task = asyncio.create_task(importing())
                     await asyncio.wait_for(started.wait(), 5)
-                    await _wait_blocked(owner, import_pid, writer_pid, task)
+                    with pytest.raises(LockNotAvailable):
+                        await asyncio.wait_for(task, 5)
                     assert not checked.is_set()
-                # The writer's real commit releases RowExclusiveLock. Import's
-                # subsequent READ COMMITTED check must observe that new row.
-                with pytest.raises(importer.PortableImportError) as refused:
-                    await asyncio.wait_for(task, 5)
-                assert checked.is_set()
-                assert refused.value.error == "target_not_clean"
-                assert refused.value.extra["conflicts"]["trips"]["count"] == 1
+                # The failed lock upgrade leaves the committed manual trip intact.
                 async with account.connection() as conn:
                     assert await (await conn.execute(
                         "SELECT id,imported,notes FROM trips WHERE account_id=%s",
@@ -94,14 +88,12 @@ def test_manual_insert_after_clean_check_waits_until_import_commit(monkeypatch):
         async with _fixture() as (owner, _pools, _state, account, _other):
             checked, allow_import, writer_started = (asyncio.Event() for _ in range(3))
             original_check = importer._check_clean_target
-            import_pid = writer_pid = None
             import_task = writer_task = None
 
             async def check(conn):
-                nonlocal import_pid
                 conflicts = await original_check(conn)
                 assert conflicts == {}
-                import_pid = await _pid(conn)
+                await _pid(conn)
                 checked.set()
                 await allow_import.wait()
                 return conflicts
@@ -111,10 +103,9 @@ def test_manual_insert_after_clean_check_waits_until_import_commit(monkeypatch):
                     return await importer._apply_import(conn, _bundle())
 
             async def writing():
-                nonlocal writer_pid
+                writer_started.set()
                 async with account.connection() as conn:
-                    writer_pid = await _pid(conn)
-                    writer_started.set()
+                    await _pid(conn)
                     return await _manual_trip(conn)
 
             monkeypatch.setattr(importer, "_check_clean_target", check)
@@ -123,12 +114,9 @@ def test_manual_insert_after_clean_check_waits_until_import_commit(monkeypatch):
                 await asyncio.wait_for(checked.wait(), 5)
                 writer_task = asyncio.create_task(writing())
                 await asyncio.wait_for(writer_started.wait(), 5)
-                await _wait_blocked(owner, writer_pid, import_pid, writer_task)
-                # The write fence still permits ordinary restricted reads.
-                async with account.connection() as conn:
-                    assert await (await conn.execute(
-                        "SELECT count(*) FROM trips WHERE account_id=%s", (account_id(conn),),
-                    )).fetchone() == (0,)
+                await asyncio.sleep(0.05)
+                assert not writer_task.done()
+                # Same-account admission waits until import's exclusive lock ends.
                 allow_import.set()
                 counts = await asyncio.wait_for(import_task, 5)
                 trip_id = await asyncio.wait_for(writer_task, 5)
@@ -151,10 +139,10 @@ def test_manual_insert_after_clean_check_waits_until_import_commit(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_place_create_waits_for_global_lock_before_acquiring_table_write_lock(monkeypatch):
+def test_import_upgrade_is_busy_if_place_create_waits_for_global_lock(monkeypatch):
     async def scenario():
         async with _fixture() as (owner, _pools, _state, account, _other):
-            global_locked, allow_table_locks = asyncio.Event(), asyncio.Event()
+            global_locked, allow_account_upgrade = asyncio.Event(), asyncio.Event()
             original_version = importer._fetch_schema_version
             import_pid = None
             import_task = place_task = None
@@ -163,10 +151,9 @@ def test_place_create_waits_for_global_lock_before_acquiring_table_write_lock(mo
                 nonlocal import_pid
                 result = await original_version(conn)
                 import_pid = await _pid(conn)
-                # Import holds the global detector key here, before requesting
-                # any of the clean-target tables' SHARE ROW EXCLUSIVE locks.
+                # Import holds the global detector key before the account upgrade.
                 global_locked.set()
-                await allow_table_locks.wait()
+                await allow_account_upgrade.wait()
                 return result
 
             async def importing():
@@ -198,17 +185,18 @@ def test_place_create_waits_for_global_lock_before_acquiring_table_write_lock(mo
                         "SELECT count(*) FROM pg_locks WHERE pid=%s AND locktype='advisory' AND NOT granted",
                         (observed.pid,),
                     )).fetchone() == (1,)
-                # Import can now lock places, pass its check and commit; the
-                # waiting UI create runs afterward, without a lock-order cycle.
-                allow_table_locks.set()
-                assert (await asyncio.wait_for(import_task, 5))["places"] == 1
+                # NOWAIT fails the upgrade, releasing the detector lock and
+                # allowing the already admitted place create to finish.
+                allow_account_upgrade.set()
+                with pytest.raises(LockNotAvailable):
+                    await asyncio.wait_for(import_task, 5)
                 assert (await asyncio.wait_for(place_task, 5)).status_code == 204
                 async with account.connection() as conn:
                     assert await (await conn.execute(
                         "SELECT name FROM places WHERE account_id=%s ORDER BY name", (account_id(conn),),
-                    )).fetchall() == [("Concurrent place",), ("Imported place",)]
+                    )).fetchall() == [("Concurrent place",)]
             finally:
-                allow_table_locks.set()
+                allow_account_upgrade.set()
                 await _finish_tasks(import_task, place_task)
 
     asyncio.run(scenario())

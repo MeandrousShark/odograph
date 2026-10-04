@@ -60,6 +60,7 @@ async def _provision_schema_29_roles() -> None:
         and function not in application_roles.OIDC_ATTEMPT_FUNCTIONS
         and function not in application_roles.OIDC_METHOD_FUNCTIONS
         and function not in application_roles.ACCOUNT_LIFECYCLE_FUNCTIONS
+        and function not in application_roles.IMPORT_ADMISSION_FUNCTIONS
         and function != application_roles.INVITATION_FUNCTIONS[2]
     }
     with pytest.MonkeyPatch.context() as patch:
