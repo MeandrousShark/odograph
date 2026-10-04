@@ -168,6 +168,8 @@ async def _http_scenario():
         app.add_middleware(SessionMiddleware, secret_key="test-only-session-secret")
         app.state.templates = make_templates(cfg)
         app.state.config = cfg
+        app.state.control_pool = apool.control_pool
+        app.state.runtime_pool = apool.runtime_pool
 
         async def account_request(request: Request):
             request.state.principal = apool.principal

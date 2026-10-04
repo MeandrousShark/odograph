@@ -117,6 +117,41 @@ class Config:
     portable_import_max_bytes: int
     account_avatar_max_bytes: int
 
+    capacity_ingest_slots: int = 2
+    capacity_routine_slots: int = 2
+    capacity_foreground_slots: int = 1
+    capacity_background_slots: int = 1
+    capacity_ingest_identity_slots: int = 1
+    capacity_identity_slots: int = 2
+    capacity_lifecycle_slots: int = 1
+    capacity_mail_slots: int = 2
+    capacity_auth_ingest_slots: int = 2
+    capacity_auth_interactive_slots: int = 1
+    capacity_ingest_pending: int = 4
+    capacity_routine_pending: int = 4
+    capacity_foreground_pending: int = 4
+    capacity_identity_pending: int = 4
+    capacity_ingest_wait_s: float = 0.25
+    capacity_routine_wait_s: float = 1.0
+    capacity_foreground_wait_s: float = 2.0
+    capacity_identity_wait_s: float = 1.0
+    capacity_auth_body_timeout_s: float = 15.0
+    capacity_ingest_body_timeout_s: float = 15.0
+    capacity_import_body_timeout_s: float = 60.0
+    capacity_response_timeout_s: float = 60.0
+    capacity_routine_sql_timeout_s: float = 5.0
+    capacity_operation_sql_timeout_s: float = 15.0
+    capacity_lock_timeout_s: float = 1.0
+    capacity_auth_form_max_bytes: int = 65536
+    capacity_basic_header_max_bytes: int = 8192
+    capacity_multipart_overhead_bytes: int = 65536
+    capacity_multipart_max_fields: int = 16
+    capacity_multipart_max_files: int = 1
+
+    def __post_init__(self):
+        from app.capacity import validate_capacity_config
+        validate_capacity_config(self)
+
     @property
     def map_tile_host(self) -> str:
         """CSP's img-src needs just the tile origin, not the full
@@ -177,6 +212,15 @@ class Config:
 
     @classmethod
     def from_env(cls) -> "Config":
+        for name in ("WEB_CONCURRENCY", "UVICORN_WORKERS"):
+            configured = os.environ.get(name, "")
+            if configured:
+                try:
+                    workers = int(configured)
+                except ValueError:
+                    raise RuntimeError(f"{name} must be one application process") from None
+                if workers != 1:
+                    raise RuntimeError(f"{name} must be one application process")
         dev_no_auth = os.environ.get("DEV_NO_AUTH", "") == "1"
         required = ["DATABASE_URL", "SESSION_SECRET"]
         missing = [k for k in required if not os.environ.get(k)]
@@ -242,6 +286,36 @@ class Config:
         )
 
         return cls(
+            capacity_ingest_slots=int(os.environ.get("CAPACITY_INGEST_SLOTS", 2)),
+            capacity_routine_slots=int(os.environ.get("CAPACITY_ROUTINE_SLOTS", 2)),
+            capacity_foreground_slots=int(os.environ.get("CAPACITY_FOREGROUND_SLOTS", 1)),
+            capacity_background_slots=int(os.environ.get("CAPACITY_BACKGROUND_SLOTS", 1)),
+            capacity_ingest_identity_slots=int(os.environ.get("CAPACITY_INGEST_IDENTITY_SLOTS", 1)),
+            capacity_identity_slots=int(os.environ.get("CAPACITY_IDENTITY_SLOTS", 2)),
+            capacity_lifecycle_slots=int(os.environ.get("CAPACITY_LIFECYCLE_SLOTS", 1)),
+            capacity_mail_slots=int(os.environ.get("CAPACITY_MAIL_SLOTS", 2)),
+            capacity_auth_ingest_slots=int(os.environ.get("CAPACITY_AUTH_INGEST_SLOTS", 2)),
+            capacity_auth_interactive_slots=int(os.environ.get("CAPACITY_AUTH_INTERACTIVE_SLOTS", 1)),
+            capacity_ingest_pending=int(os.environ.get("CAPACITY_INGEST_PENDING", 4)),
+            capacity_routine_pending=int(os.environ.get("CAPACITY_ROUTINE_PENDING", 4)),
+            capacity_foreground_pending=int(os.environ.get("CAPACITY_FOREGROUND_PENDING", 4)),
+            capacity_identity_pending=int(os.environ.get("CAPACITY_IDENTITY_PENDING", 4)),
+            capacity_ingest_wait_s=float(os.environ.get("CAPACITY_INGEST_WAIT_S", 0.25)),
+            capacity_routine_wait_s=float(os.environ.get("CAPACITY_ROUTINE_WAIT_S", 1.0)),
+            capacity_foreground_wait_s=float(os.environ.get("CAPACITY_FOREGROUND_WAIT_S", 2.0)),
+            capacity_identity_wait_s=float(os.environ.get("CAPACITY_IDENTITY_WAIT_S", 1.0)),
+            capacity_auth_body_timeout_s=float(os.environ.get("CAPACITY_AUTH_BODY_TIMEOUT_S", 15.0)),
+            capacity_ingest_body_timeout_s=float(os.environ.get("CAPACITY_INGEST_BODY_TIMEOUT_S", 15.0)),
+            capacity_import_body_timeout_s=float(os.environ.get("CAPACITY_IMPORT_BODY_TIMEOUT_S", 60.0)),
+            capacity_response_timeout_s=float(os.environ.get("CAPACITY_RESPONSE_TIMEOUT_S", 60.0)),
+            capacity_routine_sql_timeout_s=float(os.environ.get("CAPACITY_ROUTINE_SQL_TIMEOUT_S", 5.0)),
+            capacity_operation_sql_timeout_s=float(os.environ.get("CAPACITY_OPERATION_SQL_TIMEOUT_S", 15.0)),
+            capacity_lock_timeout_s=float(os.environ.get("CAPACITY_LOCK_TIMEOUT_S", 1.0)),
+            capacity_auth_form_max_bytes=int(os.environ.get("CAPACITY_AUTH_FORM_MAX_BYTES", 65536)),
+            capacity_basic_header_max_bytes=int(os.environ.get("CAPACITY_BASIC_HEADER_MAX_BYTES", 8192)),
+            capacity_multipart_overhead_bytes=int(os.environ.get("CAPACITY_MULTIPART_OVERHEAD_BYTES", 65536)),
+            capacity_multipart_max_fields=int(os.environ.get("CAPACITY_MULTIPART_MAX_FIELDS", 16)),
+            capacity_multipart_max_files=int(os.environ.get("CAPACITY_MULTIPART_MAX_FILES", 1)),
             database_url=os.environ["DATABASE_URL"],
             app_version=os.environ.get("APP_VERSION", "dev"),
             app_git_revision=os.environ.get("APP_GIT_REVISION", "unknown"),

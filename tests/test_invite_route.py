@@ -28,7 +28,7 @@ def _app(monkeypatch, *, redeem=None, account=None, max_failures=3):
     calls = []
 
     @asynccontextmanager
-    async def control_connection(pool):
+    async def control_connection(pool, *, lane="identity"):
         assert pool is conn
         yield conn
 
@@ -164,8 +164,7 @@ def test_parallel_invalid_invites_bound_password_work(monkeypatch):
 
         async def slow_redeem(conn, token, password, *, display_timezone):
             calls.append(token)
-            if len(calls) == 2:
-                entered.set()
+            entered.set()
             await release.wait()
             raise auth.InvitationUnavailable()
 
@@ -184,14 +183,16 @@ def test_parallel_invalid_invites_bound_password_work(monkeypatch):
             second = asyncio.create_task(clients[1].post("/invite", data=_form(csrf, token="bad-two")))
             try:
                 await asyncio.wait_for(entered.wait(), 5)
-                assert len(limiter._auth_tasks) == 2
+                assert len(limiter._auth_tasks) == 1
                 excess = await clients[2].post("/invite", data=_form(csrf, token="bad-three"))
-                assert excess.status_code == 429
-                assert len(limiter._auth_tasks) == 2
-                assert calls == ["bad-one", "bad-two"]
+                assert excess.status_code == 503
+                assert len(limiter._auth_tasks) == 1
+                assert calls == ["bad-one"]
                 release.set()
                 responses = await asyncio.wait_for(asyncio.gather(first, second), 5)
-                assert [response.status_code for response in responses] == [400, 400]
+                assert [response.status_code for response in responses] == [400, 503]
+                retried = await clients[1].post("/invite", data=_form(csrf, token="bad-two"))
+                assert retried.status_code == 400
                 assert limiter.blocked("127.0.0.1")
             finally:
                 release.set()
@@ -216,12 +217,14 @@ def test_cancelled_bounded_work_keeps_its_slot_and_records_failure():
         try:
             await entered.wait()
             request.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await request
+            await asyncio.sleep(0)
+            assert not request.done()
             assert len(limiter._auth_tasks) == 1
             with pytest.raises(auth._AuthSaturated):
                 await limiter.run_bounded(operation)
             release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await request
             await asyncio.gather(*limiter._auth_tasks, return_exceptions=True)
             assert limiter.blocked("client")
         finally:

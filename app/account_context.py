@@ -33,11 +33,14 @@ SQL NULL, so the comparison is NULL rather than true and the policy denies.
 from __future__ import annotations
 
 import logging
-from contextlib import asynccontextmanager
+import math
+from contextlib import asynccontextmanager, nullcontext
 from dataclasses import dataclass
 from typing import AsyncIterator, Any
 
 from psycopg import AsyncConnection
+from psycopg.errors import LockNotAvailable, QueryCanceled
+from psycopg_pool import PoolTimeout
 from psycopg.pq import TransactionStatus
 from psycopg_pool import AsyncConnectionPool
 
@@ -231,6 +234,27 @@ async def account_connection(
 
 
 @asynccontextmanager
+async def _serving_timeout_errors(managed):
+    """Translate only deadlines configured by serving admission."""
+    try:
+        yield
+    except PoolTimeout:
+        if not managed:
+            raise
+        from app.capacity import CapacityBusy
+        raise CapacityBusy("connection deadline expired") from None
+    except (QueryCanceled, LockNotAvailable) as exc:
+        message = exc.diag.message_primary or str(exc)
+        if not managed or message not in (
+            "canceling statement due to statement timeout",
+            "canceling statement due to lock timeout",
+        ):
+            raise
+        from app.capacity import CapacityBusy
+        raise CapacityBusy("database deadline expired") from None
+
+
+@asynccontextmanager
 async def _account_connection(
     pool: AsyncConnectionPool, principal: AccountPrincipal, *, timeout=None,
     consistent_snapshot: bool = False,
@@ -252,22 +276,35 @@ async def _account_connection(
         raise AccountDisabledError(
             f"account {principal.account_id} is not enabled"
         )
-    async with pool.connection(**({"timeout": timeout} if timeout is not None else {})) as conn:
-        async with conn.transaction():
-            if consistent_snapshot:
-                # SET TRANSACTION must precede the first query, including
-                # transaction-local account context and admission. Portable
-                # export opts in so its separate reads share one snapshot.
-                await conn.execute(
-                    "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"
-                )
-            await apply_account_context(conn, principal)
-            yield conn
+    from app.capacity import ManagedPool, _value
+    manager = pool.capacity if isinstance(pool, ManagedPool) else None
+    admission = manager.runtime_borrow(principal) if manager is not None else nullcontext()
+    async with _serving_timeout_errors(manager is not None):
+        async with admission as owner:
+            async with pool.connection(**({"timeout": timeout} if timeout is not None else {})) as conn:
+                async with conn.transaction():
+                    if consistent_snapshot:
+                        # SET TRANSACTION must precede the first query, including
+                        # transaction-local account context and admission. Portable
+                        # export opts in so its separate reads share one snapshot.
+                        await conn.execute(
+                            "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"
+                        )
+                    if manager is not None:
+                        timeout_name = ("operation_sql_timeout_s" if owner.lane in
+                                        ("foreground", "background") else "routine_sql_timeout_s")
+                        statement_s = _value(manager.config, timeout_name, 15. if timeout_name.startswith("operation") else 5.)
+                        lock_s = _value(manager.config, "lock_timeout_s", 1.)
+                        await conn.execute("SELECT set_config('statement_timeout', %s, true)",
+                                           (f"{max(1, math.ceil(statement_s * 1000))}ms",))
+                        await conn.execute("SELECT set_config('lock_timeout', %s, true)", (f"{max(1, math.ceil(lock_s * 1000))}ms",))
+                    await apply_account_context(conn, principal)
+                    yield conn
 
 
 @asynccontextmanager
 async def control_connection(
-    pool: AsyncConnectionPool,
+    pool: AsyncConnectionPool, *, lane: str = "identity",
 ) -> AsyncIterator[AsyncConnection]:
     """Borrow a connection for identity and bootstrap work, with no context.
 
@@ -279,14 +316,19 @@ async def control_connection(
     Opens no transaction of its own. Callers that need atomicity, such as
     first-account bootstrap, open one explicitly around their own work.
     """
-    async with pool.connection() as conn:
-        leaked = await current_account_context(conn)
-        if leaked is not None:
-            raise AccountContextError(
-                f"{ACCOUNT_CONTEXT_SETTING} is set on a connection borrowed "
-                "for control work; the context was not applied transaction-locally"
-            )
-        yield conn
+    from app.capacity import ManagedPool
+    manager = pool.capacity if isinstance(pool, ManagedPool) else None
+    admission = manager.control_borrow(lane) if manager is not None else nullcontext()
+    async with _serving_timeout_errors(manager is not None):
+        async with admission:
+            async with pool.connection() as conn:
+                leaked = await current_account_context(conn)
+                if leaked is not None:
+                    raise AccountContextError(
+                        f"{ACCOUNT_CONTEXT_SETTING} is set on a connection borrowed "
+                        "for control work; the context was not applied transaction-locally"
+                    )
+                yield conn
 
 
 async def runtime_privilege_problems(

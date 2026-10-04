@@ -33,6 +33,9 @@ from app.accounts import (
     sign_out_everywhere,
     valid_email,
 )
+from app.capacity_routes import capacity_setting
+from app.capacity import CapacityBusy, await_completion, owned_thread
+from app.capacity_routes import release_authentication
 from app.account_work import external_account_work
 from app.account_context import AccountPool, AccountPrincipal, control_connection
 from app.account_settings import config_for_account, load_account_settings
@@ -60,7 +63,7 @@ from app.local_auth import hash_password, verify_password
 from app.mailer import Mailer
 from app.password_reset import consume_password_reset, password_reset_usable
 from app.page import render_page
-from app.uploads import read_capped_upload
+from app.uploads import UploadEnvelopeTooLarge, bounded_multipart_form, read_capped_upload
 from app.oidc_identities import (
     IdentityLinkRejectedError,
     create_identity_link,
@@ -226,7 +229,8 @@ def _avatar_upload_exceeds_limit(request: Request) -> bool:
     except ValueError:
         return False
     cfg = request.app.state.config
-    return declared_bytes > cfg.account_avatar_max_bytes
+    overhead = capacity_setting(getattr(request.app.state, "capacity", None), "capacity_multipart_overhead_bytes")
+    return declared_bytes > cfg.account_avatar_max_bytes + overhead
 
 
 def _if_none_match_matches(header_value: str, etag: str) -> bool:
@@ -368,6 +372,9 @@ async def require_import_user(request: Request) -> dict | JSONResponse:
 
 
 async def _require_user(request: Request, *, import_lock_timeout: bool = False) -> dict:
+    cached = getattr(getattr(request, "state", None), "_capacity_authenticated_user", None)
+    if cached is not None:
+        return cached
     cfg = request.app.state.config
     if cfg.dev_no_auth:
         principal = request.app.state.dev_principal
@@ -596,7 +603,7 @@ async def _finish_protected_attempt(request: Request, action: str, state: str, a
 
     task = asyncio.create_task(finish())
     task.add_done_callback(lambda completed: completed.exception() if not completed.cancelled() else None)
-    await asyncio.shield(task)
+    await await_completion(task)
 
 
 async def _oidc_protected_redirect(
@@ -723,7 +730,7 @@ async def _verified_account(
         )
     if precheck_error is not None:
         raise _AccountActionRejected(account, precheck_error, 400)
-    password_ok = await asyncio.to_thread(
+    password_ok = await owned_thread(
         verify_password, current_password, account["password_hash"]
     )
     if not password_ok:
@@ -733,7 +740,9 @@ async def _verified_account(
 
 
 def make_router() -> APIRouter:
-    router = APIRouter()
+    from app.capacity_routes import AdmissionRoute
+
+    router = APIRouter(route_class=AdmissionRoute)
 
     async def _render_invite(request: Request, *, error: str | None = None,
                              status_code: int = 200):
@@ -932,7 +941,7 @@ def make_router() -> APIRouter:
             and hmac.compare_digest(
                 email_norm.encode("utf-8"), account["email"].encode("utf-8")
             )
-            and await asyncio.to_thread(
+            and await owned_thread(
                 verify_password, password, account["password_hash"]
             )
         )
@@ -997,7 +1006,7 @@ def make_router() -> APIRouter:
 
         async def provision():
             try:
-                async with control_connection(request.app.state.control_pool) as conn:
+                async with control_connection(request.app.state.control_pool, lane="lifecycle") as conn:
                     async with conn.transaction():
                         account_id = await redeem_invitation(
                             conn, token, password, display_timezone=timezone_name
@@ -1089,9 +1098,9 @@ def make_router() -> APIRouter:
                 request, error=error, status_code=400
             )
 
-        password_hash = await asyncio.to_thread(hash_password, password)
+        password_hash = await owned_thread(hash_password, password)
         try:
-            async with control_connection(request.app.state.control_pool) as conn:
+            async with control_connection(request.app.state.control_pool, lane="lifecycle") as conn:
                 account = await create_admin(
                     conn, email_norm, password_hash, display_timezone=timezone_name
                 )
@@ -1266,19 +1275,22 @@ def make_router() -> APIRouter:
                             target, protected_attempt["browser_nonce"],
                         )
                     return True, None
-                result = await _issue_and_deliver_email_challenge(
-                    request, account, proof_action, target,
-                    proof_nonce=protected_attempt["browser_nonce"],
-                )
-                return True, result
+                return True, (account, proof_action, target, protected_attempt["browser_nonce"])
 
             finishing = asyncio.create_task(finish_reauth())
             finishing.add_done_callback(lambda completed: completed.exception() if not completed.cancelled() else None)
-            verified, email_result = await asyncio.shield(finishing)
+            verified, email_preparation = await await_completion(finishing)
             if not verified:
                 limiter.record_failure(ip)
                 raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
             if email_action:
+                if email_preparation is None:
+                    limiter.record_failure(ip)
+                    raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
+                account, purpose, target, proof_nonce = email_preparation
+                email_result = await _issue_and_deliver_email_challenge(
+                    request, account, purpose, target, proof_nonce=proof_nonce,
+                )
                 if email_result is None:
                     limiter.record_failure(ip)
                     raise HTTPException(status_code=401, detail=GENERIC_OIDC_ERROR)
@@ -1292,7 +1304,7 @@ def make_router() -> APIRouter:
 
         if protected_action == "invite":
             try:
-                async with control_connection(request.app.state.control_pool) as conn:
+                async with control_connection(request.app.state.control_pool, lane="lifecycle") as conn:
                     async with conn.transaction():
                         account_id = await redeem_oidc_invitation_by_digest(
                             conn, pending["invitation_digest"], issuer, subject,
@@ -1310,7 +1322,7 @@ def make_router() -> APIRouter:
             return RedirectResponse("/", status_code=303)
 
         if protected_action == "link":
-            async with control_connection(request.app.state.control_pool) as conn:
+            async with control_connection(request.app.state.control_pool, lane="lifecycle") as conn:
                 linked = await create_identity_link(
                     conn,
                     pending["account_id"],
@@ -1418,9 +1430,9 @@ def make_router() -> APIRouter:
         ):
             request.session.clear()
             raise AuthRedirect()
-        password_hash = await asyncio.to_thread(hash_password, password)
+        password_hash = await owned_thread(hash_password, password)
         try:
-            async with control_connection(request.app.state.control_pool) as conn:
+            async with control_connection(request.app.state.control_pool, lane="lifecycle") as conn:
                 account, _identity = await establish_legacy_admin_identity(
                     conn,
                     email=email_norm,
@@ -1559,7 +1571,7 @@ def make_router() -> APIRouter:
             return await _render_account_unavailable(request, user, status_code=503)
         except _AccountActionRejected as rejected:
             return await _render_rejection(request, user, rejected)
-        async with control_connection(request.app.state.control_pool) as conn:
+        async with control_connection(request.app.state.control_pool, lane="lifecycle") as conn:
             identity = await get_identity_for_account(
                 conn, account["id"], request.app.state.config.oidc_issuer
             )
@@ -1630,28 +1642,38 @@ def make_router() -> APIRouter:
                 )
             return False
 
-        async with control_connection(request.app.state.control_pool) as conn:
-            if proof_nonce is not None:
-                async with conn.transaction():
-                    proven = await consume_action_proof(
-                        conn, account_id=account["id"],
-                        auth_version=request.state.principal.auth_version,
-                        action=purpose, target=target, browser_nonce=proof_nonce,
-                    )
+        async def prepare():
+            async with control_connection(request.app.state.control_pool) as conn:
+                if proof_nonce is not None:
+                    async with conn.transaction():
+                        proven = await consume_action_proof(
+                            conn, account_id=account["id"],
+                            auth_version=request.state.principal.auth_version,
+                            action=purpose, target=target, browser_nonce=proof_nonce,
+                        )
+                        token = await issue_email_challenge(
+                            conn, account["id"], request.state.principal.auth_version,
+                            purpose, target,
+                        ) if proven else None
+                else:
+                    proven = True
                     token = await issue_email_challenge(
                         conn, account["id"], request.state.principal.auth_version,
                         purpose, target,
-                    ) if proven else None
-            else:
-                proven = True
-                token = await issue_email_challenge(
-                    conn, account["id"], request.state.principal.auth_version,
-                    purpose, target,
-                )
-        if not proven:
-            return None
-        if token is None:
-            return True
+                    )
+            return proven, token
+
+        preparation = asyncio.create_task(prepare())
+        cancelled = False
+        try:
+            proven, token = await await_completion(preparation)
+        except asyncio.CancelledError:
+            cancelled = True
+            proven, token = preparation.result()
+        if not proven or token is None:
+            if cancelled:
+                raise asyncio.CancelledError
+            return None if not proven else True
 
         mailer = Mailer(
             cfg.smtp_host, cfg.smtp_port, cfg.smtp_username, cfg.smtp_password,
@@ -1661,7 +1683,7 @@ def make_router() -> APIRouter:
 
         @asynccontextmanager
         async def admit():
-            async with control_connection(request.app.state.control_pool) as conn:
+            async with control_connection(request.app.state.control_pool, lane="mail") as conn:
                 async with conn.transaction():
                     yield await email_challenge_send_usable(
                         conn, account["id"], request.state.principal.auth_version,
@@ -1691,10 +1713,13 @@ def make_router() -> APIRouter:
                 await revoke_email_challenge(conn, account["id"], purpose, token)
             return False
 
+        await release_authentication(request)
         delivery = asyncio.create_task(deliver())
         delivery.add_done_callback(
             lambda completed: completed.exception() if not completed.cancelled() else None
         )
+        if cancelled:
+            raise asyncio.CancelledError
         return await asyncio.shield(delivery)
 
     async def _request_email_challenge(
@@ -1749,7 +1774,11 @@ def make_router() -> APIRouter:
             return await _render_account(
                 request, account, user, error=GENERIC_EMAIL_ERROR, status_code=503
             )
-        return await _render_account(request, account, user, success=EMAIL_REQUEST_NOTICE)
+        try:
+            return await _render_account(request, account, user, success=EMAIL_REQUEST_NOTICE)
+        except CapacityBusy:
+            request.session["account_notice"] = EMAIL_REQUEST_NOTICE
+            return RedirectResponse("/settings/account", status_code=303)
 
     async def _render_account_unavailable(request: Request, user: dict, *, status_code: int = 503):
         async with control_connection(request.app.state.control_pool) as conn:
@@ -1800,7 +1829,7 @@ def make_router() -> APIRouter:
         ip = client_ip(request)
         if limiter.blocked(ip):
             return await _render_email_challenge(request, user, error=GENERIC_EMAIL_ERROR, status_code=429)
-        async with control_connection(request.app.state.control_pool) as conn:
+        async with control_connection(request.app.state.control_pool, lane="lifecycle") as conn:
             account = await consume_email_challenge(
                 conn, user["id"], request.state.principal.auth_version, purpose, token
             )
@@ -1871,72 +1900,87 @@ def make_router() -> APIRouter:
         # declared as File()/Form() parameters on this function -- see
         # _avatar_upload_exceeds_limit's docstring for why that's load-
         # bearing rather than a style choice.
-        form = await request.form()
-        raw_csrf_token = form.get("csrf_token", "")
-        csrf_token = raw_csrf_token if isinstance(raw_csrf_token, str) else ""
-        check_form_csrf(request, csrf_token)
+        try:
+            async with bounded_multipart_form(request,
+                    max_files=capacity_setting(request.app.state.capacity, "capacity_multipart_max_files"),
+                    max_fields=capacity_setting(request.app.state.capacity, "capacity_multipart_max_fields")) as form:
+                raw_csrf_token = form.get("csrf_token", "")
+                csrf_token = raw_csrf_token if isinstance(raw_csrf_token, str) else ""
+                check_form_csrf(request, csrf_token)
 
-        async with control_connection(request.app.state.control_pool) as conn:
-            account = await get_account(conn, user["id"])
-        if account is None:
-            request.session.clear()
-            raise AuthRedirect()
+                async with control_connection(request.app.state.control_pool) as conn:
+                    account = await get_account(conn, user["id"])
+                if account is None:
+                    request.session.clear()
+                    raise AuthRedirect()
 
-        file = form.get("file")
-        if not isinstance(file, UploadFile):
-            return await _render_account(
-                request, account, user,
-                error="Choose an image file to upload.", status_code=422,
-            )
+                file = form.get("file")
+                if not isinstance(file, UploadFile):
+                    return await _render_account(
+                        request, account, user,
+                        error="Choose an image file to upload.", status_code=422,
+                    )
 
-        raw = await read_capped_upload(file, cfg.account_avatar_max_bytes)
-        if raw is None:
+                raw = await read_capped_upload(file, cfg.account_avatar_max_bytes)
+                if raw is None:
+                    return await _render_account(
+                        request, account, user,
+                        error=f"Avatar exceeds the {_human_size(cfg.account_avatar_max_bytes)} limit.",
+                        status_code=413,
+                    )
+                if not raw:
+                    return await _render_account(
+                        request, account, user,
+                        error="Choose an image file to upload.", status_code=422,
+                    )
+
+                detection = await owned_thread(_detect_avatar, raw)
+                if detection.reason == REASON_TOO_LARGE:
+                    return await _render_account(
+                        request, account, user,
+                        error=(
+                            "This image is too large. Avatars can be up to "
+                            f"{MAX_AVATAR_PIXELS // 1_048_576} megapixels, with no side "
+                            f"longer than {MAX_AVATAR_SIDE} pixels."
+                        ),
+                        status_code=422,
+                    )
+                if detection.reason is not None:
+                    return await _render_account(
+                        request, account, user,
+                        error="Unsupported file type. Upload a PNG, JPEG, or WebP image.",
+                        status_code=422,
+                    )
+                avatar_mime = detection.mime
+
+                # Neither this route nor remove_avatar below re-verifies the current
+                # password, unlike the OIDC link/unlink routes: a display image
+                # doesn't change how this account authenticates, so there's nothing
+                # to re-verify, and neither route bumps auth_version or signs out
+                # other sessions.
+                async with control_connection(request.app.state.control_pool) as conn:
+                    updated = await set_account_avatar(
+                        conn, account["id"], raw, avatar_mime,
+                        expected_auth_version=request.state.principal.auth_version,
+                    )
+                if updated is None:
+                    request.session.clear()
+                    raise AuthRedirect()
+
+                request.session["account_notice"] = "Avatar updated."
+                return RedirectResponse("/settings/account", status_code=303)
+
+        except UploadEnvelopeTooLarge:
+            async with control_connection(request.app.state.control_pool) as conn:
+                account = await get_account(conn, user["id"])
+            if account is None:
+                request.session.clear()
+                raise AuthRedirect()
             return await _render_account(
                 request, account, user,
                 error=f"Avatar exceeds the {_human_size(cfg.account_avatar_max_bytes)} limit.",
                 status_code=413,
             )
-        if not raw:
-            return await _render_account(
-                request, account, user,
-                error="Choose an image file to upload.", status_code=422,
-            )
-
-        detection = _detect_avatar(raw)
-        if detection.reason == REASON_TOO_LARGE:
-            return await _render_account(
-                request, account, user,
-                error=(
-                    "This image is too large. Avatars can be up to "
-                    f"{MAX_AVATAR_PIXELS // 1_048_576} megapixels, with no side "
-                    f"longer than {MAX_AVATAR_SIDE} pixels."
-                ),
-                status_code=422,
-            )
-        if detection.reason is not None:
-            return await _render_account(
-                request, account, user,
-                error="Unsupported file type. Upload a PNG, JPEG, or WebP image.",
-                status_code=422,
-            )
-        avatar_mime = detection.mime
-
-        # Neither this route nor remove_avatar below re-verifies the current
-        # password, unlike the OIDC link/unlink routes: a display image
-        # doesn't change how this account authenticates, so there's nothing
-        # to re-verify, and neither route bumps auth_version or signs out
-        # other sessions.
-        async with control_connection(request.app.state.control_pool) as conn:
-            updated = await set_account_avatar(
-                conn, account["id"], raw, avatar_mime,
-                expected_auth_version=request.state.principal.auth_version,
-            )
-        if updated is None:
-            request.session.clear()
-            raise AuthRedirect()
-
-        request.session["account_notice"] = "Avatar updated."
-        return RedirectResponse("/settings/account", status_code=303)
 
     @router.post("/settings/account/avatar/remove")
     async def remove_avatar(
@@ -2012,7 +2056,7 @@ def make_router() -> APIRouter:
                 )
 
         async def save_password():
-            async with control_connection(request.app.state.control_pool) as conn:
+            async with control_connection(request.app.state.control_pool, lane="lifecycle") as conn:
                 async with conn.transaction():
                     if proof_nonce is not None:
                         proven = await consume_action_proof(
@@ -2023,7 +2067,7 @@ def make_router() -> APIRouter:
                         if not proven:
                             limiter.record_failure(ip)
                             return None, False
-                    password_hash = await asyncio.to_thread(hash_password, password)
+                    password_hash = await owned_thread(hash_password, password)
                     updated = await replace_password(
                         conn, account["id"], password_hash,
                         expected_auth_version=request.state.principal.auth_version,
@@ -2041,12 +2085,14 @@ def make_router() -> APIRouter:
             raise AuthRedirect()
 
         _set_account_session(request, updated)
-        return await _render_account(
-            request,
-            updated,
-            _account_user(updated),
-            success=PASSWORD_SAVED_NOTICE,
-        )
+        await release_authentication(request)
+        try:
+            return await _render_account(
+                request, updated, _account_user(updated), success=PASSWORD_SAVED_NOTICE,
+            )
+        except CapacityBusy:
+            request.session["account_notice"] = PASSWORD_SAVED_NOTICE
+            return RedirectResponse("/settings/account", status_code=303)
 
     async def _render_reset_page(request: Request, name: str, *, error: str | None = None,
                                  notice: str | None = None, status_code: int = 200):
@@ -2116,8 +2162,8 @@ def make_router() -> APIRouter:
             async with control_connection(pool) as conn:
                 if not await password_reset_usable(conn, token):
                     return None
-            password_hash = await asyncio.to_thread(hash_password, values["password"])
-            async with control_connection(pool) as conn:
+            password_hash = await owned_thread(hash_password, values["password"])
+            async with control_connection(pool, lane="lifecycle") as conn:
                 return await consume_password_reset(conn, token, password_hash)
 
         try:
@@ -2139,7 +2185,7 @@ def make_router() -> APIRouter:
     ):
         if request.app.state.config.dev_no_auth:
             raise HTTPException(status_code=403)
-        async with control_connection(request.app.state.control_pool) as conn:
+        async with control_connection(request.app.state.control_pool, lane="lifecycle") as conn:
             signed_out = await sign_out_everywhere(
                 conn, user["id"],
                 expected_auth_version=request.state.principal.auth_version,

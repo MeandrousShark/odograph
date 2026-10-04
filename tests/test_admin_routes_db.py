@@ -282,8 +282,8 @@ def test_cancelled_invitation_send_owns_its_real_pool_connection(monkeypatch, ba
         checked_out = set()
 
         @asynccontextmanager
-        async def tracked_connection(pool):
-            async with original_connection(pool) as conn:
+        async def tracked_connection(pool, **kwargs):
+            async with original_connection(pool, **kwargs) as conn:
                 checked_out.add(id(conn))
                 try:
                     yield conn
@@ -431,5 +431,69 @@ def test_admin_recovery_queues_only_a_verified_target_and_binds_actor_identity()
             )
             assert "no verified login address" in unverified.text
             assert queued == [(account["id"], 1, member_id)]
+
+    asyncio.run(_scenario(check))
+
+
+@pytest.mark.capacity_contract
+@pytest.mark.parametrize("action", ["disable", "invite"])
+def test_committed_admin_outcome_survives_saturated_identity_refresh(monkeypatch, action):
+    from dataclasses import replace
+    from app.capacity import AdmissionManager
+    from app.role_setup import RolePools
+
+    async def check(owner, raw_pools, account):
+        async with owner.connection() as conn:
+            await conn.execute("DROP INDEX accounts_singleton_idx")
+            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
+            await conn.execute("INSERT INTO accounts(id,email,password_hash,is_admin) VALUES (42,'member@example.invalid','unused',false)")
+        cfg = replace(auth_config(TEST_DB), capacity_identity_pending=0)
+        manager = AdmissionManager(cfg)
+        pools = RolePools(manager.manage_pool(raw_pools.control, "control"),
+                          manager.manage_pool(raw_pools.runtime, "runtime"))
+        app = _app(pools, config=cfg)
+        app.state.capacity = manager
+        app.state.security_mail = SecurityMailAdmission(capacity=manager)
+        original = admin._load_page_data
+        entered = [asyncio.Event(), asyncio.Event()]
+        release = asyncio.Event()
+        holders = []
+
+        async def occupy(index):
+            async with manager.operation("identity"):
+                entered[index].set()
+                await release.wait()
+
+        async def busy_refresh(request, actor):
+            holders.extend(asyncio.create_task(occupy(i)) for i in range(2))
+            await asyncio.gather(*(event.wait() for event in entered))
+            return await original(request, actor)
+
+        monkeypatch.setattr(admin, "_load_page_data", busy_refresh)
+        try:
+            async with await _client(app) as client:
+                await client.post(f"/test/session/{account['id']}/1")
+                if action == "disable":
+                    response = await client.post("/admin/accounts/42/disable", data={"csrf_token": "route-csrf"})
+                    assert response.status_code == 200
+                    assert "Account disabled." in response.text
+                    async with owner.connection() as conn:
+                        assert (await (await conn.execute("SELECT is_enabled FROM accounts WHERE id=42")).fetchone()) == (False,)
+                else:
+                    response = await client.post("/admin/invitations", data={
+                        "csrf_token": "route-csrf", "email": "invited@example.invalid",
+                    })
+                    assert response.status_code == 200
+                    assert "Invitation issued." in response.text
+                    assert "Invitation token: <code>" in response.text
+                    assert "Email was not requested." in response.text
+                    async with owner.connection() as conn:
+                        assert (await (await conn.execute("SELECT count(*) FROM invitations WHERE email='invited@example.invalid'")).fetchone()) == (1,)
+                assert response.headers["cache-control"] == "no-store, private"
+                assert "Reload account details" in response.text
+        finally:
+            release.set()
+            await asyncio.gather(*holders, return_exceptions=True)
+            await manager.shutdown()
 
     asyncio.run(_scenario(check))

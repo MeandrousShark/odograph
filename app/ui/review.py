@@ -9,7 +9,7 @@ from starlette.responses import Response
 
 from app.account_context import account_id
 from app.auth import require_csrf, require_user
-from app.page import render_page
+from app.page import render_page, render_template
 from app.vehicles import list_vehicles
 
 from app.ui._common import (
@@ -125,7 +125,7 @@ async def _render_review_card(
                 **extra,
             },
         )
-    return request.app.state.templates.TemplateResponse(
+    return await render_template(
         request, template,
         {
             **card, "vehicles": vehicles, "recent_purposes": recent_purposes,
@@ -309,6 +309,7 @@ def register(router: APIRouter) -> None:
                     raise HTTPException(status_code=400, detail="No such vehicle")
                 if cur.rowcount == 0:
                     raise HTTPException(status_code=404, detail="No such trip")
+            request.state._capacity_mutation_committed = True
             return Response(status_code=204)
 
         @router.post("/review/{trip_id}/undo", dependencies=[Depends(require_csrf)])

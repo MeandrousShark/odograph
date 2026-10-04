@@ -155,7 +155,10 @@ def test_there_is_no_escape_hatch_on_the_account_entry_point():
         parameter.default is inspect.Parameter.empty
         for parameter in parameters.values()
     )
-    assert list(inspect.signature(control_connection).parameters) == ["pool"]
+    control_parameters = inspect.signature(control_connection).parameters
+    assert list(control_parameters) == ["pool", "lane"]
+    assert control_parameters["lane"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert control_parameters["lane"].default == "identity"
     assert account_connection is not control_connection
 
 

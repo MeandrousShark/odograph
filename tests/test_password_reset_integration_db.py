@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 import app.main as main_module
-from app.account_context import AccountPool, AccountPrincipal
+from app.account_context import AccountPool, AccountPrincipal, control_connection
 from app.config import Config
 from app.db import make_pool
 from app.mailer import Mailer
@@ -105,7 +105,7 @@ def test_reset_ends_only_the_target_accounts_sessions(monkeypatch, caplog):
                             "SELECT %s,year,rate_per_mi,rate_h2_per_mi,h2_start_month "
                             "FROM reference_mileage_rates", (b_id,))
                         await conn.execute("UPDATE accounts SET email_verified_at=now()")
-                    async with app.state.control_pool.connection() as conn:
+                    async with control_connection(app.state.control_pool) as conn:
                         await create_identity_link(conn, a_id, "https://idp.example.invalid", "a-subject")
                     bound = AccountPool(app.state.runtime_pool, AccountPrincipal(a_id, True, 1))
                     async with bound.connection() as conn:

@@ -8,7 +8,6 @@ Concurrency model:
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import resource
@@ -17,6 +16,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from app.account_context import AccountPool, account_id
+from app.capacity import owned_thread
 
 from app.autotag import AutotagTrip, Rule, plan_autotags
 from app.db import DETECTOR_ADVISORY_LOCK_KEY
@@ -271,7 +271,7 @@ class DetectorRunner:
         # detect() is CPU-bound and pure over its (immutable) inputs, so it
         # runs off the event loop; the held connection stays idle during the
         # thread and is used again for the writes that follow.
-        stays, trips = await asyncio.to_thread(detect, points, self.params, overrides)
+        stays, trips = await owned_thread(detect, points, self.params, overrides)
 
         await conn.execute(
             "DELETE FROM stays WHERE account_id = %s AND tracking_device_id = %s AND started_at >= %s", (owner, device, t0)

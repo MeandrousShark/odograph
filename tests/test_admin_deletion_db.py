@@ -48,10 +48,10 @@ def test_deletion_requires_exact_confirmation_cannot_bypass_grace_and_cancellati
                 "VALUES ('target-key','target-user','secret-hash',%s,'legacy')", (target,),
             )
         async with pools.control.connection() as conn:
+            before = (await (await conn.execute("SELECT transaction_timestamp()")).fetchone())[0]
             for email, ack in [("wrong@example.invalid", True), ("member@example.invalid", False)]:
                 with pytest.raises(AccountLifecycleUnavailable):
                     await request_account_deletion(conn, actor, target, email=email, acknowledge=ack)
-            before = time.time()
             assert await request_account_deletion(conn, actor, target, email="member@example.invalid", acknowledge=True) == "scheduled"
             with pytest.raises(AccountLifecycleUnavailable):
                 await set_account_enabled(conn, actor, target, enable=True)
@@ -65,7 +65,8 @@ def test_deletion_requires_exact_confirmation_cannot_bypass_grace_and_cancellati
             assert state == (True, 2, None)
             assert (await (await conn.execute("SELECT revoked_at IS NOT NULL,generation FROM ingest_credentials WHERE account_id=%s", (target,))).fetchone()) == (True, 2)
             deadline = (await (await conn.execute("SELECT occurred_at FROM account_security_audit WHERE action='request_deletion'", ())).fetchone())[0]
-            assert before <= deadline.timestamp() <= time.time()
+            after = (await (await conn.execute("SELECT clock_timestamp()")).fetchone())[0]
+            assert before <= deadline <= after
         async with pools.control.connection() as conn:
             await request_account_deletion(conn, actor, target, email="member@example.invalid", acknowledge=True)
         async with owner.connection() as conn:
@@ -207,10 +208,13 @@ def test_deletion_routes_auth_csrf_confirmation_and_fresh_password():
     asyncio.run(_scenario(check))
 
 
+@pytest.mark.capacity_contract
 def test_purge_lease_survives_cancelled_security_mail_waiter_and_disable_commit():
     import threading
     from contextlib import asynccontextmanager
     from app.account_work import external_account_work
+    from app.account_context import control_connection
+    from app.capacity import AdmissionManager, ManagedPool
     from app.mailer import Mailer
     from app.password_reset import SecurityMailAdmission
 
@@ -223,37 +227,43 @@ def test_purge_lease_survives_cancelled_security_mail_waiter_and_disable_commit(
             release.wait(10)
 
         mailer = Mailer("",25,"","","none",False,"from@example.invalid","to@example.invalid",transport=blocking_transport)
-        admission = SecurityMailAdmission(limit=1)
+        manager = AdmissionManager()
+        control = ManagedPool(pools.control, manager, "control")
+        admission = SecurityMailAdmission(limit=1, capacity=manager)
 
         @asynccontextmanager
         async def admit():
-            async with pools.control.connection() as conn:
+            async with control_connection(control, lane="mail") as conn:
                 async with conn.transaction():
                     cur = await conn.execute("SELECT 1 FROM accounts WHERE id=%s AND is_enabled FOR SHARE", (target,))
                     yield await cur.fetchone() is not None
 
         send = asyncio.create_task(admission.send(
             mailer, mailer.compose("Test","No private data"), admit=admit,
-            lease=lambda: external_account_work(pools.control,target),
+            lease=lambda: external_account_work(control,target),
         ))
         try:
             assert await asyncio.to_thread(started.wait,3)
             send.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await send
-            async with pools.control.connection() as conn:
+            async with control_connection(control, lane="lifecycle") as conn:
                 await request_account_deletion(conn,actor,target,email="member@example.invalid",acknowledge=True)
             await _elapsed(owner,target)
-            async with pools.control.connection() as conn:
+            async with control_connection(control, lane="lifecycle") as conn:
                 with pytest.raises(AccountLifecycleUnavailable):
                     await purge_account(conn,actor,target,email="member@example.invalid",confirm=True,verified_password_hash=actor["password_hash"])
             assert admission._slots.locked()
+            assert manager.snapshot()["leases"] == 1
+            assert manager.snapshot()["mail"]["active"] == 1
         finally:
             release.set()
             await admission.drain()
-        async with pools.control.connection() as conn:
+        async with control_connection(control, lane="lifecycle") as conn:
             assert await purge_account(conn,actor,target,email="member@example.invalid",confirm=True,verified_password_hash=actor["password_hash"]) == "purged"
         assert not admission._tasks
+        assert manager.snapshot()["leases"] == 0
+        assert manager.snapshot()["mail"]["active"] == 0
     asyncio.run(_scenario(check))
 
 

@@ -23,7 +23,7 @@ def _endpoint(path: str, method: str):
 
 
 @asynccontextmanager
-async def _connection(_pool):
+async def _connection(_pool, *, lane="identity"):
     class Connection:
         @asynccontextmanager
         async def transaction(self):
@@ -394,9 +394,11 @@ def test_cancelled_email_callback_keeps_owning_issuance_and_delivery(monkeypatch
         caller = asyncio.create_task(_endpoint("/auth/callback", "GET")(request))
         await asyncio.wait_for(issue_started.wait(), 2)
         caller.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await caller
+        await asyncio.sleep(0)
+        assert not caller.done()
         release_issue.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(caller, 2)
         await asyncio.wait_for(delivered.wait(), 2)
 
     asyncio.run(run())
@@ -538,17 +540,19 @@ def test_method_routes_hold_bounded_verification_after_cancellation(monkeypatch,
         try:
             assert await asyncio.to_thread(started.wait, 2)
             first.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await first
+            await asyncio.sleep(0)
+            assert not first.done()
             assert len(request.app.state.login_limiter._auth_tasks) == 1
             saturated = await call()
             assert saturated.status_code == 503
             assert not request.app.state.login_limiter.blocked(request.client.host)
         finally:
             release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
         await asyncio.gather(*request.app.state.login_limiter._auth_tasks, return_exceptions=True)
         assert request.app.state.login_limiter.blocked(request.client.host) is False
-        assert len(request.app.state.login_limiter._failures[request.client.host]) == 1
+        assert sum(len(q) for q in request.app.state.login_limiter._failures.values()) == 1
         assert (await call()).status_code == 401
 
     asyncio.run(run())
@@ -662,11 +666,13 @@ def test_cancelled_reauth_token_exchange_consumes_exact_attempt(monkeypatch):
         caller.cancel()
         await asyncio.sleep(0)
         caller.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await caller
+        await asyncio.sleep(0)
+        assert not caller.done()
         assert "oidc_action_proof_nonce" not in request.session
         release.set()
-        await asyncio.wait_for(consumed.wait(), 2)
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(caller, 2)
+        assert consumed.is_set()
 
     asyncio.run(run())
 
@@ -701,10 +707,12 @@ def test_successful_reauth_finishing_is_not_aborted_with_cancelled_caller(monkey
         caller = asyncio.create_task(_endpoint("/auth/callback", "GET")(request))
         await entered.wait()
         caller.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await caller
+        await asyncio.sleep(0)
+        assert not caller.done()
         release.set()
-        await asyncio.wait_for(finished.wait(), 2)
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(caller, 2)
+        assert finished.is_set()
 
     asyncio.run(run())
 
@@ -778,7 +786,7 @@ def test_oidc_only_password_addition_consumes_proof_before_hash(monkeypatch):
     monkeypatch.setattr(auth, "replace_password", replace)
     monkeypatch.setattr(auth, "get_identity_for_account", identity)
     monkeypatch.setattr(auth, "is_current_email_verified", verified)
-    monkeypatch.setattr(auth.asyncio, "to_thread", to_thread)
+    monkeypatch.setattr(auth, "owned_thread", to_thread)
 
     response = asyncio.run(_endpoint("/settings/account/password", "POST")(
         request, current_password="", password="new password",

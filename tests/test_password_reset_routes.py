@@ -52,7 +52,7 @@ def _app(monkeypatch, *, smtp_host="smtp.example.com", app_url="https://odograph
     app.state.calls = []
 
     @asynccontextmanager
-    async def fake_connection(pool):
+    async def fake_connection(pool, *, lane="identity"):
         yield object()
 
     async def usable(conn, token):

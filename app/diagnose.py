@@ -30,6 +30,7 @@ import httpx
 from psycopg_pool import AsyncConnectionPool
 
 from app.config import Config
+from app.capacity import owned_thread
 from app.account_context import AccountPool
 from app.db import MIGRATIONS_DIR, MIGRATION_FILENAME_RE
 from app.application_roles import application_role_pools
@@ -255,19 +256,24 @@ def worker_reports_from_config(cfg: Config) -> list[WorkerReport]:
 
 
 async def build_report(
-    cfg: Config, pool: AsyncConnectionPool, state=None,
+    cfg: Config, pool: AsyncConnectionPool | AccountPool, state=None,
 ) -> DiagnosticsReport:
     """The one report builder both surfaces call. `state` is the running
     app's `app.state` (worker run history included) from the Settings page,
     or `None` from the standalone CLI, which has no process to ask and
     falls back to config-derived enablement only.
     """
-    # These checks read instance metadata only; use the restricted runtime
-    # pool directly rather than requiring a personal-data transaction.
-    database_pool = pool.runtime_pool if isinstance(pool, AccountPool) else pool
-    database, migrations = await asyncio.gather(
-        _check_database(database_pool), _check_migrations(database_pool),
-    )
+    if isinstance(pool, AccountPool):
+        # Serving metadata uses the same admitted account helper as its page.
+        # Sequential borrows avoid competing with our own account reservation.
+        database = await _check_database(pool)
+        migrations = await _check_migrations(pool)
+    else:
+        # The standalone operator command has unbound restricted pools and no
+        # serving-process admission manager or account context.
+        database, migrations = await asyncio.gather(
+            _check_database(pool), _check_migrations(pool),
+        )
     workers = (
         worker_reports_from_state(state) if state is not None
         else worker_reports_from_config(cfg)
@@ -376,20 +382,23 @@ def _smtp_probe(cfg: Config) -> None:
             smtp.noop()
 
 
-async def _check_smtp(cfg: Config) -> ConnectivityResult:
+async def _check_smtp(cfg: Config, *, serving: bool = False) -> ConnectivityResult:
     if not (cfg.smtp_host and cfg.email_from):
         return ConnectivityResult(
             "smtp", configured=False, detail="SMTP_HOST/EMAIL_FROM not set"
         )
     try:
-        await asyncio.to_thread(_smtp_probe, cfg)
+        if serving:
+            await owned_thread(_smtp_probe, cfg)
+        else:
+            await asyncio.to_thread(_smtp_probe, cfg)
         return ConnectivityResult("smtp", configured=True, ok=True, detail="reachable")
     except Exception as exc:
         return ConnectivityResult("smtp", configured=True, ok=False, detail=type(exc).__name__)
 
 
 async def run_connectivity_checks(
-    cfg: Config, http_client: httpx.AsyncClient | None = None,
+    cfg: Config, http_client: httpx.AsyncClient | None = None, *, serving: bool = False,
 ) -> list[ConnectivityResult]:
     """The on-demand "check now" surface (D6): every call here is a direct
     result of an explicit operator action (a button click, or running this
@@ -405,7 +414,7 @@ async def run_connectivity_checks(
     try:
         osrm, geocode, ntfy, smtp = await asyncio.gather(
             _check_osrm(cfg, client), _check_geocode(cfg, client),
-            _check_ntfy(cfg, client), _check_smtp(cfg),
+            _check_ntfy(cfg, client), _check_smtp(cfg, serving=serving),
         )
     finally:
         if owns_client:
@@ -474,7 +483,7 @@ async def _main() -> None:
             migrations=MigrationReport(applied=None, expected=_expected_migration_versions()),
             workers=worker_reports_from_config(cfg), config_presence=config_presence(cfg),
         )
-    connectivity = await run_connectivity_checks(cfg)
+    connectivity = await run_connectivity_checks(cfg, serving=False)
     print(render_report_text(report, connectivity))
 
 

@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from fastapi import Request
 
 from app.account_context import account_id
+from app.capacity import current_owner, owned_thread
 
 
 async def render_page(
@@ -22,6 +23,14 @@ async def render_page(
             (account_id(conn),),
         )
         review_count = (await cur.fetchone())[0]
-    return request.app.state.templates.TemplateResponse(
-        request, template, {**context, "review_count": review_count}, status_code=status_code
-    )
+    return await render_template(request, template, {**context, "review_count": review_count},
+                                 status_code=status_code)
+
+
+async def render_template(request, template, context, **kwargs):
+    """Keep expensive template assembly under the actual foreground lifetime."""
+    render = lambda: request.app.state.templates.TemplateResponse(request, template, context, **kwargs)
+    owner = current_owner()
+    if owner is not None and owner.lane == "foreground":
+        return await owned_thread(render)
+    return render()

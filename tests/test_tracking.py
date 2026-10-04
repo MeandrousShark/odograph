@@ -11,6 +11,8 @@ import pytest
 from fastapi import FastAPI
 
 from app import ingest
+from app.account_context import AccountPrincipal
+from app.capacity import owned_thread
 from app.tracking import IssuedCredential, TrackingUnavailable
 
 
@@ -100,7 +102,7 @@ def test_blocked_shared_ip_retains_valid_sender_for_retry_without_verification_o
 
     async def verify(_pool, username, _password, **kwargs):
         calls.append(username)
-        return object()
+        return SimpleNamespace(account=AccountPrincipal(1, True, 1))
 
     monkeypatch.setattr(ingest, "authenticate_ingest", verify)
 
@@ -152,8 +154,8 @@ def test_auth_saturation_and_request_cancellation_hold_slots_until_threads_finis
         async def verify(_pool, username, _password, **kwargs):
             calls.append(username)
             if username in release:
-                await asyncio.to_thread(thread_work, username)
-            return object()
+                await owned_thread(thread_work, username)
+            return SimpleNamespace(account=AccountPrincipal(1, True, 1))
 
         async def body():
             body_reads.append(True)
@@ -174,14 +176,16 @@ def test_auth_saturation_and_request_cancellation_hold_slots_until_threads_finis
                 assert calls == ["first", "second"] and body_reads == []
 
                 first.cancel()
-                with pytest.raises(asyncio.CancelledError):
-                    await first
+                await asyncio.sleep(0)
+                assert not first.done()
                 assert limiter._auth_tasks == active
                 response = await client.post("/ingest", content=body(), auth=("third", "password"))
                 assert response.status_code == 503
                 assert calls == ["first", "second"] and body_reads == []
 
                 release["first"].set()
+                with pytest.raises(asyncio.CancelledError):
+                    await first
                 done, pending = await asyncio.wait(active, timeout=5, return_when=asyncio.FIRST_COMPLETED)
                 assert len(done) == len(pending) == 1
                 assert not second.done()
@@ -218,9 +222,9 @@ def test_cancelled_authentication_still_records_completed_failure(monkeypatch):
         async def verify(_pool, username, _password, **kwargs):
             calls.append(username)
             if username == "bad":
-                await asyncio.to_thread(thread_work)
+                await owned_thread(thread_work)
                 return None
-            return object()
+            return SimpleNamespace(account=AccountPrincipal(1, True, 1))
 
         monkeypatch.setattr(ingest, "authenticate_ingest", verify)
         async with httpx.AsyncClient(
@@ -231,9 +235,11 @@ def test_cancelled_authentication_still_records_completed_failure(monkeypatch):
                 await asyncio.wait_for(entered.wait(), 5)
                 active = set(limiter._auth_tasks)
                 request.cancel()
+                await asyncio.sleep(0)
+                assert not request.done()
+                release.set()
                 with pytest.raises(asyncio.CancelledError):
                     await request
-                release.set()
                 await asyncio.wait_for(asyncio.gather(*active), 5)
                 assert limiter.blocked("127.0.0.1")
                 response = await client.post("/ingest", content=b"", auth=("valid", "password"))

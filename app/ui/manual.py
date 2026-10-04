@@ -525,5 +525,6 @@ def register(router: APIRouter) -> None:
                         )
                 except errors.ForeignKeyViolation:
                     raise HTTPException(status_code=400, detail="No such vehicle")
+            request.state._capacity_mutation_committed = True
             redirect = "/trips" if notice is None else f"/trips?notice={notice}"
             return Response(status_code=204, headers={"HX-Redirect": redirect})

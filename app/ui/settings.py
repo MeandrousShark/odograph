@@ -9,7 +9,7 @@ from psycopg.rows import dict_row
 
 from app.account_context import account_id
 from app.auth import require_admin, require_csrf, require_user
-from app.page import render_page
+from app.page import render_page, render_template
 from app.db import _fetch_schema_version
 from app.detector.runner import DETECTOR_VERSION
 from app.diagnose import build_report, run_connectivity_checks
@@ -90,7 +90,7 @@ async def _fetch_odometer_context(conn) -> list[dict]:
 
 async def _render_vehicles_table(request: Request, conn):
     vehicles = await list_vehicles(conn, include_inactive=True)
-    return request.app.state.templates.TemplateResponse(
+    return await render_template(
         request, "_vehicles_table.html", {"vehicles": vehicles}
     )
 
@@ -98,7 +98,7 @@ async def _render_vehicles_table(request: Request, conn):
 async def _render_odometer_table(request: Request, conn):
     vehicles = await list_vehicles(conn, include_inactive=True)
     odometer = await _fetch_odometer_context(conn)
-    return request.app.state.templates.TemplateResponse(
+    return await render_template(
         request, "_odometer_table.html", {"vehicles": vehicles, "odometer": odometer}
     )
 
@@ -223,6 +223,7 @@ def register(router: APIRouter) -> None:
                      email_weekly_nudge == "1", email_monthly_summary == "1", email_filing_reminder == "1",
                      email_odometer_reminder == "1", email_digest_hour, f"{month:02d}-{day:02d}", account_id(conn)),
                 )
+            request.state._capacity_mutation_committed = True
             return _redirect_back(request)
 
         @router.post("/settings/diagnostics/check", dependencies=[Depends(require_csrf)])
@@ -233,8 +234,8 @@ def register(router: APIRouter) -> None:
             docstring for why a background prober was rejected.
             """
             cfg = request.state.config
-            connectivity = await run_connectivity_checks(cfg)
-            return request.app.state.templates.TemplateResponse(
+            connectivity = await run_connectivity_checks(cfg, serving=True)
+            return await render_template(
                 request, "_diagnostics_connectivity.html", {"connectivity": connectivity},
             )
 
@@ -400,6 +401,7 @@ def register(router: APIRouter) -> None:
                     (account_id(conn), year, rate_per_mi, h2_rate, h2_month),
                 )
                 db_rates = await _fetch_rates_rows(conn)
-            return request.app.state.templates.TemplateResponse(
+            request.state._capacity_mutation_committed = True
+            return await render_template(
                 request, "_rates_table.html", {"rates": db_rates}
             )

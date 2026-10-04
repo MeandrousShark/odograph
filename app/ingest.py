@@ -28,13 +28,15 @@ import json
 import logging
 import math
 import time
-from collections import defaultdict, deque
+from collections import deque
+from hashlib import sha256
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Request, Response
 from psycopg.errors import InsufficientPrivilege
 
 from app.account_context import AccountPool
+from app.capacity import await_completion
 from app.tracking import (
     TrackingNotFound, TrackingStream, TrackingUnavailable, admit_ingest,
     authenticate_ingest, resolve_ingest_stream,
@@ -71,15 +73,19 @@ class FailedAuthLimiter:
         clock=time.monotonic,
         prune_interval_s: float | None = None,
         max_concurrent_auth: int = 2,
+        max_keys: int = 1024,
     ):
         if max_concurrent_auth < 1:
             raise ValueError("max_concurrent_auth must be positive")
+        if max_keys < 1 or max_failures < 1 or window_s <= 0:
+            raise ValueError("failure limiter bounds must be positive")
+        self.max_keys = max_keys
         self.max_failures = max_failures
         self.window_s = window_s
         self._clock = clock
         self._prune_interval_s = prune_interval_s or min(window_s, 60.0)
         self._next_global_prune = self._clock() + self._prune_interval_s
-        self._failures: dict[str, deque] = defaultdict(deque)
+        self._failures: dict[str, deque] = {}
         self._max_concurrent_auth = max_concurrent_auth
         self._auth_tasks: set[asyncio.Task] = set()
 
@@ -101,15 +107,21 @@ class FailedAuthLimiter:
         self._next_global_prune = now + self._prune_interval_s
 
     def blocked(self, ip: str) -> bool:
+        ip = sha256(ip.encode()).hexdigest()
         now = self._clock()
         self._maybe_prune_all(now)
         self._prune(ip, now)
-        return len(self._failures.get(ip, ())) >= self.max_failures
+        return (ip not in self._failures and len(self._failures) >= self.max_keys) or len(self._failures.get(ip, ())) >= self.max_failures
 
     def record_failure(self, ip: str) -> None:
+        ip = sha256(ip.encode()).hexdigest()
         now = self._clock()
         self._maybe_prune_all(now)
         self._prune(ip, now)
+        if ip not in self._failures:
+            if len(self._failures) >= self.max_keys:
+                return
+            self._failures[ip] = deque(maxlen=self.max_failures)
         self._failures[ip].append(now)
 
     async def run_bounded(self, operation):
@@ -119,7 +131,7 @@ class FailedAuthLimiter:
         task = asyncio.create_task(operation())
         self._auth_tasks.add(task)
         task.add_done_callback(self._auth_finished)
-        return await asyncio.shield(task)
+        return await self._wait_owned(task)
 
     async def authenticate(self, ip: str, *args, **kwargs):
         if len(self._auth_tasks) >= self._max_concurrent_auth:
@@ -136,7 +148,12 @@ class FailedAuthLimiter:
         task.add_done_callback(self._auth_finished)
         # Cancelling a request does not stop scrypt's thread. Keep its slot
         # occupied, and count any failure, until the verification really ends.
-        return await asyncio.shield(task)
+        return await self._wait_owned(task)
+
+    async def _wait_owned(self, task):
+        # Repeated cancellation must not drop the shared owner while a child
+        # is still doing identity lookup or finishing its password verification.
+        return await await_completion(task)
 
     def _auth_finished(self, task: asyncio.Task) -> None:
         self._auth_tasks.discard(task)
@@ -155,6 +172,9 @@ def client_ip(request: Request) -> str:
 
 def _basic_credentials(request: Request) -> tuple[str, str] | None:
     header = request.headers.get("authorization", "")
+    from app.capacity_routes import capacity_setting
+    if len(header.encode("utf-8")) > capacity_setting(request.app.state.capacity, "capacity_basic_header_max_bytes"):
+        return None
     if not header.startswith("Basic "):
         return None
     try:
@@ -187,48 +207,61 @@ async def _read_capped_body(request: Request, max_bytes: int) -> bytes | None:
                 return None
         except ValueError:
             pass
-    chunks: list[bytes] = []
+    body = bytearray()
     total = 0
     async for chunk in request.stream():
         total += len(chunk)
         if total > max_bytes:
             return None
-        chunks.append(chunk)
-    return b"".join(chunks)
+        body.extend(chunk)
+    return bytes(body)
+
+
+async def authenticate_request(request: Request):
+    limiter: FailedAuthLimiter = request.app.state.ingest_limiter
+    ip = client_ip(request)
+    if limiter.blocked(ip):
+        # OwnTracks iOS drops queued messages on every 4xx, including 429.
+        # A shared IP's temporary failure window must preserve valid fixes.
+        return Response(
+            status_code=503, headers={"Retry-After": str(max(1, math.ceil(limiter.window_s)))},
+        )
+    cfg = request.app.state.config
+    basic = _basic_credentials(request)
+    credential = None
+    if basic is not None:
+        try:
+            credential = await limiter.authenticate(
+                ip, request.app.state.control_pool, *basic,
+                legacy_username=cfg.ingest_username, legacy_password=cfg.ingest_password,
+            )
+        except _AuthSaturated:
+            return Response(status_code=503, headers={"Retry-After": "1"})
+        except TrackingUnavailable:
+            return Response(status_code=503, headers={"Retry-After": "60"})
+    if credential is None:
+        if basic is None:
+            limiter.record_failure(ip)
+        return Response(
+            status_code=401, headers={"WWW-Authenticate": 'Basic realm="ingest"'}
+        )
+
+    return credential
 
 
 def make_router() -> APIRouter:
-    router = APIRouter()
+    from app.capacity_routes import AdmissionRoute
+
+    router = APIRouter(route_class=AdmissionRoute)
 
     @router.post("/ingest")
     async def ingest(request: Request):
-        limiter: FailedAuthLimiter = request.app.state.ingest_limiter
-        ip = client_ip(request)
-        if limiter.blocked(ip):
-            # OwnTracks iOS drops queued messages on every 4xx, including 429.
-            # A shared IP's temporary failure window must preserve valid fixes.
-            return Response(
-                status_code=503, headers={"Retry-After": str(max(1, math.ceil(limiter.window_s)))},
-            )
-        cfg = request.app.state.config
-        basic = _basic_credentials(request)
-        credential = None
-        if basic is not None:
-            try:
-                credential = await limiter.authenticate(
-                    ip, request.app.state.control_pool, *basic,
-                    legacy_username=cfg.ingest_username, legacy_password=cfg.ingest_password,
-                )
-            except _AuthSaturated:
-                return Response(status_code=503, headers={"Retry-After": "1"})
-            except TrackingUnavailable:
-                return Response(status_code=503, headers={"Retry-After": "60"})
+        credential = getattr(request.state, "_capacity_ingest_credential", None)
         if credential is None:
-            if basic is None:
-                limiter.record_failure(ip)
-            return Response(
-                status_code=401, headers={"WWW-Authenticate": 'Basic realm="ingest"'}
-            )
+            credential = await authenticate_request(request)
+        if isinstance(credential, Response):
+            return credential
+        cfg = request.app.state.config
 
         body = await _read_capped_body(request, cfg.ingest_max_body_bytes)
         if body is None:

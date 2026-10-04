@@ -13,6 +13,7 @@ import pytest
 import app.password_reset as reset
 from app.config import security_link_base
 from app.mailer import Mailer
+from app.capacity import AdmissionManager
 
 LINK_BASE = "https://odograph.example.com"
 
@@ -94,7 +95,7 @@ def test_admission_holds_its_slot_until_the_transport_thread_finishes():
         caller.cancel()
         with pytest.raises(asyncio.CancelledError):
             await caller
-        second = asyncio.create_task(admission.send(mailer, mailer.compose("s", "b")))
+        second = asyncio.create_task(admission.send(mailer, mailer.compose("s", "b"), wait=True))
         await asyncio.sleep(0.05)
         assert not second.done()
         release.set()
@@ -171,7 +172,7 @@ class _FakeDb:
         self.revoked = []
 
         @asynccontextmanager
-        async def connection(pool):
+        async def connection(pool, **kwargs):
             yield _FakeConn()
 
         async def issue(conn, token, *, initiator, email=None, account_id=None,
@@ -428,7 +429,10 @@ def test_cancelled_mail_send_preserves_cancellation_when_thread_later_fails():
         raise RuntimeError("transport failed after cancellation")
 
     async def run():
-        task = asyncio.create_task(_mailer("verified@example.com",transport).send("message"))
+        async def sending():
+            async with AdmissionManager().operation("mail"):
+                await _mailer("verified@example.com", transport).send("message")
+        task = asyncio.create_task(sending())
         try:
             assert await asyncio.to_thread(started.wait,2)
             task.cancel()

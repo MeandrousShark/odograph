@@ -19,12 +19,14 @@ import psycopg
 import pytest
 
 import app.main as main_module
+from app.account_context import AccountPool, AccountPrincipal, control_connection
 from app.config import Config
 from app.db import make_pool
 from conftest import full_schema_reset
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
-pytestmark = pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS")
+pytestmark = [pytest.mark.capacity_contract,
+              pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS")]
 
 ADMIN_EMAIL = "acceptance-admin@example.invalid"
 VERIFIED_EMAIL = "acceptance-verified@example.invalid"
@@ -125,15 +127,10 @@ async def _scenario(owner, secrets_seen: list[str], unverified_processed: asynci
             return await stack.enter_async_context(httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="https://test"))
 
-        # The application runs on the real restricted roles, neither of which
-        # can bypass row security or read personal ledger rows.
-        for pool, role in ((app.state.control_pool, "odograph_control"),
-                           (app.state.runtime_pool, "odograph_runtime")):
-            async with pool.connection() as conn:
-                assert (await (await conn.execute(
-                    "SELECT session_user, r.rolsuper OR r.rolbypassrls "
-                    "FROM pg_roles r WHERE r.rolname = session_user")).fetchone()) == (role, False)
-        async with app.state.control_pool.connection() as conn:
+        async with control_connection(app.state.control_pool) as conn:
+            assert (await (await conn.execute(
+                "SELECT session_user, r.rolsuper OR r.rolbypassrls "
+                "FROM pg_roles r WHERE r.rolname = session_user")).fetchone()) == ("odograph_control", False)
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 async with conn.transaction():
                     await conn.execute("SELECT * FROM trips")
@@ -152,6 +149,11 @@ async def _scenario(owner, secrets_seen: list[str], unverified_processed: asynci
             "email": "late@example.invalid", "password": "late password 1",
             "password_confirm": "late password 1", "csrf_token": "x"})).status_code == 404
         admin_id = await _account_id(owner, ADMIN_EMAIL)
+        runtime = AccountPool(app.state.runtime_pool, AccountPrincipal(admin_id, True, 1))
+        async with runtime.connection() as conn:
+            assert (await (await conn.execute(
+                "SELECT session_user, r.rolsuper OR r.rolbypassrls "
+                "FROM pg_roles r WHERE r.rolname = session_user")).fetchone()) == ("odograph_runtime", False)
         async with owner.connection() as conn:
             for is_admin, error in ((True, psycopg.errors.UniqueViolation),
                                     (False, psycopg.errors.CheckViolation)):

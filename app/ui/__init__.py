@@ -100,7 +100,9 @@ from app.ui.trips import (  # noqa: F401
 
 
 def make_router() -> APIRouter:
-    router = APIRouter()
+    from app.capacity_routes import AdmissionRoute
+
+    router = APIRouter(route_class=AdmissionRoute)
     # Registration order is load-bearing: Starlette matches on regex shape
     # before FastAPI validates path types, so a bare {year} or {trip_id}
     # segment will swallow a literal sibling registered after it. This is

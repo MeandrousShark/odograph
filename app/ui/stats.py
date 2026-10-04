@@ -8,6 +8,7 @@ from psycopg.rows import dict_row
 
 from app.account_context import account_id
 from app.auth import require_user
+from app.capacity import owned_thread
 from app.page import render_page
 from app.config import DEFAULT_MISSING_TRIP_GAP_M
 from app.dashboard import build_week_dashboard, parse_week_anchor, week_bounds
@@ -63,7 +64,7 @@ async def _build_week_dashboard_context(
     threshold_m = getattr(
         config, "missing_trip_gap_m", DEFAULT_MISSING_TRIP_GAP_M
     )
-    dashboard = build_week_dashboard(
+    dashboard = await owned_thread(build_week_dashboard,
         trips, expense_total, rates, anchor, tz, now, threshold_m,
     )
     return {
@@ -198,7 +199,7 @@ def register(router: APIRouter) -> None:
                         category=category, exclusion="none",
                     )
 
-                dashboard = build_dashboard(
+                dashboard = await owned_thread(build_dashboard,
                     selected_year, period_start_date, period_end_date,
                     await category_cur.fetchall(), await weekly_cur.fetchall(),
                     await monthly_cur.fetchall(),
@@ -242,10 +243,10 @@ def register(router: APIRouter) -> None:
                     end = date(bar_year, bar_month, last_day)
                     return _url_with_filters("/trips", start.isoformat(), end.isoformat(), vehicle)
 
-                multiyear = build_multiyear_chart(
+                multiyear = await owned_thread(build_multiyear_chart,
                     cross_year_rows, multiyear_years, cutoff_month, cutoff_day, multiyear_drill_url
                 )
-                trend = build_share_trend(cross_year_rows, multiyear_years, cutoff_month)
+                trend = await owned_thread(build_share_trend,cross_year_rows, multiyear_years, cutoff_month)
 
                 vehicle_mileage_cur = await conn.execute(
                     "SELECT t.vehicle_id, COALESCE(v.name, ''), "
@@ -267,7 +268,7 @@ def register(router: APIRouter) -> None:
                     (account_id(conn), period_start_date, period_end_date, *vehicle_params),
                 )
                 rates = await load_rates(conn)
-                vehicle_breakdown = build_vehicle_breakdown(
+                vehicle_breakdown = await owned_thread(build_vehicle_breakdown,
                     await vehicle_mileage_cur.fetchall(),
                     await vehicle_expenses_cur.fetchall(),
                     selected_year,

@@ -4,20 +4,21 @@ that `EmailMessage` itself comes from.
 
 stdlib `smtplib` + `email.message.EmailMessage` rather than a new
 dependency: native-async SMTP buys nothing at a few emails per
-month, so the blocking session runs via `asyncio.to_thread` instead, keeping
-the event loop free for everything else the app is doing. The blocking
+month, so the blocking session runs through an owned thread, keeping
+its admission until the transport finishes and leaving the event loop free. The blocking
 transport is an injectable callable (`Mailer.transport`) so unit tests can
 capture a composed message or force a failure with no real network I/O and
 no sleeps; the default (`smtp_transport` below) is the real thing.
 """
 from __future__ import annotations
 
-import asyncio
 import smtplib
 import ssl
 from dataclasses import dataclass, field
 from email.message import EmailMessage
 from typing import Callable
+
+from app.capacity import owned_thread
 
 SMTP_TIMEOUT_S = 15.0
 
@@ -100,18 +101,4 @@ class Mailer:
         return message
 
     async def send(self, message: EmailMessage) -> None:
-        task = asyncio.create_task(asyncio.to_thread(self.transport, self, message))
-        cancelled = False
-        while not task.done():
-            try:
-                await asyncio.shield(task)
-            except asyncio.CancelledError:
-                # The SMTP thread cannot be cancelled. Retain admission until it exits.
-                cancelled = True
-            except Exception:
-                break
-        if cancelled:
-            if not task.cancelled():
-                task.exception()
-            raise asyncio.CancelledError
-        task.result()
+        await owned_thread(self.transport, self, message)

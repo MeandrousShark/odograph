@@ -70,7 +70,7 @@ def test_link_authorization_uses_server_pending_state_bound_to_current_account(m
     attempts = []
 
     @asynccontextmanager
-    async def connection(_pool):
+    async def connection(_pool, *, lane="identity"):
         yield object()
 
     async def start(_conn, **kwargs):
@@ -116,7 +116,7 @@ def test_link_restart_reuses_browser_binding_and_replaces_cookie_attempt(monkeyp
     attempts = []
 
     @asynccontextmanager
-    async def connection(_pool):
+    async def connection(_pool, *, lane="identity"):
         yield object()
 
     async def start(_conn, **kwargs):
@@ -147,7 +147,7 @@ def test_cancelled_protected_redirect_consumes_attempt_after_caller_leaves(monke
     entered, release, consumed = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
     @asynccontextmanager
-    async def connection(_pool):
+    async def connection(_pool, *, lane="identity"):
         yield object()
 
     async def start(_conn, **_kwargs):
@@ -192,7 +192,7 @@ def test_rejected_link_start_does_not_replace_existing_cookie_attempt(monkeypatc
     request.session[OIDC_PROTECTED_ATTEMPT_KEY] = {"state": "link.current"}
 
     @asynccontextmanager
-    async def connection(_pool):
+    async def connection(_pool, *, lane="identity"):
         yield object()
 
     async def reject(_conn, **_kwargs):
@@ -236,7 +236,7 @@ def test_unsafe_authorization_destination_fails_closed_and_consumes_attempt(
     consumed = []
 
     @asynccontextmanager
-    async def connection(_pool):
+    async def connection(_pool, *, lane="identity"):
         yield object()
 
     async def start(_conn, **kwargs):
@@ -291,7 +291,7 @@ def test_link_provider_departure_failure_consumes_bound_pending_attempt(monkeypa
     consumed = []
 
     @asynccontextmanager
-    async def connection(_pool):
+    async def connection(_pool, *, lane="identity"):
         yield object()
 
     async def start(_conn, **_kwargs):
@@ -324,7 +324,7 @@ def test_protected_invitation_keeps_bearer_out_of_session_and_provider(monkeypat
     attempts = []
 
     @asynccontextmanager
-    async def connection(_pool):
+    async def connection(_pool, *, lane="identity"):
         yield object()
 
     async def start(_conn, **kwargs):
@@ -363,7 +363,7 @@ def test_fresh_action_requests_max_age_and_reuses_browser_binding(monkeypatch):
     attempts = []
 
     @asynccontextmanager
-    async def connection(_pool):
+    async def connection(_pool, *, lane="identity"):
         yield object()
 
     async def start(_conn, **kwargs):

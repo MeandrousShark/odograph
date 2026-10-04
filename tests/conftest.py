@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -71,6 +72,39 @@ _seed_snapshot = SeedSnapshot()
 # current set has grown past this baseline, so the leak fails loudly in the
 # test that caused it rather than as an unrelated failure elsewhere.
 _schema_object_baseline: set[str] = set()
+
+
+@pytest.fixture(autouse=True)
+def _explicit_domain_capacity(monkeypatch, request):
+    """Give legacy domain fixtures explicit owners without a serving bypass.
+
+    Capacity contract tests use real admission setup and retain strict rejection
+    of ownerless work. Other tests invoke hashing/rendering directly, outside
+    HTTP dispatch; their blocking work gets a test-owned authentication slot.
+    """
+    from fastapi import FastAPI
+    from app.capacity import AdmissionManager, current_owner, owned_thread
+
+    if request.node.get_closest_marker("capacity_contract"):
+        return
+
+    original_init = FastAPI.__init__
+
+    def fixture_app_init(app, *args, **kwargs):
+        original_init(app, *args, **kwargs)
+        app.state.capacity = AdmissionManager()
+
+    monkeypatch.setattr(FastAPI, "__init__", fixture_app_init)
+
+    async def fixture_thread(function, *args, **kwargs):
+        if current_owner() is not None:
+            return await owned_thread(function, *args, **kwargs)
+        async with AdmissionManager().operation("auth_interactive"):
+            return await owned_thread(function, *args, **kwargs)
+
+    for name, module in tuple(sys.modules.items()):
+        if name.startswith("app.") and name != "app.capacity" and getattr(module, "owned_thread", None) is owned_thread:
+            monkeypatch.setattr(module, "owned_thread", fixture_thread)
 
 
 def _database_name(pool) -> str | None:

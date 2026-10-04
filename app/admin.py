@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import logging
+from html import escape
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from psycopg.rows import dict_row
-from starlette.responses import Response
+from starlette.responses import HTMLResponse, Response
 
 from app.account_context import control_connection
 from app.account_lifecycle import (
@@ -23,6 +24,8 @@ from app.auth import (
     check_form_csrf, require_admin, _verified_account, _AccountActionRejected, _AuthSaturated,
 )
 from app.config import security_link_base
+from app.capacity_routes import AdmissionRoute, capacity_policy, release_authentication
+from app.capacity import CapacityBusy
 from app.invitations import (
     InvitationUnavailable,
     invitation_mail_admission,
@@ -125,11 +128,32 @@ async def _render_accounts(
     notice: str = "",
     invite_result: dict | None = None,
     status_code: int = 200,
+    committed: bool = False,
 ) -> Response:
     actor = _actor(user, request)
-    accounts, invitations, audit_events, multiuser_available = await _load_page_data(
-        request, actor,
-    )
+    try:
+        accounts, invitations, audit_events, multiuser_available = await _load_page_data(
+            request, actor,
+        )
+    except CapacityBusy:
+        if not committed:
+            raise
+        # The mutation/queue outcome is already final. A busy metadata refresh
+        # must preserve it, including an invitation token shown only once.
+        parts = [f'<p role="status">{escape(notice)}</p>']
+        if invite_result is not None:
+            parts.extend((
+                f'<p>{escape(invite_result["email"])}</p>',
+                f'<p>Invitation token: <code>{escape(invite_result["token"])}</code></p>',
+                f'<p>{escape(invite_result["email_status"])}</p>',
+            ))
+            if invite_result["link"]:
+                link = escape(invite_result["link"], quote=True)
+                parts.append(f'<p>Invitation link: <a href="{link}">{link}</a></p>')
+        parts.append('<p>Account details are temporarily busy. <a href="/admin/accounts">Reload account details</a>.</p>')
+        return HTMLResponse("".join(parts), status_code=status_code, headers={
+            "Referrer-Policy": "no-referrer", "Cache-Control": "no-store, private",
+        })
     response = request.app.state.templates.TemplateResponse(
         request,
         "admin_accounts.html",
@@ -183,11 +207,12 @@ async def _send_invitation_email(
     admission = request.app.state.security_mail
     @asynccontextmanager
     async def admit():
-        async with control_connection(request.app.state.control_pool) as conn:
+        async with control_connection(request.app.state.control_pool, lane="mail") as conn:
             async with invitation_mail_admission(conn, actor, invitation_id) as target_email:
                 yield bool(target_email and target_email == email)
 
     try:
+        await release_authentication(request)
         admitted = await admission.send(
             mailer, message, wait=False, admit=admit,
             lease=lambda: external_account_work(request.app.state.control_pool, actor["id"]),
@@ -226,7 +251,7 @@ async def _checked_invitation_result(
     }
     return await _render_accounts(
         request, user, notice="Invitation issued. The token is shown once below.",
-        invite_result=invite_result,
+        invite_result=invite_result, committed=True,
     )
 
 
@@ -253,7 +278,7 @@ async def _set_account_enabled_route(
             status_code=409,
         )
     try:
-        async with control_connection(request.app.state.control_pool) as conn:
+        async with control_connection(request.app.state.control_pool, lane="lifecycle") as conn:
             outcome = await set_account_enabled(conn, actor, account_id, enable=enable)
     except AccountLifecycleUnavailable:
         return await _render_accounts(
@@ -267,7 +292,7 @@ async def _set_account_enabled_route(
         "already_disabled": "Account was already disabled. Access is unchanged.",
         "already_enabled": "Account was already enabled. Access is unchanged.",
     }[outcome]
-    return await _render_accounts(request, user, notice=notice)
+    return await _render_accounts(request, user, notice=notice, committed=True)
 
 
 async def _deletion_route(request: Request, user: dict, account_id: int, action: str) -> Response:
@@ -304,7 +329,7 @@ async def _deletion_route(request: Request, user: dict, account_id: int, action:
         else:
             proof_nonce = request.session.get("oidc_action_proof_nonce")
     try:
-        async with control_connection(request.app.state.control_pool) as conn:
+        async with control_connection(request.app.state.control_pool, lane="lifecycle") as conn:
             if action == "request":
                 await request_account_deletion(conn, actor, account_id, email=form["target_email"], acknowledge=True)
             elif action == "cancel":
@@ -321,41 +346,47 @@ async def _deletion_route(request: Request, user: dict, account_id: int, action:
         "cancel": "Deletion cancelled. New sign-in is available; revoked sessions and tracking credentials stay revoked.",
         "purge": "Account permanently removed from the live database. Historical backups may still retain its data.",
     }
-    return await _render_accounts(request, user, notice=notices[action])
+    return await _render_accounts(request, user, notice=notices[action], committed=True)
 
 
 def make_router() -> APIRouter:
-    router = APIRouter()
+    router = APIRouter(route_class=AdmissionRoute)
 
     @router.get("/admin/accounts")
     async def admin_accounts(request: Request, user: dict = Depends(require_admin)):
         return await _render_accounts(request, user)
 
     @router.post("/admin/accounts/{account_id}/disable")
+    @capacity_policy("auth_interactive")
     async def disable_account_route(
         request: Request, account_id: int, user: dict = Depends(require_admin),
     ):
         return await _set_account_enabled_route(request, user, account_id, enable=False)
 
     @router.post("/admin/accounts/{account_id}/enable")
+    @capacity_policy("auth_interactive")
     async def enable_account_route(
         request: Request, account_id: int, user: dict = Depends(require_admin),
     ):
         return await _set_account_enabled_route(request, user, account_id, enable=True)
 
     @router.post("/admin/accounts/{account_id}/deletion")
+    @capacity_policy("auth_interactive")
     async def request_deletion_route(request: Request, account_id: int, user: dict = Depends(require_admin)):
         return await _deletion_route(request, user, account_id, "request")
 
     @router.post("/admin/accounts/{account_id}/deletion/cancel")
+    @capacity_policy("auth_interactive")
     async def cancel_deletion_route(request: Request, account_id: int, user: dict = Depends(require_admin)):
         return await _deletion_route(request, user, account_id, "cancel")
 
     @router.post("/admin/accounts/{account_id}/purge")
+    @capacity_policy("auth_interactive")
     async def purge_account_route(request: Request, account_id: int, user: dict = Depends(require_admin)):
         return await _deletion_route(request, user, account_id, "purge")
 
     @router.post("/admin/invitations")
+    @capacity_policy("auth_interactive")
     async def issue_member_invitation_route(
         request: Request, user: dict = Depends(require_admin),
     ):
@@ -380,7 +411,7 @@ def make_router() -> APIRouter:
                 status_code=409,
             )
         try:
-            async with control_connection(request.app.state.control_pool) as conn:
+            async with control_connection(request.app.state.control_pool, lane="lifecycle") as conn:
                 invitation_id, token = await issue_invitation_record(conn, actor, email)
         except InvitationUnavailable:
             return await _render_accounts(
@@ -394,6 +425,7 @@ def make_router() -> APIRouter:
         )
 
     @router.post("/admin/invitations/{invitation_id}/revoke")
+    @capacity_policy("auth_interactive")
     async def revoke_member_invitation_route(
         request: Request, invitation_id: int, user: dict = Depends(require_admin),
     ):
@@ -403,15 +435,16 @@ def make_router() -> APIRouter:
             raise HTTPException(status_code=404)
         actor = _actor(user, request)
         try:
-            async with control_connection(request.app.state.control_pool) as conn:
+            async with control_connection(request.app.state.control_pool, lane="lifecycle") as conn:
                 await revoke_invitation(conn, actor, invitation_id)
         except InvitationUnavailable:
             return await _render_accounts(
                 request, user, notice="The invitation could not be revoked.", status_code=400,
             )
-        return await _render_accounts(request, user, notice="Invitation revoked if it was still open.")
+        return await _render_accounts(request, user, notice="Invitation revoked if it was still open.", committed=True)
 
     @router.post("/admin/invitations/{invitation_id}/resend")
+    @capacity_policy("auth_interactive")
     async def resend_member_invitation_route(
         request: Request, invitation_id: int, user: dict = Depends(require_admin),
     ):
@@ -431,7 +464,7 @@ def make_router() -> APIRouter:
                 status_code=409,
             )
         try:
-            async with control_connection(request.app.state.control_pool) as conn:
+            async with control_connection(request.app.state.control_pool, lane="lifecycle") as conn:
                 new_id, email, token = await resend_invitation_record(
                     conn, actor, invitation_id,
                 )
@@ -447,6 +480,7 @@ def make_router() -> APIRouter:
         )
 
     @router.post("/admin/accounts/{account_id}/recovery")
+    @capacity_policy("auth_interactive")
     async def admin_account_recovery_route(
         request: Request, account_id: int, user: dict = Depends(require_admin),
     ):
@@ -480,6 +514,6 @@ def make_router() -> APIRouter:
             if accepted else
             "Recovery was not queued. Try again later."
         )
-        return await _render_accounts(request, user, notice=notice)
+        return await _render_accounts(request, user, notice=notice, committed=True)
 
     return router
