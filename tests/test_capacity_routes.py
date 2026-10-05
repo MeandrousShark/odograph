@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, FastAPI, Form, Request
 from starlette.requests import ClientDisconnect
 from starlette.responses import Response
 
-from app.account_context import AccountPrincipal
+from app.account_context import AccountPrincipal, control_connection
 from app.auth import require_user
 from app.capacity import AdmissionManager, current_owner, owned_thread
 from app.capacity_routes import (
@@ -652,19 +652,28 @@ def test_avatar_cancelled_disk_spool_write_retains_owner_and_lease(monkeypatch):
 
 
 def test_repeated_ingest_cancellation_retains_auth_owner_until_verifier_finishes(monkeypatch):
+    import threading
     from app.ingest import make_router
     async def run():
         app = FastAPI()
-        manager = app.state.capacity = _manager(capacity_auth_ingest_slots=1)
+        manager = app.state.capacity = _manager(
+            capacity_auth_ingest_slots=1, capacity_auth_ingest_pending=0,
+        )
         app.state.config = SimpleNamespace(ingest_username='', ingest_password='')
         app.state.control_pool = object()
         limiter = app.state.ingest_limiter = FailedAuthLimiter(10, 900)
-        entered, finish = asyncio.Event(), asyncio.Event()
+        loop = asyncio.get_running_loop()
+        entered = asyncio.Event()
+        finish_thread = threading.Event()
         calls = []
+
+        def verify_thread():
+            loop.call_soon_threadsafe(entered.set)
+            assert finish_thread.wait(5), 'test did not release actual verification work'
+
         async def verify(*args, **kwargs):
             calls.append(True)
-            entered.set()
-            await finish.wait()
+            await owned_thread(verify_thread)
             return None
         monkeypatch.setattr('app.ingest.authenticate_ingest', verify)
         app.include_router(make_router())
@@ -684,10 +693,316 @@ def test_repeated_ingest_cancellation_retains_auth_owner_until_verifier_finishes
                 assert refused.headers['retry-after'] == '1'
                 assert calls == [True]
             finally:
-                finish.set()
+                finish_thread.set()
             with pytest.raises(asyncio.CancelledError):
                 await caller
         assert not limiter._auth_tasks
         assert not any(manager._active.values())
         assert sum(len(q) for q in limiter._failures.values()) == 1
+    asyncio.run(run())
+
+
+def test_ingest_auth_queue_holds_two_active_and_eight_fifo_waiters(monkeypatch):
+    from app.ingest import make_router
+
+    async def run():
+        app = FastAPI()
+        manager = app.state.capacity = _manager()
+        app.state.config = SimpleNamespace(ingest_username='', ingest_password='', ingest_max_body_bytes=1000)
+        app.state.control_pool = object()
+        app.state.ingest_limiter = FailedAuthLimiter(20, 60)
+        entered = {str(index): asyncio.Event() for index in range(11)}
+        release = {name: asyncio.Event() for name in entered}
+        calls = []
+
+        async def verify(_pool, username, _password, **kwargs):
+            calls.append(username)
+            entered[username].set()
+            await release[username].wait()
+            return SimpleNamespace(account=AccountPrincipal(int(username) + 1, True, 1))
+
+        monkeypatch.setattr('app.ingest.authenticate_ingest', verify)
+        app.include_router(make_router())
+        body_reads = []
+
+        async def body():
+            body_reads.append(True)
+            yield b'{}'
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            requests = []
+            try:
+                for name in ('0', '1'):
+                    requests.append(asyncio.create_task(client.post('/ingest', content=b'', auth=(name, 'secret'))))
+                    await asyncio.wait_for(entered[name].wait(), 2)
+                assert manager.snapshot()['auth_ingest'] == {'active': 2, 'pending': 0}
+
+                for index in range(2, 10):
+                    name = str(index)
+                    requests.append(asyncio.create_task(client.post('/ingest', content=b'', auth=(name, 'secret'))))
+                    async def pending_count(expected):
+                        while manager.snapshot()['auth_ingest']['pending'] != expected:
+                            await asyncio.sleep(0)
+                    await asyncio.wait_for(pending_count(index - 1), 2)
+
+                async def eleventh_body():
+                    body_reads.append(True)
+                    yield b'private'
+
+                refused = await client.post('/ingest', content=eleventh_body(), auth=('10', 'secret'))
+                assert refused.status_code == 503 and refused.headers['retry-after'] == '1'
+                assert manager.snapshot()['auth_ingest'] == {'active': 2, 'pending': 8}
+                assert calls == ['0', '1'] and body_reads == []
+
+                release['0'].set()
+                assert (await asyncio.wait_for(requests[0], 2)).status_code == 200
+                await asyncio.wait_for(entered['2'].wait(), 2)
+                assert calls == ['0', '1', '2']
+                assert manager.snapshot()['auth_ingest'] == {'active': 2, 'pending': 7}
+            finally:
+                for event in release.values():
+                    event.set()
+                await asyncio.gather(*requests, return_exceptions=True)
+
+        assert manager.snapshot()['auth_ingest'] == {'active': 0, 'pending': 0}
+        assert not any(manager.snapshot()[lane]['active'] or manager.snapshot()[lane]['pending'] for lane in manager.lanes)
+    asyncio.run(run())
+
+
+def test_ingest_identity_lookup_has_one_active_and_one_waiter(monkeypatch):
+    from app.ingest import make_router
+
+    class Cursor:
+        async def fetchone(self):
+            return (None,)
+
+    class Connection:
+        async def execute(self, *_args):
+            return Cursor()
+
+    class Pool:
+        active = 0
+
+        @asynccontextmanager
+        async def connection(self):
+            self.active += 1
+            try:
+                yield Connection()
+            finally:
+                self.active -= 1
+
+    async def run():
+        app = FastAPI()
+        manager = app.state.capacity = _manager()
+        app.state.config = SimpleNamespace(ingest_username='', ingest_password='', ingest_max_body_bytes=1000)
+        pool = Pool()
+        app.state.control_pool = manager.manage_pool(pool, 'control')
+        app.state.ingest_limiter = FailedAuthLimiter(20, 60)
+        entered = {name: asyncio.Event() for name in ('first', 'second')}
+        release = {name: asyncio.Event() for name in entered}
+
+        async def verify(control_pool, username, _password, **kwargs):
+            async with control_connection(control_pool, lane='ingest_identity'):
+                entered[username].set()
+                await release[username].wait()
+            return SimpleNamespace(account=AccountPrincipal(1 if username == 'first' else 2, True, 1))
+
+        monkeypatch.setattr('app.ingest.authenticate_ingest', verify)
+        app.include_router(make_router())
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            first = asyncio.create_task(client.post('/ingest', content=b'', auth=('first', 'secret')))
+            second = None
+            try:
+                await asyncio.wait_for(entered['first'].wait(), 2)
+                second = asyncio.create_task(client.post('/ingest', content=b'', auth=('second', 'secret')))
+                async def identity_waiter_ready():
+                    while manager.snapshot()['ingest_identity']['pending'] != 1:
+                        await asyncio.sleep(0)
+                await asyncio.wait_for(identity_waiter_ready(), 2)
+                assert manager.snapshot()['auth_ingest'] == {'active': 2, 'pending': 0}
+                assert manager.snapshot()['ingest_identity'] == {'active': 1, 'pending': 1}
+                assert pool.active == 1
+
+                release['first'].set()
+                assert (await asyncio.wait_for(first, 2)).status_code == 200
+                await asyncio.wait_for(entered['second'].wait(), 2)
+                assert manager.snapshot()['ingest_identity'] == {'active': 1, 'pending': 0}
+                assert pool.active == 1
+                release['second'].set()
+                assert (await asyncio.wait_for(second, 2)).status_code == 200
+            finally:
+                for event in release.values():
+                    event.set()
+                await asyncio.gather(*(task for task in (first, second) if task is not None), return_exceptions=True)
+        assert pool.active == 0
+        assert not any(manager.snapshot()[lane]['active'] or manager.snapshot()[lane]['pending'] for lane in manager.lanes)
+    asyncio.run(run())
+
+
+def test_ingest_auth_rechecks_failure_limiter_after_wait(monkeypatch):
+    from app.ingest import make_router
+
+    async def run():
+        app = FastAPI()
+        manager = app.state.capacity = _manager(capacity_auth_ingest_slots=1, capacity_auth_ingest_pending=1)
+        app.state.config = SimpleNamespace(ingest_username='', ingest_password='', ingest_max_body_bytes=1000)
+        app.state.control_pool = object()
+        app.state.ingest_limiter = FailedAuthLimiter(1, 60)
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = []
+
+        async def verify(_pool, username, _password, **kwargs):
+            calls.append(username)
+            entered.set()
+            await release.wait()
+            return None
+
+        monkeypatch.setattr('app.ingest.authenticate_ingest', verify)
+        app.include_router(make_router())
+        body_reads = []
+
+        async def body():
+            body_reads.append(True)
+            yield b'private'
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            first = asyncio.create_task(client.post('/ingest', content=b'', auth=('bad', 'secret')))
+            waiter = None
+            try:
+                await asyncio.wait_for(entered.wait(), 2)
+                waiter = asyncio.create_task(client.post('/ingest', content=body(), auth=('queued', 'secret')))
+                async def waiter_ready():
+                    while manager.snapshot()['auth_ingest']['pending'] != 1:
+                        await asyncio.sleep(0)
+                await asyncio.wait_for(waiter_ready(), 2)
+                release.set()
+                assert (await asyncio.wait_for(first, 2)).status_code == 401
+                response = await asyncio.wait_for(waiter, 2)
+                assert response.status_code == 503 and response.headers['retry-after'] == '60'
+                assert calls == ['bad'] and body_reads == []
+                assert sum(len(failures) for failures in app.state.ingest_limiter._failures.values()) == 1
+            finally:
+                release.set()
+                await asyncio.gather(*(task for task in (first, waiter) if task is not None), return_exceptions=True)
+        assert not any(manager.snapshot()[lane]['active'] or manager.snapshot()[lane]['pending'] for lane in manager.lanes)
+    asyncio.run(run())
+
+
+def test_oversized_and_malformed_basic_headers_are_rejected_before_body(monkeypatch):
+    from app.ingest import make_router
+
+    async def run():
+        app = FastAPI()
+        manager = app.state.capacity = _manager()
+        app.state.config = SimpleNamespace(ingest_username='', ingest_password='', ingest_max_body_bytes=1000)
+        app.state.control_pool = object()
+        app.state.ingest_limiter = FailedAuthLimiter(10, 60)
+        app.include_router(make_router())
+        occupied = asyncio.Event()
+        release = asyncio.Event()
+        entered = 0
+
+        async def hold():
+            nonlocal entered
+            async with manager.operation('auth_ingest'):
+                entered += 1
+                if entered == 2:
+                    occupied.set()
+                await release.wait()
+
+        holders = [asyncio.create_task(hold()) for _ in range(2)]
+        await asyncio.wait_for(occupied.wait(), 2)
+        received, sent = [], []
+
+        async def receive():
+            received.append(True)
+            return {'type': 'http.request', 'body': b'private', 'more_body': False}
+
+        async def send(message):
+            sent.append(message)
+
+        try:
+            oversized = b'Basic ' + b'\xff' * 8192
+            await app(_scope('/ingest', headers=[(b'authorization', oversized)]), receive, send)
+            assert sent[0]['status'] == 401
+            assert received == []
+            assert manager.snapshot()['auth_ingest'] == {'active': 2, 'pending': 0}
+            assert sum(len(failures) for failures in app.state.ingest_limiter._failures.values()) == 1
+        finally:
+            release.set()
+            await asyncio.gather(*holders)
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            malformed = await client.post('/ingest', headers={'authorization': 'Basic !!!'}, content=b'private')
+        assert malformed.status_code == 401
+        assert sum(len(failures) for failures in app.state.ingest_limiter._failures.values()) == 2
+        sent.clear()
+        await app(_scope('/ingest', headers=[(b'authorization', b'Basic \xff')]), receive, send)
+        assert sent[0]['status'] == 401
+        assert received == []
+        assert sum(len(failures) for failures in app.state.ingest_limiter._failures.values()) == 3
+        assert not any(manager.snapshot()[lane]['active'] or manager.snapshot()[lane]['pending'] for lane in manager.lanes)
+    asyncio.run(run())
+
+
+def test_ingest_auth_wait_expiry_cancellation_and_shutdown_drain(monkeypatch):
+    from app.ingest import make_router
+
+    async def run():
+        app = FastAPI()
+        manager = app.state.capacity = _manager(
+            capacity_auth_ingest_slots=1, capacity_auth_ingest_pending=1,
+            capacity_auth_ingest_wait_s=.03,
+        )
+        app.state.config = SimpleNamespace(ingest_username='', ingest_password='', ingest_max_body_bytes=1000)
+        app.state.control_pool = object()
+        app.state.ingest_limiter = FailedAuthLimiter(20, 60)
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = []
+
+        async def verify(_pool, username, _password, **kwargs):
+            calls.append(username)
+            entered.set()
+            await release.wait()
+            return SimpleNamespace(account=AccountPrincipal(1, True, 1))
+
+        monkeypatch.setattr('app.ingest.authenticate_ingest', verify)
+        app.include_router(make_router())
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            first = asyncio.create_task(client.post('/ingest', content=b'', auth=('active', 'secret')))
+            cancelled = expired = shutting_down = shutdown = None
+            try:
+                await asyncio.wait_for(entered.wait(), 2)
+
+                cancelled = asyncio.create_task(client.post('/ingest', content=b'', auth=('cancelled', 'secret')))
+                async def pending_one():
+                    while manager.snapshot()['auth_ingest']['pending'] != 1:
+                        await asyncio.sleep(0)
+                await asyncio.wait_for(pending_one(), 2)
+                cancelled.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await cancelled
+                assert manager.snapshot()['auth_ingest'] == {'active': 1, 'pending': 0}
+
+                expired = asyncio.create_task(client.post('/ingest', content=b'', auth=('expired', 'secret')))
+                await asyncio.wait_for(pending_one(), 2)
+                response = await asyncio.wait_for(expired, 2)
+                assert response.status_code == 503 and response.headers['retry-after'] == '1'
+                assert calls == ['active']
+
+                shutting_down = asyncio.create_task(client.post('/ingest', content=b'', auth=('shutdown', 'secret')))
+                await asyncio.wait_for(pending_one(), 2)
+                shutdown = asyncio.create_task(manager.shutdown())
+                response = await asyncio.wait_for(shutting_down, 2)
+                assert response.status_code == 503 and not shutdown.done()
+                assert manager.snapshot()['auth_ingest'] == {'active': 1, 'pending': 0}
+                release.set()
+                assert (await asyncio.wait_for(first, 2)).status_code == 503
+                await asyncio.wait_for(shutdown, 2)
+            finally:
+                release.set()
+                await asyncio.gather(*(task for task in (first, cancelled, expired, shutting_down, shutdown)
+                                       if task is not None), return_exceptions=True)
+        assert calls == ['active']
+        assert not any(manager.snapshot()[lane]['active'] or manager.snapshot()[lane]['pending'] for lane in manager.lanes)
     asyncio.run(run())

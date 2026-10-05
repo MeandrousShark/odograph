@@ -90,15 +90,19 @@ def validate_capacity_config(config):
     if sum(caps[name] for name in ("ingest_identity", "identity", "lifecycle", "mail")) > 6:
         raise ValueError("control capacity reservations exceed six connections")
     if any(caps[name] > maximum for name, maximum in (
-        ("foreground", 1), ("background", 1), ("mail", 2),
+        ("foreground", 1), ("background", 1), ("ingest_identity", 1), ("mail", 2),
         ("auth_ingest", 2), ("auth_interactive", 1))):
         raise ValueError("capacity exceeds the reviewed operation or authentication bound")
-    for name in ("ingest", "routine", "foreground", "identity"):
-        pending = _value(config, name + "_pending", 4)
-        if type(pending) is not int or not 0 <= pending <= 4:
-            raise ValueError("capacity pending limits must be integers from zero to four")
+    for name, default, maximum in (
+            ("ingest", 4, 4), ("routine", 4, 4), ("foreground", 4, 4),
+            ("identity", 4, 4), ("auth_ingest", 8, 8),
+            ("ingest_identity", 1, 1)):
+        pending = _value(config, name + "_pending", default)
+        if type(pending) is not int or not 0 <= pending <= maximum:
+            raise ValueError(f"capacity {name} pending limit must be an integer from zero to {maximum}")
     for name, default in (("ingest_wait_s", .25), ("routine_wait_s", 1.),
             ("foreground_wait_s", 2.), ("identity_wait_s", 1.),
+            ("auth_ingest_wait_s", 1.), ("ingest_identity_wait_s", .25),
             ("auth_body_timeout_s", 15.), ("ingest_body_timeout_s", 15.),
             ("import_body_timeout_s", 60.), ("response_timeout_s", 60.), ("routine_sql_timeout_s", 5.),
             ("operation_sql_timeout_s", 15.), ("lock_timeout_s", 1.)):
@@ -108,6 +112,9 @@ def validate_capacity_config(config):
         if name.endswith("sql_timeout_s") or name == "lock_timeout_s":
             if value > 2147483.647:
                 raise ValueError("capacity SQL deadlines exceed the supported database timeout")
+        maximum = {"auth_ingest_wait_s": 1., "ingest_identity_wait_s": .25}.get(name)
+        if maximum is not None and value > maximum:
+            raise ValueError("capacity authentication waits exceed the reviewed limit")
     for name, default, maximum in (("auth_form_max_bytes", 65536, 65536),
             ("basic_header_max_bytes", 8192, 8192),
             ("multipart_overhead_bytes", 65536, 65536),
@@ -125,9 +132,9 @@ class AdmissionManager:
         for name, limit, pending, wait in (
                 ("ingest", 2, 4, .25), ("routine", 2, 4, 1.),
                 ("foreground", 1, 4, 2.), ("background", 1, 0, 0),
-                ("ingest_identity", 1, 0, 0), ("identity", 2, 4, 1.),
+                ("ingest_identity", 1, 1, .25), ("identity", 2, 4, 1.),
                 ("lifecycle", 1, 0, 0), ("mail", 2, 0, 0),
-                ("auth_ingest", 2, 0, 0), ("auth_interactive", 1, 0, 0)):
+                ("auth_ingest", 2, 8, 1.), ("auth_interactive", 1, 0, 0)):
             self.lanes[name] = Lane(_value(config, name + "_slots", limit),
                 _value(config, name + "_pending", pending) if pending else 0,
                 _value(config, name + "_wait_s", wait) if wait else 0)

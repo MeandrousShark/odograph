@@ -222,9 +222,13 @@ class AdmissionRoute(APIRoute):
 
         try:
             if lane == 'ingest':
-                from app.ingest import authenticate_request
+                from app.ingest import authenticate_request, preflight_authentication_request
+                preflight_response = preflight_authentication_request(request)
+                if preflight_response is not None:
+                    await preflight_response(scope, receive, send)
+                    return
                 async with manager.operation('auth_ingest'):
-                    credential = await authenticate_request(request)
+                    credential = await authenticate_request(request, preflight=False)
                 if isinstance(credential, Response):
                     return await credential(scope, receive, send)
                 scope.setdefault('state', {})['_capacity_ingest_credential'] = credential

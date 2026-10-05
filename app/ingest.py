@@ -170,12 +170,25 @@ def client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _basic_credentials(request: Request) -> tuple[str, str] | None:
-    header = request.headers.get("authorization", "")
+def _authorization_header_bytes(request: Request) -> bytes:
+    for name, value in request.scope.get("headers", ()):
+        if name.lower() == b"authorization":
+            return value
+    return b""
+
+
+def _basic_header_oversized(request: Request) -> bool:
     from app.capacity_routes import capacity_setting
-    if len(header.encode("utf-8")) > capacity_setting(request.app.state.capacity, "capacity_basic_header_max_bytes"):
+    return len(_authorization_header_bytes(request)) > capacity_setting(
+        request.app.state.capacity, "capacity_basic_header_max_bytes",
+    )
+
+
+def _basic_credentials(request: Request) -> tuple[str, str] | None:
+    if _basic_header_oversized(request):
         return None
-    if not header.startswith("Basic "):
+    header = _authorization_header_bytes(request)
+    if not header.startswith(b"Basic "):
         return None
     try:
         decoded = base64.b64decode(header[6:], validate=True).decode("utf-8")
@@ -188,6 +201,30 @@ def _basic_credentials(request: Request) -> tuple[str, str] | None:
 def _ok() -> Response:
     # OwnTracks expects a JSON array of messages for the device; always empty.
     return JSONResponse(content=[])
+
+
+def _blocked_auth_response(limiter: FailedAuthLimiter) -> Response:
+    return Response(
+        status_code=503, headers={"Retry-After": str(max(1, math.ceil(limiter.window_s)))},
+    )
+
+
+def _bad_auth_response() -> Response:
+    return Response(
+        status_code=401, headers={"WWW-Authenticate": 'Basic realm="ingest"'},
+    )
+
+
+def preflight_authentication_request(request: Request) -> Response | None:
+    """Reject blocked and oversized requests without taking a queue ticket."""
+    limiter: FailedAuthLimiter = request.app.state.ingest_limiter
+    ip = client_ip(request)
+    if limiter.blocked(ip):
+        return _blocked_auth_response(limiter)
+    if _basic_header_oversized(request):
+        limiter.record_failure(ip)
+        return _bad_auth_response()
+    return None
 
 
 async def _read_capped_body(request: Request, max_bytes: int) -> bytes | None:
@@ -217,15 +254,16 @@ async def _read_capped_body(request: Request, max_bytes: int) -> bytes | None:
     return bytes(body)
 
 
-async def authenticate_request(request: Request):
+async def authenticate_request(request: Request, *, preflight: bool = True):
     limiter: FailedAuthLimiter = request.app.state.ingest_limiter
     ip = client_ip(request)
     if limiter.blocked(ip):
-        # OwnTracks iOS drops queued messages on every 4xx, including 429.
-        # A shared IP's temporary failure window must preserve valid fixes.
-        return Response(
-            status_code=503, headers={"Retry-After": str(max(1, math.ceil(limiter.window_s)))},
-        )
+        # This check also runs after an auth ticket wait, because another
+        # request from the same IP may have exhausted the failure window.
+        return _blocked_auth_response(limiter)
+    if preflight and _basic_header_oversized(request):
+        limiter.record_failure(ip)
+        return _bad_auth_response()
     cfg = request.app.state.config
     basic = _basic_credentials(request)
     credential = None
@@ -242,9 +280,7 @@ async def authenticate_request(request: Request):
     if credential is None:
         if basic is None:
             limiter.record_failure(ip)
-        return Response(
-            status_code=401, headers={"WWW-Authenticate": 'Basic realm="ingest"'}
-        )
+        return _bad_auth_response()
 
     return credential
 

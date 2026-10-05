@@ -391,6 +391,10 @@ async def test_managed_account_helper_sets_deadlines_and_rolls_back_before_retur
 @pytest.mark.parametrize("env,value", [
     ("CAPACITY_FOREGROUND_SLOTS", "2"), ("CAPACITY_ROUTINE_PENDING", "5"),
     ("CAPACITY_AUTH_BODY_TIMEOUT_S", "nan"), ("CAPACITY_INGEST_SLOTS", "3"),
+    ("CAPACITY_AUTH_INGEST_PENDING", "9"), ("CAPACITY_INGEST_IDENTITY_PENDING", "2"),
+    ("CAPACITY_AUTH_INGEST_WAIT_S", "1.01"),
+    ("CAPACITY_INGEST_IDENTITY_WAIT_S", "0.251"),
+    ("CAPACITY_INGEST_IDENTITY_SLOTS", "2"),
 ])
 def test_config_environment_rejects_unreviewed_bounds(monkeypatch, env, value):
     from app.config import Config
@@ -399,6 +403,28 @@ def test_config_environment_rejects_unreviewed_bounds(monkeypatch, env, value):
     monkeypatch.setenv(env, value)
     with pytest.raises(ValueError):
         Config.from_env()
+
+
+def test_config_exposes_reviewed_ingest_authentication_wait_bounds(monkeypatch):
+    from app.config import Config
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/example")
+    monkeypatch.setenv("SESSION_SECRET", "test-session")
+    monkeypatch.setenv("CAPACITY_AUTH_INGEST_PENDING", "7")
+    monkeypatch.setenv("CAPACITY_AUTH_INGEST_WAIT_S", "0.8")
+    monkeypatch.setenv("CAPACITY_INGEST_IDENTITY_PENDING", "1")
+    monkeypatch.setenv("CAPACITY_INGEST_IDENTITY_WAIT_S", "0.2")
+    cfg = Config.from_env()
+
+    assert cfg.capacity_auth_ingest_pending == 7
+    assert cfg.capacity_auth_ingest_wait_s == .8
+    assert cfg.capacity_ingest_identity_pending == 1
+    assert cfg.capacity_ingest_identity_wait_s == .2
+    manager = AdmissionManager(cfg)
+    assert manager.lanes["auth_ingest"].pending == 7
+    assert manager.lanes["auth_ingest"].wait == .8
+    assert manager.lanes["ingest_identity"].pending == 1
+    assert manager.lanes["ingest_identity"].wait == .2
 
 
 @pytest.mark.parametrize("workers", ["2", "0", "-1", "garbage"])

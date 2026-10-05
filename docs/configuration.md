@@ -153,10 +153,14 @@ FIFO order; repeated requests from an active or queued account receive busy.
 | `CAPACITY_MAIL_SLOTS` | `2` | Control connections reserved for admitted security-mail final checks. |
 | `CAPACITY_AUTH_INGEST_SLOTS` | `2` | Concurrent ingest authentication operations. |
 | `CAPACITY_AUTH_INTERACTIVE_SLOTS` | `1` | Concurrent interactive form parsing, password work or OIDC exchange. |
+| `CAPACITY_AUTH_INGEST_PENDING` | `8` | Maximum ingest authentication requests waiting for a verifier. |
 | `CAPACITY_INGEST_PENDING` | `4` | Maximum waiting authenticated intake tickets. |
 | `CAPACITY_ROUTINE_PENDING` | `4` | Maximum waiting ordinary runtime borrows. |
 | `CAPACITY_FOREGROUND_PENDING` | `4` | Maximum waiting expensive-operation tickets. |
 | `CAPACITY_IDENTITY_PENDING` | `4` | Maximum waiting ordinary control borrows. |
+| `CAPACITY_INGEST_IDENTITY_PENDING` | `1` | Maximum waiting ingest credential lookup. |
+| `CAPACITY_AUTH_INGEST_WAIT_S` | `1` | Maximum ingest authentication admission wait in seconds. |
+| `CAPACITY_INGEST_IDENTITY_WAIT_S` | `0.25` | Maximum ingest credential lookup wait in seconds. |
 | `CAPACITY_INGEST_WAIT_S` | `0.25` | Total intake admission wait in seconds. |
 | `CAPACITY_ROUTINE_WAIT_S` | `1` | Total ordinary runtime admission wait in seconds. |
 | `CAPACITY_FOREGROUND_WAIT_S` | `2` | Total expensive-operation admission wait in seconds. |
@@ -175,9 +179,15 @@ FIFO order; repeated requests from an active or queued account receive busy.
 | `CAPACITY_MULTIPART_MAX_FILES` | `1` | Maximum files in an owned multipart upload. |
 
 Slot counts must be positive and the runtime/control reservation sums cannot
-exceed six. Foreground/background maxima remain one, mail at most two, and
-authentication at most two ingest plus one interactive operation. Pending
-queues cannot exceed four; waits and deadlines must stay positive and finite.
+exceed six. Foreground/background and ingest-identity maxima remain one, mail
+at most two, and authentication at most two ingest plus one interactive
+operation. Pending queues cannot exceed four except ingest authentication
+(eight) and ingest identity lookup (one). Authentication waits cannot exceed
+one second for verification admission or 250 ms for identity lookup; waits and
+deadlines must stay positive and finite. Before a request takes an auth ticket,
+the server checks the failed-auth limiter and rejects an oversized Basic header
+without decoding it. Pending tickets contain no credential or account identity,
+and a waiting request rechecks the limiter before verification begins.
 Authentication forms, headers and multipart allowances cannot exceed the
 listed defaults. Invalid settings prevent startup. Connection reservations
 are independent; idle positions are not borrowed by another class.
