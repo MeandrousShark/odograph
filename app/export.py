@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import csv
 import io
+import os
+import sys
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -32,6 +34,46 @@ HEADERS = (
     "Gap", "Source", "Deduction ($)",
 )
 
+
+def _write_only_cell(ws, value, *, font=None, number_format=None):
+    from openpyxl.cell import WriteOnlyCell
+
+    cell = WriteOnlyCell(ws, value=value)
+    if font is not None:
+        cell.font = font
+    if number_format is not None:
+        cell.number_format = number_format
+    return cell
+
+
+def _cleanup_write_only_workbook(wb) -> None:
+    """Remove only this workbook's unfinished openpyxl worksheet writers."""
+    has_primary_error = sys.exc_info()[0] is not None
+    cleanup_error = None
+    for ws in wb.worksheets:
+        writer = getattr(ws, "_writer", None)
+        path = getattr(writer, "out", None)
+        if writer is None or not path or not os.path.exists(path):
+            continue
+        try:
+            if not ws.closed:
+                ws.close()
+        except Exception as error:
+            cleanup_error = cleanup_error or error
+        finally:
+            try:
+                writer.close()
+            except Exception as error:
+                cleanup_error = cleanup_error or error
+            try:
+                if os.path.exists(path):
+                    writer.cleanup()
+            except Exception as error:
+                cleanup_error = cleanup_error or error
+    if cleanup_error is not None and not has_primary_error:
+        raise cleanup_error
+
+
 def _trip_distance_and_deduction(t: dict, rates: dict[int, YearRate], tz: ZoneInfo):
     """The unrounded `(distance_m, deduction_or_None)` a trip contributes,
     shared by `build_export_rows` (which rounds each for per-row display)
@@ -52,6 +94,42 @@ def _trip_distance_and_deduction(t: dict, rates: dict[int, YearRate], tz: ZoneIn
     return distance_m, ded
 
 
+def _iter_export_rows(trips, rates: dict[int, YearRate], tz: ZoneInfo):
+    """Yield rows in `HEADERS` order without retaining the export in memory."""
+    for t in trips:
+        yield _export_row(t, rates, tz)
+
+
+def _export_row(t: dict, rates: dict[int, YearRate], tz: ZoneInfo) -> list:
+    local_start = t["started_at"].astimezone(tz)
+    local_end = t["ended_at"].astimezone(tz)
+    distance_m, ded = _trip_distance_and_deduction(t, rates, tz)
+    return [
+        local_start.strftime("%Y-%m-%d"),
+        local_start.strftime("%H:%M"),
+        local_end.strftime("%H:%M"),
+        format_duration(t["started_at"], t["ended_at"]),
+        describe_endpoint(
+            t.get("start_place_name"), t.get("start_lat"), t.get("start_lon"),
+            t.get("start_address"),
+        ),
+        describe_endpoint(
+            t.get("end_place_name"), t.get("end_lat"), t.get("end_lon"),
+            t.get("end_address"),
+        ),
+        round(distance_m / METERS_PER_MILE, 1),
+        round(distance_m / 1000.0, 1),
+        t["category"],
+        t.get("exclusion") or "",
+        t.get("vehicle_name") or "",
+        t.get("purpose") or "",
+        t.get("notes") or "",
+        "yes" if t.get("has_gap") else "",
+        t["source"],
+        round(ded, 2) if ded is not None else "",
+    ]
+
+
 def build_export_rows(trips: list[dict], rates: dict[int, YearRate], tz: ZoneInfo) -> list[list]:
     """One row per trip, in `HEADERS` order. `trips` rows are expected to
     carry the same keys `TRIP_COLUMNS` selects (including start/end place
@@ -59,36 +137,7 @@ def build_export_rows(trips: list[dict], rates: dict[int, YearRate], tz: ZoneInf
     raw `distance_m` as fallback -- so exports match what's shown on the
     trip list.
     """
-    rows = []
-    for t in trips:
-        local_start = t["started_at"].astimezone(tz)
-        local_end = t["ended_at"].astimezone(tz)
-        distance_m, ded = _trip_distance_and_deduction(t, rates, tz)
-        rows.append([
-            local_start.strftime("%Y-%m-%d"),
-            local_start.strftime("%H:%M"),
-            local_end.strftime("%H:%M"),
-            format_duration(t["started_at"], t["ended_at"]),
-            describe_endpoint(
-                t.get("start_place_name"), t.get("start_lat"), t.get("start_lon"),
-                t.get("start_address"),
-            ),
-            describe_endpoint(
-                t.get("end_place_name"), t.get("end_lat"), t.get("end_lon"),
-                t.get("end_address"),
-            ),
-            round(distance_m / METERS_PER_MILE, 1),
-            round(distance_m / 1000.0, 1),
-            t["category"],
-            t.get("exclusion") or "",
-            t.get("vehicle_name") or "",
-            t.get("purpose") or "",
-            t.get("notes") or "",
-            "yes" if t.get("has_gap") else "",
-            t["source"],
-            round(ded, 2) if ded is not None else "",
-        ])
-    return rows
+    return list(_iter_export_rows(trips, rates, tz))
 
 
 def to_csv(trips: list[dict], rates: dict[int, YearRate], tz: ZoneInfo) -> bytes:
@@ -102,14 +151,9 @@ def to_csv(trips: list[dict], rates: dict[int, YearRate], tz: ZoneInfo) -> bytes
 
 def _populate_trips_sheet(ws, trips: list[dict], rates: dict[int, YearRate], tz: ZoneInfo) -> None:
     from openpyxl.styles import Font
-    from openpyxl.utils import get_column_letter
 
-    rows = build_export_rows(trips, rates, tz)
-    ws.append(HEADERS)
-    for cell in ws[1]:
-        cell.font = Font(bold=True)
-    for row in rows:
-        ws.append(row)
+    header_font = Font(bold=True)
+    ws.append([_write_only_cell(ws, value, font=header_font) for value in HEADERS])
 
     # The total row is derived from each trip's unrounded distance/deduction
     # (via `_trip_distance_and_deduction`, the same helper `build_export_rows`
@@ -126,38 +170,46 @@ def _populate_trips_sheet(ws, trips: list[dict], rates: dict[int, YearRate], tz:
     total_m = 0.0
     total_ded = 0.0
     for t in trips:
+        row = _export_row(t, rates, tz)
         distance_m, ded = _trip_distance_and_deduction(t, rates, tz)
         if t.get("exclusion") != "not_my_vehicle":
             total_m += distance_m
         if ded is not None:
             total_ded += ded
+        deduction_value = row[-1]
+        if isinstance(deduction_value, (int, float)):
+            row[-1] = _write_only_cell(
+                ws, deduction_value, number_format='"$"#,##0.00'
+            )
+        ws.append(row)
     totals = [""] * len(HEADERS)
     totals[0] = "Total"
     totals[mi_col - 1] = round(total_m / METERS_PER_MILE, 1)
     totals[km_col - 1] = round(total_m / 1000.0, 1)
     totals[ded_col - 1] = round(total_ded, 2)
-    ws.append(totals)
-    for cell in ws[ws.max_row]:
-        cell.font = Font(bold=True)
-
-    ded_letter = get_column_letter(ded_col)
-    for row_idx in range(2, ws.max_row + 1):
-        cell = ws[f"{ded_letter}{row_idx}"]
-        if isinstance(cell.value, (int, float)):
-            cell.number_format = '"$"#,##0.00'
+    total_cells = []
+    for index, value in enumerate(totals):
+        total_cells.append(_write_only_cell(
+            ws, value, font=header_font,
+            number_format='"$"#,##0.00' if index == ded_col - 1 else None,
+        ))
+    ws.append(total_cells)
 
 
 def to_xlsx(trips: list[dict], rates: dict[int, YearRate], tz: ZoneInfo) -> bytes:
     from openpyxl import Workbook
 
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Trips"
-    _populate_trips_sheet(ws, trips, rates, tz)
+    wb = Workbook(write_only=True)
+    try:
+        ws = wb.create_sheet("Trips")
+        _populate_trips_sheet(ws, trips, rates, tz)
 
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+    finally:
+        _cleanup_write_only_workbook(wb)
+        wb.close()
 
 
 def _write_summary_sheet(
@@ -172,32 +224,39 @@ def _write_summary_sheet(
     """
     from openpyxl.styles import Font
 
-    ws.append([title or f"Annual Mileage Report: {report.year}"])
-    ws["A1"].font = Font(bold=True, size=14)
-    ws.append([])
-    ws.append(["Business miles", round(report.business_m / METERS_PER_MILE, 1)])
-    ws.append(["Personal miles", round(report.personal_m / METERS_PER_MILE, 1)])
+    for col, width in zip("ABCDEFGHIJK", (32, 18, 14, 16, 18, 19, 18, 20, 18, 28, 18)):
+        ws.column_dimensions[col].width = width
+
+    def append(values, *, bold=False, title_row=False):
+        if not values:
+            ws.append([])
+            return
+        font = Font(bold=True, size=14) if title_row else Font(bold=True) if bold else None
+        cells = [_write_only_cell(ws, value, font=font) for value in values]
+        ws.append(cells)
+
+    append([title or f"Annual Mileage Report: {report.year}"], bold=True, title_row=True)
+    append([])
+    append(["Business miles", round(report.business_m / METERS_PER_MILE, 1)])
+    append(["Personal miles", round(report.personal_m / METERS_PER_MILE, 1)])
     if report.nondeductible_m:
-        ws.append(["Non-deductible miles", round(report.nondeductible_m / METERS_PER_MILE, 1)])
-    ws.append(["Total miles", round(report.total_m / METERS_PER_MILE, 1)])
-    ws.append([
+        append(["Non-deductible miles", round(report.nondeductible_m / METERS_PER_MILE, 1)])
+    append(["Total miles", round(report.total_m / METERS_PER_MILE, 1)])
+    append([
         "Business share",
         f"{report.business_pct:.1f}%" if report.business_pct is not None else "--",
     ])
-    ws.append(["Rate(s) applied", format_rate_periods(report.rate_periods)])
-    ws.append([
+    append(["Rate(s) applied", format_rate_periods(report.rate_periods)])
+    append([
         "Total deduction",
         f"${report.total_deduction:,.2f}" if report.total_deduction is not None else "--",
     ])
-    ws.append(["Trip count", report.trip_count])
-    ws.append([])
+    append(["Trip count", report.trip_count])
+    append([])
 
-    ws.append(["Month", "Trips", "Business (mi)", "Rate ($/mi)", "Deduction ($)"])
-    header_row = ws.max_row
-    for cell in ws[header_row]:
-        cell.font = Font(bold=True)
+    append(["Month", "Trips", "Business (mi)", "Rate ($/mi)", "Deduction ($)"], bold=True)
     for month in report.months:
-        ws.append([
+        append([
             MONTH_ABBR[month.month],
             month.trip_count,
             round(month.business_m / METERS_PER_MILE, 1),
@@ -206,27 +265,23 @@ def _write_summary_sheet(
         ])
 
     if report.caveats.any:
-        ws.append([])
-        ws.append(["Caveats: review before filing"])
-        ws[f"A{ws.max_row}"].font = Font(bold=True)
+        append([])
+        append(["Caveats: review before filing"], bold=True)
         for line in caveat_lines(report.caveats, report.year):
-            ws.append([line])
+            append([line])
 
     # Appended after the caveats block (rather than, say, right after the
     # month table) so the summary sheet's fixed row positions (title/headline
     # rows, month-table header/rows) stay put regardless of how many vehicles
     # a year has.
     if report.by_vehicle:
-        ws.append([])
-        ws.append([
+        append([])
+        append([
             "By vehicle", "Business (mi)", "Non-deductible (mi)", "Total (mi)",
             "Deduction ($)",
-        ])
-        header_row = ws.max_row
-        for cell in ws[header_row]:
-            cell.font = Font(bold=True)
+        ], bold=True)
         for v in report.by_vehicle:
-            ws.append([
+            append([
                 v.vehicle_name,
                 round(v.business_m / METERS_PER_MILE, 1),
                 round(v.nondeductible_m / METERS_PER_MILE, 1),
@@ -238,23 +293,19 @@ def _write_summary_sheet(
     # one text line per vehicle via `coverage_line` (not a data table) so
     # this can't drift in wording from the HTML report's own use of it.
     if odometer_coverage:
-        ws.append([])
-        ws.append(["Odometer reconciliation"])
-        ws[f"A{ws.max_row}"].font = Font(bold=True)
+        append([])
+        append(["Odometer reconciliation"], bold=True)
         for line in odometer_coverage:
-            ws.append([coverage_line(line)])
+            append([coverage_line(line)])
 
     if expense_report and expense_report.comparisons:
-        ws.append([])
-        ws.append(["Standard vs. actual expense estimate"])
-        ws[f"A{ws.max_row}"].font = Font(bold=True)
-        ws.append([
+        append([])
+        append(["Standard vs. actual expense estimate"], bold=True)
+        append([
             "Vehicle", "Business (mi)", "Total (mi)", "Business use", "Total-mile source",
             "Shared expenses ($)", "Fully business ($)", "Standard estimate ($)",
             "Actual estimate ($)", "Larger estimate", "Status",
-        ])
-        for cell in ws[ws.max_row]:
-            cell.font = Font(bold=True)
+        ], bold=True)
         for line in expense_report.comparisons:
             if line.larger_estimate == "tie":
                 larger = "Tie"
@@ -264,7 +315,7 @@ def _write_summary_sheet(
                     larger += " (provisional)"
             else:
                 larger = "--"
-            ws.append([
+            append([
                 line.vehicle_name,
                 round(line.business_m / METERS_PER_MILE, 1),
                 round(line.denominator_m / METERS_PER_MILE, 1),
@@ -277,43 +328,40 @@ def _write_summary_sheet(
                 larger,
                 comparison_status(line),
             ])
-        ws.append([])
-        ws.append(["Actual-expense caveats: review before filing"])
-        ws[f"A{ws.max_row}"].font = Font(bold=True)
+        append([])
+        append(["Actual-expense caveats: review before filing"], bold=True)
         for line in comparison_caveat_lines(expense_report.comparisons):
-            ws.append([line])
-        ws.append(["IRS guidance: Publication 463 and Publication 946."])
-
-    for col, width in zip("ABCDEFGHIJK", (32, 18, 14, 16, 18, 19, 18, 20, 18, 28, 18)):
-        ws.column_dimensions[col].width = width
+            append([line])
+        append(["IRS guidance: Publication 463 and Publication 946."])
 
 
 def _populate_expenses_sheet(ws, expenses: list[dict]) -> None:
     from openpyxl.styles import Font
 
     headers = ("Date", "Vehicle", "Category", "Amount ($)", "Tax treatment", "Notes")
-    ws.append(headers)
-    for cell in ws[1]:
-        cell.font = Font(bold=True)
+    for col, width in zip("ABCDEF", (14, 22, 24, 14, 24, 36)):
+        ws.column_dimensions[col].width = width
+    header_font = Font(bold=True)
+    ws.append([_write_only_cell(ws, value, font=header_font) for value in headers])
     total = Decimal("0")
     for expense in expenses:
         amount = Decimal(str(expense["amount"]))
         total += amount
-        ws.append([
-            expense["incurred_on"],
-            expense["vehicle_name"],
-            CATEGORY_LABELS[expense["category"]],
-            float(amount),
-            TREATMENT_LABELS[expense["treatment"]],
-            expense.get("notes") or "",
-        ])
-        ws.cell(ws.max_row, 4).number_format = '"$"#,##0.00'
-    ws.append(["Total", "", "", float(total.quantize(Decimal("0.01"))), "", ""])
-    for cell in ws[ws.max_row]:
-        cell.font = Font(bold=True)
-    ws.cell(ws.max_row, 4).number_format = '"$"#,##0.00'
-    for col, width in zip("ABCDEF", (14, 22, 24, 14, 24, 36)):
-        ws.column_dimensions[col].width = width
+        row = [
+            expense["incurred_on"], expense["vehicle_name"],
+            CATEGORY_LABELS[expense["category"]], float(amount),
+            TREATMENT_LABELS[expense["treatment"]], expense.get("notes") or "",
+        ]
+        row[3] = _write_only_cell(ws, row[3], number_format='"$"#,##0.00')
+        ws.append(row)
+    total_row = ["Total", "", "", float(total.quantize(Decimal("0.01"))), "", ""]
+    total_cells = []
+    for index, value in enumerate(total_row):
+        total_cells.append(_write_only_cell(
+            ws, value, font=Font(bold=True),
+            number_format='"$"#,##0.00' if index == 3 else None,
+        ))
+    ws.append(total_cells)
 
 
 def to_report_xlsx(
@@ -332,21 +380,24 @@ def to_report_xlsx(
     """
     from openpyxl import Workbook
 
-    wb = Workbook()
-    summary_ws = wb.active
-    summary_ws.title = "Summary"
-    _write_summary_sheet(summary_ws, report, odometer_coverage, expense_report)
+    wb = Workbook(write_only=True)
+    try:
+        summary_ws = wb.create_sheet("Summary")
+        _write_summary_sheet(summary_ws, report, odometer_coverage, expense_report)
 
-    trips_ws = wb.create_sheet("Trips")
-    _populate_trips_sheet(trips_ws, trips, rates, tz)
+        trips_ws = wb.create_sheet("Trips")
+        _populate_trips_sheet(trips_ws, trips, rates, tz)
 
-    if expense_report is not None:
-        expenses_ws = wb.create_sheet("Expenses")
-        _populate_expenses_sheet(expenses_ws, expenses or [])
+        if expense_report is not None:
+            expenses_ws = wb.create_sheet("Expenses")
+            _populate_expenses_sheet(expenses_ws, expenses or [])
 
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+    finally:
+        _cleanup_write_only_workbook(wb)
+        wb.close()
 
 
 def to_range_report_xlsx(
@@ -366,19 +417,22 @@ def to_range_report_xlsx(
     """
     from openpyxl import Workbook
 
-    wb = Workbook()
-    summary_ws = wb.active
-    summary_ws.title = "Summary"
-    _write_summary_sheet(
-        summary_ws, report, title=f"Mileage Report: {range_label(report.start, report.end)}"
-    )
+    wb = Workbook(write_only=True)
+    try:
+        summary_ws = wb.create_sheet("Summary")
+        _write_summary_sheet(
+            summary_ws, report, title=f"Mileage Report: {range_label(report.start, report.end)}"
+        )
 
-    trips_ws = wb.create_sheet("Trips")
-    in_range_trips = [
-        t for t in trips if report.start <= t["started_at"].astimezone(tz).date() <= report.end
-    ]
-    _populate_trips_sheet(trips_ws, in_range_trips, rates, tz)
+        trips_ws = wb.create_sheet("Trips")
+        in_range_trips = (
+            t for t in trips if report.start <= t["started_at"].astimezone(tz).date() <= report.end
+        )
+        _populate_trips_sheet(trips_ws, in_range_trips, rates, tz)
 
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+    finally:
+        _cleanup_write_only_workbook(wb)
+        wb.close()
