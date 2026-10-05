@@ -292,6 +292,13 @@ class Config:
             os.environ.get("GEOCODE_PROVIDER", ""), geocode_api_key
         )
 
+        try:
+            osrm_max_coords = int(os.environ.get("OSRM_MAX_COORDS", 250))
+        except ValueError:
+            raise RuntimeError("OSRM_MAX_COORDS must be an integer from 2 through 10000") from None
+        if not 2 <= osrm_max_coords <= 10_000:
+            raise RuntimeError("OSRM_MAX_COORDS must be an integer from 2 through 10000")
+
         return cls(
             capacity_ingest_slots=int(os.environ.get("CAPACITY_INGEST_SLOTS", 2)),
             capacity_routine_slots=int(os.environ.get("CAPACITY_ROUTINE_SLOTS", 1)),
@@ -364,7 +371,7 @@ class Config:
             ingest_max_body_bytes=int(os.environ.get("INGEST_MAX_BODY_BYTES", 65536)),
             osrm_url=os.environ.get("OSRM_URL", "").rstrip("/"),
             osrm_min_confidence=_f("OSRM_MIN_CONFIDENCE", 0.5),
-            osrm_max_coords=int(os.environ.get("OSRM_MAX_COORDS", 250)),
+            osrm_max_coords=osrm_max_coords,
             snap_debounce_s=_f("SNAP_DEBOUNCE_S", 15.0),
             snap_sweep_s=_f("SNAP_SWEEP_S", 300.0),
             geocode_api_key=geocode_api_key,

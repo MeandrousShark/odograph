@@ -993,3 +993,69 @@ def test_resolve_and_autotag_apply_loop_sql_guard_blocks_stale_rule_result():
     to (unrealistically) hand back a 'rule' result for an already
     human-tagged trip -- the guard must still refuse the UPDATE."""
     asyncio.run(_run_apply_loop_sql_guard_scenario())
+
+
+def test_atomic_detector_turn_advances_device_cursor_and_stops_at_overlap_round_end():
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                devices = [await seed_tracking_device(conn, label) for label in ["first", "second"]]
+                for device in devices:
+                    await conn.execute(
+                        "INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom) "
+                        "VALUES(%s,%s,'phone',now(),ST_SetSRID(ST_MakePoint(10,20),4326)::geography)",
+                        (account_id(conn), device))
+            worker = DetectorRunner(pool, Params())
+            first = await worker.run_turn()
+            assert first.ready and first.cursor == devices[0]
+            async with pool.connection() as conn:
+                assert await (await conn.execute(
+                    "SELECT tracking_device_id,last_run_at IS NOT NULL FROM detector_state ORDER BY tracking_device_id"
+                )).fetchall() == [(devices[0], True), (devices[1], False)]
+            second = await worker.run_turn(first.cursor)
+            assert second.ready and second.cursor == devices[1]
+            idle = await worker.run_turn(second.cursor)
+            assert not idle.ready and idle.cursor is None
+            assert idle.batch.attempted == 0
+            # A restart recovers eligibility from checkpoints rather than losing work.
+            restarted = await DetectorRunner(pool, Params()).run_turn()
+            assert restarted.cursor == devices[0]
+        finally:
+            await raw.close()
+    asyncio.run(scenario())
+
+
+def test_atomic_detector_failure_advances_to_the_later_device_without_checkpointing_failure():
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                devices = [await seed_tracking_device(conn, label) for label in ["first", "second"]]
+                for device in devices:
+                    await conn.execute(
+                        "INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom) "
+                        "VALUES(%s,%s,'phone',now(),ST_SetSRID(ST_MakePoint(10,20),4326)::geography)",
+                        (account_id(conn), device))
+            class Runner(DetectorRunner):
+                async def _run(self, conn, device):
+                    if device == devices[0]:
+                        raise RuntimeError("synthetic device failure")
+                    return await super()._run(conn, device)
+            worker = Runner(pool, Params())
+            first = await worker.run_turn()
+            assert first.ready and first.cursor == devices[0]
+            assert first.batch.retriable_failures == 1
+            second = await worker.run_turn(first.cursor)
+            assert second.cursor == devices[1] and second.batch.completed == 1
+            async with pool.connection() as conn:
+                assert await (await conn.execute(
+                    "SELECT tracking_device_id,last_run_at IS NOT NULL FROM detector_state ORDER BY tracking_device_id"
+                )).fetchall() == [(devices[0], False), (devices[1], True)]
+        finally:
+            await raw.close()
+    asyncio.run(scenario())

@@ -13,6 +13,9 @@ from __future__ import annotations
 from app.account_context import account_id
 from app.account_jobs import lock_device_generation
 from app.worker import BatchOutcome
+from app.provider_http import bounded_json, GEOCODE_RESPONSE_MAX_BYTES
+from app.provider_pacing import ProviderPacer
+from app.capacity import current_owner, owned_thread
 
 import asyncio
 import logging
@@ -24,6 +27,19 @@ from psycopg_pool import AsyncConnectionPool
 log = logging.getLogger(__name__)
 
 GEOCODE_PRECISION = 4  # keep in sync with migration 006's numeric(8,4)
+
+
+def _parse_provider_response(parser, body, omit_country):
+    try:
+        return parser(body, omit_country)
+    except (AttributeError, KeyError, TypeError) as exc:
+        raise ValueError("malformed geocode response") from exc
+
+
+async def _parse_response(parser, body, omit_country):
+    if current_owner() is not None:
+        return await owned_thread(_parse_provider_response, parser, body, omit_country)
+    return _parse_provider_response(parser, body, omit_country)
 
 
 def round_coord(lat: float, lon: float) -> tuple[float, float]:
@@ -125,22 +141,31 @@ class GeoapifyProvider:
         a bad API key from getting silently cached as "no address found"
         for every coordinate it touches.
         """
-        resp = await client.get(
+        body = await bounded_json(client, "GET",
             GEOAPIFY_REVERSE_URL,
+            max_bytes=GEOCODE_RESPONSE_MAX_BYTES,
             params={"lat": lat, "lon": lon, "apiKey": self.api_key, "format": "geojson"},
         )
-        resp.raise_for_status()
-        return parse_geoapify_reverse_response(resp.json(), self.omit_country)
+        if not isinstance(body, dict) or not isinstance(body.get("features"), list):
+            raise ValueError("malformed geocode response")
+        if body["features"]:
+            feature = body["features"][0]
+            props = feature.get("properties") if isinstance(feature, dict) else None
+            if not isinstance(props, dict) or not isinstance(props.get("formatted"), str) or not props["formatted"]:
+                raise ValueError("malformed geocode address")
+        return await _parse_response(parse_geoapify_reverse_response, body, self.omit_country)
 
     async def autocomplete(
         self, client: httpx.AsyncClient, query: str, limit: int = 5
     ) -> list[dict]:
-        resp = await client.get(
+        body = await bounded_json(client, "GET",
             GEOAPIFY_AUTOCOMPLETE_URL,
+            max_bytes=GEOCODE_RESPONSE_MAX_BYTES,
             params={"text": query, "apiKey": self.api_key, "format": "geojson", "limit": limit},
         )
-        resp.raise_for_status()
-        return parse_geoapify_autocomplete_response(resp.json(), self.omit_country)
+        if not isinstance(body, dict) or not isinstance(body.get("features"), list):
+            raise ValueError("malformed geocode response")
+        return await _parse_response(parse_geoapify_autocomplete_response, body, self.omit_country)
 
 
 # ---- Nominatim ----
@@ -213,24 +238,28 @@ class NominatimProvider:
         `error` key (handled in `parse_nominatim_reverse_response`), not as
         a status this method could catch here.
         """
-        resp = await client.get(
+        body = await bounded_json(client, "GET",
             f"{self.base_url}/reverse",
+            max_bytes=GEOCODE_RESPONSE_MAX_BYTES,
             params={"lat": lat, "lon": lon, "format": "jsonv2"},
             headers=self._headers,
         )
-        resp.raise_for_status()
-        return parse_nominatim_reverse_response(resp.json(), self.omit_country)
+        if not isinstance(body, dict) or not ("error" in body or body.get("display_name")):
+            raise ValueError("malformed geocode response")
+        return await _parse_response(parse_nominatim_reverse_response, body, self.omit_country)
 
     async def autocomplete(
         self, client: httpx.AsyncClient, query: str, limit: int = 5
     ) -> list[dict]:
-        resp = await client.get(
+        body = await bounded_json(client, "GET",
             f"{self.base_url}/search",
+            max_bytes=GEOCODE_RESPONSE_MAX_BYTES,
             params={"q": query, "format": "jsonv2", "limit": limit},
             headers=self._headers,
         )
-        resp.raise_for_status()
-        return parse_nominatim_autocomplete_response(resp.json(), self.omit_country)
+        if not isinstance(body, list):
+            raise ValueError("malformed geocode response")
+        return await _parse_response(parse_nominatim_autocomplete_response, body, self.omit_country)
 
 
 # ---- provider resolution ----
@@ -294,20 +323,11 @@ class GeocodeWorker:
     column, so there's no terminal-failure enum to manage -- a cache row's
     existence (even with a NULL address) *is* the "don't retry" signal.
 
-    `run_once()` is the only method `AccountWorker` (app/account_workers.py)
-    calls -- it builds a fresh `GeocodeWorker` per account per sweep and
-    never uses this class's own loop/poke/debounce, since `AccountWorker`'s
-    own `PokeSweepWorker` (app/worker.py) already supplies that for the
-    whole per-account sweep.
-
-    Processes its batch **one coordinate at a time with a fixed delay**
-    (`min_interval_s`) rather than `SnapWorker`'s all-at-once loop, since a
-    provider's own rate limits are enforced server-side and this local
-    pacing exists as a courtesy default (avoiding a large backfill burning
-    a whole quota window in one sweep) rather than the only thing standing
-    between the app and a policy violation. Each result (hit or miss) is
-    written to `geocode_cache` immediately, so a crash mid-batch loses no
-    progress.
+    `AccountWorker` calls `run_turn()` once per coordinate, after waiting
+    for the shared provider pacer outside background ownership. Each result
+    (hit or genuine miss) commits independently. Transient errors defer the
+    account; discovery still lacks durable retry ordering, so an early
+    failure can starve its later coordinates until durable retries exist.
     """
 
     def __init__(
@@ -317,14 +337,17 @@ class GeocodeWorker:
         provider: GeocodeProvider,
         min_interval_s: float,
         batch_size: int = 20,
+        *, pacer: ProviderPacer | None = None, retry_s: float = 300.0,
     ):
         self.pool = pool
         self.http = http_client
         self.provider = provider
         self.min_interval_s = min_interval_s
         self.batch_size = batch_size
+        self.pacer = pacer
+        self.retry_s = retry_s
 
-    async def run_once(self) -> BatchOutcome:
+    async def _coordinates(self, limit):
         async with self.pool.connection() as conn:
             cur = await conn.execute(
                 f"""
@@ -348,9 +371,31 @@ class GeocodeWorker:
                 SELECT lat, lon FROM geocode_cache WHERE account_id = %s
                 LIMIT %s
                 """,
-                (account_id(conn), account_id(conn), self.batch_size),
+                (account_id(conn), account_id(conn), limit),
             )
             coords = [(float(r[0]), float(r[1])) for r in await cur.fetchall()]
+        return coords
+
+    async def run_turn(self, cursor=None):
+        from app.worker import TurnOutcome
+
+        # Durable retry ordering is separate work. An early failed
+        # coordinate can still starve later coordinates in this account.
+        coords = await self._coordinates(1)
+        if not coords:
+            return TurnOutcome()
+        lat, lon = coords[0]
+        outcome = await self._geocode_one(lat, lon, ticket=cursor)
+        if outcome is None:
+            return TurnOutcome(deferred_until=self.pacer.next_start)
+        if outcome.retriable_failures:
+            return TurnOutcome(batch=outcome,
+                deferred_until=asyncio.get_running_loop().time() + self.retry_s)
+        return TurnOutcome(batch=outcome, ready=True)
+
+    async def run_once(self) -> BatchOutcome:
+        """Compatibility batch entry point; production uses one run_turn."""
+        coords = await self._coordinates(self.batch_size)
         if not coords:
             return BatchOutcome()
         outcome = BatchOutcome()
@@ -378,11 +423,14 @@ class GeocodeWorker:
         )
         return await cur.fetchall()
 
-    async def _geocode_one(self, lat: float, lon: float) -> BatchOutcome:
+    async def _geocode_one(self, lat: float, lon: float, *, ticket=None) -> BatchOutcome | None:
         async with self.pool.connection() as conn:
             sources = await self._sources(conn, lat, lon)
         if not sources:
             return BatchOutcome()
+        if self.pacer is not None:
+            if ticket is None or not self.pacer.try_start(ticket):
+                return None
         try:
             address = await self.provider.reverse(self.http, lat, lon)
         except (httpx.HTTPError, ValueError) as e:

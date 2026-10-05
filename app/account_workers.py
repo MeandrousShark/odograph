@@ -10,7 +10,7 @@ from app.account_context import AccountPool, AccountPrincipal, control_connectio
 from app.account_work import external_account_work
 from app.capacity import AdmissionManager, CapacityBusy
 from app.account_settings import config_for_account, load_account_settings
-from app.worker import BatchOutcome, PokeSweepWorker, RUN_SKIPPED
+from app.worker import BatchOutcome, PokeSweepWorker, RUN_SKIPPED, TurnOutcome
 
 log = logging.getLogger(__name__)
 _PARTIAL_FAILURE = object()
@@ -78,16 +78,14 @@ class BackgroundScheduler:
 
 
 class AccountWorker(PokeSweepWorker):
-    """Each account gets an independent job and immutable configuration.
+    """Rotate atomic account units with fresh immutable configuration.
 
-    A failed account does not roll back another account's completed work.
-    poke() (inherited from PokeSweepWorker) takes no target: every sweep
-    already revalidates every enabled principal, so there is nothing to
-    narrow a wakeup to.
+    One account failure leaves other committed units intact. Enabled accounts
+    are enumerated at round boundaries, with no task per account or backlog row.
     """
 
     def __init__(self, pools, config, factory, *, label, debounce_s, sweep_s, after_run=None,
-                 capacity=None, scheduler=None):
+                 capacity=None, scheduler=None, before_turn=None):
         super().__init__(task_name=label, log=log,
             failure_message=f"{label}: account enumeration failed",
             debounce_s=debounce_s, sweep_s=sweep_s)
@@ -101,8 +99,100 @@ class AccountWorker(PokeSweepWorker):
         self.after_run = after_run
         self.last_outcome = BatchOutcome()
         self._produced_work = False
+        self.before_turn = before_turn
+        self._round: deque[AccountPrincipal] = deque()
+        self._last_round_started: int | None = None
+        self._continuations: dict[int, TurnOutcome] = {}
+
+    def wake_cycle(self):
+        for owner, continuation in self._continuations.items():
+            if continuation.deferred_until is None:
+                self._continuations[owner] = TurnOutcome(ready=True, cursor=continuation.cursor)
+
+    def _schedule_continuation(self):
+        now = asyncio.get_running_loop().time()
+        deadlines = [now if outcome.ready else outcome.deferred_until
+                     for outcome in self._continuations.values()
+                     if outcome.ready or outcome.deferred_until is not None]
+        self._continuation_at = min(deadlines) if deadlines else None
+
+    async def run_turn(self):
+        """Rotate accounts after one atomic unit, reconstructing each round live."""
+        self.last_outcome = BatchOutcome()
+        self._produced_work = False
+        now = asyncio.get_running_loop().time()
+        if not self._round:
+            principals = await enabled_principals(self.pools.control)
+            enabled = {p.account_id for p in principals}
+            self._continuations = {owner: outcome for owner, outcome in self._continuations.items()
+                                   if owner in enabled}
+            if self._last_round_started is not None:
+                principals = ([p for p in principals if p.account_id > self._last_round_started]
+                              + [p for p in principals if p.account_id <= self._last_round_started])
+            for principal in principals:
+                state = self._continuations.setdefault(principal.account_id, TurnOutcome(ready=True))
+                if state.ready or (state.deferred_until is not None and state.deferred_until <= now):
+                    self._round.append(principal)
+            if self._round:
+                self._last_round_started = self._round[0].account_id
+        if not self._round:
+            self._schedule_continuation()
+            return TurnOutcome(deferred_until=self._continuation_at)
+        principal = self._round.popleft()
+        owner = principal.account_id
+        previous = self._continuations[owner]
+        result = TurnOutcome()
+        cursor = previous.cursor
+        admitted = False
+        try:
+            if self.before_turn is not None:
+                cursor = await self.before_turn(principal, cursor)
+            async with self.scheduler.turn(self._task_name, principal):
+                admitted = True
+                self._last_account_started = owner
+                async with external_account_work(self.pools.control, owner):
+                    pool = AccountPool(self.pools.runtime, principal)
+                    async with pool.connection() as conn:
+                        settings = await load_account_settings(conn)
+                    config = config_for_account(self.config, settings)
+                    worker = self.factory(pool, config)
+                    if worker is not None:
+                        try:
+                            if hasattr(worker, "run_turn"):
+                                result = await worker.run_turn(cursor)
+                            else:
+                                legacy = await worker.run_once()
+                                result = TurnOutcome(batch=legacy if isinstance(legacy, BatchOutcome)
+                                                     else BatchOutcome(), skipped=_did_not_run(legacy))
+                        finally:
+                            self._produced_work = bool(getattr(worker, "produced_work", False))
+                        status = getattr(worker, "status", None)
+                        if status is not None and status.last_failure_at is not None:
+                            self.status.last_failure_at = status.last_failure_at
+                            self.status.last_failure_type = status.last_failure_type
+            self.last_outcome = result.batch
+            if result.batch.retriable_failures:
+                self.status.record_failure_type(result.batch.failure_type or "RetriableFailure")
+        except CapacityBusy as exc:
+            if admitted:
+                self.status.record_failure(exc)
+            result = TurnOutcome(cursor=previous.cursor, skipped=not admitted)
+        except Exception as exc:
+            log.warning("%s: account job failed (%s)", self._task_name, type(exc).__name__)
+            self.status.record_failure(exc)
+            result = TurnOutcome(cursor=previous.cursor)
+        finally:
+            if self.before_turn is not None and hasattr(cursor, "close"):
+                cursor.close()
+        self._continuations[owner] = result
+        self._schedule_continuation()
+        # Unvisited accounts in this round remain ready even if this account went idle.
+        if self._round:
+            self._continuation_at = asyncio.get_running_loop().time()
+        return result
 
     async def run_once(self):
+        """Legacy explicit sweep; the serving loop uses run_turn instead."""
         ran = False
         failed = False
         self.last_outcome = BatchOutcome()
@@ -165,9 +255,10 @@ class AccountWorker(PokeSweepWorker):
 
     async def _run_guarded(self):
         self.status.record_run()
+        last_failure = self.status.last_failure_at
         try:
-            result = await self.run_once()
-            if result is RUN_SKIPPED:
+            result = await self.run_turn()
+            if result.skipped:
                 self.status.record_skip()
                 return
             await self.after_run_once(result)
@@ -175,7 +266,7 @@ class AccountWorker(PokeSweepWorker):
             self.status.record_failure(exc)
             log.warning("%s: sweep failed (%s)", self._task_name, type(exc).__name__)
         else:
-            if result is not _PARTIAL_FAILURE:
+            if self.status.last_failure_at == last_failure:
                 self.status.record_success()
 
     async def after_run_once(self, result):

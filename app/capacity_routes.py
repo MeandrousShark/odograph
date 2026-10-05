@@ -20,6 +20,9 @@ NAVIGATION_ROUTES = frozenset({
     ('GET', '/'), ('POST', '/trips/{trip_id}/tag'),
 })
 FOREGROUND_ROUTES = frozenset({
+    ('GET', '/places/search'),
+    ('GET', '/trips/manual'), ('POST', '/trips/manual'),
+    ('POST', '/trips/manual/route-preview'),
     ('GET', '/stats'), ('GET', '/expenses'),
     ('GET', '/trips/selection'), ('GET', '/trips/month/{year}/{month}'),
     ('GET', '/trips/{trip_id}'), ('GET', '/trips/{trip_id}/points'),
@@ -277,6 +280,9 @@ class AdmissionRoute(APIRoute):
                             file_cap = cfg.account_avatar_max_bytes if avatar_upload else cfg.portable_import_max_bytes
                             await invoke(file_cap + capacity_setting(manager, "capacity_multipart_overhead_bytes"),
                                          capacity_setting(manager, "capacity_import_body_timeout_s"))
+                        elif self.path in ('/trips/manual', '/trips/manual/route-preview') and scope['method'] == 'POST':
+                            await invoke(capacity_setting(manager, "capacity_auth_form_max_bytes"),
+                                         capacity_setting(manager, "capacity_auth_body_timeout_s"))
                         else:
                             await invoke(body_timeout=capacity_setting(manager, "capacity_import_body_timeout_s")
                                          if self.has_form else None)

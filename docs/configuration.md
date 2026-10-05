@@ -219,8 +219,13 @@ control and five lease connections total at most 16 serving connections.
 Migration/maintenance connections and PostgreSQL administrative
 headroom are separate. These limits bound concurrency and waits, not physical
 memory or total detector job duration. Large ledgers can still need substantial
-memory, and a slow background job can delay other jobs. Multi-account activation
-remains separately controlled.
+memory. Background types rotate after each completed device, snap trip, geocode
+coordinate, email kind or retention batch (at most 1,000 expired raw rows).
+Accounts rotate between those units, and ready backlogs continue without
+waiting for a periodic sweep. A whole detector device, complete report or SMTP
+transport can still take a long time; this is not a universal job deadline.
+Geocode failures can still delay later coordinates in the same account.
+Multi-account activation remains separately controlled.
 
 OIDC is optional. Set all three required provider values together and register
 `https://your-domain/auth/callback`. Existing password accounts can link the
@@ -293,7 +298,7 @@ or account-related data to a hosted provider.
 | `OSRM_URL` | unset | OSRM base URL. Enables both GPS-trace road snapping and routed manual trip entry. In the optional Compose profile use `http://osrm:5000`. |
 | `OSRM_DATASET` | unset | Basename of the prepared dataset served by the Compose `osrm` profile. It is checked only when that profile starts. |
 | `OSRM_MIN_CONFIDENCE` | `0.5` | Minimum OSRM match confidence accepted for a snapped route. |
-| `OSRM_MAX_COORDS` | `250` | Maximum coordinates sent in one OSRM match request. |
+| `OSRM_MAX_COORDS` | `250` | Maximum coordinates materialized and sent in one OSRM match request; integer from 2 through 10,000. |
 
 Prepare a regional dataset before setting these values. See
 [Self-hosted OSRM road-snapping](osrm.md).
@@ -306,7 +311,22 @@ Prepare a regional dataset before setting these values. See
 | `GEOCODE_API_KEY` | unset | Geoapify API key. |
 | `GEOCODE_NOMINATIM_URL` | unset | Base URL of an operator-controlled Nominatim instance. The public OpenStreetMap Nominatim service is not a supported bulk backend. |
 | `GEOCODE_OMIT_COUNTRY` | `United States of America` | Exact trailing country label removed from returned addresses. Set an empty value to retain it. |
-| `GEOCODE_MIN_INTERVAL_S` | `1.0` | Minimum interval between provider requests. |
+| `GEOCODE_MIN_INTERVAL_S` | `1.0` | Minimum interval between request starts, shared by background reverse lookups, address autocomplete and diagnostic checks. |
+
+Address search and reverse lookups share one FIFO provider pacer. Waiting
+reverse lookups release background ownership before pacing, and provider
+failures still consume their interval. Address search may therefore wait
+behind an earlier lookup. This interval is operator configuration, not a
+claim about a hosted provider's usage policy.
+
+Provider HTTP operations have a 15-second total network deadline through
+response completion, in addition to shorter socket timeouts. Decompressed
+responses are limited to 8 MiB for OSRM, 256 KiB for geocoding/autocomplete
+and 64 KiB for notification responses. Oversize/timeout failures retain
+retryable work and graceful routing/address fallback; responses are never
+clipped, failed sends are not marked delivered and transient geocode failures
+are not cached as permanent missing addresses. SMTP keeps its existing
+15-second socket timeout, which does not bound the whole transport.
 
 ### ntfy
 

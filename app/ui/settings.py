@@ -234,7 +234,8 @@ def register(router: APIRouter) -> None:
             docstring for why a background prober was rejected.
             """
             cfg = request.state.config
-            connectivity = await run_connectivity_checks(cfg, serving=True)
+            connectivity = await run_connectivity_checks(cfg, serving=True,
+                geocode_pacer=request.app.state.geocode_pacer)
             return await render_template(
                 request, "_diagnostics_connectivity.html", {"connectivity": connectivity},
             )

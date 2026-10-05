@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.account_context import AccountPool, account_id
 from app.capacity import owned_thread
+from app.worker import BatchOutcome, TurnOutcome
 
 from app.autotag import AutotagTrip, Rule, plan_autotags
 from app.db import DETECTOR_ADVISORY_LOCK_KEY
@@ -117,6 +118,49 @@ class DetectorRunner:
         if failure is not None:
             raise failure
         return ran
+
+    async def run_turn(self, cursor=None) -> TurnOutcome:
+        """Commit one device; continuation visits each device once per wake cycle."""
+        self.produced_work = False
+        async with self.pool.connection() as conn:
+            owner = account_id(conn)
+            cur = await conn.execute(
+                "SELECT d.id FROM tracking_devices d JOIN detector_state s "
+                "ON s.account_id = d.account_id AND s.tracking_device_id = d.id "
+                "WHERE d.account_id = %s AND d.enabled AND d.revoked_at IS NULL "
+                "AND (s.detector_version <> %s OR EXISTS (SELECT 1 FROM points p "
+                "WHERE p.account_id = d.account_id AND p.tracking_device_id = d.id "
+                "AND p.received_at > COALESCE(s.last_run_at, '-infinity'::timestamptz))) "
+                "AND (s.last_run_at IS NOT NULL OR s.detector_version <> 0 "
+                "OR EXISTS (SELECT 1 FROM points p WHERE p.account_id=d.account_id "
+                "AND p.tracking_device_id=d.id) "
+                "OR EXISTS (SELECT 1 FROM trips t WHERE t.account_id=d.account_id "
+                "AND t.tracking_device_id=d.id AND t.source='detected' AND NOT t.imported) "
+                "OR EXISTS (SELECT 1 FROM trip_boundary_overrides o WHERE o.account_id=d.account_id "
+                "AND o.tracking_device_id=d.id)) "
+                "AND d.id > %s ORDER BY d.id LIMIT 1",
+                (owner, DETECTOR_VERSION, cursor or 0),
+            )
+            row = await cur.fetchone()
+        if row is None:
+            return TurnOutcome()
+        device = row[0]
+        try:
+            async with self.pool.connection() as conn:
+                lock = await conn.execute(
+                    "SELECT pg_try_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
+                )
+                if not (await lock.fetchone())[0]:
+                    return TurnOutcome(cursor=cursor, skipped=True)
+                if await self._admit_device(conn, device) is None:
+                    return TurnOutcome(ready=True, cursor=device)
+                processed = await self._run(conn, device)
+            self.produced_work = bool(processed)
+        except Exception as exc:
+            log.warning("detector: stream failed: %s", type(exc).__name__)
+            return TurnOutcome(batch=BatchOutcome(1, 0, 1, type(exc).__name__),
+                               ready=True, cursor=device)
+        return TurnOutcome(batch=BatchOutcome(1, 1), ready=True, cursor=device)
 
     async def _admit_device(self, conn, device: int) -> str | None:
         cur = await conn.execute(

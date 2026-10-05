@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 import httpx
+from app.provider_http import bounded_request, NOTIFICATION_RESPONSE_MAX_BYTES
 
 from app.odometer import vehicles_due_for_reminder
 from app.account_context import account_id
@@ -63,7 +64,7 @@ async def publish_ntfy(
         auth = httpx.BasicAuth(username, password)
     elif token:
         headers["Authorization"] = f"Bearer {token}"
-    response = await http_client.post(
+    await bounded_request(http_client, "POST",
         f"{ntfy_url.rstrip('/')}/{topic}", content=message, headers=headers, auth=auth,
+        max_bytes=NOTIFICATION_RESPONSE_MAX_BYTES,
     )
-    response.raise_for_status()

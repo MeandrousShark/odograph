@@ -307,11 +307,11 @@ async def _check_osrm(cfg: Config, client: httpx.AsyncClient) -> ConnectivityRes
         return ConnectivityResult(
             "osrm", configured=True, ok=False, detail=f"http {exc.response.status_code}"
         )
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, ValueError) as exc:
         return ConnectivityResult("osrm", configured=True, ok=False, detail=type(exc).__name__)
 
 
-async def _check_geocode(cfg: Config, client: httpx.AsyncClient) -> ConnectivityResult:
+async def _check_geocode(cfg: Config, client: httpx.AsyncClient, *, pacer=None) -> ConnectivityResult:
     # The `detail` prefix names which provider was probed (D6/M5's
     # "which provider" requirement) without adding a field only this one
     # service uses -- config_presence/render_report_text stay shaped the
@@ -323,7 +323,11 @@ async def _check_geocode(cfg: Config, client: httpx.AsyncClient) -> Connectivity
     if provider is None:
         return ConnectivityResult("geocode", configured=False, detail="GEOCODE_PROVIDER not set")
     try:
-        await provider.reverse(client, _PROBE_LAT, _PROBE_LON)
+        if pacer is None:
+            await provider.reverse(client, _PROBE_LAT, _PROBE_LON)
+        else:
+            async with pacer.request():
+                await provider.reverse(client, _PROBE_LAT, _PROBE_LON)
         return ConnectivityResult(
             "geocode", configured=True, ok=True, detail=f"{provider.name}: reachable"
         )
@@ -332,7 +336,7 @@ async def _check_geocode(cfg: Config, client: httpx.AsyncClient) -> Connectivity
             "geocode", configured=True, ok=False,
             detail=f"{provider.name}: http {exc.response.status_code}",
         )
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, ValueError) as exc:
         return ConnectivityResult(
             "geocode", configured=True, ok=False, detail=f"{provider.name}: {type(exc).__name__}"
         )
@@ -403,6 +407,7 @@ async def _check_smtp(cfg: Config, *, serving: bool = False) -> ConnectivityResu
 
 async def run_connectivity_checks(
     cfg: Config, http_client: httpx.AsyncClient | None = None, *, serving: bool = False,
+    geocode_pacer=None,
 ) -> list[ConnectivityResult]:
     """The on-demand "check now" surface (D6): every call here is a direct
     result of an explicit operator action (a button click, or running this
@@ -417,7 +422,7 @@ async def run_connectivity_checks(
     client = http_client or httpx.AsyncClient()
     try:
         osrm, geocode, ntfy, smtp = await asyncio.gather(
-            _check_osrm(cfg, client), _check_geocode(cfg, client),
+            _check_osrm(cfg, client), _check_geocode(cfg, client, pacer=geocode_pacer),
             _check_ntfy(cfg, client), _check_smtp(cfg, serving=serving),
         )
     finally:

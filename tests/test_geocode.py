@@ -552,3 +552,18 @@ def test_contract_reverse_non_2xx_raises(contract):
 
     with pytest.raises(httpx.HTTPStatusError):
         _reverse_via(contract.make_provider(), handler)
+
+
+@pytest.mark.parametrize("contract", PROVIDER_CONTRACTS, ids=[c.name for c in PROVIDER_CONTRACTS])
+@pytest.mark.parametrize("content", [b"not json", b"{}", b"[]", b"null"])
+def test_contract_reverse_malformed_response_is_transient(contract, content):
+    with pytest.raises(ValueError):
+        _reverse_via(contract.make_provider(), lambda request: httpx.Response(200, content=content))
+
+
+@pytest.mark.parametrize("contract", PROVIDER_CONTRACTS, ids=[c.name for c in PROVIDER_CONTRACTS])
+def test_contract_reverse_oversize_response_is_transient(contract):
+    from app.provider_http import GEOCODE_RESPONSE_MAX_BYTES, ProviderResponseTooLarge
+    with pytest.raises(ProviderResponseTooLarge):
+        _reverse_via(contract.make_provider(), lambda request: httpx.Response(
+            200, content=b" " * (GEOCODE_RESPONSE_MAX_BYTES + 1)))

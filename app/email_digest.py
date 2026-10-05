@@ -30,6 +30,7 @@ import jinja2
 from psycopg_pool import AsyncConnectionPool
 
 from app.db import EMAIL_DIGEST_ADVISORY_LOCK_KEY
+from app.capacity import owned_thread
 from app.formatting import format_miles, format_usd
 from app.mailer import Mailer
 from app.notifications import notification_preferences_current, count_unclassified_trips, odometer_reminder_vehicles
@@ -37,7 +38,7 @@ from app.nudge import latest_window_end
 from app.odometer import latest_quarter_start
 from app.report import build_annual_report, build_range_report
 from app.ui import _fetch_range_trips_in
-from app.worker import WorkerStatus
+from app.worker import BatchOutcome, TurnOutcome, WorkerStatus
 
 log = logging.getLogger(__name__)
 
@@ -135,12 +136,10 @@ def latest_filing_reminder_at(now: datetime, mmdd: str, hour: int) -> datetime:
 
 class EmailDigestWorker:
     """Hourly eligibility checker for all four email digest kinds.
-    `run_once()` is the only method `AccountWorker` (app/account_workers.py)
-    calls -- it builds a fresh `EmailDigestWorker` per account on its own
-    hourly-cadence sweep; this class supplies no loop, `start`/`stop`, or
-    guarded-run wrapper of its own. `run_once` below does its own per-kind
-    try/except, since a single try/except around the whole method would let
-    one kind's exception stop the rest from being evaluated.
+    AccountWorker calls run_turn() for one enabled kind, advancing its cursor
+    between account turns. Idle accounts retain the hourly sweep cadence.
+    run_once() evaluates all kinds for direct callers. Per-kind guards preserve
+    failure diagnostics without preventing later kinds from being evaluated.
 
     Each kind's own `_run_*` method opens its own pool connection and
     transaction, spanning the advisory lock, the ledger check, and (inside
@@ -185,7 +184,29 @@ class EmailDigestWorker:
         if self.email_odometer_reminder:
             await self._guarded("quarterly_odometer", self._run_quarterly_odometer, local_now)
 
-    async def _guarded(self, kind: str, run, now: datetime) -> None:
+    async def run_turn(self, cursor=None, now: datetime | None = None) -> TurnOutcome:
+        kinds = [
+            ("weekly_nudge", self._run_weekly_nudge, self.email_weekly_nudge),
+            ("monthly_summary", self._run_monthly_summary, self.email_monthly_summary),
+            ("filing_reminder", self._run_filing_reminder, self.email_filing_reminder),
+            ("quarterly_odometer", self._run_quarterly_odometer, self.email_odometer_reminder),
+        ]
+        start = cursor or 0
+        for index in range(start, len(kinds)):
+            kind, run, enabled = kinds[index]
+            if not enabled:
+                continue
+            local_now = (now or datetime.now(self.display_tz)).astimezone(self.display_tz)
+            failed = await self._guarded(kind, run, local_now)
+            ready = any(item[2] for item in kinds[index + 1:])
+            return TurnOutcome(
+                batch=BatchOutcome(1, 0 if failed else 1, int(bool(failed)), failed),
+                ready=ready,
+                cursor=index + 1 if ready else None,
+            )
+        return TurnOutcome()
+
+    async def _guarded(self, kind: str, run, now: datetime) -> str | None:
         """Isolate one kind's failure from the others: the transaction it
         ran in already rolled back on the raise (no ledger row), so all
         that's left to do here is make sure the root-cause exception still
@@ -204,6 +225,8 @@ class EmailDigestWorker:
         except Exception as exc:
             self.status.record_failure(exc)
             log.warning("email digest: %s failed (%s); will retry next hour", kind, type(exc).__name__)
+            return type(exc).__name__
+        return None
 
     async def _already_delivered(self, conn, kind: str, period_end: datetime) -> bool:
         """Take the shared advisory lock, then check the ledger. Callers keep
@@ -278,7 +301,7 @@ class EmailDigestWorker:
                 if await self._already_delivered(conn, "monthly_summary", period_end):
                     return
                 trips, rates = await _fetch_range_trips_in(conn, self.display_tz, month_start, month_end)
-                report = build_range_report(trips, rates, self.display_tz, month_start, month_end)
+                report = await owned_thread(build_range_report, trips, rates, self.display_tz, month_start, month_end)
                 body = _render(
                     "monthly_summary.txt",
                     month_label=f"{MONTH_ABBR[month]} {year}",
@@ -310,7 +333,7 @@ class EmailDigestWorker:
                 trips, rates = await _fetch_range_trips_in(
                     conn, self.display_tz, date(year, 1, 1), date(year, 12, 31)
                 )
-                report = build_annual_report(trips, rates, self.display_tz, year)
+                report = await owned_thread(build_annual_report, trips, rates, self.display_tz, year)
                 body = _render(
                     "filing_reminder.txt",
                     year=year,

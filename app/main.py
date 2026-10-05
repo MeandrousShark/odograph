@@ -39,6 +39,7 @@ from app.email_digest import EmailDigestWorker
 from app.expenses import EXPENSE_CONFLICT_LABELS, comparison_caveat_lines, comparison_status
 from app.formatting import format_duration, format_miles, format_usd
 from app.geocode import GeocodeWorker
+from app.provider_pacing import ProviderPacer
 from app.ingest import FailedAuthLimiter
 from app.mailer import Mailer
 from app.missing_trip import missing_trip_badge
@@ -339,13 +340,16 @@ def create_app(config: Config | None = None) -> FastAPI:
                 stack.push_async_callback(notification_http.aclose)
             app.state.osrm_http_client = http_client
             app.state.geocode_http_client = geocode_http
+            geocode_pacer = ProviderPacer(cfg.geocode_min_interval_s)
+            app.state.geocode_pacer = geocode_pacer
 
-            async def start_worker(name, factory, debounce, sweep, *, enabled=True, after_run=None):
+            async def start_worker(name, factory, debounce, sweep, *, enabled=True, after_run=None,
+                                   before_turn=None):
                 worker = None
                 if enabled:
                     worker = AccountWorker(pools, cfg, factory, label=name.replace("_", "-"),
                         debounce_s=debounce, sweep_s=sweep, after_run=after_run,
-                        capacity=capacity, scheduler=scheduler)
+                        capacity=capacity, scheduler=scheduler, before_turn=before_turn)
                     await worker.start()
                     stack.push_async_callback(worker.stop)
                 setattr(app.state, name, worker)
@@ -357,11 +361,17 @@ def create_app(config: Config | None = None) -> FastAPI:
             app.state.audit_retention_worker = audit_retention_worker
 
             snap_worker = await start_worker("snap_worker", lambda pool, c: SnapWorker(
-                pool, http_client, c.osrm_url, c.osrm_min_confidence, c.osrm_max_coords),
+                pool, http_client, c.osrm_url, c.osrm_min_confidence, c.osrm_max_coords,
+                retry_s=c.snap_sweep_s),
                 cfg.snap_debounce_s, cfg.snap_sweep_s, enabled=cfg.snap_enabled)
+            async def prepare_geocode(principal, cursor):
+                return await geocode_pacer.wait_ready(cursor)
+
             geocode_worker = await start_worker("geocode_worker", lambda pool, c: GeocodeWorker(
-                pool, geocode_http, provider, c.geocode_min_interval_s),
-                cfg.geocode_debounce_s, cfg.geocode_sweep_s, enabled=provider is not None)
+                pool, geocode_http, provider, c.geocode_min_interval_s,
+                pacer=geocode_pacer, retry_s=c.geocode_sweep_s),
+                cfg.geocode_debounce_s, cfg.geocode_sweep_s, enabled=provider is not None,
+                before_turn=prepare_geocode)
             await start_worker("retention_worker", lambda pool, c: RetentionWorker(
                 pool, c.raw_message_retention_days), 1, 86400, enabled=cfg.retention_enabled)
             await start_worker("nudge_worker", lambda pool, c: NudgeWorker(
@@ -410,6 +420,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     )
     capacity = AdmissionManager(cfg)
     app.state.capacity = capacity
+    app.state.geocode_pacer = ProviderPacer(cfg.geocode_min_interval_s)
     app.state.config = cfg
     app.state.templates = make_templates(cfg)
     app.state.oauth = auth.build_oauth(cfg)

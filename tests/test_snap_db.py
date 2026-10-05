@@ -12,13 +12,16 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
 
 from app.db import make_pool
-from app.snap import SnapWorker
+from app.snap import MatchPoint, SnapWorker, downsample
+from app.worker import BatchOutcome
+from app.detector.runner import load_trip_points
 from conftest import reset_account_db, seed_tracking_device
 from app.account_context import account_id
 
@@ -30,6 +33,17 @@ pytestmark = pytest.mark.skipif(
 DEVICE = "TESTDEV"
 T0 = datetime(2026, 7, 1, 8, 0, 0, tzinfo=timezone.utc)
 
+
+
+class _StreamHTTP:
+    @asynccontextmanager
+    async def stream(self, method, url, **kwargs):
+        response = await self.get(url)
+        response.request = httpx.Request(method, url)
+        try:
+            yield response
+        finally:
+            await response.aclose()
 
 async def _insert_trip(conn, started_at, ended_at, point_count) -> int:
     cur = await conn.execute(
@@ -182,15 +196,18 @@ async def _retry_order_scenario():
 
         calls = 0
 
-        class FailingHTTP:
+        class FailingHTTP(_StreamHTTP):
             async def get(self, url):
                 nonlocal calls
                 calls += 1
                 raise httpx.ConnectError("temporary outage")
 
         first = SnapWorker(pool, FailingHTTP(), "http://osrm", 0.5, 250)
-        outcome = await first.run_once()
-        assert (outcome.attempted, outcome.completed, outcome.retriable_failures) == (20, 0, 20)
+        for _ in range(20):
+            turn = await first.run_turn()
+            assert turn.ready
+            assert (turn.batch.attempted, turn.batch.completed,
+                    turn.batch.retriable_failures) == (1, 0, 1)
         assert calls == 20
         async with pool.connection() as conn:
             rows = await (await conn.execute(
@@ -201,11 +218,11 @@ async def _retry_order_scenario():
 
         # A new worker has no memory of the first batch, but durable attempt
         # order still admits the 21st row before retrying early failures.
-        class NoMatchHTTP:
+        class NoMatchHTTP(_StreamHTTP):
             async def get(self, url):
                 return httpx.Response(200, json={"code": "NoMatch", "matchings": []})
 
-        restarted = SnapWorker(pool, NoMatchHTTP(), "http://osrm", 0.5, 250, batch_size=1)
+        restarted = SnapWorker(pool, NoMatchHTTP(), "http://osrm", 0.5, 250)
         outcome = await restarted.run_once()
         assert (outcome.attempted, outcome.completed, outcome.retriable_failures) == (1, 1, 0)
         async with pool.connection() as conn:
@@ -216,13 +233,21 @@ async def _retry_order_scenario():
         assert all(row[1] == "pending" for row in rows[:20])
         oldest = rows[0][0]
 
-        # A steady new arrival has a later creation age than the old failed
-        # attempts. Retrying wraps to row one rather than always taking new work.
+        # Retry eligibility survives restart and prevents a provider busy loop.
+        deferred = await restarted.run_turn()
+        assert not deferred.ready and deferred.deferred_until is not None
+        # A steady new arrival has a later creation age than eligible old
+        # failed attempts. Retrying wraps to row one, preserving durable age.
         async with pool.connection() as conn:
             start = T0 + timedelta(hours=1)
             fresh = await _insert_trip(conn, start, start + timedelta(seconds=15), 2)
             await _insert_point(conn, start, fresh)
             await _insert_point(conn, start + timedelta(seconds=15), fresh)
+        async with pool.connection() as conn:
+            await conn.execute(
+                "UPDATE trips SET snap_attempted_at = snap_attempted_at - interval '301 seconds' "
+                "WHERE id = %s", (oldest,),
+            )
         await restarted.run_once()
         async with pool.connection() as conn:
             rows = await (await conn.execute(
@@ -253,23 +278,23 @@ async def _cancelled_attempt_scenario():
                 await _insert_point(conn, start, trip)
                 await _insert_point(conn, start + timedelta(seconds=15), trip)
 
-        class CancelHTTP:
+        class CancelHTTP(_StreamHTTP):
             async def get(self, url):
                 raise asyncio.CancelledError
 
         with pytest.raises(asyncio.CancelledError):
-            await SnapWorker(pool, CancelHTTP(), "http://osrm", 0.5, 250, batch_size=1).run_once()
+            await SnapWorker(pool, CancelHTTP(), "http://osrm", 0.5, 250).run_once()
         async with pool.connection() as conn:
             attempts = await (await conn.execute(
                 "SELECT id,snap_attempted_at FROM trips ORDER BY id"
             )).fetchall()
         assert attempts[0][1] is not None and attempts[1][1] is None
 
-        class NoMatchHTTP:
+        class NoMatchHTTP(_StreamHTTP):
             async def get(self, url):
                 return httpx.Response(200, json={"code": "NoMatch", "matchings": []})
 
-        await SnapWorker(pool, NoMatchHTTP(), "http://osrm", 0.5, 250, batch_size=1).run_once()
+        await SnapWorker(pool, NoMatchHTTP(), "http://osrm", 0.5, 250).run_once()
         async with pool.connection() as conn:
             statuses = await (await conn.execute(
                 "SELECT id,snap_status::text FROM trips ORDER BY id"
@@ -311,7 +336,7 @@ def test_stale_or_revoked_trip_is_not_admitted_to_provider(mutation):
                         )
                     return points
 
-            class HTTP:
+            class HTTP(_StreamHTTP):
                 async def get(self, url):
                     pytest.fail("stale work reached provider")
 
@@ -327,7 +352,7 @@ def test_stale_or_revoked_trip_is_not_admitted_to_provider(mutation):
     asyncio.run(scenario())
 
 
-class _RewritingHTTPClient:
+class _RewritingHTTPClient(_StreamHTTP):
     """Stands in for `SnapWorker.http`. Its `.get` performs a detector-style
     rewrite of the trip (bumping `updated_at`, resetting `snap_status` back
     to 'pending') between the point load already done by `_snap_one` and the
@@ -624,3 +649,146 @@ async def _manual_trip_immunity_scenario():
 
 def test_snapworker_never_drains_manual_trips_including_routed_ones():
     asyncio.run(_manual_trip_immunity_scenario())
+
+
+@pytest.mark.parametrize("count, cap", [(7, 5), (12, 5), (1000, 250), (50000, 250)])
+def test_bounded_loader_returns_exact_existing_sample(count, cap):
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                await seed_tracking_device(conn, DEVICE, device_id=1)
+                trip = await _insert_trip(conn, T0, T0 + timedelta(seconds=count), count)
+                await conn.execute(
+                    "INSERT INTO points (account_id,tracking_device_id,device,recorded_at,received_at,"
+                    "geom,accuracy_m,trip_id) "
+                    "SELECT %s,1,%s,%s + i * interval '1 second',%s,"
+                    "ST_SetSRID(ST_MakePoint(-122.33 + i * 0.000001,47.60),4326)::geography,"
+                    "i %% 50,%s FROM generate_series(0,%s) i",
+                    (account_id(conn), DEVICE, T0, T0, trip, count - 1),
+                )
+            worker = SnapWorker(pool, None, "http://osrm", 0.5, cap)
+            async with pool.connection(consistent_snapshot=True) as conn:
+                rows = await load_trip_points(conn, trip)
+                expected = downsample([
+                    MatchPoint(t=r[1], lat=r[2], lon=r[3], accuracy_m=r[4]) for r in rows
+                ], cap)
+                sampled = await worker._load_points(conn, trip)
+            assert sampled == expected
+            assert len(sampled) <= cap
+            assert sampled[0].t == T0
+            assert sampled[-1].t == T0 + timedelta(seconds=count - 1)
+        finally:
+            await raw.close()
+    asyncio.run(scenario())
+
+
+def test_sample_count_and_rank_share_snapshot_during_point_insertion():
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                await seed_tracking_device(conn, DEVICE, device_id=1)
+                trip = await _insert_trip(conn, T0, T0 + timedelta(seconds=90), 7)
+                for i in range(7):
+                    await _insert_point(conn, T0 + timedelta(seconds=i * 15), trip)
+
+            class RaceProbe(SnapWorker):
+                async def _point_count(self, conn, trip_id):
+                    count = await super()._point_count(conn, trip_id)
+                    async with pool.connection() as other:
+                        await _insert_point(other, T0 + timedelta(seconds=1), trip_id)
+                    return count
+
+            worker = RaceProbe(pool, None, "http://osrm", 0.5, 5)
+            async with pool.connection(consistent_snapshot=True) as conn:
+                sampled = await worker._load_points(conn, trip)
+            assert [p.t for p in sampled] == [
+                T0 + timedelta(seconds=i * 15) for i in [0, 1, 2, 4, 6]
+            ]
+            async with pool.connection() as conn:
+                assert await SnapWorker(pool, None, "http://osrm", 0.5, 5)._point_count(conn, trip) == 8
+        finally:
+            await raw.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("status", [400, 503])
+def test_no_match_body_obeys_provider_http_status(status):
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                await seed_tracking_device(conn, DEVICE, device_id=1)
+                trip = await _insert_trip(conn, T0, T0 + timedelta(seconds=15), 2)
+                await _insert_point(conn, T0, trip)
+                await _insert_point(conn, T0 + timedelta(seconds=15), trip)
+            async with httpx.AsyncClient(transport=httpx.MockTransport(
+                lambda request: httpx.Response(status, json={"code": "NoMatch"})
+            )) as client:
+                turn = await SnapWorker(pool, client, "http://osrm", 0.5, 250).run_turn()
+            assert not turn.ready
+            if status == 400:
+                assert turn.deferred_until is None
+                assert turn.batch == BatchOutcome(attempted=1, completed=1)
+            else:
+                assert turn.deferred_until is not None
+                assert turn.batch == BatchOutcome(attempted=1, retriable_failures=1,
+                                                 failure_type="HTTPStatusError")
+            async with pool.connection() as conn:
+                row = await (await conn.execute(
+                    "SELECT snap_status::text FROM trips WHERE id=%s", (trip,),
+                )).fetchone()
+            assert row == (("failed" if status == 400 else "pending"),)
+        finally:
+            await raw.close()
+    asyncio.run(scenario())
+
+
+def test_unadmitted_early_trip_continues_to_later_trip_without_busy_retry():
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                await seed_tracking_device(conn, DEVICE, device_id=1)
+                early = await _insert_trip(conn, T0, T0 + timedelta(seconds=15), 2)
+                later = await _insert_trip(conn, T0 + timedelta(minutes=1),
+                                           T0 + timedelta(minutes=1, seconds=15), 2)
+                for trip, start in [(early, T0), (later, T0 + timedelta(minutes=1))]:
+                    await _insert_point(conn, start, trip)
+                    await _insert_point(conn, start + timedelta(seconds=15), trip)
+
+            class AdmissionProbe(SnapWorker):
+                async def _snap_one(self, trip_id):
+                    if trip_id == early:
+                        return BatchOutcome()
+                    return await super()._snap_one(trip_id)
+
+            async with httpx.AsyncClient(transport=httpx.MockTransport(
+                lambda request: httpx.Response(400, json={"code": "NoMatch"})
+            )) as client:
+                first = await AdmissionProbe(pool, client, "http://osrm", .5, 250).run_turn()
+                assert first.ready and first.cursor is not None
+                assert first.batch == BatchOutcome()
+                # Production constructs a fresh worker for every account turn.
+                second = await AdmissionProbe(pool, client, "http://osrm", .5, 250).run_turn(first.cursor)
+                assert second.batch == BatchOutcome(attempted=1, completed=1)
+                assert not second.ready and second.deferred_until is not None
+                assert second.cursor is None
+            async with pool.connection() as conn:
+                rows = await (await conn.execute(
+                    "SELECT id,snap_status::text,snap_attempted_at IS NOT NULL "
+                    "FROM trips ORDER BY id",
+                )).fetchall()
+            assert rows == [(early, "pending", False), (later, "failed", True)]
+        finally:
+            await raw.close()
+    asyncio.run(scenario())

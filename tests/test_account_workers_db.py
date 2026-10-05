@@ -114,13 +114,13 @@ def test_inactive_device_does_not_starve_later_pending_snap(device_state):
                     (device_state != "disabled", device_state == "revoked", account_id(conn), inactive_device),
                 )
             calls = []
-            class HTTP:
-                async def get(self, url):
-                    calls.append(url)
-                    return httpx.Response(200, json={"code": "NoMatch", "matchings": []})
-            worker = SnapWorker(first, HTTP(), "http://osrm", .5, 250, batch_size=1)
-            await worker.run_once()
-            await worker.run_once()
+            def respond(request):
+                calls.append(str(request.url))
+                return httpx.Response(200, json={"code": "NoMatch", "matchings": []})
+            async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+                worker = SnapWorker(first, client, "http://osrm", .5, 250)
+                await worker.run_once()
+                await worker.run_once()
             assert len(calls) == 1
             async with first.connection() as conn:
                 assert await (await conn.execute(
@@ -195,12 +195,12 @@ async def _delayed_result(worker_kind, mutation):
             worker = GeocodeWorker(first,None,_Provider("stale",started,release),0)
             task = asyncio.create_task(worker.run_once())
         else:
-            class DelayedHTTP:
-                async def get(self, url):
-                    started.set()
-                    await release.wait()
-                    return httpx.Response(200,json={"code":"NoMatch","matchings":[]})
-            task = asyncio.create_task(SnapWorker(first,DelayedHTTP(),"http://osrm",0.5,250).run_once())
+            async def delayed(request):
+                started.set()
+                await release.wait()
+                return httpx.Response(200,json={"code":"NoMatch","matchings":[]})
+            client = httpx.AsyncClient(transport=httpx.MockTransport(delayed))
+            task = asyncio.create_task(SnapWorker(first,client,"http://osrm",0.5,250).run_once())
         await asyncio.wait_for(started.wait(),5)
         async with raw.connection() as conn:
             if mutation == "disable_account":
@@ -214,6 +214,8 @@ async def _delayed_result(worker_kind, mutation):
                 await task
         else:
             await task
+        if worker_kind == "snap":
+            await client.aclose()
         async with raw.connection() as conn:
             assert await (await conn.execute("SELECT count(*) FROM geocode_cache")).fetchone() == (0,)
             assert await (await conn.execute("SELECT snap_status::text FROM trips WHERE id=%s", (trip,))).fetchone() == ("pending",)
@@ -300,9 +302,12 @@ async def _account_failure_independence():
         await worker._run_guarded()
         assert worker.status.last_failure_at is not None
         assert worker.status.last_success_at is None
+        await worker._run_guarded()
         async with raw.connection() as conn:
             assert await (await conn.execute("SELECT account_id FROM geocode_cache")).fetchall() == [(99,)]
         fail=False
+        worker.wake_cycle()
+        await worker._run_guarded()
         await worker._run_guarded()
         assert worker.status.last_success_at is not None
         async with raw.connection() as conn:
@@ -338,9 +343,12 @@ def test_account_sweep_reports_empty_successful_mixed_and_failed_batches(outcome
             )
             await worker._run_guarded()
             result = worker.last_outcome
+            await worker._run_guarded()
+            result += worker.last_outcome
             assert (result.attempted, result.completed, result.retriable_failures,
                     worker.status.last_failure_at is not None) == expected
-            assert (worker.status.last_success_at is not None) == (not expected[3])
+            assert (worker.status.last_success_at is not None) == any(
+                not outcome.retriable_failures for outcome in outcomes)
             if expected[3]:
                 assert worker.status.last_failure_type == "ConnectError"
     asyncio.run(scenario())
@@ -489,8 +497,10 @@ def test_detector_pokes_for_committed_stream_when_later_stream_fails():
             )
             await worker._run_guarded()
             assert poked == ["poked"]
+            await worker._run_guarded()
             assert worker.status.last_failure_type == "RuntimeError"
-            assert worker.status.last_success_at is None
+            assert worker.status.last_success_at is not None
+            assert poked == ["poked"]
             async with pool.connection() as conn:
                 checkpoints = await (await conn.execute(
                     "SELECT tracking_device_id,last_run_at IS NOT NULL FROM detector_state "
