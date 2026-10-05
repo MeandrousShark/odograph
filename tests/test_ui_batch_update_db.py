@@ -59,7 +59,18 @@ async def _insert_trip(
             vehicle_id,
         ),
     )
-    return (await cur.fetchone())[0]
+    trip_id = (await cur.fetchone())[0]
+    if source == "detected":
+        # Native core output keeps the two fixes at its recorded boundaries.
+        await conn.execute(
+            "INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom,trip_id) "
+            "SELECT account_id,tracking_device_id,device,started_at,"
+            "ST_SetSRID(ST_MakePoint(-122.3,47.6),4326)::geography,id FROM trips WHERE id=%s "
+            "UNION ALL SELECT account_id,tracking_device_id,device,ended_at,"
+            "ST_SetSRID(ST_MakePoint(-122.29,47.6),4326)::geography,id FROM trips WHERE id=%s",
+            (trip_id, trip_id),
+        )
+    return trip_id
 
 
 async def _rows(conn, trip_ids):
@@ -296,12 +307,6 @@ async def _batch_delete_scenario():
                 "Survivor", None, 1,
             )
             await conn.execute(
-                "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, geom, "
-                "trip_id) VALUES (%s, %s, 'A', '2026-01-02T09:30:00Z', "
-                "ST_SetSRID(ST_MakePoint(-122.3, 47.6), 4326)::geography, %s)",
-                (account_id(conn), await fixture_device(conn, 'A'), detected_id,),
-            )
-            await conn.execute(
                 "INSERT INTO expenses (account_id, vehicle_id, incurred_on, category, amount, "
                 "treatment, trip_id) VALUES (%s, 1, '2026-05-04', 'fuel', 17.23, "
                 "'business_use_allocated', %s)", (
@@ -328,7 +333,7 @@ async def _batch_delete_scenario():
             cur = await conn.execute("SELECT trip_id FROM expenses")
             assert (await cur.fetchone())[0] is None
             cur = await conn.execute("SELECT trip_id FROM points WHERE device = 'A'")
-            assert await cur.fetchall() == [(None,)]
+            assert await cur.fetchall() == [(None,), (None,)]
 
             rollback_detected = await _insert_trip(
                 conn, "D", "detected", "2026-06-04T09:00:00Z", "business",
@@ -337,12 +342,6 @@ async def _batch_delete_scenario():
             rollback_manual = await _insert_trip(
                 conn, "E", "manual", "2026-07-04T09:00:00Z", "personal",
                 "Rollback manual", None, 1,
-            )
-            await conn.execute(
-                "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, geom, "
-                "trip_id) VALUES (%s, %s, 'D', '2026-06-04T09:30:00Z', "
-                "ST_SetSRID(ST_MakePoint(-122.3, 47.6), 4326)::geography, %s)",
-                (account_id(conn), await fixture_device(conn, 'D'), rollback_detected,),
             )
             await conn.execute(
                 "INSERT INTO expenses (account_id, vehicle_id, incurred_on, category, amount, "
@@ -384,7 +383,7 @@ async def _batch_delete_scenario():
             cur = await conn.execute(
                 "SELECT trip_id FROM points WHERE trip_id = %s", (rollback_detected,)
             )
-            assert (await cur.fetchone())[0] == rollback_detected
+            assert await cur.fetchall() == [(rollback_detected,), (rollback_detected,)]
             cur = await conn.execute(
                 "SELECT trip_id FROM expenses WHERE trip_id = %s", (rollback_detected,)
             )

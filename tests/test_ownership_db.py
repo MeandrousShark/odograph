@@ -121,7 +121,9 @@ async def _migrated_account(monkeypatch):
             """)
             await conn.execute("""
                 INSERT INTO points(id,device,recorded_at,geom,trip_id) OVERRIDING SYSTEM VALUE
-                VALUES(77,'phone','2024-01-01T00:10Z',ST_SetSRID(ST_MakePoint(20,10),4326)::geography,88)
+                VALUES(76,'phone','2024-01-01Z',ST_SetSRID(ST_MakePoint(20,10),4326)::geography,88),
+                      (77,'phone','2024-01-01T00:10Z',ST_SetSRID(ST_MakePoint(20,10),4326)::geography,88),
+                      (78,'phone','2024-01-01T01:00Z',ST_SetSRID(ST_MakePoint(20.01,10),4326)::geography,88)
             """)
             await conn.execute("INSERT INTO trip_boundary_overrides(device,kind,point_id) VALUES('phone','force',77)")
             await conn.execute("INSERT INTO raw_messages(received_at,payload) VALUES('2024-01-01Z','{\"_type\":\"location\",\"lat\":10,\"lon\":20,\"tst\":1704067200,\"tid\":\"raw-only\"}')")
@@ -130,7 +132,10 @@ async def _migrated_account(monkeypatch):
         cfg = _legacy_config(email_to="legacy@example.test", ntfy_topic="old-topic", email_monthly_summary=True)
         await run_migrations(pool, cfg)
         assert await _fetch(pool, "SELECT account_id,id,device,distance_m,category::text,tag_source::text,notes,exclusion::text FROM trips") == [(42,88,"phone",1000,"business","human","kept","not_deductible")]
-        assert await _fetch(pool, "SELECT account_id,id,trip_id,ST_AsText(geom::geometry) FROM points") == [(42,77,88,"POINT(20 10)")]
+        assert await _fetch(pool, "SELECT account_id,id,trip_id,ST_AsText(geom::geometry) FROM points ORDER BY id") == [
+            (42,76,88,"POINT(20 10)"), (42,77,88,"POINT(20 10)"),
+            (42,78,88,"POINT(20.01 10)"),
+        ]
         assert await _fetch(pool, "SELECT account_id,label FROM tracking_devices ORDER BY label") == [(42,"phone"),(42,"raw-only")]
         assert await _fetch(pool, "SELECT count(*) FROM detector_state WHERE account_id=42 AND last_run_at='2025-01-01Z' AND detector_version=2") == [(2,)]
         assert await _fetch(pool, "SELECT account_id,tracking_device_id IS NULL FROM raw_messages ORDER BY id") == [(42,False),(42,True)]

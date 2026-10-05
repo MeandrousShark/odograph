@@ -425,7 +425,7 @@ def test_portable_refuses_own_retained_work_and_accepts_unused_device(retained_w
     asyncio.run(run())
 
 
-def test_idle_sweep_skips_only_pristine_streams_and_keeps_point_free_reconciliation():
+def test_idle_sweep_skips_only_pristine_streams_and_keeps_point_free_reconciliation(monkeypatch):
     async def run():
         async with _fixture() as (owner, _pools, _state, a, _b):
             async with a.connection() as conn:
@@ -444,11 +444,31 @@ def test_idle_sweep_skips_only_pristine_streams_and_keeps_point_free_reconciliat
                     (a.principal.account_id, devices["native"]),
                 )
                 await conn.execute(
+                    "INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom) VALUES "
+                    "(%s,%s,'old label','2026-08-01T10:00:00Z',ST_SetSRID(ST_MakePoint(20,10),4326)::geography), "
+                    "(%s,%s,'old label','2026-08-01T11:00:00Z',ST_SetSRID(ST_MakePoint(20.01,10),4326)::geography)",
+                    (a.principal.account_id, devices["native"], a.principal.account_id, devices["native"]),
+                )
+                await conn.execute(
                     "INSERT INTO trip_boundary_overrides(account_id,tracking_device_id,device,kind,range_start,range_end) "
                     "VALUES (%s,%s,'old label','discard','2026-08-01T10:00:00Z','2026-08-01T11:00:00Z')",
                     (a.principal.account_id, devices["override"]),
                 )
-            assert await DetectorRunner(a, Params()).run_once() is True
+            runner = DetectorRunner(a, Params())
+            original_run = runner._run
+
+            async def run_after_input_deletion(conn, device):
+                if device == devices["native"]:
+                    # Point-free native cleanup shares the deletion transaction.
+                    # A committed detector trip without retained points is invalid.
+                    await conn.execute(
+                        "DELETE FROM points WHERE account_id=%s AND tracking_device_id=%s",
+                        (a.principal.account_id, device),
+                    )
+                return await original_run(conn, device)
+
+            monkeypatch.setattr(runner, "_run", run_after_input_deletion)
+            assert await runner.run_once() is True
             assert await _checkpoint(owner, devices["unused"]) == (None, 0)
             for name in ("progressed", "native", "override"):
                 checkpoint = await _checkpoint(owner, devices[name])
@@ -456,6 +476,9 @@ def test_idle_sweep_skips_only_pristine_streams_and_keeps_point_free_reconciliat
             async with a.connection() as conn:
                 assert (await (await conn.execute("SELECT count(*) FROM trips WHERE account_id=%s", (a.principal.account_id,))).fetchone())[0] == 0
                 assert (await (await conn.execute("SELECT count(*) FROM trip_boundary_overrides WHERE account_id=%s", (a.principal.account_id,))).fetchone())[0] == 1
+                assert (await (await conn.execute("SELECT count(*) FROM points WHERE account_id=%s", (a.principal.account_id,))).fetchone())[0] == 0
+            async with owner.connection() as conn:
+                assert (await (await conn.execute("SELECT public.storage_usage_consistent()")).fetchone())[0]
     asyncio.run(run())
 
 

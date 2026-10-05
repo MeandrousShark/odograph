@@ -64,6 +64,20 @@ def test_fresh_second_migration_does_not_claim_first_installation_roles():
                     "'public.issue_member_invitation(bigint,text,text)','EXECUTE')")).fetchone() == (False, False)
                 assert await (await conn.execute(
                     "SELECT to_regclass('odograph_service.managed_role_state')")).fetchone() == (None,)
+                # Accounting objects must also wait for guarded initial role
+                # provisioning, even when another database already has roles.
+                for table in application_roles.STORAGE_TABLES:
+                    assert (await (await conn.execute(
+                        "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid=%s::regclass",
+                        ("public." + table,),
+                    )).fetchone())[0] not in ALL_ROLES
+                assert await (await conn.execute(
+                    "SELECT EXISTS (SELECT 1 FROM pg_shdepend d "
+                    "WHERE d.dbid=(SELECT oid FROM pg_database WHERE datname=current_database()) "
+                    "AND d.refclassid='pg_authid'::regclass "
+                    "AND d.refobjid IN (SELECT oid FROM pg_roles WHERE rolname=ANY(%s)))",
+                    (list(ALL_ROLES),),
+                )).fetchone() == (False,)
             await application_roles.prepare_application_roles(TEST_DB)
     asyncio.run(run())
 

@@ -47,6 +47,8 @@ async def _seed_every_owned_table(conn, owner: int) -> None:
     point = await one(f"INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom,trip_id) "
                       f"VALUES(%s,%s,%s,'2026-01-01T00:00Z',{POINT},%s) RETURNING id",
                       (owner, device, label, trip))
+    await conn.execute(f"INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom,trip_id) "
+                       f"VALUES(%s,%s,%s,'2026-01-01T01:00Z',{POINT},%s)", (owner,device,label,trip))
     await conn.execute(f"INSERT INTO stays(account_id,tracking_device_id,device,started_at,ended_at,centroid,"
                        f"point_count) VALUES(%s,%s,%s,'2026-01-01T00:00Z','2026-01-01T00:10Z',{POINT},1)",
                        (owner, device, label))

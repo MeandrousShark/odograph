@@ -124,6 +124,8 @@ async def _unsnappable_scenario():
         async with pool.connection() as conn:
             trip = await _insert_trip(conn, T0, T0 + timedelta(seconds=60), point_count=1)
             await _insert_point(conn, T0, trip)  # only one usable point
+            # A rejected fix outside the trip remains retained for the device.
+            await _insert_point(conn, T0 + timedelta(minutes=5), None, accuracy=500.0)
 
         worker = SnapWorker(pool, None, "http://osrm", 0.5, 250)
         await worker._snap_one(trip)

@@ -35,7 +35,8 @@ OWNED_TABLES = (
     "odometer_reminder_windows", "email_deliveries", "account_settings",
     "tracking_devices", "tracking_device_aliases", "ingest_credentials",
 )
-PROTECTED_TABLES = ("email_challenges",)
+STORAGE_TABLES = ("account_usage", "device_storage_envelopes")
+PROTECTED_TABLES = ("email_challenges",) + STORAGE_TABLES
 CONTROL_TABLES = (
     "accounts", "oidc_identities", "instance_state", "invitations",
     "oidc_attempts", "oidc_action_proofs", "account_security_audit",
@@ -74,6 +75,9 @@ class FunctionSpec:
     caller: str
     source: str
     owner: str = BOOTSTRAP_ROLE
+    security_definer: bool = True
+    language: str = "plpgsql"
+    volatility: str = "v"
 
 
 FUNCTION_SPECS = (
@@ -126,6 +130,25 @@ EMAIL_CHALLENGE_FUNCTIONS = tuple(s.signature for s in FUNCTION_SPECS if "email_
 PASSWORD_RESET_FUNCTIONS = tuple(s.signature for s in FUNCTION_SPECS
                                  if s.source in ("031_password_reset.sql", "035_admin_recovery.sql")
                                  and s.signature not in EMAIL_CHALLENGE_FUNCTIONS)
+STORAGE_FUNCTIONS = tuple(
+    "public.storage_charge_" + table + "(public." + table + ")" for table in OWNED_TABLES
+) + (
+    "public.storage_account_init()", "public.storage_apply_statement()",
+    "public.storage_row_account_guard()",
+    "public.storage_avatar_change()", "public.storage_check_envelope()",
+    "public.storage_write_admission()", "public.storage_envelope_metadata()",
+    "public.storage_expected_usage()", "public.storage_expected_envelopes()",
+    "public.storage_usage_consistent()", "public.reconcile_storage_usage()",
+)
+FUNCTION_SPECS += tuple(
+    FunctionSpec(signature, MIGRATE_ROLE, "040_storage_accounting.sql", MIGRATE_ROLE,
+                 not signature.startswith("public.storage_charge_"),
+                 "sql" if signature.startswith(("public.storage_charge_", "public.storage_expected_",
+                                                "public.storage_usage_consistent")) else "plpgsql",
+                 "i" if signature.startswith("public.storage_charge_") else
+                 "s" if signature.startswith(("public.storage_expected_", "public.storage_usage_consistent")) else "v")
+    for signature in STORAGE_FUNCTIONS
+)
 FUNCTIONS = {spec.signature: spec.caller for spec in FUNCTION_SPECS}
 FUNCTION_OWNERS = {spec.signature: spec.owner for spec in FUNCTION_SPECS}
 RESTORE_AUTH_VERSION_STEP = 1_000_000_000
@@ -182,6 +205,8 @@ async def _check_role_database_ownership(conn) -> None:
 
 def _table_rights(role: str, table: str) -> set[str]:
     if role == RUNTIME_ROLE:
+        if table in STORAGE_TABLES:
+            return {"SELECT"}
         if table in OWNED_TABLES:
             return {"INSERT", "UPDATE", "DELETE"} | ({"SELECT"} if table != "ingest_credentials" else set())
         if table in REFERENCE_TABLES:
@@ -194,7 +219,7 @@ def _table_rights(role: str, table: str) -> set[str]:
         if table in ("instance_state", "schema_migrations"):
             return {"SELECT"}
     if role == BOOTSTRAP_ROLE:
-        rights = {"SELECT", "DELETE"} if table in OWNED_TABLES + ("accounts", "invitations", "email_challenges") else set()
+        rights = {"SELECT", "DELETE"} if table in OWNED_TABLES + STORAGE_TABLES + ("accounts", "invitations", "email_challenges") else set()
         if table == "account_security_audit":
             return {"SELECT", "INSERT", "DELETE"}
         if table == "invitations":
@@ -219,6 +244,12 @@ def _policy_contract() -> dict[tuple[str, str], tuple[str, str, str | None, str 
     expression = "account_id = NULLIF(current_setting('app.account_id'::text,true),''::text)::bigint"
     policies = {(table, "account_isolation"): (RUNTIME_ROLE, "ALL", expression, expression)
                 for table in OWNED_TABLES + PROTECTED_TABLES}
+    for table in STORAGE_TABLES:
+        if table in PROTECTED_TABLES:
+            policies[table, "account_isolation"] = (RUNTIME_ROLE, "SELECT", expression, None)
+    if "public.storage_usage_consistent()" in FUNCTIONS:
+        for table in OWNED_TABLES + PROTECTED_TABLES:
+            policies[table, "migration_writer"] = (MIGRATE_ROLE, "ALL", "true", "true")
     for table in ("ingest_credentials", "tracking_devices"):
         policies[table, "control_lookup"] = (CONTROL_ROLE, "SELECT", "true", None)
     for table in OWNED_TABLES + PROTECTED_TABLES:
@@ -477,22 +508,87 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
             bad_privileges = [privilege for privilege, allowed in await cur.fetchall()
                               if allowed != (privilege == "SELECT" and table == "recovery_metadata" and role in (RUNTIME_ROLE, CONTROL_ROLE))]
             _require_contract(not bad_privileges, f"table privilege: {role} {STATE_SCHEMA}.{table} {bad_privileges}")
+    if "public.storage_usage_consistent()" in FUNCTIONS:
+        await _validate_storage_triggers(conn)
+    sources = {}
     for spec in FUNCTION_SPECS:
         function = spec.signature
         if function not in FUNCTIONS:
             continue
-        name = function.split("(", 1)[0]
         cur = await conn.execute(
-            "SELECT pg_get_userbyid(proowner),prosecdef,proconfig,prosrc FROM pg_proc WHERE oid=%s::regprocedure",
+            "SELECT pg_get_userbyid(p.proowner),p.prosecdef,p.proconfig,p.prosrc,l.lanname,p.provolatile "
+            "FROM pg_proc p JOIN pg_language l ON l.oid=p.prolang WHERE p.oid=%s::regprocedure",
             (function,))
         row = await cur.fetchone()
         source_dir = MIGRATIONS_DIR if spec.source.endswith(".sql") and spec.source[0].isdigit() else SQL_DIR
-        source = (source_dir / spec.source).read_text()
-        body = re.search(
-            rf"CREATE (?:OR REPLACE )?FUNCTION {re.escape(name)}\(.*?AS\s+(\$[a-z_]*\$)(.*?)\1",
-            source, re.S | re.I).group(2)
-        _require_contract(row == (spec.owner, True, ["search_path=pg_catalog, pg_temp"], body),
+        path = source_dir / spec.source
+        if path not in sources:
+            sources[path] = path.read_text()
+        body = _function_body(sources[path], function)
+        _require_contract(row == (spec.owner, spec.security_definer, ["search_path=pg_catalog, pg_temp"], body,
+                                  spec.language, spec.volatility),
             f"function definition: {function}")
+
+
+async def _validate_storage_triggers(conn) -> None:
+    expected = {}
+    for table in OWNED_TABLES:
+        for event, kind, old_table, new_table in (
+            ("insert", 4, None, "storage_new_rows"),
+            ("update", 16, "storage_old_rows", "storage_new_rows"),
+            ("delete", 8, "storage_old_rows", None),
+        ):
+            expected[table, "storage_charge_" + event] = (
+                "storage_apply_statement", kind, (), False, False, old_table, new_table)
+        expected[table, "storage_write_admission"] = (
+            "storage_write_admission", 30, (), False, False, None, None)
+        expected[table, "storage_row_account_guard"] = (
+            "storage_row_account_guard", 17, (), False, False, None, None)
+    expected.update({
+        ("device_storage_envelopes", "storage_envelope_metadata"):
+            ("storage_envelope_metadata", 13, (), False, False, None, None),
+        ("accounts", "storage_account_init"): ("storage_account_init", 5, (), False, False, None, None),
+        ("accounts", "storage_avatar_change"):
+            ("storage_avatar_change", 17, ("avatar_bytes", "avatar_mime"), False, False, None, None),
+        ("device_storage_envelopes", "storage_envelope_final"):
+            ("storage_check_envelope", 29, (), True, True, None, None),
+    })
+    cur = await conn.execute(
+        "SELECT c.relname,t.tgname,p.proname,t.tgtype,"
+        "ARRAY(SELECT a.attname FROM pg_attribute a WHERE a.attrelid=t.tgrelid "
+        "AND a.attnum=ANY(t.tgattr) ORDER BY a.attnum),"
+        "t.tgdeferrable,t.tginitdeferred,t.tgenabled,t.tgnargs,t.tgqual IS NULL,"
+        "p.pronamespace='public'::regnamespace,t.tgconstraint<>0,t.tgoldtable,t.tgnewtable "
+        "FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid "
+        "JOIN pg_proc p ON p.oid=t.tgfoid WHERE NOT t.tgisinternal "
+        "AND c.relnamespace='public'::regnamespace AND c.relname=ANY(%s)",
+        (list(TABLES),))
+    rows = await cur.fetchall()
+    found = {(row[0], row[1]) for row in rows}
+    _require_contract(found == set(expected),
+        f"storage trigger set: unexpected {sorted(found - set(expected))} missing {sorted(set(expected) - found)}")
+    for (table, name, function, kind, columns, deferred, initially, enabled, args,
+         no_qual, public, constraint, old_table, new_table) in rows:
+        actual = (function, kind, tuple(columns), deferred, initially, old_table, new_table)
+        _require_contract(actual == expected[table, name]
+                          and enabled == "O" and args == 0 and no_qual and public
+                          and constraint == deferred,
+                          f"storage trigger definition: {table}.{name}")
+
+
+def _function_body(source: str, signature: str) -> str:
+    name, arguments = signature.rstrip(")").split("(", 1)
+    wanted = arguments.split(",") if arguments else []
+    definitions = re.finditer(
+        rf"CREATE (?:OR REPLACE )?FUNCTION {re.escape(name)}\((.*?)\)"
+        rf".*?AS\s+(\$[a-z_]*\$)(.*?)\2", source, re.S | re.I)
+    for definition in definitions:
+        params = definition.group(1).split(",") if definition.group(1).strip() else []
+        types = [re.split(r"\s+DEFAULT\s+|\s*=\s*", param.strip(), flags=re.I)[0]
+                 .split()[-1] for param in params]
+        if types == wanted:
+            return definition.group(3)
+    raise _ContractMismatch("application database security contract mismatch: function source " + signature)
 
 
 async def prepare_application_roles(database_url: str, *, restoring: bool = False) -> ManagedRoleState:
@@ -536,6 +632,11 @@ async def prepare_application_roles(database_url: str, *, restoring: bool = Fals
             if restoring:
                 await _revoke_restored_security_state(conn)
             await validate_application_contract(conn, state)
+            if "public.storage_usage_consistent()" in FUNCTIONS:
+                if restoring:
+                    await conn.execute("SELECT public.reconcile_storage_usage()")
+                cur = await conn.execute("SELECT public.storage_usage_consistent()")
+                _require_contract(await cur.fetchone() == (True,), "storage accounting data")
             return state
     except _RolesUsedElsewhere:
         raise

@@ -51,10 +51,23 @@ async def _insert_trip(
     conn, started_at: datetime, category: str = "unclassified",
     distance_m: float = 1000.0, vehicle_id: int | None = None,
 ) -> None:
+    # Detected core output is backed by retained fixes. Distinct duplicate
+    # report fixtures get separate fixes inside the same fifteen-minute span.
+    ended_at = started_at + timedelta(minutes=15)
+    await conn.execute(
+        "WITH endpoint_offset AS (SELECT count(*)*interval '1 microsecond' AS amount "
+        "FROM trips WHERE account_id=%s AND tracking_device_id=1 AND started_at=%s) "
+        "INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom) "
+        "SELECT %s,1,'phone',moment+direction*amount,"
+        "ST_SetSRID(ST_MakePoint(longitude,37),4326)::geography "
+        "FROM (VALUES(%s::timestamptz,-122.0,1),(%s::timestamptz,-121.9,-1)) "
+        "endpoint(moment,longitude,direction) CROSS JOIN endpoint_offset",
+        (account_id(conn), started_at, account_id(conn), started_at, ended_at),
+    )
     await conn.execute(
         "INSERT INTO trips (account_id, tracking_device_id, device, started_at, ended_at, distance_m, category, vehicle_id) "
         "VALUES (%s, 1, 'phone', %s, %s, %s, %s, %s)",
-        (account_id(conn), started_at, started_at + timedelta(minutes=15), distance_m, category, vehicle_id),
+        (account_id(conn), started_at, ended_at, distance_m, category, vehicle_id),
     )
 
 

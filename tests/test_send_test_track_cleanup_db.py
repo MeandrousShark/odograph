@@ -39,6 +39,11 @@ async def _seed_device(conn, device_id: int) -> None:
         (owner, device_id, T0),
     )
     await conn.execute(
+        "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, geom) "
+        "VALUES (%s, %s, 'test', %s, ST_SetSRID(ST_MakePoint(-122.483,37.7694),4326))",
+        (owner,device_id,T0+timedelta(minutes=24)),
+    )
+    await conn.execute(
         "INSERT INTO trip_boundary_overrides (account_id, tracking_device_id, device, kind, point_id) "
         "VALUES (%s, %s, 'test', 'force', %s)",
         (owner, device_id, (await point.fetchone())[0]),

@@ -239,6 +239,13 @@ async def _populate_source(pool) -> None:
     async with pool.connection() as conn:
         truck_id = await create_vehicle(conn, "Truck", make="Ford", model="F150")
         device_id = await fixture_device(conn, "phone1")
+        await conn.execute(
+            "INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom,accuracy_m) "
+            "SELECT 41,%s,'phone1',t,ST_SetSRID(ST_MakePoint(lon,lat),4326)::geography,5 "
+            "FROM (VALUES ('2026-06-15T15:00:00+00:00'::timestamptz,-122.30,47.60), "
+            "('2026-06-15T15:30:00+00:00'::timestamptz,-122.35,47.65)) AS fixes(t,lon,lat)",
+            (device_id,),
+        )
 
         office_cur = await conn.execute(
             "INSERT INTO places (account_id, name, kind, geom, radius_m) "
@@ -914,16 +921,17 @@ def test_wrong_format_or_version_rejected(mutate, expected_field):
     _scenario(run)
 
 
-@pytest.mark.parametrize("schema_version", [26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39])
-def test_format_3_bundles_import_into_schema_39(schema_version):
+@pytest.mark.parametrize("schema_version", [26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40])
+def test_format_3_bundles_import_into_current_schema(schema_version):
     """Migration 027 only deletes raw_messages rows, which bundles never
     carry, 028 only enforces row-level security, 029 adds invitations, 030
     adds email challenges, 031 adds password resets, and 032 adds OIDC member
     authentication. Schema 33 adds sign-out, 34 adds invitation metadata, and
     35 adds administrator recovery functions, and 36 adds account audit and
     lifecycle state. Schema 38 adds internal snap retry state, and 39 adds
-    import admission. Format-3 exports from schema 26 through 39 import because
-    these additions do not change bundle data."""
+    import admission. Schema 40 adds internal storage accounting. Format-3
+    exports from schema 26 through 40 import because these additions do not
+    change bundle data."""
     async def run(pool):
         transport = httpx.ASGITransport(app=_bare_app(pool))
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:

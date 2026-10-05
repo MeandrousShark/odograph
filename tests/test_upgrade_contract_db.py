@@ -81,7 +81,8 @@ async def _provision(pool, monkeypatch, schema):
                             + application_roles.OIDC_ATTEMPT_FUNCTIONS
                             + application_roles.OIDC_METHOD_FUNCTIONS
                             + application_roles.ACCOUNT_LIFECYCLE_FUNCTIONS
-                            + application_roles.IMPORT_ADMISSION_FUNCTIONS)
+                            + application_roles.IMPORT_ADMISSION_FUNCTIONS
+                            + application_roles.STORAGE_FUNCTIONS)
         patch.setattr(application_roles, "OWNED_TABLES", owned_tables)
         patch.setattr(application_roles, "PROTECTED_TABLES", ())
         patch.setattr(application_roles, "CONTROL_TABLES", control_tables)
@@ -120,9 +121,12 @@ async def _provision(pool, monkeypatch, schema):
 
 async def _prepare_before_039(monkeypatch):
     with monkeypatch.context() as patch:
+        patch.setattr(application_roles, "PROTECTED_TABLES", ("email_challenges",))
+        patch.setattr(application_roles, "TABLES", tuple(
+            table for table in application_roles.TABLES if table not in application_roles.STORAGE_TABLES))
         patch.setattr(application_roles, "FUNCTIONS", {
             key: value for key, value in application_roles.FUNCTIONS.items()
-            if key not in application_roles.IMPORT_ADMISSION_FUNCTIONS
+            if key not in application_roles.IMPORT_ADMISSION_FUNCTIONS + application_roles.STORAGE_FUNCTIONS
         })
         await prepare_application_roles(TEST_DB)
 
@@ -346,3 +350,48 @@ def test_032_converts_only_empty_passwords_and_rejects_new_empty_hashes(monkeypa
             await full_schema_reset(pool)
             await pool.close()
     asyncio.run(run())
+
+
+def test_storage_upgrade_keeps_contract_without_reprovisioning(monkeypatch, tmp_path):
+    """Upgrade an already managed installation and validate its migration grants."""
+    async def scenario():
+        pool = make_pool(TEST_DB)
+        await pool.open(wait=True)
+        try:
+            await drop_and_recreate_schema(pool)
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", _migration_dir(tmp_path, "before_storage", through=39))
+            await run_migrations(pool)
+            with monkeypatch.context() as patch:
+                patch.setattr(application_roles, "PROTECTED_TABLES", ("email_challenges",))
+                patch.setattr(application_roles, "TABLES", tuple(
+                    table for table in application_roles.TABLES if table not in application_roles.STORAGE_TABLES))
+                patch.setattr(application_roles, "FUNCTIONS", {
+                    key: value for key, value in application_roles.FUNCTIONS.items()
+                    if key not in application_roles.STORAGE_FUNCTIONS
+                })
+                await prepare_application_roles(TEST_DB)
+            async with pool.connection() as conn:
+                await conn.execute(
+                    "INSERT INTO accounts(id,email,password_hash,is_admin,avatar_bytes,avatar_mime,avatar_updated_at) "
+                    "VALUES(41,'upgrade-storage@example.invalid','unused',true,'avatar'::bytea,'image/png',now())")
+                await conn.execute(
+                    "INSERT INTO raw_messages(account_id,payload) VALUES(41,'{\"kind\": \"legacy\"}')")
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
+            await run_migrations(pool)
+
+            async def forbidden_reprovision(conn):
+                raise AssertionError("upgrade must validate rather than provision")
+
+            monkeypatch.setattr(application_roles, "_provision", forbidden_reprovision)
+            await prepare_application_roles(TEST_DB)
+            async with pool.connection() as conn:
+                assert await (await conn.execute("SELECT public.storage_usage_consistent()")).fetchone() == (True,)
+                assert await (await conn.execute(
+                    "SELECT charge_version,actual_bytes,raw_bytes,reserved_bytes FROM account_usage WHERE account_id=41"
+                )).fetchone() == (1, 128 + 6 + 9 + 128 + len('{"kind": "legacy"}'),
+                                  128 + len('{"kind": "legacy"}'), 0)
+        finally:
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
+            await full_schema_reset(pool)
+            await pool.close()
+    asyncio.run(scenario())

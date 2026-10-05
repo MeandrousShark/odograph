@@ -71,7 +71,16 @@ async def _insert_detected_trip(conn, device, started_at, ended_at, lat, lon) ->
             lat,
         ),
     )
-    return (await cur.fetchone())[0]
+    trip_id = (await cur.fetchone())[0]
+    # Retain the accepted inputs behind the synthetic detector output.
+    await conn.execute(
+        "INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom,trip_id) "
+        "SELECT t.account_id,t.tracking_device_id,t.device,e.t, "
+        "COALESCE(e.geom,ST_SetSRID(ST_MakePoint(-122.33,47.60),4326)::geography),t.id "
+        "FROM trips t CROSS JOIN LATERAL (VALUES(t.started_at,t.start_geom), "
+        "(t.ended_at,t.end_geom)) e(t,geom) WHERE t.id=%s "
+        "ON CONFLICT(tracking_device_id,recorded_at) DO NOTHING", (trip_id,))
+    return trip_id
 
 
 async def _call_page(request, **prefill):
