@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from starlette.responses import RedirectResponse
+from starlette.responses import HTMLResponse, RedirectResponse
+from html import escape
+from app.capacity import CapacityBusy
+from app.capacity_routes import release_authentication
 
 from app.auth import check_form_csrf, require_user
 from app.page import render_page
@@ -12,18 +15,44 @@ from app.tracking import (
 )
 
 
+def _saved_credential_response(issued, ingest_url):
+    return HTMLResponse(
+        '<h1>Tracking credential saved</h1><p>The settings page is busy. '
+        'Save these values before leaving, the password is shown only once.</p>'
+        f'<p>URL: <code>{escape(ingest_url)}</code></p>'
+        f'<p>User: <code>{escape(issued.username)}</code></p>'
+        f'<p>Password: <code>{escape(issued.secret)}</code></p>'
+        '<p><a href="/settings/tracking">Open tracking settings</a></p>',
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 async def _render_tracking(
     request: Request, user: dict, issued: IssuedCredential | None = None,
 ):
-    async with request.state.account_pool.connection() as conn:
-        devices, credentials = await list_tracking(conn)
+    if issued is not None:
+        await release_authentication(request)
+    try:
+        async with request.state.account_pool.connection() as conn:
+            devices, credentials = await list_tracking(conn)
+    except CapacityBusy:
+        if issued is None:
+            raise
+        cfg = request.app.state.config
+        ingest_url = cfg.app_url.rstrip("/") + "/ingest" if cfg.app_url else str(request.url_for("ingest"))
+        return _saved_credential_response(issued, ingest_url)
     cfg = request.app.state.config
     ingest_url = cfg.app_url.rstrip("/") + "/ingest" if cfg.app_url else str(request.url_for("ingest"))
-    response = await render_page(request, "tracking.html", {
-        "user": user, "csrf": request.session.get("csrf", ""),
-        "devices": devices, "credentials": credentials,
-        "issued": issued, "ingest_url": ingest_url,
-    })
+    try:
+        response = await render_page(request, "tracking.html", {
+            "user": user, "csrf": request.session.get("csrf", ""),
+            "devices": devices, "credentials": credentials,
+            "issued": issued, "ingest_url": ingest_url,
+        })
+    except CapacityBusy:
+        if issued is None:
+            raise
+        return _saved_credential_response(issued, ingest_url)
     response.headers["Cache-Control"] = "no-store"
     return response
 

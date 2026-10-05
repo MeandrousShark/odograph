@@ -198,6 +198,7 @@ def register(router: APIRouter) -> None:
                     )
                 except errors.ForeignKeyViolation:
                     raise HTTPException(status_code=400, detail="Invalid expense reference")
+            request.state._capacity_mutation_committed = True
             return Response(status_code=204, headers={"HX-Redirect": f"/expenses?year={parsed_date.year}"})
 
         @router.post("/expenses/{expense_id}/update", dependencies=[Depends(require_csrf)])
@@ -243,6 +244,7 @@ def register(router: APIRouter) -> None:
                     raise HTTPException(status_code=400, detail="Invalid expense reference")
                 if cur.rowcount == 0:
                     raise HTTPException(status_code=404, detail="No such expense")
+            request.state._capacity_mutation_committed = True
             return Response(status_code=204, headers={"HX-Redirect": f"/expenses?year={parsed_date.year}"})
 
         @router.post("/expenses/{expense_id}/delete", dependencies=[Depends(require_csrf)])
@@ -253,4 +255,5 @@ def register(router: APIRouter) -> None:
                 cur = await conn.execute("DELETE FROM expenses WHERE id = %s AND account_id = %s", (expense_id, account_id(conn)))
                 if cur.rowcount == 0:
                     raise HTTPException(status_code=404, detail="No such expense")
+            request.state._capacity_mutation_committed = True
             return Response(status_code=204, headers={"HX-Redirect": "/expenses"})

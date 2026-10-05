@@ -3,10 +3,14 @@ from __future__ import annotations
 
 import csv
 import io
+import os
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+import openpyxl
+import pytest
 from openpyxl import load_workbook
+from openpyxl.utils.exceptions import IllegalCharacterError
 
 from app.export import HEADERS, build_export_rows, to_csv, to_range_report_xlsx, to_report_xlsx, to_xlsx
 from app.expenses import build_expense_report
@@ -664,3 +668,123 @@ def test_expenses_sheet_total_accumulates_large_values_with_decimal_precision():
     raw = to_report_xlsx(report, [], RATES, TZ, None, expense_report, expenses)
     ws = load_workbook(io.BytesIO(raw))["Expenses"]
     assert Decimal(str(ws.cell(ws.max_row, 4).value)) == Decimal("2489999999997.51")
+
+
+def test_xlsx_streaming_preserves_styles_and_empty_totals():
+    trips = [
+        _trip(category="business", distance_m=1609.344),
+        _trip(category="personal", exclusion="not_my_vehicle", distance_m=3218.688),
+    ]
+    ws = load_workbook(io.BytesIO(to_xlsx(trips, RATES, TZ)))["Trips"]
+
+    assert ws.max_row == 4
+    assert ws["A1"].font.bold
+    assert ws["P2"].number_format == '"$"#,##0.00'
+    assert ws["P3"].number_format == "General"
+    assert ws["A4"].value == "Total"
+    assert ws["A4"].font.bold
+    assert ws["G4"].value == 1.0
+    assert ws["P4"].value == round(0.725, 2)
+    assert ws["P4"].number_format == '"$"#,##0.00'
+
+    empty_ws = load_workbook(io.BytesIO(to_xlsx([], RATES, TZ)))["Trips"]
+    assert empty_ws.max_row == 2
+    assert [cell.value for cell in empty_ws[1]] == list(HEADERS)
+    assert empty_ws["A2"].value == "Total"
+    assert empty_ws["G2"].value == 0
+    assert empty_ws["P2"].value == 0
+    assert empty_ws["A2"].font.bold
+
+
+def test_report_and_range_write_only_sheets_preserve_styles_and_widths():
+    from datetime import date
+
+    trips = [_trip(category="business", vehicle_name="Truck")]
+    report = build_annual_report(trips, RATES, TZ, 2026)
+    annual = load_workbook(io.BytesIO(to_report_xlsx(report, trips, RATES, TZ)))
+    summary = annual["Summary"]
+    assert annual.sheetnames == ["Summary", "Trips"]
+    assert summary["A1"].font.bold and summary["A1"].font.sz == 14
+    assert summary["A11"].value == "Month" and summary["A11"].font.bold
+    assert summary.column_dimensions["A"].width == 32
+    assert summary.column_dimensions["K"].width == 18
+    assert annual["Trips"]["A1"].font.bold
+
+    range_report = build_range_report(trips, RATES, TZ, date(2026, 4, 1), date(2026, 6, 30))
+    ranged = load_workbook(io.BytesIO(to_range_report_xlsx(range_report, trips, RATES, TZ)))
+    assert ranged["Summary"]["A1"].value == "Mileage Report: 2026 Q2"
+    assert ranged["Summary"]["A1"].font.bold
+    assert ranged["Summary"].column_dimensions["A"].width == 32
+    assert ranged["Trips"].max_row == 3
+
+
+def test_expenses_write_only_sheet_preserves_date_currency_styles_and_widths():
+    from datetime import date
+    from decimal import Decimal
+
+    expenses = [{
+        "vehicle_id": 7,
+        "vehicle_name": "Truck",
+        "incurred_on": date(2026, 6, 1),
+        "category": "fuel",
+        "amount": Decimal("12.34"),
+        "treatment": "business_use_allocated",
+        "notes": "receipt",
+    }]
+    report = build_annual_report([], RATES, TZ, 2026)
+    expense_report = build_expense_report(2026, [], expenses, [], RATES, TZ)
+    wb = load_workbook(io.BytesIO(to_report_xlsx(
+        report, [], RATES, TZ, None, expense_report, expenses,
+    )))
+    ws = wb["Expenses"]
+
+    assert [cell.value for cell in ws[1]] == [
+        "Date", "Vehicle", "Category", "Amount ($)", "Tax treatment", "Notes",
+    ]
+    assert ws["A1"].font.bold
+    assert ws["A2"].value.date() == date(2026, 6, 1)
+    assert ws["D2"].number_format == '"$"#,##0.00'
+    assert ws["A3"].value == "Total" and ws["A3"].font.bold
+    assert ws["D3"].number_format == '"$"#,##0.00'
+    assert [ws.column_dimensions[col].width for col in "ABCDEF"] == [14, 22, 24, 14, 24, 36]
+
+
+@pytest.mark.parametrize("failure", ["row-validation", "save"])
+def test_xlsx_writer_failure_cleans_only_its_own_temporary_file(monkeypatch, failure):
+    original_workbook = openpyxl.Workbook
+    unrelated_wb = original_workbook(write_only=True)
+    unrelated_ws = unrelated_wb.create_sheet("Unrelated")
+    unrelated_ws.append(["still owned by another workbook"])
+    unrelated_path = unrelated_ws._writer.out
+    assert os.path.exists(unrelated_path)
+
+    workbooks = []
+
+    def workbook_factory(*args, **kwargs):
+        wb = original_workbook(*args, **kwargs)
+        workbooks.append(wb)
+        if failure == "save":
+            def fail_save(_buffer):
+                raise RuntimeError("injected XLSX save failure")
+
+            wb.save = fail_save
+        return wb
+
+    monkeypatch.setattr(openpyxl, "Workbook", workbook_factory)
+    trips = [_trip(notes="bad\x01text")] if failure == "row-validation" else [_trip()]
+    error_type = IllegalCharacterError if failure == "row-validation" else RuntimeError
+
+    try:
+        with pytest.raises(error_type):
+            to_xlsx(trips, RATES, TZ)
+
+        owned_writer = workbooks[0]["Trips"]._writer
+        assert not os.path.exists(owned_writer.out)
+        assert getattr(owned_writer.xf, "gi_frame", None) is None
+        assert os.path.exists(unrelated_path)
+    finally:
+        unrelated_ws.close()
+        unrelated_writer = unrelated_ws._writer
+        unrelated_writer.close()
+        unrelated_writer.cleanup()
+        unrelated_wb.close()

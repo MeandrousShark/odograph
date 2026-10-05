@@ -44,7 +44,7 @@ def _app(monkeypatch, *, smtp_host="smtp.example.com"):
     app.state.security_mail = SecurityMailAdmission()
 
     @asynccontextmanager
-    async def fake_connection(pool):
+    async def fake_connection(pool, *, lane="identity"):
         class Connection:
             async def execute(self, query, parameters=None):
                 return None
@@ -352,7 +352,7 @@ def test_cancelled_delivery_owns_exact_token_cleanup(monkeypatch, fails):
     assert live == ({"replacement-token"} if fails else {"new-token", "replacement-token"})
 
 
-def test_cancelled_challenge_waiting_for_mail_slot_still_revokes_failed_send(monkeypatch):
+def test_busy_mail_slot_revokes_challenge_without_waiting_or_sending(monkeypatch):
     issued = asyncio.Event()
     revoked = asyncio.Event()
     sent = []
@@ -392,11 +392,9 @@ def test_cancelled_challenge_waiting_for_mail_slot_still_revokes_failed_send(mon
                     "current_password": "correct", "csrf_token": "csrf-test",
                 }))
                 await asyncio.wait_for(issued.wait(), 2)
-                await asyncio.sleep(0)
-                caller.cancel()
-                with pytest.raises(asyncio.CancelledError):
-                    await caller
-                assert not sent and not revoked.is_set()
+                response = await asyncio.wait_for(caller, 2)
+                assert response.status_code == 503
+                assert not sent and revoked.is_set()
         finally:
             admission._slots.release()
             admission._slots.release()
@@ -404,7 +402,7 @@ def test_cancelled_challenge_waiting_for_mail_slot_still_revokes_failed_send(mon
         await admission.drain()
 
     asyncio.run(run())
-    assert len(sent) == 1
+    assert sent == []
 
 
 def test_confirmation_requires_session_and_csrf_and_renews_change_session(monkeypatch):

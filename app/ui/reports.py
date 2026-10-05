@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import asyncio
+from app.capacity import owned_thread
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -189,7 +189,7 @@ async def _fetch_year_expense_report(pool, tz: ZoneInfo, year: int, trips: list[
             (account_id(conn),),
         )
         readings = await reading_cur.fetchall()
-    return expenses, build_expense_report(year, trips, expenses, readings, rates, tz)
+    return expenses, await owned_thread(build_expense_report, year, trips, expenses, readings, rates, tz)
 
 
 async def _build_range_report_data(
@@ -199,7 +199,7 @@ async def _build_range_report_data(
     start, end = _parse_range_query_dates(from_str, to_str)
     trips, rates = await _fetch_range_trips(request.state.account_pool, tz, start, end)
     try:
-        report = build_range_report(trips, rates, tz, start, end)
+        report = await owned_thread(build_range_report, trips, rates, tz, start, end)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return _RangeReportData(tz, start, end, report, trips, rates)
@@ -211,7 +211,7 @@ async def _build_annual_report_data(request: Request, year: int) -> _AnnualRepor
     trips, rates = await _fetch_range_trips(
         pool, tz, date(year, 1, 1), date(year, 12, 31)
     )
-    report = build_annual_report(trips, rates, tz, year)
+    report = await owned_thread(build_annual_report, trips, rates, tz, year)
     odometer_coverage = await _fetch_year_odometer_coverage(pool, tz, year, trips)
     expenses, expense_report = await _fetch_year_expense_report(pool, tz, year, trips, rates)
     return _AnnualReportData(
@@ -255,9 +255,9 @@ def register(router: APIRouter) -> None:
             # CSV/XLSX serialization is CPU-bound; offload so it doesn't block
             # the event loop for other requests while a large export builds.
             if format == "csv":
-                content = await asyncio.to_thread(to_csv, trips, rates, tz)
+                content = await owned_thread(to_csv, trips, rates, tz)
             else:
-                content = await asyncio.to_thread(to_xlsx, trips, rates, tz)
+                content = await owned_thread(to_xlsx, trips, rates, tz)
             return Response(
                 content=content,
                 media_type=EXPORT_MEDIA_TYPES[format],
@@ -301,7 +301,7 @@ def register(router: APIRouter) -> None:
             data = await _build_range_report_data(request, from_, to)
             # XLSX serialization is CPU-bound; offload so it doesn't block the
             # event loop for other requests while the report builds.
-            content = await asyncio.to_thread(
+            content = await owned_thread(
                 to_range_report_xlsx,
                 data.report,
                 data.trips,
@@ -343,7 +343,7 @@ def register(router: APIRouter) -> None:
             data = await _build_annual_report_data(request, year)
             # XLSX serialization is CPU-bound; offload so it doesn't block the
             # event loop for other requests while the report builds.
-            content = await asyncio.to_thread(
+            content = await owned_thread(
                 to_report_xlsx,
                 data.report,
                 data.trips,

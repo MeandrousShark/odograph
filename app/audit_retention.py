@@ -21,7 +21,7 @@ class AuditRetentionWorker(PokeSweepWorker):
         self.control_pool = control_pool
 
     async def run_once(self) -> None:
-        async with control_connection(self.control_pool) as conn:
+        async with control_connection(self.control_pool, lane="identity") as conn:
             cur = await conn.execute("SELECT public.prune_account_security_audit()")
             deleted = (await cur.fetchone())[0]
         if deleted:

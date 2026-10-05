@@ -12,8 +12,9 @@ from psycopg.rows import dict_row
 from starlette.responses import JSONResponse, RedirectResponse, Response
 
 from app.account_context import account_id
+from app.capacity import owned_thread
 from app.auth import require_csrf, require_user
-from app.page import render_page
+from app.page import render_page, render_template
 from app.dashboard import parse_week_anchor
 from app.db import DETECTOR_ADVISORY_LOCK_KEY
 from app.detector.runner import load_trip_points
@@ -750,7 +751,7 @@ def register_archive(router: APIRouter) -> None:
                 "export_oob": True,
                 "ytd_oob": True,
             })
-            response = request.app.state.templates.TemplateResponse(
+            response = await render_template(
                 request, "_trip_archive_response.html", archive
             )
             header, url = _archive_history_directive(
@@ -825,7 +826,7 @@ def register_month_page(router: APIRouter) -> None:
                 )
                 vehicles = await list_vehicles(conn)
                 recent_purposes = await _fetch_recent_purposes(conn)
-            return request.app.state.templates.TemplateResponse(
+            return await render_template(
                 request,
                 "_trip_page_rows.html",
                 {
@@ -853,10 +854,10 @@ def register(router: APIRouter) -> None:
             ctx = await _fetch_trip_card_context(request.state.account_pool, trip_id)
             if dashboard_week:
                 ctx["dashboard_week"] = dashboard_week
-                return request.app.state.templates.TemplateResponse(
+                return await render_template(
                     request, "_dashboard_trip_row.html", ctx
                 )
-            return request.app.state.templates.TemplateResponse(request, "_trip_archive_row.html", ctx)
+            return await render_template(request, "_trip_archive_row.html", ctx)
 
         @router.get("/trips/{trip_id}/edit")
         async def edit_trip_card(
@@ -873,7 +874,7 @@ def register(router: APIRouter) -> None:
             })
             if dashboard_week:
                 ctx["dashboard_week"] = dashboard_week
-            return request.app.state.templates.TemplateResponse(request, "_trip_edit_card.html", ctx)
+            return await render_template(request, "_trip_edit_card.html", ctx)
 
         @router.post("/trips/{trip_id}/edit", dependencies=[Depends(require_csrf)])
         async def save_trip_card(
@@ -1053,25 +1054,26 @@ def register(router: APIRouter) -> None:
                             raise ManualTripValidationError(
                                 {"vehicle_id": "Choose a vehicle that still exists."}
                             )
+                request.state._capacity_mutation_committed = True
             except ManualTripValidationError as exc:
                 ctx = await _fetch_trip_card_context(pool, trip_id)
                 ctx.update({"values": values, "errors": exc.errors})
                 if dashboard_week:
                     ctx["dashboard_week"] = dashboard_week
-                return request.app.state.templates.TemplateResponse(
+                return await render_template(
                     request, "_trip_edit_card.html", ctx
                 )
 
             ctx = await _fetch_trip_card_context(pool, trip_id)
             if dashboard_week:
                 ctx["dashboard_week"] = dashboard_week
-                response = request.app.state.templates.TemplateResponse(
+                response = await render_template(
                     request, "_dashboard_trip_row.html", ctx
                 )
                 response.headers["HX-Refresh"] = "true"
                 return response
             return _mark_archive_write(
-                request.app.state.templates.TemplateResponse(
+                await render_template(
                     request, "_trip_archive_row.html", ctx
                 )
             )
@@ -1093,9 +1095,10 @@ def register(router: APIRouter) -> None:
                 )
                 if cur.rowcount == 0:
                     raise HTTPException(status_code=404, detail="No such trip")
+            request.state._capacity_mutation_committed = True
             ctx = await _fetch_trip_card_context(pool, trip_id)
             return _mark_archive_write(
-                request.app.state.templates.TemplateResponse(
+                await render_template(
                     request, "_trip_archive_row.html", ctx
                 )
             )
@@ -1142,6 +1145,7 @@ def register(router: APIRouter) -> None:
                         notes_value.strip() or None, trip_id,
                     ),
                 )
+            request.state._capacity_mutation_committed = True
             return Response(
                 status_code=204,
                 headers={"HX-Redirect": f"/trips/{trip_id}"},
@@ -1295,9 +1299,10 @@ def register(router: APIRouter) -> None:
                                 + ", updated_at = now() WHERE id = %s AND account_id = %s",
                                 (*label_params, trip_id, account_id(conn)),
                             )
+                request.state._capacity_mutation_committed = True
             except ManualTripValidationError as exc:
                 trip = await _fetch_trip(pool, trip_id)
-                return request.app.state.templates.TemplateResponse(
+                return await render_template(
                     request,
                     "_trip_label_form.html",
                     {"trip": trip, "values": values, "errors": exc.errors},
@@ -1321,6 +1326,7 @@ def register(router: APIRouter) -> None:
             pool = request.state.account_pool
             async with request.state.account_pool.connection() as conn:
                 await _apply_human_tag(conn, trip_id, category)
+            request.state._capacity_mutation_committed = True
             if dashboard_week:
                 # Importing here avoids coupling the trips module's import
                 # path to stats while the router is assembled.
@@ -1336,7 +1342,7 @@ def register(router: APIRouter) -> None:
                     vehicles=dashboard_context["vehicles"],
                     recent_purposes=dashboard_context["recent_purposes"],
                 )
-                return request.app.state.templates.TemplateResponse(
+                return await render_template(
                     request,
                     "_dashboard_tag_response.html",
                     {**ctx, **dashboard_context, "dashboard_oob": True},
@@ -1363,7 +1369,7 @@ def register(router: APIRouter) -> None:
                 # to the plain row swap rather than guess at figures this
                 # handler cannot otherwise recompute correctly.
                 return _mark_archive_write(
-                    request.app.state.templates.TemplateResponse(
+                    await render_template(
                         request, "_trip_archive_row.html", ctx
                     )
                 )
@@ -1383,7 +1389,7 @@ def register(router: APIRouter) -> None:
                 ytd_year, ytd_deduction = await _fetch_ytd_deduction(conn, tz, rates)
 
             return _mark_archive_write(
-                request.app.state.templates.TemplateResponse(
+                await render_template(
                     request,
                     "_trip_tag_response.html",
                     {
@@ -1407,9 +1413,10 @@ def register(router: APIRouter) -> None:
                     "UPDATE trips SET notes = %s, updated_at = now() WHERE id = %s AND account_id = %s",
                     (notes.strip() or None, trip_id, account_id(conn)),
                 )
+            request.state._capacity_mutation_committed = True
             ctx = await _fetch_trip_card_context(pool, trip_id)
             return _mark_archive_write(
-                request.app.state.templates.TemplateResponse(
+                await render_template(
                     request, "_trip_archive_row.html", ctx
                 )
             )
@@ -1430,9 +1437,10 @@ def register(router: APIRouter) -> None:
                 )
                 if cur.rowcount == 0:
                     raise HTTPException(status_code=404, detail="No such trip")
+            request.state._capacity_mutation_committed = True
             ctx = await _fetch_trip_card_context(pool, trip_id)
             return _mark_archive_write(
-                request.app.state.templates.TemplateResponse(
+                await render_template(
                     request, "_trip_archive_row.html", ctx
                 )
             )
@@ -1454,9 +1462,10 @@ def register(router: APIRouter) -> None:
                     )
                 except errors.ForeignKeyViolation:
                     raise HTTPException(status_code=400, detail="No such vehicle")
+            request.state._capacity_mutation_committed = True
             ctx = await _fetch_trip_card_context(pool, trip_id)
             return _mark_archive_write(
-                request.app.state.templates.TemplateResponse(
+                await render_template(
                     request, "_trip_archive_row.html", ctx
                 )
             )
@@ -1473,6 +1482,7 @@ def register_delete(router: APIRouter) -> None:
         ):
             async with request.state.account_pool.connection() as conn:
                 await _delete_trip_in(conn, trip_id)
+            request.state._capacity_mutation_committed = True
             if dashboard_week:
                 return Response(status_code=200, headers={"HX-Refresh": "true"})
             if fragment:
@@ -1548,6 +1558,7 @@ def register_batch_and_points(router: APIRouter) -> None:
                         status_code=400,
                         detail="One or more selected trips no longer exist",
                     )
+            request.state._capacity_mutation_committed = True
             return JSONResponse({"updated": cur.rowcount})
 
         @router.post("/trips/batch_delete", dependencies=[Depends(require_csrf)])
@@ -1576,6 +1587,7 @@ def register_batch_and_points(router: APIRouter) -> None:
                     )
                 for trip_id in trip_ids:
                     await _delete_trip_in(conn, trip_id)
+            request.state._capacity_mutation_committed = True
             return JSONResponse({"deleted": len(trip_ids)})
 
         @router.get("/trips/{trip_id}/points")
@@ -1585,6 +1597,6 @@ def register_batch_and_points(router: APIRouter) -> None:
                 raise HTTPException(status_code=400, detail="Only detected trips have points")
             async with request.state.account_pool.connection() as conn:
                 rows = await load_trip_points(conn, trip_id)
-            return JSONResponse([
+            return await owned_thread(lambda: JSONResponse([
                 {"id": r[0], "t": r[1].isoformat(), "lat": r[2], "lon": r[3]} for r in rows
-            ])
+            ]))

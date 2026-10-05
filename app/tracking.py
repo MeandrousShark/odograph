@@ -1,7 +1,7 @@
 """Owned tracking streams and one-time, revocable Basic credentials."""
 from __future__ import annotations
 
-import asyncio
+from app.capacity import owned_thread
 import hmac
 import re
 import secrets
@@ -85,7 +85,7 @@ async def authenticate_ingest(
     Environment credentials only recognize a pre-setup sender. Once an account
     exists, the durable credential record is the sole authentication authority.
     """
-    async with control_connection(control_pool) as conn:
+    async with control_connection(control_pool, lane="ingest_identity") as conn:
         cur = await conn.execute(
             "SELECT c.public_id, c.secret_hash, c.account_id, c.tracking_device_id, "
             "c.kind, c.generation, c.revoked_at, a.is_enabled, a.auth_version, "
@@ -109,7 +109,7 @@ async def authenticate_ingest(
         return None
     if row[3] is not None and (not row[9] or row[11] is not None):
         return None
-    if not await asyncio.to_thread(verify_password, password, row[1]):
+    if not await owned_thread(verify_password, password, row[1]):
         return None
     return IngestPrincipal(
         AccountPrincipal(row[2], row[7], row[8]), row[0], row[5], row[4], row[3], row[10],
@@ -200,7 +200,7 @@ async def _issue_credential(conn, tracking_device_id: int, label: str) -> Issued
     owner = account_id(conn)
     public_id = "odograph_" + secrets.token_urlsafe(18)
     secret = secrets.token_urlsafe(32)
-    secret_hash = await asyncio.to_thread(hash_password, secret)
+    secret_hash = await owned_thread(hash_password, secret)
     for attempt in range(_MAX_USERNAME_ATTEMPTS):
         basic_username = _new_basic_username(label)
         try:
@@ -278,7 +278,7 @@ async def rotate_credential(conn, public_id: str) -> IssuedCredential:
     if await cur.fetchone() is None:
         raise TrackingNotFound("No such tracking device")
     secret = secrets.token_urlsafe(32)
-    secret_hash = await asyncio.to_thread(hash_password, secret)
+    secret_hash = await owned_thread(hash_password, secret)
     await conn.execute(
         "UPDATE ingest_credentials SET secret_hash = %s, revoked_at = NULL, generation = generation + 1, "
         "updated_at = now() WHERE account_id = %s AND public_id = %s",

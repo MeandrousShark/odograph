@@ -72,6 +72,39 @@ def test_render_page_preserves_a_nondefault_status_code():
     assert templates.calls[0][3] == 400
 
 
+def test_render_page_reuses_an_explicit_account_connection_without_another_borrow():
+    raw = _Connection()
+    conn = AccountConnection(raw, AccountPrincipal(41, True, 1))
+    templates = _Templates()
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(templates=templates)))
+
+    context = asyncio.run(render_page(request, "review.html", {}, conn=conn))
+
+    assert raw.queries == [("SELECT count(*) FROM trips WHERE account_id = %s AND category = 'unclassified'", (41,))]
+    assert context["review_count"] == 5
+
+
+def test_review_full_page_reuses_its_open_account_connection(monkeypatch):
+    raw = _Connection()
+    conn = AccountConnection(raw, AccountPrincipal(41, True, 1))
+    templates = _Templates()
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(templates=templates)))
+
+    async def rows(conn):
+        return []
+
+    monkeypatch.setattr(review, "list_vehicles", rows)
+    monkeypatch.setattr(review, "_fetch_recent_purposes", rows)
+    context = asyncio.run(review._render_review_card(
+        request, conn, "review.html", {"trip": None, "remaining": 0}, "", "", "",
+    ))
+
+    assert len(raw.queries) == 1
+    assert raw.queries[0][1] == (41,)
+    assert context["review_count"] == 5
+    assert templates.calls[0][1] == "review.html"
+
+
 def test_review_fragment_does_not_use_the_full_page_renderer(monkeypatch):
     templates = _Templates()
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(templates=templates)))

@@ -29,6 +29,14 @@ WORKER_ENV_VARS = (
     "ODOMETER_REMINDER", "SMTP_HOST", "EMAIL_FROM", "EMAIL_TO",
     "GEOCODE_API_KEY", "GEOCODE_PROVIDER", "GEOCODE_NOMINATIM_URL",
 )
+CAPACITY_INGEST_AUTH_ENV_VARS = (
+    "CAPACITY_AUTH_INGEST_PENDING", "CAPACITY_AUTH_INGEST_WAIT_S",
+    "CAPACITY_INGEST_IDENTITY_PENDING", "CAPACITY_INGEST_IDENTITY_WAIT_S",
+)
+CAPACITY_NAVIGATION_ENV_VARS = (
+    "CAPACITY_NAVIGATION_SLOTS", "CAPACITY_NAVIGATION_PENDING",
+    "CAPACITY_NAVIGATION_WAIT_S",
+)
 
 
 @pytest.fixture
@@ -244,6 +252,95 @@ def test_hsts_max_age_reads_from_environment(clean_env):
     cfg = Config.from_env()
 
     assert cfg.hsts_max_age == 63072000
+
+
+def test_ingest_authentication_queue_defaults(clean_env):
+    for key in CAPACITY_INGEST_AUTH_ENV_VARS:
+        clean_env.delenv(key, raising=False)
+
+    cfg = Config.from_env()
+
+    assert cfg.capacity_auth_ingest_pending == 8
+    assert cfg.capacity_auth_ingest_wait_s == 1.0
+    assert cfg.capacity_ingest_identity_pending == 1
+    assert cfg.capacity_ingest_identity_wait_s == 0.25
+
+
+def test_navigation_capacity_defaults_and_environment_roundtrip(clean_env):
+    for key in CAPACITY_NAVIGATION_ENV_VARS + (
+        "CAPACITY_ROUTINE_SLOTS", "CAPACITY_IDENTITY_SLOTS",
+    ):
+        clean_env.delenv(key, raising=False)
+
+    defaults = Config.from_env()
+    assert defaults.capacity_routine_slots == 1
+    assert defaults.capacity_identity_slots == 1
+    assert defaults.capacity_navigation_slots == 1
+    assert defaults.capacity_navigation_pending == 4
+    assert defaults.capacity_navigation_wait_s == 1.0
+
+    clean_env.setenv("CAPACITY_NAVIGATION_SLOTS", "1")
+    clean_env.setenv("CAPACITY_NAVIGATION_PENDING", "0")
+    clean_env.setenv("CAPACITY_NAVIGATION_WAIT_S", "0.75")
+    custom = Config.from_env()
+    assert custom.capacity_navigation_slots == 1
+    assert custom.capacity_navigation_pending == 0
+    assert custom.capacity_navigation_wait_s == .75
+
+
+@pytest.mark.parametrize(("name", "value"), [
+    ("CAPACITY_NAVIGATION_SLOTS", "2"),
+    ("CAPACITY_NAVIGATION_PENDING", "-1"),
+    ("CAPACITY_NAVIGATION_PENDING", "5"),
+    ("CAPACITY_NAVIGATION_WAIT_S", "0"),
+    ("CAPACITY_NAVIGATION_WAIT_S", "1.01"),
+    ("CAPACITY_NAVIGATION_WAIT_S", "nan"),
+    ("CAPACITY_NAVIGATION_WAIT_S", "inf"),
+    ("CAPACITY_ROUTINE_SLOTS", "2"),
+    ("CAPACITY_IDENTITY_SLOTS", "2"),
+])
+def test_navigation_capacity_environment_rejects_out_of_range_values(
+    clean_env, name, value,
+):
+    clean_env.setenv(name, value)
+
+    with pytest.raises(ValueError):
+        Config.from_env()
+
+
+def test_ingest_authentication_queue_custom_values(clean_env):
+    clean_env.setenv("CAPACITY_AUTH_INGEST_PENDING", "7")
+    clean_env.setenv("CAPACITY_AUTH_INGEST_WAIT_S", "0.75")
+    clean_env.setenv("CAPACITY_INGEST_IDENTITY_PENDING", "0")
+    clean_env.setenv("CAPACITY_INGEST_IDENTITY_WAIT_S", "0.125")
+
+    cfg = Config.from_env()
+
+    assert cfg.capacity_auth_ingest_pending == 7
+    assert cfg.capacity_auth_ingest_wait_s == 0.75
+    assert cfg.capacity_ingest_identity_pending == 0
+    assert cfg.capacity_ingest_identity_wait_s == 0.125
+
+
+@pytest.mark.parametrize("name,value", [
+    ("CAPACITY_AUTH_INGEST_PENDING", "-1"),
+    ("CAPACITY_AUTH_INGEST_PENDING", "9"),
+    ("CAPACITY_INGEST_IDENTITY_PENDING", "-1"),
+    ("CAPACITY_INGEST_IDENTITY_PENDING", "2"),
+    ("CAPACITY_AUTH_INGEST_WAIT_S", "0"),
+    ("CAPACITY_AUTH_INGEST_WAIT_S", "1.001"),
+    ("CAPACITY_AUTH_INGEST_WAIT_S", "nan"),
+    ("CAPACITY_INGEST_IDENTITY_WAIT_S", "0"),
+    ("CAPACITY_INGEST_IDENTITY_WAIT_S", "0.251"),
+    ("CAPACITY_INGEST_IDENTITY_WAIT_S", "inf"),
+])
+def test_ingest_authentication_queue_rejects_out_of_range_values(clean_env, name, value):
+    for key in CAPACITY_INGEST_AUTH_ENV_VARS:
+        clean_env.delenv(key, raising=False)
+    clean_env.setenv(name, value)
+
+    with pytest.raises(ValueError):
+        Config.from_env()
 
 
 @pytest.mark.parametrize("value", ["*", ""])

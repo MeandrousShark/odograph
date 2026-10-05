@@ -14,13 +14,13 @@ from fastapi import FastAPI, Request
 from fastapi.templating import Jinja2Templates
 from starlette.datastructures import MutableHeaders
 from starlette.middleware.sessions import SessionMiddleware
-from starlette.responses import JSONResponse, RedirectResponse
+from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.staticfiles import StaticFiles
 
 from app import admin, auth, ingest, portable, ui
 from app.auth import AuthRedirect
 from app.account_context import AccountPrincipal, control_connection
-from app.account_workers import AccountWorker
+from app.account_workers import AccountWorker, BackgroundScheduler
 from app.audit_retention import AuditRetentionWorker
 from app.application_roles import application_role_pools
 from app.config import (
@@ -29,6 +29,9 @@ from app.config import (
     DEFAULT_MISSING_TRIP_GAP_M,
     Config,
 )
+from app.capacity import AdmissionManager, CapacityBusy
+from app.capacity_routes import busy_response
+from app.role_setup import RolePools
 from app.dashboard import format_week_range
 from app.db import make_pool, run_migrations
 from app.detector.runner import DetectorRunner
@@ -314,6 +317,16 @@ def create_app(config: Config | None = None) -> FastAPI:
                             hash_password(secrets.token_urlsafe(32)), display_timezone=str(cfg.display_tz))
                 app.state.dev_principal = AccountPrincipal(account["id"], account["is_enabled"], account["auth_version"])
 
+            pools = RolePools(
+                control=capacity.manage_pool(pools.control, "control"),
+                runtime=capacity.manage_pool(pools.runtime, "runtime"),
+            )
+            app.state.control_pool = pools.control
+            app.state.runtime_pool = pools.runtime
+            stack.push_async_callback(capacity.shutdown)
+            stack.push_async_callback(app.state.security_mail.drain)
+            scheduler = BackgroundScheduler(capacity)
+
             http_client = _make_worker_http_client() if cfg.snap_enabled else None
             if http_client is not None:
                 stack.push_async_callback(http_client.aclose)
@@ -331,7 +344,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                 worker = None
                 if enabled:
                     worker = AccountWorker(pools, cfg, factory, label=name.replace("_", "-"),
-                        debounce_s=debounce, sweep_s=sweep, after_run=after_run)
+                        debounce_s=debounce, sweep_s=sweep, after_run=after_run,
+                        capacity=capacity, scheduler=scheduler)
                     await worker.start()
                     stack.push_async_callback(worker.stop)
                 setattr(app.state, name, worker)
@@ -394,6 +408,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         title="odograph", lifespan=lifespan,
         docs_url=None, redoc_url=None, openapi_url=None,
     )
+    capacity = AdmissionManager(cfg)
+    app.state.capacity = capacity
     app.state.config = cfg
     app.state.templates = make_templates(cfg)
     app.state.oauth = auth.build_oauth(cfg)
@@ -420,7 +436,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         "password reset request identifier", cfg.login_auth_max_failures, cfg.login_auth_window_s)
     app.state.reset_validation_limiter = AttemptLimiter(
         "password reset validation", cfg.login_auth_max_failures, cfg.login_auth_window_s)
-    app.state.security_mail = SecurityMailAdmission()
+    app.state.security_mail = SecurityMailAdmission(capacity=capacity)
     app.state.password_reset_queue = None
 
     app.add_middleware(
@@ -444,9 +460,15 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def _auth_redirect(request: Request, exc: AuthRedirect):
         return RedirectResponse("/login", status_code=303)
 
+    @app.exception_handler(CapacityBusy)
+    async def _capacity_busy(request: Request, exc: CapacityBusy):
+        if getattr(request.state, "_capacity_mutation_committed", False):
+            return Response(status_code=204, headers={"HX-Refresh": "true"})
+        return busy_response(request)
+
     @app.get("/healthz")
     async def healthz(request: Request):
-        async with request.app.state.control_pool.connection() as conn:
+        async with control_connection(request.app.state.control_pool) as conn:
             await conn.execute("SELECT 1")
         return JSONResponse({"ok": True})
 

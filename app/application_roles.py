@@ -26,6 +26,8 @@ from app.role_setup import (
 
 CONTRACT_VERSION = "ownership-activated-v1"
 STATE_SCHEMA = "odograph_service"
+CONTROL_POOL_MAX_SIZE = 5
+RUNTIME_POOL_MAX_SIZE = 6
 OWNED_TABLES = (
     "raw_messages", "points", "stays", "trips", "detector_state", "places",
     "tag_rules", "geocode_cache", "trip_boundary_overrides", "vehicles",
@@ -558,8 +560,9 @@ async def application_role_pools(database_url: str):
             conninfo = role_conninfo(database_url, state, role)
             async with await _SafeConnection.connect(conninfo) as conn:
                 await validate(conn)
+            max_size = CONTROL_POOL_MAX_SIZE if role == CONTROL_ROLE else RUNTIME_POOL_MAX_SIZE
             pool = AsyncConnectionPool(conninfo, connection_class=_SafeConnection, min_size=1,
-                max_size=6, open=False, configure=validate, timeout=5, name=f"application-{role}")
+                max_size=max_size, open=False, configure=validate, timeout=5, name=f"application-{role}")
             pools.append(pool)
             await pool.open(wait=True, timeout=5)
         yield RolePools(control=pools[0], runtime=pools[1])

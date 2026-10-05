@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.page import render_template
+
 import logging
 
 import httpx
@@ -85,6 +87,7 @@ def register_boundary_override(router: APIRouter) -> None:
                 if row:
                     await runner.reprocess_device_in(conn, row[0])
                     reprocessed = True
+            request.state._capacity_mutation_committed = True
             if reprocessed:
                 _poke_snap_worker(request)
             return _redirect_back(request)
@@ -108,7 +111,7 @@ def register(router: APIRouter) -> None:
                     # and a raise_for_status() HTTPStatusError's message embeds
                     # the full URL it failed against.
                     log.warning("address search failed: %s", type(e).__name__)
-            return request.app.state.templates.TemplateResponse(
+            return await render_template(
                 request, "_address_results.html", {"results": results}
             )
 
@@ -151,6 +154,7 @@ def register(router: APIRouter) -> None:
                 except errors.UniqueViolation:
                     raise HTTPException(status_code=400, detail="A place with that name already exists")
                 await reprocess_places_in(conn)
+            request.state._capacity_mutation_committed = True
             return _redirect_back(request)
 
         @router.post("/places/{place_id}/update", dependencies=[Depends(require_csrf)])
@@ -194,6 +198,7 @@ def register(router: APIRouter) -> None:
                 except errors.UniqueViolation:
                     raise HTTPException(status_code=400, detail="A place with that name already exists")
                 await reprocess_places_in(conn)
+            request.state._capacity_mutation_committed = True
             return _redirect_back(request)
 
         @router.post("/places/{place_id}/delete", dependencies=[Depends(require_csrf)])
@@ -203,6 +208,7 @@ def register(router: APIRouter) -> None:
                 await conn.execute("SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,))
                 await conn.execute("DELETE FROM places WHERE id = %s AND account_id = %s", (place_id, account_id(conn)))
                 await reprocess_places_in(conn)
+            request.state._capacity_mutation_committed = True
             return _redirect_back(request)
 
         @router.post("/rules", dependencies=[Depends(require_csrf)])
@@ -253,6 +259,7 @@ def register(router: APIRouter) -> None:
                 except errors.ForeignKeyViolation:
                     raise HTTPException(status_code=400, detail="No such place")
                 await reprocess_places_in(conn)
+            request.state._capacity_mutation_committed = True
             return _redirect_back(request)
 
         @router.post("/rules/{rule_id}/delete", dependencies=[Depends(require_csrf)])
@@ -262,4 +269,5 @@ def register(router: APIRouter) -> None:
                 await conn.execute("SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,))
                 await conn.execute("DELETE FROM tag_rules WHERE id = %s AND account_id = %s", (rule_id, account_id(conn)))
                 await reprocess_places_in(conn)
+            request.state._capacity_mutation_committed = True
             return _redirect_back(request)

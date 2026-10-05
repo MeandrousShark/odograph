@@ -1,7 +1,7 @@
 """Restricted control operations for member invitations."""
 from __future__ import annotations
 
-import asyncio
+from app.capacity import owned_thread
 import hashlib
 import secrets
 from collections.abc import Mapping
@@ -135,7 +135,7 @@ async def redeem_invitation(conn, token: str, password: str, *, display_timezone
         raise InvitationUnavailable()
     if not isinstance(password, str) or len(password) < MIN_LOCAL_PASSWORD_LENGTH:
         raise InvitationUnavailable()
-    password_hash = await asyncio.to_thread(hash_password, password)
+    password_hash = await owned_thread(hash_password, password)
     try:
         async with conn.transaction():
             cur = await conn.execute(

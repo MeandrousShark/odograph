@@ -23,6 +23,7 @@ from app.accounts import get_account, get_account_by_email, safe_delivery_email
 from app.account_work import external_account_work
 from app.email_challenges import _digest
 from app.mailer import Mailer
+from app.capacity import AdmissionManager, CapacityBusy
 
 log = logging.getLogger(__name__)
 
@@ -154,12 +155,15 @@ class SecurityMailAdmission:
     when the waiting caller is cancelled.
     """
 
-    def __init__(self, limit: int = SECURITY_MAIL_SENDS):
+    def __init__(self, limit: int = SECURITY_MAIL_SENDS, *, capacity=None):
+        if type(limit) is not int or not 1 <= limit <= SECURITY_MAIL_SENDS:
+            raise ValueError("security mail supports at most two sends")
+        self.capacity = capacity if capacity is not None else AdmissionManager()
         self._slots = asyncio.Semaphore(limit)
         self._tasks: set[asyncio.Task] = set()
 
     async def send(
-        self, mailer: Mailer, message, *, wait: bool = True,
+        self, mailer: Mailer, message, *, wait: bool = False,
         admit: Callable[[], AsyncContextManager[bool]] | None = None,
         lease: Callable[[], AsyncContextManager] | None = None,
     ) -> bool:
@@ -173,6 +177,10 @@ class SecurityMailAdmission:
 
     async def _send(self, mailer, message, admit, lease) -> bool:
         async with AsyncExitStack() as contexts:
+            try:
+                await contexts.enter_async_context(self.capacity.operation("mail"))
+            except CapacityBusy:
+                return False
             if lease is not None:
                 await contexts.enter_async_context(lease())
             if admit is None:
@@ -233,6 +241,10 @@ class RecoveryQueue:
     def __init__(self, pool, link_base: str, mailer_for: Callable[[str], Mailer],
                  admission: SecurityMailAdmission, *, max_pending: int = MAX_QUEUED_REQUESTS,
                  workers: int = RECOVERY_WORKERS):
+        if type(max_pending) is not int or not 1 <= max_pending <= MAX_QUEUED_REQUESTS:
+            raise ValueError("recovery queue supports at most 64 pending requests")
+        if type(workers) is not int or not 1 <= workers <= RECOVERY_WORKERS:
+            raise ValueError("recovery queue supports at most two workers")
         self._pool = pool
         self._link_base = link_base
         self._mailer_for = mailer_for
@@ -295,7 +307,7 @@ class RecoveryQueue:
         actor_id = item[1] if initiator == INITIATOR_ADMIN else None
         actor_version = item[2] if initiator == INITIATOR_ADMIN else None
         token = secrets.token_urlsafe(32)
-        async with control_connection(self._pool) as conn:
+        async with control_connection(self._pool, lane="identity") as conn:
             address = await issue_password_reset(
                 conn, token, initiator=initiator,
                 email=target if initiator == INITIATOR_PUBLIC else None,
@@ -312,20 +324,20 @@ class RecoveryQueue:
         message = reset_message(mailer, self._link_base, token)
         @asynccontextmanager
         async def admit():
-            async with control_connection(self._pool) as conn:
+            async with control_connection(self._pool, lane="mail") as conn:
                 async with conn.transaction():
                     yield await password_reset_send_usable(
                         conn, token, actor_id=actor_id, actor_auth_version=actor_version,
                     )
         try:
             admitted = await self._admission.send(
-                mailer, message, admit=admit,
+                mailer, message, wait=True, admit=admit,
                 lease=lambda: external_account_work(self._pool, target_account["id"], *([actor_id] if actor_id else [])),
             )
             if not admitted:
-                async with control_connection(self._pool) as conn:
+                async with control_connection(self._pool, lane="identity") as conn:
                     await revoke_password_reset(conn, token)
         except Exception as exc:
             log.warning("password reset delivery failed (%s)", type(exc).__name__)
-            async with control_connection(self._pool) as conn:
+            async with control_connection(self._pool, lane="identity") as conn:
                 await revoke_password_reset(conn, token)

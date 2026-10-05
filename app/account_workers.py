@@ -1,10 +1,14 @@
 """Enumerate eligible identities through control, then run owned jobs."""
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections import deque
+from contextlib import asynccontextmanager
 
 from app.account_context import AccountPool, AccountPrincipal, control_connection
 from app.account_work import external_account_work
+from app.capacity import AdmissionManager, CapacityBusy
 from app.account_settings import config_for_account, load_account_settings
 from app.worker import BatchOutcome, PokeSweepWorker, RUN_SKIPPED
 
@@ -27,10 +31,50 @@ def _did_not_run(result) -> bool:
 
 
 async def enabled_principals(control_pool) -> list[AccountPrincipal]:
-    async with control_connection(control_pool) as conn:
+    async with control_connection(control_pool, lane="identity") as conn:
         cur = await conn.execute(
             "SELECT id,is_enabled,auth_version FROM accounts WHERE is_enabled ORDER BY id")
         return [AccountPrincipal(*row) for row in await cur.fetchall()]
+
+
+class BackgroundScheduler:
+    """Rotate ready worker types, with one registration per type and no fan-out."""
+
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self._ready: deque[tuple[str, asyncio.Future]] = deque()
+        self._registrations: set[str] = set()
+        self._active: str | None = None
+
+    def _advance(self):
+        while self._active is None and self._ready:
+            label, ready = self._ready.popleft()
+            if ready.cancelled():
+                continue
+            self._active = label
+            ready.set_result(None)
+
+    @asynccontextmanager
+    async def turn(self, label, principal):
+        if label in self._registrations:
+            raise RuntimeError("background type already registered")
+        if len(self._registrations) >= 7:
+            raise RuntimeError("too many background worker types")
+        ready = asyncio.get_running_loop().create_future()
+        self._registrations.add(label)
+        self._ready.append((label, ready))
+        self._advance()
+        try:
+            await ready
+            async with self.capacity.operation("background", principal=principal, registration=label):
+                yield
+        finally:
+            self._registrations.discard(label)
+            if self._active == label:
+                self._active = None
+            else:
+                self._ready = deque(item for item in self._ready if item[1] is not ready)
+            self._advance()
 
 
 class AccountWorker(PokeSweepWorker):
@@ -42,10 +86,15 @@ class AccountWorker(PokeSweepWorker):
     narrow a wakeup to.
     """
 
-    def __init__(self, pools, config, factory, *, label, debounce_s, sweep_s, after_run=None):
+    def __init__(self, pools, config, factory, *, label, debounce_s, sweep_s, after_run=None,
+                 capacity=None, scheduler=None):
         super().__init__(task_name=label, log=log,
             failure_message=f"{label}: account enumeration failed",
             debounce_s=debounce_s, sweep_s=sweep_s)
+        self.capacity = (capacity if capacity is not None else
+                         getattr(pools.runtime, "capacity", None) or AdmissionManager(config))
+        self.scheduler = scheduler if scheduler is not None else BackgroundScheduler(self.capacity)
+        self._last_account_started: int | None = None
         self.pools = pools
         self.config = config
         self.factory = factory
@@ -58,38 +107,55 @@ class AccountWorker(PokeSweepWorker):
         failed = False
         self.last_outcome = BatchOutcome()
         self._produced_work = False
-        for principal in await enabled_principals(self.pools.control):
+        principals = await enabled_principals(self.pools.control)
+        if self._last_account_started is not None:
+            principals = ([p for p in principals if p.account_id > self._last_account_started]
+                          + [p for p in principals if p.account_id <= self._last_account_started])
+        first_start = True
+        for principal in principals:
+            admitted = False
             try:
-                async with external_account_work(self.pools.control, principal.account_id):
-                    pool = AccountPool(self.pools.runtime, principal)
-                    async with pool.connection() as conn:
-                        settings = await load_account_settings(conn)
-                    config = config_for_account(self.config, settings)
-                    worker = self.factory(pool, config)
-                    if worker is None:
-                        continue
-                    try:
-                        result = await worker.run_once()
-                    finally:
-                        # A detector may commit one stream before another
-                        # fails. Keep its downstream poke even when it raises.
-                        self._produced_work |= bool(getattr(worker, "produced_work", False))
-                    ran |= not _did_not_run(result)
-                    if isinstance(result, BatchOutcome):
-                        self.last_outcome += result
-                        if result.retriable_failures:
+                async with self.scheduler.turn(self._task_name, principal):
+                    admitted = True
+                    if first_start:
+                        self._last_account_started = principal.account_id
+                        first_start = False
+                    async with external_account_work(self.pools.control, principal.account_id):
+                        pool = AccountPool(self.pools.runtime, principal)
+                        async with pool.connection() as conn:
+                            settings = await load_account_settings(conn)
+                        config = config_for_account(self.config, settings)
+                        worker = self.factory(pool, config)
+                        if worker is None:
+                            continue
+                        try:
+                            result = await worker.run_once()
+                        finally:
+                            # A detector may commit one stream before another
+                            # fails. Keep its downstream poke even when it raises.
+                            self._produced_work |= bool(getattr(worker, "produced_work", False))
+                        ran |= not _did_not_run(result)
+                        if isinstance(result, BatchOutcome):
+                            self.last_outcome += result
+                            if result.retriable_failures:
+                                failed = True
+                                self.status.record_failure_type(result.failure_type or "RetriableFailure")
+                        # Not every wrapped job is a _LoopWorker: DetectorRunner owns
+                        # no WorkerStatus and reports failure by raising, which the
+                        # clause below already records. Reading `.status` off it
+                        # unconditionally turns every sweep, successful or not, into
+                        # an AttributeError logged as an account-job failure.
+                        status = getattr(worker, "status", None)
+                        if status is not None and status.last_failure_at is not None:
                             failed = True
-                            self.status.record_failure_type(result.failure_type or "RetriableFailure")
-                    # Not every wrapped job is a _LoopWorker: DetectorRunner owns
-                    # no WorkerStatus and reports failure by raising, which the
-                    # clause below already records. Reading `.status` off it
-                    # unconditionally turns every sweep, successful or not, into
-                    # an AttributeError logged as an account-job failure.
-                    status = getattr(worker, "status", None)
-                    if status is not None and status.last_failure_at is not None:
-                        failed = True
-                        self.status.last_failure_at = status.last_failure_at
-                        self.status.last_failure_type = status.last_failure_type
+                            self.status.last_failure_at = status.last_failure_at
+                            self.status.last_failure_type = status.last_failure_type
+            except CapacityBusy as exc:
+                # Preserve downstream pokes after an earlier stream committed.
+                if admitted:
+                    failed = True
+                    self.status.record_failure(exc)
+                continue
             except Exception as exc:
                 failed = True
                 # Provider exceptions can contain private URLs/coordinates.

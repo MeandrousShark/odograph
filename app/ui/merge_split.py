@@ -155,6 +155,7 @@ async def _merge_trips_core(
             )
         except errors.ForeignKeyViolation:
             raise HTTPException(status_code=400, detail="No such vehicle")
+    request.state._capacity_mutation_committed = True
     _poke_snap_worker(request)
     return merged_id
 
@@ -331,5 +332,6 @@ def register_split(router: APIRouter) -> None:
                     (account_id(conn), device, label, point_id),
                 )
                 await runner.reprocess_device_in(conn, device)
+            request.state._capacity_mutation_committed = True
             _poke_snap_worker(request)
             return Response(status_code=204, headers={"HX-Redirect": "/trips"})

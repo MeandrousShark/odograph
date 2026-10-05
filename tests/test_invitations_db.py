@@ -159,7 +159,7 @@ def test_restricted_invite_route_respects_singleton_and_switches_session_in_futu
     asyncio.run(_scenario(check))
 
 
-def test_restricted_invite_route_handles_expiry_revoke_disabled_issuer_rollback_and_race():
+def test_restricted_invite_route_handles_expiry_revoke_disabled_issuer_rollback_and_race(monkeypatch):
     async def check(owner, pools, admin_user):
         async with owner.connection() as conn:
             await conn.execute("DROP INDEX accounts_singleton_idx")
@@ -245,17 +245,37 @@ def test_restricted_invite_route_handles_expiry_revoke_disabled_issuer_rollback_
                 data = {"csrf_token": csrf, "token": tokens["race"],
                         "password": "member-password", "password_confirm": "member-password",
                         "display_timezone": "UTC"}
-                responses = await asyncio.gather(
-                    *(contender.post("/invite", data=data) for contender in contenders)
-                )
-                assert sorted(response.status_code for response in responses) == [303, 400]
+                entered, release = asyncio.Event(), asyncio.Event()
+                original_redeem = auth.redeem_invitation
+                async def paused_redeem(conn, token, password, **kwargs):
+                    entered.set()
+                    await release.wait()
+                    return await original_redeem(conn, token, password, **kwargs)
+                monkeypatch.setattr(auth, "redeem_invitation", paused_redeem)
+                first = asyncio.create_task(contenders[0].post("/invite", data=data))
+                try:
+                    await asyncio.wait_for(entered.wait(), 5)
+                    refused = await asyncio.wait_for(contenders[1].post("/invite", data=data), 10)
+                finally:
+                    release.set()
+                    accepted = await asyncio.wait_for(first, 10)
+                responses = [accepted, refused]
+                assert [response.status_code for response in responses] == [303, 503]
+                assert refused.headers["retry-after"] == "1"
                 assert all(tokens["race"] not in response.text for response in responses)
+                retry = await contenders[1].post("/invite", data=data)
+                assert retry.status_code == 400
+                assert auth.GENERIC_INVITE_ERROR in retry.text
+                assert tokens["race"] not in retry.text
 
             async with owner.connection() as conn:
                 assert await (await conn.execute("SELECT count(*) FROM accounts")).fetchone() == (2,)
                 assert await (await conn.execute(
                     "SELECT consumed_at IS NOT NULL FROM invitations WHERE email='race@example.invalid'"
                 )).fetchone() == (True,)
+                assert await (await conn.execute(
+                    "SELECT count(*) FROM invitations WHERE consumed_at IS NOT NULL"
+                )).fetchone() == (1,)
 
     asyncio.run(_scenario(check))
 

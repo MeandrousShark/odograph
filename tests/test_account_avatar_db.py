@@ -546,7 +546,7 @@ def test_declared_oversized_upload_renders_without_reading_the_request_body():
                 content=body_gen(),
                 headers={
                     "content-type": f"multipart/form-data; boundary={boundary}",
-                    "content-length": "10000",
+                    "content-length": str(16 + app.state.config.capacity_multipart_overhead_bytes + 1),
                 },
             )
             response = await client.send(request)
@@ -585,7 +585,7 @@ def test_unauthenticated_declared_oversized_upload_is_redirected_before_body_rea
                 content=body_gen(),
                 headers={
                     "content-type": f"multipart/form-data; boundary={boundary}",
-                    "content-length": "10000",
+                    "content-length": str(16 + app.state.config.capacity_multipart_overhead_bytes + 1),
                 },
             )
             response = await client.send(request)

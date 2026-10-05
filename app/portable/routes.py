@@ -6,7 +6,8 @@ validation those modules already do.
 """
 from __future__ import annotations
 
-import asyncio
+from app.capacity_routes import capacity_setting
+from app.capacity import owned_thread
 import json
 import logging
 from datetime import datetime, timezone
@@ -32,7 +33,7 @@ from app.portable.export import (
 )
 from app.portable.importer import PortableImportError, _apply_import
 from app.portable.normalize import normalize_bundle
-from app.uploads import read_capped_upload
+from app.uploads import bounded_multipart_form, read_capped_upload
 
 log = logging.getLogger(__name__)
 
@@ -70,7 +71,7 @@ def _reject_oversized_import_upload(request: Request) -> None:
     except ValueError:
         return
     cfg = request.app.state.config
-    if declared_bytes > cfg.portable_import_max_bytes:
+    if declared_bytes > cfg.portable_import_max_bytes + capacity_setting(request.app.state.capacity, "capacity_multipart_overhead_bytes"):
         raise HTTPException(
             status_code=413,
             detail=f"Upload exceeds the {cfg.portable_import_max_bytes}-byte limit",
@@ -102,7 +103,9 @@ async def _read_export_bundle(pool) -> dict:
 
 
 def make_router() -> APIRouter:
-    router = APIRouter()
+    from app.capacity_routes import AdmissionRoute
+
+    router = APIRouter(route_class=AdmissionRoute)
 
     @router.get("/settings/export/data")
     async def export_data(request: Request, user: dict = Depends(require_user)):
@@ -120,7 +123,7 @@ def make_router() -> APIRouter:
         try:
             # Serializing the whole database is CPU-bound and can be large;
             # offload so it doesn't block the event loop for other requests.
-            content = await asyncio.to_thread(_serialize_bundle)
+            content = await owned_thread(_serialize_bundle)
         except ValueError:
             log.exception("portable export: bundle contains a non-finite value")
             return JSONResponse(
@@ -150,55 +153,57 @@ def make_router() -> APIRouter:
         # declared as File()/Form() parameters on this function -- see
         # _reject_oversized_import_upload's docstring for why that's load-
         # bearing rather than a style choice.
-        form = await request.form()
-        file = form.get("file")
-        if not isinstance(file, UploadFile):
-            raise HTTPException(status_code=422, detail="file is required")
-        raw_dry_run = form.get("dry_run", "")
-        raw_csrf_token = form.get("csrf_token", "")
-        dry_run = raw_dry_run if isinstance(raw_dry_run, str) else ""
-        csrf_token = raw_csrf_token if isinstance(raw_csrf_token, str) else ""
+        async with bounded_multipart_form(request,
+                max_files=capacity_setting(request.app.state.capacity, "capacity_multipart_max_files"),
+                max_fields=capacity_setting(request.app.state.capacity, "capacity_multipart_max_fields")) as form:
+            file = form.get("file")
+            if not isinstance(file, UploadFile):
+                raise HTTPException(status_code=422, detail="file is required")
+            raw_dry_run = form.get("dry_run", "")
+            raw_csrf_token = form.get("csrf_token", "")
+            dry_run = raw_dry_run if isinstance(raw_dry_run, str) else ""
+            csrf_token = raw_csrf_token if isinstance(raw_csrf_token, str) else ""
 
-        check_form_csrf(request, csrf_token)
+            check_form_csrf(request, csrf_token)
 
-        cfg = request.app.state.config
-        raw = await read_capped_upload(file, cfg.portable_import_max_bytes)
-        if raw is None:
-            raise HTTPException(
-                status_code=413,
-                detail=f"Upload exceeds the {cfg.portable_import_max_bytes}-byte limit",
-            )
+            cfg = request.app.state.config
+            raw = await read_capped_upload(file, cfg.portable_import_max_bytes)
+            if raw is None:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Upload exceeds the {cfg.portable_import_max_bytes}-byte limit",
+                )
 
-        try:
-            payload = json.loads(raw)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return JSONResponse(
-                {"ok": False, "error": "invalid_json", "detail": "Uploaded file is not valid JSON"},
-                status_code=400,
-            )
+            try:
+                payload = await owned_thread(json.loads, raw)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                return JSONResponse(
+                    {"ok": False, "error": "invalid_json", "detail": "Uploaded file is not valid JSON"},
+                    status_code=400,
+                )
 
-        normalized, issues = normalize_bundle(payload)
-        if issues:
-            return JSONResponse(
-                {"ok": False, "error": "malformed_bundle", "issues": issues}, status_code=400
-            )
+            normalized, issues = await owned_thread(normalize_bundle, payload)
+            if issues:
+                return JSONResponse(
+                    {"ok": False, "error": "malformed_bundle", "issues": issues}, status_code=400
+                )
 
-        is_dry_run = dry_run == "1"
-        pool = request.state.account_pool
-        try:
-            async with pool.connection(import_lock_timeout=True) as conn:
-                async with conn.transaction():
-                    summary = await _apply_import(conn, normalized)
-                    if is_dry_run:
-                        # Runs the identical validate-then-mutate path so a
-                        # dry run genuinely exercises conflict detection,
-                        # then discards the mutation instead of committing it.
-                        raise Rollback()
-        except PortableImportError as exc:
-            return JSONResponse(exc.to_response(), status_code=exc.status_code)
-        except LockNotAvailable:
-            return import_busy_response()
+            is_dry_run = dry_run == "1"
+            pool = request.state.account_pool
+            try:
+                async with pool.connection(import_lock_timeout=True) as conn:
+                    async with conn.transaction():
+                        summary = await _apply_import(conn, normalized)
+                        if is_dry_run:
+                            # Runs the identical validate-then-mutate path so a
+                            # dry run genuinely exercises conflict detection,
+                            # then discards the mutation instead of committing it.
+                            raise Rollback()
+            except PortableImportError as exc:
+                return JSONResponse(exc.to_response(), status_code=exc.status_code)
+            except LockNotAvailable:
+                return import_busy_response()
 
-        return JSONResponse({"ok": True, "dry_run": is_dry_run, "counts": summary})
+            return JSONResponse({"ok": True, "dry_run": is_dry_run, "counts": summary})
 
     return router
