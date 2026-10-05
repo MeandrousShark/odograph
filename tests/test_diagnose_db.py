@@ -18,6 +18,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from fastapi import FastAPI
+from app.provider_pacing import ProviderPacer
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.account_workers import AccountWorker
@@ -47,6 +48,7 @@ def _bare_app(pool, retention_worker=None) -> FastAPI:
     # Every field config_presence()/worker gating could touch, all empty/off
     # -- OSRM, the geocoder, ntfy, and SMTP all read as "not configured".
     app.state.config = auth_config(TEST_DB, dev_no_auth=True, app_version="test", app_git_revision="test")
+    app.state.geocode_pacer = ProviderPacer(app.state.config.geocode_min_interval_s)
     app.state.templates = make_templates(app.state.config)
     if retention_worker is not None:
         app.state.retention_worker = retention_worker

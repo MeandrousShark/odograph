@@ -112,3 +112,43 @@ async def _large_window_scenario():
 
 def test_retentionworker_large_window_keeps_recent_rows():
     asyncio.run(_large_window_scenario())
+
+
+@pytest.mark.parametrize("retention_days", [0, -1])
+def test_disabled_retention_does_not_borrow_a_connection(retention_days):
+    class Pool:
+        def connection(self):
+            raise AssertionError("disabled retention borrowed runtime")
+    outcome = asyncio.run(RetentionWorker(Pool(), retention_days).run_turn())
+    assert not outcome.ready
+    assert outcome.batch.completed == 0
+
+
+def test_retention_turn_deletes_at_most_1000_in_received_at_id_order():
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                await conn.execute(
+                    "INSERT INTO raw_messages(account_id,received_at,payload) "
+                    "SELECT %s,now()-interval '400 days' - ((i %% 5)*interval '1 day'), '{}'::jsonb "
+                    "FROM generate_series(1,1505) i", (account_id(conn),))
+                rows = await (await conn.execute(
+                    "SELECT id FROM raw_messages ORDER BY received_at,id")).fetchall()
+            expected = {row[0] for row in rows[1000:]}
+            worker = RetentionWorker(pool, 365)
+            outcome = await worker.run_turn()
+            assert outcome.ready
+            assert outcome.batch.completed == 1000
+            async with pool.connection() as conn:
+                assert await _all_ids(conn) == expected
+            outcome = await worker.run_turn()
+            assert not outcome.ready
+            assert outcome.batch.completed == 505
+            async with pool.connection() as conn:
+                assert await _all_ids(conn) == set()
+        finally:
+            await raw.close()
+    asyncio.run(scenario())

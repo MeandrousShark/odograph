@@ -11,6 +11,7 @@ import json
 
 import httpx
 import pytest
+from fastapi import Request
 
 from app.snap import RoutedLine, route_line
 
@@ -208,3 +209,111 @@ def test_route_line_raises_on_http_error_status():
 
     with pytest.raises(httpx.HTTPStatusError):
         _run(handler)
+
+
+@pytest.mark.capacity_contract
+def test_route_line_supports_direct_library_calls_without_admission():
+    from app.capacity import current_owner
+    assert current_owner() is None
+    assert _run(lambda request: httpx.Response(200, json=_ok_body())).distance_m == 2345.6
+
+
+@pytest.mark.capacity_contract
+@pytest.mark.parametrize("path, failure", [
+    ("/trips/manual/route-preview", None),
+    ("/trips/manual/route-preview", "oversized"),
+    ("/trips/manual/route-preview", "timeout"),
+    ("/trips/manual", "oversized"), ("/trips/manual", "timeout"),
+])
+def test_manual_routing_retains_owner_and_original_form_limits(monkeypatch, path, failure):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    import threading
+
+    from fastapi import FastAPI, Request
+    from app.account_context import AccountPrincipal
+    from app.auth import require_csrf, require_user
+    from app.capacity import AdmissionManager, current_owner
+    from app.ui import make_router
+    import app.snap as snap
+
+    async def run():
+        app = FastAPI()
+        settings = SimpleNamespace(capacity_auth_body_timeout_s=.02) if failure == "timeout" else None
+        manager = app.state.capacity = AdmissionManager(settings)
+        app.state.control_pool = object()
+        lease_live = False
+        parsed_in_thread = False
+        provider_called = False
+        db_borrows = 0
+
+        @asynccontextmanager
+        async def lease(pool, account):
+            nonlocal lease_live
+            assert current_owner().lane == "foreground"
+            lease_live = True
+            try:
+                yield
+            finally:
+                lease_live = False
+
+        class CoordinatesPool:
+            @asynccontextmanager
+            async def connection(self):
+                nonlocal db_borrows
+                db_borrows += 1
+                yield object()  # The map-coordinate path needs no SQL.
+
+        async def identity(request: Request):
+            request.state.principal = AccountPrincipal(1, True, 1)
+            request.state.account_pool = CoordinatesPool()
+            request.state.config = SimpleNamespace(osrm_url="http://osrm")
+            return {"id": 1}
+
+        original_parse = snap._parse_route_line
+        def parse(body):
+            nonlocal parsed_in_thread
+            assert lease_live and current_owner().lane == "foreground"
+            assert threading.current_thread() is not threading.main_thread()
+            parsed_in_thread = True
+            return original_parse(body)
+
+        def provider(request):
+            nonlocal provider_called
+            provider_called = True
+            assert lease_live and current_owner().lane == "foreground"
+            return httpx.Response(200, json=_ok_body())
+
+        monkeypatch.setattr("app.capacity_routes.external_account_work", lease)
+        monkeypatch.setattr(snap, "_parse_route_line", parse)
+        app.dependency_overrides[require_user] = identity
+        app.dependency_overrides[require_csrf] = lambda: None
+        app.include_router(make_router())
+        async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as osrm:
+            app.state.osrm_http_client = osrm
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                         base_url="http://test") as client:
+                if failure == "timeout":
+                    async def slow_body():
+                        yield b"route_mode=map&"
+                        await asyncio.sleep(.04)
+                        yield b"start_lat=47&start_lon=-122&end_lat=47.02&end_lon=-122"
+                    response = await client.post(path, content=slow_body(),
+                        headers={"content-type": "application/x-www-form-urlencoded"})
+                else:
+                    response = await client.post(path, data={
+                        "route_mode": "map", "start_lat": "x" * 70000 if failure == "oversized" else "47",
+                        "start_lon": "-122", "end_lat": "47.02", "end_lon": "-122",
+                    })
+        if failure:
+            assert response.status_code == (413 if failure == "oversized" else 503)
+            assert not parsed_in_thread and not provider_called
+            assert db_borrows == 0
+        else:
+            assert response.status_code == 200
+            assert response.json()["ok"] is True
+            assert response.json()["distance_m"] == 2345.6
+            assert parsed_in_thread and provider_called
+        assert not lease_live and not any(manager._active.values())
+
+    asyncio.run(run())

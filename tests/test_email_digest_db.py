@@ -414,6 +414,9 @@ class _FixedNowEmailDigestWorker(EmailDigestWorker):
     async def run_once(self, now: datetime | None = None) -> None:
         await super().run_once(self._now)
 
+    async def run_turn(self, cursor=None, now=None):
+        return await super().run_turn(cursor, self._now)
+
 
 async def _account_worker_wraps_email_digest_scenario():
     raw_pool = make_pool(TEST_DB)
@@ -457,6 +460,10 @@ async def _account_worker_wraps_email_digest_scenario():
         # AccountWorker.run_once reads a wrapped worker's own status (see
         # app/account_workers.py) -- not a bare inner run_once() call.
         await outer._run_guarded()
+        assert outer.status.last_failure_at is not None
+        assert outer.status.last_success_at is None
+        await outer._run_guarded()
+        assert outer.status.last_success_at is not None
 
         assert outer.status.last_failure_at is not None
         async with pool.connection() as conn:

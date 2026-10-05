@@ -21,16 +21,16 @@ import logging
 from psycopg_pool import AsyncConnectionPool
 
 from app.account_context import account_id
+from app.worker import BatchOutcome, TurnOutcome
 
 log = logging.getLogger(__name__)
 
 
 class RetentionWorker:
     """Deletes `raw_messages` rows older than the configured retention
-    window. `run_once()` is the only method `AccountWorker`
-    (app/account_workers.py) calls -- it builds a fresh `RetentionWorker`
-    per account on its own daily-cadence sweep; this class supplies no
-    loop, `start`/`stop`, or guarded-run wrapper of its own.
+    window, in ordered transactions of at most 1,000 rows. AccountWorker
+    rotates accounts between run_turn() units, draining ready backlog promptly.
+    Idle accounts retain the daily sweep cadence.
     """
 
     def __init__(self, pool: AsyncConnectionPool, retention_days: float):
@@ -38,13 +38,22 @@ class RetentionWorker:
         self.retention_days = retention_days
 
     async def run_once(self) -> None:
+        await self.run_turn()
+
+    async def run_turn(self, cursor=None) -> TurnOutcome:
+        if self.retention_days <= 0:
+            return TurnOutcome()
         async with self.pool.connection() as conn:
             cur = await conn.execute(
-                "DELETE FROM raw_messages WHERE account_id = %s AND received_at < now() - %s * interval '1 day'",
-                (account_id(conn), self.retention_days),
+                "WITH expired AS (SELECT id FROM raw_messages WHERE account_id = %s "
+                "AND received_at < now() - %s * interval '1 day' "
+                "ORDER BY received_at,id LIMIT 1000) "
+                "DELETE FROM raw_messages r USING expired e WHERE r.account_id = %s AND r.id=e.id",
+                (account_id(conn), self.retention_days, account_id(conn)),
             )
             deleted = cur.rowcount
         log.info(
             "retention: pruned %d raw_messages row(s) older than %s day(s)",
             deleted, self.retention_days,
         )
+        return TurnOutcome(batch=BatchOutcome(deleted, deleted), ready=deleted == 1000)

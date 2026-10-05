@@ -298,6 +298,22 @@ def test_check_osrm_reports_unreachable_on_connection_failure():
     assert result.detail == "ConnectError"
 
 
+@pytest.mark.parametrize(("content", "failure"), [
+    (b"not JSON", "JSONDecodeError"),
+    (b"x" * (8 * 1024 * 1024 + 1), "ProviderResponseTooLarge"),
+])
+def test_osrm_invalid_or_oversize_response_is_reported_without_breaking_other_probes(content, failure):
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, content=content))) as client:
+            return await run_connectivity_checks(_config(osrm_url="https://osrm.invalid"),
+                                                http_client=client)
+    results = asyncio.run(scenario())
+    assert [result.service for result in results] == ["osrm", "geocode", "ntfy", "smtp"]
+    assert results[0].configured is True and results[0].ok is False
+    assert results[0].detail == failure
+
+
 def test_check_geocode_not_configured_when_provider_unset():
     result = asyncio.run(_check_geocode(_config(geocode_provider=None), httpx.AsyncClient()))
     assert result.configured is False

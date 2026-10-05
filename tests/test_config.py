@@ -469,3 +469,21 @@ def test_forwarded_allow_ips_wildcard_is_silent_under_dev_no_auth(clean_env, cap
     with caplog.at_level("WARNING"):
         Config.from_env()
     assert not any("FORWARDED_ALLOW_IPS" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize("value", ["0", "1", "-1", "10001", "2.5", "invalid"])
+def test_osrm_coordinate_limit_rejects_unbounded_or_invalid_values(clean_env, value):
+    clean_env.setenv("OSRM_MAX_COORDS", value)
+    with pytest.raises(RuntimeError, match="OSRM_MAX_COORDS.*2 through 10000"):
+        Config.from_env()
+
+
+@pytest.mark.parametrize("value", [2, 250, 10000])
+def test_osrm_coordinate_limit_accepts_bounded_values(clean_env, value):
+    clean_env.setenv("OSRM_MAX_COORDS", str(value))
+    assert Config.from_env().osrm_max_coords == value
+
+
+def test_osrm_coordinate_limit_preserves_default(clean_env):
+    clean_env.delenv("OSRM_MAX_COORDS", raising=False)
+    assert Config.from_env().osrm_max_coords == 250

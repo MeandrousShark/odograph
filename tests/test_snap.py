@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from app.snap import MatchPoint, downsample, parse_match_response, radiuses
+import pytest
+
+from app.snap import MatchPoint, downsample, parse_match_response, radiuses, sample_ordinals
 
 
 def _pts(n: int, accuracy=10.0) -> list[MatchPoint]:
@@ -274,3 +276,16 @@ def test_parse_coverage_threshold_is_configurable():
     kwargs = dict(min_confidence=0.5, input_count=3, raw_distance_m=1000.0)
     assert parse_match_response(response, **kwargs).distance_m is None
     assert parse_match_response(response, min_coverage=0.4, **kwargs).distance_m == 500.0
+
+
+@pytest.mark.parametrize("count, cap", [(0, 2), (1, 2), (2, 2), (3, 2),
+                                        (7, 5), (12, 5), (1000, 250),
+                                        (10001, 10000), (50000, 250)])
+def test_sample_ordinals_equal_existing_downsample(count, cap):
+    pts = _pts(count)
+    assert [pts[i] for i in sample_ordinals(count, cap)] == downsample(pts, cap)
+
+
+def test_sample_ordinals_preserve_python_rounding_ties():
+    # 5/4 stride: Python rounds 2.5 to 2 (nearest even), not PostgreSQL's 3.
+    assert sample_ordinals(7, 5) == [0, 1, 2, 4, 6]

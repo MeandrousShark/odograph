@@ -181,6 +181,7 @@ SEARCH_PLACES = _search_places_endpoint()
 
 def test_address_search_failure_never_logs_api_key_or_query_text(caplog):
     from app.geocode import GeoapifyProvider
+    from app.provider_pacing import ProviderPacer
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"error": "invalid api key"})
@@ -193,6 +194,7 @@ def test_address_search_failure_never_logs_api_key_or_query_text(caplog):
         request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
             config=SimpleNamespace(geocode_provider=provider),
             geocode_http_client=client,
+            geocode_pacer=ProviderPacer(0),
             templates=SimpleNamespace(
                 TemplateResponse=lambda request, name, context, status_code=200: (
                     PlainTextResponse("ok")

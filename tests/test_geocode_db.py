@@ -107,32 +107,20 @@ async def _insert_trip(
     return (await cur.fetchone())[0]
 
 
-class _FakeHTTP:
-    """Stands in for httpx.AsyncClient in GeocodeWorker tests -- no real
-    network call, just enough of the interface GeoapifyProvider.reverse() uses.
-    """
+class _FakeHTTP(httpx.AsyncClient):
+    """Mock transport exercises the same streaming API as serving requests."""
 
     def __init__(self, address: str | None):
         self.address = address
         self.calls = 0
+        super().__init__(transport=httpx.MockTransport(self._response))
 
-    async def get(self, url, params=None):
+    def _response(self, request):
         self.calls += 1
         features = (
             [{"properties": {"formatted": self.address}}] if self.address else []
         )
-        return _FakeResponse({"type": "FeatureCollection", "features": features})
-
-
-class _FakeResponse:
-    def __init__(self, body: dict):
-        self._body = body
-
-    def raise_for_status(self):
-        pass
-
-    def json(self):
-        return self._body
+        return httpx.Response(200, json={"type": "FeatureCollection", "features": features})
 
 
 async def _scenario():
@@ -208,6 +196,7 @@ async def _scenario():
         fake_http = _FakeHTTP("123 Real St")
         worker.http = fake_http
         await worker.run_once()
+        await fake_http.aclose()
         async with pool.connection() as conn:
             cur = await conn.execute(
                 "SELECT address FROM geocode_cache WHERE lat = 47.6031 AND lon = -122.3301"
@@ -239,3 +228,46 @@ async def _scenario():
 
 def test_geocode_discovery_and_trip_columns():
     asyncio.run(_scenario())
+
+
+def test_geocode_turn_has_one_coordinate_and_transient_failure_defers_without_cache():
+    from app.provider_pacing import ProviderPacer
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                await seed_tracking_device(conn, DEVICE, device_id=1)
+                for offset in range(3):
+                    await _insert_trip(conn, T0 + timedelta(hours=offset),
+                        T0 + timedelta(hours=offset, minutes=1), 47.1 + offset / 10, -122.1)
+            provider = GeoapifyProvider("key", "")
+            pacer = ProviderPacer(0)
+            calls = []
+            def failing(request):
+                calls.append(request)
+                return httpx.Response(200, content=b"not JSON")
+            async with httpx.AsyncClient(transport=httpx.MockTransport(failing)) as client:
+                worker = GeocodeWorker(pool, client, provider, 0, pacer=pacer, retry_s=60)
+                ticket = await pacer.wait_ready()
+                started = asyncio.get_running_loop().time()
+                failed = await worker.run_turn(ticket)
+                assert len(calls) == 1
+                assert failed.batch.retriable_failures == 1
+                assert not failed.ready and failed.deferred_until >= started + 60
+                async with pool.connection() as conn:
+                    assert (await (await conn.execute("SELECT count(*) FROM geocode_cache")).fetchone())[0] == 0
+            async with _FakeHTTP(None) as client:
+                worker = GeocodeWorker(pool, client, provider, 0, pacer=pacer)
+                for count in range(1, 4):
+                    complete = await worker.run_turn(await pacer.wait_ready())
+                    assert complete.ready and complete.batch.completed == 1
+                    assert client.calls == count
+                idle_ticket = await pacer.wait_ready()
+                idle = await worker.run_turn(idle_ticket)
+                idle_ticket.close()
+                assert not idle.ready and idle.batch.attempted == 0
+        finally:
+            await raw.close()
+    asyncio.run(scenario())

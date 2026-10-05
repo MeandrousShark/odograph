@@ -131,3 +131,13 @@ def test_publish_ntfy_checks_response_status():
 
     with pytest.raises(httpx.HTTPStatusError):
         asyncio.run(scenario())
+
+
+def test_publish_ntfy_rejects_oversize_success_response():
+    from app.provider_http import NOTIFICATION_RESPONSE_MAX_BYTES, ProviderResponseTooLarge
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request:
+                httpx.Response(200, content=b"x" * (NOTIFICATION_RESPONSE_MAX_BYTES + 1)))) as client:
+            await publish_ntfy(client, "https://ntfy.example.com", "alerts", "", "", "", "x")
+    with pytest.raises(ProviderResponseTooLarge):
+        asyncio.run(scenario())

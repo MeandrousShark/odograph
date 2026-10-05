@@ -104,7 +104,8 @@ def register(router: APIRouter) -> None:
             provider = cfg.geocode_provider
             if provider is not None and q:
                 try:
-                    results = await provider.autocomplete(request.app.state.geocode_http_client, q)
+                    async with request.app.state.geocode_pacer.request():
+                        results = await provider.autocomplete(request.app.state.geocode_http_client, q)
                 except (httpx.HTTPError, ValueError) as e:
                     # Not str(e): the provider's request carries both its API
                     # key and the user's typed search text as query parameters,

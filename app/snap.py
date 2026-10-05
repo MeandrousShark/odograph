@@ -7,6 +7,7 @@ from __future__ import annotations
 from app.account_context import account_id
 from app.account_jobs import lock_device_generation
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -16,9 +17,10 @@ from typing import Optional
 import httpx
 from psycopg_pool import AsyncConnectionPool
 
-from app.detector.runner import load_trip_points
+from app.capacity import current_owner, owned_thread
+from app.provider_http import SNAP_RESPONSE_MAX_BYTES, bounded_json
 from app.validation import parse_finite_number
-from app.worker import BatchOutcome
+from app.worker import BatchOutcome, TurnOutcome
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +69,7 @@ def downsample(points: list[MatchPoint], max_coords: int) -> list[MatchPoint]:
             result.append(points[idx])
         result.append(points[-1])
 
+
     seen = set()
     deduped = []
     for p in result:
@@ -74,6 +77,33 @@ def downsample(points: list[MatchPoint], max_coords: int) -> list[MatchPoint]:
             seen.add(p.t)
             deduped.append(p)
     return sorted(deduped, key=lambda p: p.t)
+
+
+def sample_ordinals(count: int, max_coords: int) -> list[int]:
+    """Zero-based positions using downsample's Python rounding, including ties."""
+    if count <= max_coords:
+        return list(range(count))
+    if max_coords < 2:
+        raise ValueError("max_coords must be at least 2")
+    interior = max_coords - 2
+    step = (count - 2) / (interior + 1)
+    ordinals = [0]
+    for k in range(1, interior + 1):
+        ordinals.append(min(max(round(k * step), 1), count - 2))
+    ordinals.append(count - 1)
+    return ordinals
+
+
+# Matches the split picker predicate, including shared boundary fixes and
+# excluding detector-rejected points. Only snapping ranks and thins this set.
+_POINT_PREDICATE = (
+    "FROM points p JOIN trips t ON t.id = %s "
+    "WHERE t.account_id = %s AND p.account_id = t.account_id "
+    "AND p.tracking_device_id = t.tracking_device_id "
+    "AND p.recorded_at >= t.started_at AND p.recorded_at <= t.ended_at "
+    "AND p.trip_id IS NOT NULL "
+)
+
 
 
 def radiuses(points: list[MatchPoint], min_r: float = 20.0, max_r: float = 50.0) -> list[float]:
@@ -130,9 +160,10 @@ async def route_distance_m(
         f"{from_lon:.6f},{from_lat:.6f};{to_lon:.6f},{to_lat:.6f}"
         "?overview=false&alternatives=false&steps=false"
     )
-    resp = await http_client.get(url, timeout=httpx.Timeout(4.0, connect=2.0))
-    resp.raise_for_status()
-    body = resp.json()
+    body = await bounded_json(
+        http_client, "GET", url, max_bytes=SNAP_RESPONSE_MAX_BYTES,
+        timeout=httpx.Timeout(4.0, connect=2.0), raise_for_status=True,
+    )
     routes = body.get("routes") or []
     if body.get("code") != "Ok" or not routes:
         return None
@@ -167,9 +198,16 @@ async def route_line(
         f"{from_lon:.6f},{from_lat:.6f};{to_lon:.6f},{to_lat:.6f}"
         "?overview=full&geometries=geojson&alternatives=false&steps=false"
     )
-    resp = await http_client.get(url, timeout=httpx.Timeout(4.0, connect=2.0))
-    resp.raise_for_status()
-    body = resp.json()
+    body = await bounded_json(
+        http_client, "GET", url, max_bytes=SNAP_RESPONSE_MAX_BYTES,
+        timeout=httpx.Timeout(4.0, connect=2.0), raise_for_status=True,
+    )
+    if current_owner() is not None:
+        return await owned_thread(_parse_route_line, body)
+    return _parse_route_line(body)
+
+
+def _parse_route_line(body) -> Optional[RoutedLine]:
     routes = body.get("routes") or []
     if body.get("code") != "Ok" or not routes:
         return None
@@ -305,32 +343,38 @@ def parse_match_response(
     )
 
 
+def _parse_and_serialize_match(body, min_confidence, input_count, raw_distance_m):
+    matchings = body.get("matchings") or []
+    tracepoints = body.get("tracepoints") or []
+    if not isinstance(matchings, list) or not isinstance(tracepoints, list):
+        raise ValueError("malformed OSRM match response")
+    for matching in matchings:
+        if not isinstance(matching, dict):
+            raise ValueError("malformed OSRM matching")
+        if (parse_finite_number(matching.get("distance", 0), minimum=0) is None
+                or parse_finite_number(matching.get("confidence", 0), minimum=0, maximum=1) is None):
+            raise ValueError("invalid OSRM distance or confidence")
+        geometry = matching.get("geometry") or {}
+        if not isinstance(geometry, dict):
+            raise ValueError("malformed OSRM geometry")
+        coordinates = geometry.get("coordinates") or []
+        if not isinstance(coordinates, list):
+            raise ValueError("malformed OSRM coordinates")
+        for coordinate in coordinates:
+            if (not isinstance(coordinate, (list, tuple)) or len(coordinate) != 2
+                    or parse_finite_number(coordinate[0], minimum=-180, maximum=180) is None
+                    or parse_finite_number(coordinate[1], minimum=-90, maximum=90) is None):
+                raise ValueError("invalid OSRM coordinate")
+    result = parse_match_response(body, min_confidence, input_count, raw_distance_m)
+    geometry_json = json.dumps(result.path_geojson) if result.path_geojson else None
+    return result, geometry_json
+
+
 class SnapWorker:
-    """Drains `snap_status='pending'` trips against a self-hosted OSRM
-    instance. `run_once()` is the only method `AccountWorker`
-    (app/account_workers.py) calls -- it builds a fresh `SnapWorker` per
-    account per sweep and never uses this class's own loop/poke/debounce,
-    since `AccountWorker`'s own `PokeSweepWorker` (app/worker.py) already
-    supplies that for the whole per-account sweep.
+    """Attempt one pending trip per account turn; durable attempt age orders retries.
 
-    No advisory lock and no cross-process claim (unlike the detector, which
-    needs a lock because a *skipped* run must never falsely advance its
-    checkpoint or a dirty window gets silently dropped). A pending row just
-    stays pending until a terminal UPDATE lands it, which is what removes it
-    from the pending set -- nothing else needs to coordinate at this app's
-    single-instance scale. The batch SELECT deliberately does NOT hold a
-    `FOR UPDATE` lock across processing: the claiming connection is released
-    back to the pool before any OSRM call, so a row lock taken there would be
-    gone during the work it was meant to protect (an earlier version took one
-    here, which did nothing). If a second replica were ever added the two
-    could double-process an overlapping batch -- wasteful, but not unsafe,
-    since each trip's terminal UPDATE is idempotent. A real claim (a transient
-    status, or a lock genuinely held across the multi-second OSRM request) is
-    left until that scale actually exists.
-
-    Snapping never blocks or shares a transaction with the detector's --
-    each DB write below is its own short connection borrow, and the OSRM
-    HTTP call happens between borrows, never while holding one.
+    The HTTP call runs between short database borrows. Generation/CAS guards
+    reject a result superseded by detector or device changes.
     """
 
     def __init__(
@@ -340,62 +384,103 @@ class SnapWorker:
         osrm_url: str,
         min_confidence: float,
         max_coords: int,
-        batch_size: int = 20,
+        retry_s: float = 300.0,
     ):
         self.pool = pool
         self.http = http_client
         self.osrm_url = osrm_url.rstrip("/")
         self.min_confidence = min_confidence
         self.max_coords = max_coords
-        self.batch_size = batch_size
+        if not 2 <= max_coords <= 10_000:
+            raise ValueError("max_coords must be between 2 and 10000")
+        self.retry_s = retry_s
 
     async def run_once(self) -> BatchOutcome:
+        return (await self.run_turn()).batch
+
+    async def _next_trip(self, cursor=None):
+        after_clause = ""
+        args = [self.retry_s]
         async with self.pool.connection() as conn:
+            args.append(account_id(conn))
+            if cursor is not None:
+                after_clause = "AND (COALESCE(t.snap_attempted_at,t.created_at),t.id) > (%s,%s) "
+                args.extend(cursor)
+            args.append(self.retry_s)
             cur = await conn.execute(
-                "SELECT t.id FROM trips t JOIN tracking_devices d "
+                "SELECT t.id, GREATEST(0, EXTRACT(EPOCH FROM "
+                "t.snap_attempted_at + %s * interval '1 second' - now())), "
+                "COALESCE(t.snap_attempted_at,t.created_at) "
+                "FROM trips t JOIN tracking_devices d "
                 "ON d.account_id=t.account_id AND d.id=t.tracking_device_id "
                 "WHERE t.account_id=%s AND t.snap_status='pending' "
                 "AND t.source='detected' AND NOT t.imported AND d.enabled AND d.revoked_at IS NULL "
-                "ORDER BY COALESCE(t.snap_attempted_at, t.created_at), t.id LIMIT %s",
-                (account_id(conn), self.batch_size),
+                + after_clause + "ORDER BY (t.snap_attempted_at IS NOT NULL AND "
+                "t.snap_attempted_at + %s * interval '1 second' > now()), "
+                "COALESCE(t.snap_attempted_at, t.created_at), t.id LIMIT 1",
+                args,
             )
-            trip_ids = [r[0] for r in await cur.fetchall()]
-        if not trip_ids:
-            return BatchOutcome()
-        outcome = BatchOutcome()
-        for trip_id in trip_ids:
-            outcome += await self._snap_one(trip_id)
-        return outcome
+            row = await cur.fetchone()
+        return row
+
+    async def run_turn(self, cursor=None) -> TurnOutcome:
+        row = await self._next_trip(cursor)
+        if row is None:
+            if cursor is not None and await self._next_trip() is not None:
+                return TurnOutcome(deferred_until=asyncio.get_running_loop().time() + self.retry_s)
+            return TurnOutcome()
+        trip_id, delay, selection_age = row
+        if delay > 0:
+            return TurnOutcome(deferred_until=asyncio.get_running_loop().time() + float(delay))
+        outcome = await self._snap_one(trip_id)
+        if not outcome.attempted:
+            # Continue beyond an unadmitted row without recording a provider
+            # attempt. One ordered cursor covers the round, then backoff
+            # clears it so earlier rows can be revalidated without spinning.
+            cursor = (selection_age, trip_id)
+        next_row = await self._next_trip(cursor)
+        if next_row is None:
+            if cursor is not None and await self._next_trip() is not None:
+                return TurnOutcome(batch=outcome,
+                                   deferred_until=asyncio.get_running_loop().time() + self.retry_s)
+            return TurnOutcome(batch=outcome)
+        delay = float(next_row[1])
+        if delay > 0:
+            return TurnOutcome(batch=outcome,
+                               deferred_until=asyncio.get_running_loop().time() + delay)
+        return TurnOutcome(batch=outcome, ready=True, cursor=cursor)
+
+    async def _point_count(self, conn, trip_id: int) -> int:
+        cur = await conn.execute("SELECT count(*) " + _POINT_PREDICATE,
+                                 (trip_id, account_id(conn)))
+        return (await cur.fetchone())[0]
 
     async def _load_points(self, conn, trip_id: int) -> list[MatchPoint]:
-        """Adapts the shared time-range point query (`load_trip_points`,
-        app/detector/runner.py -- see its docstring for why this isn't a
-        plain `points.trip_id = trip_id` query) into this module's own
-        `MatchPoint` shape.
+        """Count and fetch exact sampled positions inside the caller's snapshot.
+
+        Ranking still scans the trip in PostgreSQL; only selected points and
+        decoded coordinates are returned to the application.
         """
-        rows = await load_trip_points(conn, trip_id)
-        return [MatchPoint(t=r[1], lat=r[2], lon=r[3], accuracy_m=r[4]) for r in rows]
+        count = await self._point_count(conn, trip_id)
+        ordinals = sample_ordinals(count, self.max_coords)
+        if not ordinals:
+            return []
+        cur = await conn.execute(
+            "WITH ranked AS (SELECT p.recorded_at, p.geom, p.accuracy_m, "
+            "row_number() OVER (ORDER BY p.recorded_at) - 1 AS ordinal "
+            + _POINT_PREDICATE + ") "
+            "SELECT recorded_at, ST_Y(geom::geometry), ST_X(geom::geometry), accuracy_m "
+            "FROM ranked WHERE ordinal = ANY(%s) ORDER BY ordinal",
+            (trip_id, account_id(conn), ordinals),
+        )
+        return [MatchPoint(t=r[0], lat=r[1], lon=r[2], accuracy_m=r[3])
+                for r in await cur.fetchall()]
 
     async def _snap_one(self, trip_id: int) -> BatchOutcome:
-        async with self.pool.connection() as conn:
-            # Read BEFORE loading points, not after: the pool runs at READ
-            # COMMITTED, so each statement on this connection gets its own
-            # snapshot, and a detector rewrite (app/detector/runner.py) could
-            # commit between two statements here. Reading updated_at first
-            # means a rewrite landing during or after the point load can only
-            # make `generation` older than the row's current value by the
-            # time we reach the terminal write below, never newer/matching -
-            # so the residual race falls in the safe direction (an
-            # unnecessary discard, re-snapped next sweep) rather than letting
-            # a stale result through. `updated_at` doubles as a generation
-            # token: the rewrite always bumps it, but this worker's own
-            # terminal UPDATEs below never do, so a mismatch at write time
-            # means a rewrite superseded the points this result was computed
-            # from.
-            # distance_m rides along with the generation token: the coverage
-            # gate in parse_match_response needs the trip's own pre-snap
-            # distance, and reading it here keeps it on the same statement
-            # snapshot as the token it will be validated against.
+        async with self.pool.connection(consistent_snapshot=True) as conn:
+            # Trip token, point count and sampled rows share one snapshot.
+            # The terminal write uses a fresh transaction and rejects any
+            # rewrite that committed while the snapshot/provider was active.
             cur = await conn.execute(
                 "SELECT t.updated_at, t.distance_m, t.tracking_device_id, d.generation FROM trips t "
                 "JOIN tracking_devices d ON d.account_id=t.account_id AND d.id=t.tracking_device_id "
@@ -465,8 +550,10 @@ class SnapWorker:
         if cur.rowcount == 0:
             return BatchOutcome()
         try:
-            resp = await self.http.get(url)
-            body = resp.json()
+            body = await bounded_json(
+                self.http, "GET", url, max_bytes=SNAP_RESPONSE_MAX_BYTES,
+                allowed_statuses=(400,),
+            )
         except (httpx.HTTPError, ValueError) as e:
             # Connection/timeout error, or a response we can't even parse as
             # JSON: leave pending, retry later. Deliberately does NOT call
@@ -483,7 +570,14 @@ class SnapWorker:
             log.warning("snap: trip %s got an unrecognized OSRM response, leaving pending", trip_id)
             return BatchOutcome(attempted=1, retriable_failures=1, failure_type="UnrecognizedResponse")
 
-        result = parse_match_response(body, self.min_confidence, len(sampled), raw_distance_m)
+        try:
+            result, geometry_json = await owned_thread(
+                _parse_and_serialize_match, body, self.min_confidence,
+                len(sampled), raw_distance_m,
+            )
+        except (TypeError, ValueError, KeyError) as exc:
+            return BatchOutcome(attempted=1, retriable_failures=1,
+                                failure_type=type(exc).__name__)
         async with self.pool.connection() as conn:
             if not await lock_device_generation(conn, device_id, device_generation):
                 return BatchOutcome(attempted=1)
@@ -492,7 +586,7 @@ class SnapWorker:
                 " distance_snapped_m = %s, snap_status = %s, snapped_at = now() "
                 "WHERE account_id = %s AND id = %s AND updated_at = %s",
                 (
-                    json.dumps(result.path_geojson) if result.path_geojson else None,
+                    geometry_json,
                     result.distance_m, result.status, account_id(conn), trip_id, generation,
                 ),
             )

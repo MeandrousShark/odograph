@@ -1,35 +1,14 @@
 """Shared background-worker loop machinery.
 
-`AccountWorker` (app/account_workers.py) uses the poke/debounce/sweep loop
-below. Each sweep it builds a fresh per-account inner worker (`SnapWorker`,
-`GeocodeWorker`, `RetentionWorker`, `NudgeWorker`,
-`OdometerReminderWorker`, `EmailDigestWorker`, or `DetectorRunner`) and calls
-only that inner worker's `run_once()` directly. None of those inner workers
-run their own loop, `start`/`stop`, `poke()`, or guarded-run wrapper in
-production -- each supplies `run_once()` (and, for `EmailDigestWorker` only,
-its own `WorkerStatus`) and nothing else from this module. The global
-`AuditRetentionWorker` also uses the loop to prune old audit rows hourly.
+AccountWorker runs one account unit per scheduler turn. TurnOutcome carries
+ready, deferred or idle continuation state; ready work drains through FIFO
+rotation while pokes and periodic sweeps refresh idle accounts. Inner workers
+supply run_turn(), with run_once() retained for direct callers. The global
+AuditRetentionWorker uses the same poke/sweep loop without continuations.
 
-`PokeSweepWorker` below factors out the loop, `start`/`stop`, and
-guarded-run wrapper `AccountWorker` and `AuditRetentionWorker` need. An external
-`poke()` resets a debounce deadline so a burst of pokes coalesces into one run
-shortly after the burst settles, while an independent periodic sweep guarantees forward
-progress even if nothing ever pokes (or a poked run is skipped or fails).
-`after_run_once()` is a no-op hook a subclass can override to react to its
-own `run_once()` result; `AccountWorker` uses it to call an optional
-`after_run` callback, which is how app/main.py pokes the detector's
-snap/geocode workers, but only after a sweep that actually did something
-(not one skipped for advisory-lock contention).
-
-`WorkerStatus` below is available to any worker that needs one. Every
-`PokeSweepWorker` subclass gets a `status` attribute the base class updates
-from `_run_guarded()`/`_loop()` with no subclass changes required --
-`AccountWorker` and `AuditRetentionWorker` are the production subclasses.
-`AccountWorker` reads an inner worker's own `status` (when it has one) through
-`getattr` in its own `run_once()`. `EmailDigestWorker` is the one inner worker that keeps a
-`WorkerStatus` of its own: its per-kind guard (see app/email_digest.py)
-never lets an exception reach a guarded-run wrapper's except clause, so it
-records its own failures onto that status directly.
+WorkerStatus records diagnostic history, including failures swallowed by
+per-kind email guards. owned_thread retains the surrounding admission and
+lease through actual CPU and SMTP completion during cancellation.
 """
 from __future__ import annotations
 
@@ -67,6 +46,17 @@ class BatchOutcome:
             self.retriable_failures + other.retriable_failures,
             self.failure_type or other.failure_type,
         )
+
+
+@dataclass(frozen=True)
+class TurnOutcome:
+    """One committed unit and its continuation, using the loop's monotonic clock."""
+
+    batch: BatchOutcome = BatchOutcome()
+    ready: bool = False
+    deferred_until: float | None = None
+    cursor: Any = None
+    skipped: bool = False
 
 
 @dataclass
@@ -204,6 +194,10 @@ class PokeSweepWorker(_LoopWorker):
         self._wake = asyncio.Event()
         self._deadline: float | None = None
         self._next_sweep: float | None = None
+        self._continuation_at: float | None = None
+
+    def wake_cycle(self) -> None:
+        """Reset idle continuations when a poke or periodic sweep is due."""
 
     def poke(self) -> None:
         self._deadline = asyncio.get_running_loop().time() + self.debounce_s
@@ -222,6 +216,8 @@ class PokeSweepWorker(_LoopWorker):
         target = self._next_sweep
         if self._deadline is not None:
             target = min(target, self._deadline)
+        if self._continuation_at is not None:
+            target = min(target, self._continuation_at)
         loop = asyncio.get_running_loop()
         self.status.next_run_at = _utcnow() + timedelta(seconds=target - loop.time())
 
@@ -235,19 +231,32 @@ class PokeSweepWorker(_LoopWorker):
             timeout = self._next_sweep - now
             if self._deadline is not None:
                 timeout = min(timeout, self._deadline - now)
+            if self._continuation_at is not None:
+                timeout = min(timeout, self._continuation_at - now)
             try:
-                await asyncio.wait_for(self._wake.wait(), timeout=max(timeout, 0.05))
+                if timeout <= 0:
+                    await asyncio.sleep(0)
+                else:
+                    await asyncio.wait_for(self._wake.wait(), timeout=timeout)
             except asyncio.TimeoutError:
                 pass
             self._wake.clear()
             now = loop.time()
             due = False
+            wake_cycle = False
             if self._deadline is not None and now >= self._deadline:
                 self._deadline = None
                 due = True
+                wake_cycle = True
             if now >= self._next_sweep:
                 self._next_sweep = now + self.sweep_s
                 due = True
+                wake_cycle = True
+            if self._continuation_at is not None and now >= self._continuation_at:
+                self._continuation_at = None
+                due = True
+            if wake_cycle:
+                self.wake_cycle()
             if due:
                 await self._run_guarded()
             self._update_next_run_estimate()
