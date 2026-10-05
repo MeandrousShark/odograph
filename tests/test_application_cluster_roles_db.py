@@ -66,7 +66,7 @@ def test_fresh_second_migration_does_not_claim_first_installation_roles():
                     "SELECT to_regclass('odograph_service.managed_role_state')")).fetchone() == (None,)
                 # Accounting objects must also wait for guarded initial role
                 # provisioning, even when another database already has roles.
-                for table in application_roles.STORAGE_TABLES:
+                for table in application_roles.STORAGE_TABLES + application_roles.GEOCODE_TABLES:
                     assert (await (await conn.execute(
                         "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid=%s::regclass",
                         ("public." + table,),

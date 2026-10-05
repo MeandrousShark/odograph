@@ -230,7 +230,7 @@ def test_forward_backfill_keeps_legacy_copied_labels_without_truncation(monkeypa
             monkeypatch.setattr(db_module,'MIGRATIONS_DIR',MIGRATIONS_DIR)
             await run_migrations(raw)
             async with raw.connection() as conn:
-                expected_actual=128+(128+3)+128+2*(256+25+1)+2+raw_charge
+                expected_actual=128+(128+3)+128+2*(256+25+1)+2+raw_charge+(128+10)
                 usage=await (await conn.execute('SELECT actual_bytes,reserved_bytes,raw_bytes,enhancement_bytes FROM account_usage')).fetchone()
                 assert usage==(expected_actual,2*(1024+8000),raw_charge,0)
                 assert (await (await conn.execute('SELECT label_bytes FROM device_storage_envelopes')).fetchone())[0]==4000

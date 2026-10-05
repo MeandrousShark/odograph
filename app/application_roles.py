@@ -10,7 +10,7 @@ from __future__ import annotations
 import secrets
 import re
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -33,10 +33,12 @@ OWNED_TABLES = (
     "tag_rules", "geocode_cache", "trip_boundary_overrides", "vehicles",
     "mileage_rates", "odometer_readings", "expenses", "nudge_delivery_windows",
     "odometer_reminder_windows", "email_deliveries", "account_settings",
-    "tracking_devices", "tracking_device_aliases", "ingest_credentials",
+    "tracking_devices", "tracking_device_aliases", "ingest_credentials", "geocode_retry",
 )
 STORAGE_TABLES = ("account_usage", "device_storage_envelopes")
-PROTECTED_TABLES = ("email_challenges",) + STORAGE_TABLES
+GEOCODE_TABLES = ("geocode_retry", "geocode_discovery")
+GEOCODE_PROTECTED_TABLES = ("geocode_discovery",)
+PROTECTED_TABLES = ("email_challenges",) + STORAGE_TABLES + GEOCODE_PROTECTED_TABLES
 CONTROL_TABLES = (
     "accounts", "oidc_identities", "instance_state", "invitations",
     "oidc_attempts", "oidc_action_proofs", "account_security_audit",
@@ -131,7 +133,7 @@ PASSWORD_RESET_FUNCTIONS = tuple(s.signature for s in FUNCTION_SPECS
                                  if s.source in ("031_password_reset.sql", "035_admin_recovery.sql")
                                  and s.signature not in EMAIL_CHALLENGE_FUNCTIONS)
 STORAGE_FUNCTIONS = tuple(
-    "public.storage_charge_" + table + "(public." + table + ")" for table in OWNED_TABLES
+    "public.storage_charge_" + table + "(public." + table + ")" for table in OWNED_TABLES if table not in GEOCODE_TABLES
 ) + (
     "public.storage_account_init()", "public.storage_apply_statement()",
     "public.storage_row_account_guard()",
@@ -149,6 +151,30 @@ FUNCTION_SPECS += tuple(
                  "s" if signature.startswith(("public.storage_expected_", "public.storage_usage_consistent")) else "v")
     for signature in STORAGE_FUNCTIONS
 )
+GEOCODE_FUNCTION_SPECS = tuple(
+    FunctionSpec("public.storage_charge_" + table + "(public." + table + ")",
+                 MIGRATE_ROLE, "041_geocode_progress.sql", MIGRATE_ROLE, False, "sql", "i")
+    for table in GEOCODE_TABLES
+) + tuple(
+    FunctionSpec(signature, caller, "041_geocode_progress.sql", MIGRATE_ROLE)
+    for signature, caller in (
+        ("public.geocode_trip_generation()", MIGRATE_ROLE),
+        ("public.geocode_device_generation()", MIGRATE_ROLE),
+        ("public.geocode_endpoint_intents()", MIGRATE_ROLE),
+        ("public.geocode_account_init()", MIGRATE_ROLE),
+        ("public.geocode_record_coordinate_turn(bigint)", RUNTIME_ROLE),
+        ("public.geocode_discover_page(bigint)", RUNTIME_ROLE),
+        ("public.geocode_representative_source(bigint,numeric,numeric)", RUNTIME_ROLE),
+    )
+)
+GEOCODE_FUNCTIONS = tuple(spec.signature for spec in GEOCODE_FUNCTION_SPECS)
+FUNCTION_SPECS = tuple(
+    replace(spec, source="041_geocode_progress.sql")
+    if spec.signature == "public.storage_expected_usage()" else spec
+    for spec in FUNCTION_SPECS
+) + GEOCODE_FUNCTION_SPECS
+STORAGE_FUNCTIONS += tuple(spec.signature for spec in GEOCODE_FUNCTION_SPECS
+                           if spec.signature.startswith("public.storage_charge_"))
 FUNCTIONS = {spec.signature: spec.caller for spec in FUNCTION_SPECS}
 FUNCTION_OWNERS = {spec.signature: spec.owner for spec in FUNCTION_SPECS}
 RESTORE_AUTH_VERSION_STEP = 1_000_000_000
@@ -205,7 +231,7 @@ async def _check_role_database_ownership(conn) -> None:
 
 def _table_rights(role: str, table: str) -> set[str]:
     if role == RUNTIME_ROLE:
-        if table in STORAGE_TABLES:
+        if table in STORAGE_TABLES + GEOCODE_PROTECTED_TABLES:
             return {"SELECT"}
         if table in OWNED_TABLES:
             return {"INSERT", "UPDATE", "DELETE"} | ({"SELECT"} if table != "ingest_credentials" else set())
@@ -219,7 +245,7 @@ def _table_rights(role: str, table: str) -> set[str]:
         if table in ("instance_state", "schema_migrations"):
             return {"SELECT"}
     if role == BOOTSTRAP_ROLE:
-        rights = {"SELECT", "DELETE"} if table in OWNED_TABLES + STORAGE_TABLES + ("accounts", "invitations", "email_challenges") else set()
+        rights = {"SELECT", "DELETE"} if table in OWNED_TABLES + STORAGE_TABLES + GEOCODE_PROTECTED_TABLES + ("accounts", "invitations", "email_challenges") else set()
         if table == "account_security_audit":
             return {"SELECT", "INSERT", "DELETE"}
         if table == "invitations":
@@ -244,7 +270,7 @@ def _policy_contract() -> dict[tuple[str, str], tuple[str, str, str | None, str 
     expression = "account_id = NULLIF(current_setting('app.account_id'::text,true),''::text)::bigint"
     policies = {(table, "account_isolation"): (RUNTIME_ROLE, "ALL", expression, expression)
                 for table in OWNED_TABLES + PROTECTED_TABLES}
-    for table in STORAGE_TABLES:
+    for table in STORAGE_TABLES + GEOCODE_PROTECTED_TABLES:
         if table in PROTECTED_TABLES:
             policies[table, "account_isolation"] = (RUNTIME_ROLE, "SELECT", expression, None)
     if "public.storage_usage_consistent()" in FUNCTIONS:
@@ -510,6 +536,9 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
             _require_contract(not bad_privileges, f"table privilege: {role} {STATE_SCHEMA}.{table} {bad_privileges}")
     if "public.storage_usage_consistent()" in FUNCTIONS:
         await _validate_storage_triggers(conn)
+    if "public.geocode_discover_page(bigint)" in FUNCTIONS:
+        await _validate_geocode_schema(conn)
+        await _validate_geocode_indexes(conn)
     sources = {}
     for spec in FUNCTION_SPECS:
         function = spec.signature
@@ -530,9 +559,120 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
             f"function definition: {function}")
 
 
+async def _validate_geocode_schema(conn) -> None:
+    columns = {
+        "geocode_retry": (
+            ("account_id", "bigint", True, None),
+            ("rounded_lat", "numeric(8,4)", True, None),
+            ("rounded_lon", "numeric(8,4)", True, None),
+            ("attempted_at", "timestamp with time zone", False, None),
+            ("next_attempt_at", "timestamp with time zone", True, "now()"),
+            ("failure_count", "integer", True, "0"),
+            ("failure_reason", "geocode_failure_reason", False, None),
+        ),
+        "geocode_discovery": (
+            ("account_id", "bigint", True, None),
+            ("cursor_trip_id", "bigint", True, "0"),
+            ("generation", "bigint", True, "1"),
+            ("round_generation", "bigint", True, "1"),
+            ("scanned_generation", "bigint", True, "0"),
+            ("last_unit", "geocode_work_unit", True, "'coordinate'::geocode_work_unit"),
+        ),
+        "trips": (("geocode_generation", "bigint", True, "1"),),
+        "tracking_devices": (("geocode_generation", "bigint", True, "1"),),
+    }
+    cur = await conn.execute(
+        "SELECT c.relname,a.attname,format_type(a.atttypid,a.atttypmod),a.attnotnull,"
+        "pg_get_expr(d.adbin,d.adrelid),a.attidentity,a.attgenerated "
+        "FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid "
+        "LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum "
+        "WHERE c.relnamespace='public'::regnamespace AND a.attnum>0 AND NOT a.attisdropped "
+        "AND (c.relname=ANY(%s) OR (c.relname IN ('trips','tracking_devices') AND a.attname='geocode_generation')) "
+        "ORDER BY c.relname,a.attnum", (list(GEOCODE_TABLES),))
+    found = {table: [] for table in columns}
+    for table, *definition in await cur.fetchall():
+        found[table].append(tuple(definition))
+    for table, expected in columns.items():
+        _require_contract(found[table] == [row + ("", "") for row in expected],
+                          f"geocode column definition: public.{table}")
+    constraints = {
+        "geocode_retry_account_id_fkey": ("geocode_retry", "FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE"),
+        "geocode_retry_pkey": ("geocode_retry", "PRIMARY KEY (account_id, rounded_lat, rounded_lon)"),
+        "geocode_retry_failure_count_check": ("geocode_retry", "CHECK (((failure_count >= 0) AND (failure_count <= 31)))"),
+        "geocode_discovery_account_id_fkey": ("geocode_discovery", "FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE"),
+        "geocode_discovery_pkey": ("geocode_discovery", "PRIMARY KEY (account_id)"),
+        "geocode_discovery_cursor_trip_id_check": ("geocode_discovery", "CHECK ((cursor_trip_id >= 0))"),
+        "geocode_discovery_generation_check": ("geocode_discovery", "CHECK ((generation > 0))"),
+        "geocode_discovery_round_generation_check": ("geocode_discovery", "CHECK ((round_generation > 0))"),
+        "geocode_discovery_scanned_generation_check": ("geocode_discovery", "CHECK ((scanned_generation >= 0))"),
+        "trips_geocode_generation_check": ("trips", "CHECK ((geocode_generation > 0))"),
+        "tracking_devices_geocode_generation_check": ("tracking_devices", "CHECK ((geocode_generation > 0))"),
+    }
+    for axis, limit in (("lat", 90), ("lon", 180)):
+        constraints[f"geocode_retry_rounded_{axis}_check"] = (
+            "geocode_retry", f"CHECK (((rounded_{axis} >= ('-{limit}'::integer)::numeric) "
+            f"AND (rounded_{axis} <= ({limit})::numeric)))")
+    cur = await conn.execute(
+        "SELECT co.conname,c.relname,pg_get_constraintdef(co.oid),co.convalidated,"
+        "co.condeferrable,co.condeferred,co.connoinherit "
+        "FROM pg_constraint co JOIN pg_class c ON c.oid=co.conrelid "
+        "WHERE c.relnamespace='public'::regnamespace "
+        "AND (c.relname=ANY(%s) OR co.conname IN ('trips_geocode_generation_check','tracking_devices_geocode_generation_check'))",
+        (list(GEOCODE_TABLES),))
+    found_constraints = {name: tuple(definition) for name, *definition in await cur.fetchall()}
+    _require_contract(found_constraints == {
+        name: definition + (True, False, False, not definition[1].startswith("CHECK"))
+        for name, definition in constraints.items()
+    }, "geocode constraint definition")
+    cur = await conn.execute(
+        "SELECT t.typname,e.enumlabel FROM pg_type t JOIN pg_enum e ON e.enumtypid=t.oid "
+        "WHERE t.typnamespace='public'::regnamespace AND t.typname=ANY(%s) "
+        "ORDER BY t.typname,e.enumsortorder", (["geocode_failure_reason", "geocode_work_unit"],))
+    _require_contract(await cur.fetchall() == [
+        ("geocode_failure_reason", reason) for reason in ("http", "transport", "parse", "source_changed")
+    ] + [("geocode_work_unit", unit) for unit in ("discovery", "coordinate")], "geocode enum definition")
+
+
+async def _validate_geocode_indexes(conn) -> None:
+    definitions = {
+        "geocode_retry_pkey": "CREATE UNIQUE INDEX geocode_retry_pkey ON public.geocode_retry "
+            "USING btree (account_id, rounded_lat, rounded_lon)",
+        "geocode_discovery_pkey": "CREATE UNIQUE INDEX geocode_discovery_pkey ON public.geocode_discovery "
+            "USING btree (account_id)",
+        "geocode_retry_due_idx": "CREATE INDEX geocode_retry_due_idx ON public.geocode_retry "
+            "USING btree (account_id, next_attempt_at, attempted_at NULLS FIRST, rounded_lat, rounded_lon)",
+        "trips_geocode_discovery_idx": "CREATE INDEX trips_geocode_discovery_idx ON public.trips "
+            "USING btree (account_id, id)",
+    }
+    for endpoint in ("start", "end"):
+        name = "trips_geocode_" + endpoint + "_idx"
+        definitions[name] = (
+            f"CREATE INDEX {name} ON public.trips USING btree (account_id, "
+            f"round((st_y(({endpoint}_geom)::geometry))::numeric, 4), "
+            f"round((st_x(({endpoint}_geom)::geometry))::numeric, 4), id) "
+            f"WHERE (({endpoint}_geom IS NOT NULL) AND ({endpoint}_place_id IS NULL))")
+    cur = await conn.execute(
+        "SELECT c.relname,pg_get_userbyid(c.relowner),i.indisvalid,i.indisready,i.indislive,"
+        "i.indisprimary,pg_get_indexdef(c.oid) FROM pg_index i "
+        "JOIN pg_class c ON c.oid=i.indexrelid JOIN pg_class t ON t.oid=i.indrelid "
+        "WHERE c.relnamespace='public'::regnamespace "
+        "AND (t.relname=ANY(%s) OR c.relname=ANY(%s))",
+        (list(GEOCODE_TABLES), list(definitions)),
+    )
+    rows = await cur.fetchall()
+    found = {row[0] for row in rows}
+    _require_contract(found == set(definitions),
+        f"geocode index set: unexpected {sorted(found - set(definitions))} "
+        f"missing {sorted(set(definitions) - found)}")
+    for name, owner, valid, ready, live, primary, definition in rows:
+        _require_contract((owner, valid, ready, live, primary, definition) ==
+                          (MIGRATE_ROLE, True, True, True, name.endswith("_pkey"), definitions[name]),
+                          f"geocode index definition: {name}")
+
+
 async def _validate_storage_triggers(conn) -> None:
     expected = {}
-    for table in OWNED_TABLES:
+    for table in OWNED_TABLES + tuple(table for table in GEOCODE_PROTECTED_TABLES if table in PROTECTED_TABLES):
         for event, kind, old_table, new_table in (
             ("insert", 4, None, "storage_new_rows"),
             ("update", 16, "storage_old_rows", "storage_new_rows"),
@@ -553,6 +693,23 @@ async def _validate_storage_triggers(conn) -> None:
         ("device_storage_envelopes", "storage_envelope_final"):
             ("storage_check_envelope", 29, (), True, True, None, None),
     })
+    if "public.geocode_discover_page(bigint)" in FUNCTIONS:
+        expected["trips", "geocode_trip_generation"] = (
+            "geocode_trip_generation", 23, (), False, False, None, None)
+        expected["tracking_devices", "geocode_device_generation"] = (
+            "geocode_device_generation", 23, (), False, False, None, None)
+        expected["accounts", "z_geocode_account_init"] = (
+            "geocode_account_init", 5, (), False, False, None, None)
+        for table in ("trips", "tracking_devices"):
+            for event, kind, old_table, new_table in (
+                ("insert", 4, None, "geocode_new_rows"),
+                ("update", 16, "geocode_old_rows", "geocode_new_rows"),
+                ("delete", 8, "geocode_old_rows", None),
+            ):
+                expected[table, "geocode_intents_" + event] = (
+                    "geocode_endpoint_intents", kind, (), False, False, old_table, new_table)
+        expected["geocode_cache", "geocode_intents_delete"] = (
+            "geocode_endpoint_intents", 8, (), False, False, "geocode_old_rows", None)
     cur = await conn.execute(
         "SELECT c.relname,t.tgname,p.proname,t.tgtype,"
         "ARRAY(SELECT a.attname FROM pg_attribute a WHERE a.attrelid=t.tgrelid "

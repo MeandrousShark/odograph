@@ -55,6 +55,15 @@ def test_geocode_batch_counts_retryable_failures_and_completed_cache_rows():
             assert (mixed.attempted, mixed.completed, mixed.retriable_failures,
                     mixed.failure_type) == (2, 1, 1, "ConnectError")
             provider.failed = False
+            assert (await worker.run_once()).attempted == 0
+            async with pool.connection() as conn:
+                row = await (await conn.execute(
+                    "SELECT failure_count,failure_reason::text,next_attempt_at-attempted_at "
+                    "FROM geocode_retry WHERE account_id=%s", (account_id(conn),)
+                )).fetchone()
+                assert row == (1, 'transport', timedelta(seconds=60))
+                await conn.execute("UPDATE geocode_retry SET next_attempt_at=now() WHERE account_id=%s",
+                                   (account_id(conn),))
             success = await worker.run_once()
             empty = await worker.run_once()
             assert (success.attempted, success.completed, success.retriable_failures) == (1, 1, 0)
@@ -242,7 +251,7 @@ def test_geocode_discovery_and_trip_columns():
     asyncio.run(_scenario())
 
 
-def test_geocode_turn_has_one_coordinate_and_transient_failure_defers_without_cache():
+def test_geocode_turn_failure_does_not_defer_other_coordinates_after_restart():
     from app.provider_pacing import ProviderPacer
     async def scenario():
         raw = make_pool(TEST_DB)
@@ -254,32 +263,472 @@ def test_geocode_turn_has_one_coordinate_and_transient_failure_defers_without_ca
                 for offset in range(3):
                     await _insert_trip(conn, T0 + timedelta(hours=offset),
                         T0 + timedelta(hours=offset, minutes=1), 47.1 + offset / 10, -122.1)
-            provider = GeoapifyProvider("key", "")
             pacer = ProviderPacer(0)
-            calls = []
-            def failing(request):
-                calls.append(request)
-                return httpx.Response(200, content=b"not JSON")
-            async with httpx.AsyncClient(transport=httpx.MockTransport(failing)) as client:
-                worker = GeocodeWorker(pool, client, provider, 0, pacer=pacer, retry_s=60)
+            class Provider:
+                calls = []
+                async def reverse(self, client, lat, lon):
+                    self.calls.append(lat)
+                    if lat == 47.1:
+                        raise ValueError("malformed provider response")
+                    return None
+            provider = Provider()
+            outcomes = []
+            for _ in range(5):
+                # Production reconstructs workers every turn; durable progress
+                # must survive that, including discovery's alternating priority.
+                worker = GeocodeWorker(pool, None, provider, 0, pacer=pacer)
                 ticket = await pacer.wait_ready()
-                started = asyncio.get_running_loop().time()
-                failed = await worker.run_turn(ticket)
-                assert len(calls) == 1
-                assert failed.batch.retriable_failures == 1
-                assert not failed.ready and failed.deferred_until >= started + 60
+                try:
+                    outcomes.append(await worker.run_turn(ticket))
+                finally:
+                    ticket.close()
+            assert provider.calls == [47.1, 47.2, 47.3]
+            assert sum(o.batch.completed for o in outcomes) == 2
+            assert sum(o.batch.retriable_failures for o in outcomes) == 1
+            assert outcomes[-1].deferred_until > asyncio.get_running_loop().time()
+            async with pool.connection() as conn:
+                assert (await (await conn.execute("SELECT count(*) FROM geocode_cache")).fetchone())[0] == 2
+                assert (await (await conn.execute(
+                    "SELECT failure_count,failure_reason::text FROM geocode_retry"
+                )).fetchone()) == (1, 'parse')
+        finally:
+            await raw.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('mutation', ['endpoint', 'device_cycle', 'note', 'unrelated_endpoint'])
+def test_geocode_generation_revalidation_preserves_only_current_results(mutation):
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                await seed_tracking_device(conn, DEVICE, device_id=1)
+                trip = await _insert_trip(conn, T0, T0 + timedelta(minutes=1), 47.1, -122.1)
+            class Provider:
+                async def reverse(self, client, lat, lon):
+                    async with pool.connection() as conn:
+                        if mutation == 'endpoint':
+                            await conn.execute(
+                                "UPDATE trips SET start_geom=ST_SetSRID(ST_MakePoint(-122.2,47.2),4326)::geography "
+                                "WHERE account_id=%s AND id=%s", (account_id(conn), trip),
+                            )
+                        elif mutation == 'device_cycle':
+                            await conn.execute("UPDATE tracking_devices SET enabled=false WHERE account_id=%s",
+                                               (account_id(conn),))
+                            await conn.execute("UPDATE tracking_devices SET enabled=true WHERE account_id=%s",
+                                               (account_id(conn),))
+                        elif mutation == 'unrelated_endpoint':
+                            await _insert_trip(conn, T0 + timedelta(hours=1), T0 + timedelta(hours=1, minutes=1),
+                                               47.2, -122.2)
+                        else:
+                            await conn.execute("UPDATE trips SET notes='human edit' WHERE account_id=%s AND id=%s",
+                                               (account_id(conn), trip))
+                    return 'Current address'
+            outcome = await GeocodeWorker(pool, None, Provider(), 0, batch_size=1).run_once()
+            assert outcome.attempted == 1
+            async with pool.connection() as conn:
+                cache = await (await conn.execute("SELECT address FROM geocode_cache")).fetchall()
+                assert cache == ([('Current address',)] if mutation in ('note', 'unrelated_endpoint') else [])
+                if mutation in ('endpoint', 'device_cycle'):
+                    assert (await (await conn.execute(
+                        "SELECT failure_reason::text FROM geocode_retry WHERE rounded_lat=47.1"
+                    )).fetchone()) == ('source_changed',)
+        finally:
+            await raw.close()
+    asyncio.run(scenario())
+
+
+def test_geocode_cancellation_keeps_coordinate_and_restart_caches_genuine_null():
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                await seed_tracking_device(conn, DEVICE, device_id=1)
+                await _insert_trip(conn, T0, T0 + timedelta(minutes=1), 47.1, -122.1)
+            started = asyncio.Event()
+            class Provider:
+                async def reverse(self, client, lat, lon):
+                    started.set()
+                    await asyncio.Future()
+            task = asyncio.create_task(GeocodeWorker(pool, None, Provider(), 0).run_once())
+            await asyncio.wait_for(started.wait(), 5)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            async with pool.connection() as conn:
+                assert (await (await conn.execute(
+                    "SELECT attempted_at,failure_count FROM geocode_retry"
+                )).fetchone()) == (None, 0)
+            class Miss:
+                calls = 0
+                async def reverse(self, client, lat, lon):
+                    self.calls += 1
+                    return None
+            provider = Miss()
+            worker = GeocodeWorker(pool, None, provider, 0)
+            assert (await worker.run_once()).completed == 1
+            assert (await worker.run_once()).attempted == 0
+            assert provider.calls == 1
+            async with pool.connection() as conn:
+                assert (await (await conn.execute("SELECT address FROM geocode_cache")).fetchone()) == (None,)
+                assert (await (await conn.execute("SELECT count(*) FROM geocode_retry")).fetchone()) == (0,)
+        finally:
+            await raw.close()
+    asyncio.run(scenario())
+
+
+def test_geocode_retry_is_capped_and_orphan_removed_without_http():
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                await seed_tracking_device(conn, DEVICE, device_id=1)
+                trip = await _insert_trip(conn, T0, T0 + timedelta(minutes=1), 47.1, -122.1)
+            class Failure:
+                async def reverse(self, client, lat, lon):
+                    raise httpx.ConnectError('unavailable')
+            worker = GeocodeWorker(pool, None, Failure(), 0)
+            for attempt, delay in enumerate([60, 120, 240, 480, 960, 1920, 3600, 3600], 1):
+                assert (await worker.run_once()).retriable_failures == 1
                 async with pool.connection() as conn:
-                    assert (await (await conn.execute("SELECT count(*) FROM geocode_cache")).fetchone())[0] == 0
-            async with _FakeHTTP(None) as client:
-                worker = GeocodeWorker(pool, client, provider, 0, pacer=pacer)
-                for count in range(1, 4):
-                    complete = await worker.run_turn(await pacer.wait_ready())
-                    assert complete.ready and complete.batch.completed == 1
-                    assert client.calls == count
-                idle_ticket = await pacer.wait_ready()
-                idle = await worker.run_turn(idle_ticket)
-                idle_ticket.close()
-                assert not idle.ready and idle.batch.attempted == 0
+                    assert (await (await conn.execute(
+                        "SELECT failure_count,next_attempt_at-attempted_at FROM geocode_retry"
+                    )).fetchone()) == (attempt, timedelta(seconds=delay))
+                    await conn.execute("UPDATE geocode_retry SET next_attempt_at=now() WHERE account_id=%s",
+                                       (account_id(conn),))
+            async with pool.connection() as conn:
+                await conn.execute("UPDATE geocode_retry SET failure_count=31 WHERE account_id=%s",
+                                   (account_id(conn),))
+            assert (await worker.run_once()).retriable_failures == 1
+            async with pool.connection() as conn:
+                assert (await (await conn.execute("SELECT failure_count FROM geocode_retry")).fetchone()) == (31,)
+                await conn.execute("DELETE FROM trips WHERE account_id=%s AND id=%s", (account_id(conn), trip))
+                await conn.execute("UPDATE geocode_retry SET next_attempt_at=now() WHERE account_id=%s",
+                                   (account_id(conn),))
+            class Unused:
+                async def reverse(self, client, lat, lon):
+                    pytest.fail('orphan reached HTTP')
+            cleaned = await GeocodeWorker(pool, None, Unused(), 0).run_once()
+            assert (cleaned.attempted, cleaned.completed) == (0, 1)
+            async with pool.connection() as conn:
+                assert (await (await conn.execute("SELECT count(*) FROM geocode_retry")).fetchone()) == (0,)
+        finally:
+            await raw.close()
+    asyncio.run(scenario())
+
+
+def test_geocode_discovery_pages_alternate_with_due_coordinates_and_resume_after_restart():
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                await conn.execute(
+                    "INSERT INTO trips(account_id,device,source,started_at,ended_at,distance_m,point_count,"
+                    "start_geom,end_geom) SELECT %s,'manual','manual',%s,%s,100,0,"
+                    "ST_SetSRID(ST_MakePoint(-122,47+i::float/10000),4326)::geography,NULL "
+                    "FROM generate_series(1,1001) i", (account_id(conn), T0, T0 + timedelta(minutes=1)),
+                )
+                # Simulate pre-existing history without immediate endpoint intents.
+                await conn.execute("DELETE FROM geocode_retry WHERE account_id=%s", (account_id(conn),))
+            class Provider:
+                calls = 0
+                async def reverse(self, client, lat, lon):
+                    self.calls += 1
+                    return 'Address'
+            provider = Provider()
+            cursors = []
+            for turn in range(5):
+                outcome = await GeocodeWorker(pool, None, provider, 0).run_turn()
+                assert outcome.ready
+                async with pool.connection() as conn:
+                    cursors.append((await (await conn.execute(
+                        "SELECT cursor_trip_id,last_unit::text FROM geocode_discovery"
+                    )).fetchone()))
+            assert [kind for _, kind in cursors] == ['discovery', 'coordinate', 'discovery', 'coordinate', 'discovery']
+            assert provider.calls == 2
+            assert cursors[0][0] > 0 and cursors[2][0] > cursors[0][0]
+            async with pool.connection() as conn:
+                assert (await (await conn.execute(
+                    "SELECT generation=scanned_generation FROM geocode_discovery"
+                )).fetchone()) == (True,)
+                assert (await (await conn.execute("SELECT count(*) FROM geocode_retry")).fetchone()) == (999,)
+        finally:
+            await raw.close()
+    asyncio.run(scenario())
+
+
+def test_geocode_representative_and_discovery_use_bounded_indexed_plans():
+    import re
+    from decimal import Decimal
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                await conn.execute(
+                    "INSERT INTO trips(account_id,device,source,started_at,ended_at,distance_m,point_count,"
+                    "start_geom) SELECT %s,'manual','manual',%s,%s,100,0,"
+                    "ST_SetSRID(ST_MakePoint(20,10+i::float/10000),4326)::geography "
+                    "FROM generate_series(1,10000) i", (account_id(conn), T0, T0 + timedelta(minutes=1)),
+                )
+                owner = account_id(conn)
+                assert await GeocodeWorker(pool, None, None, 0)._source(conn, Decimal('11'), Decimal('20'))
+            plans = []
+            async with raw.connection() as conn:
+                await conn.execute('ANALYZE trips; ANALYZE geocode_retry')
+                cur = await conn.execute(
+                    "SELECT pg_get_functiondef('public.geocode_representative_source(bigint,numeric,numeric)'::regprocedure)"
+                )
+                definition = (await cur.fetchone())[0]
+                inner = definition.split('RETURN QUERY', 1)[1].split(';', 1)[0]
+                inner = re.sub(r'\b(owner_id|lat|lon)\b', lambda match: '%(' + match[0] + ')s', inner)
+                # Explain the actual installed body under its definer identity,
+                # whose migration_writer policy permits the indexed expressions.
+                await conn.execute('SET LOCAL ROLE odograph_migrate')
+                cur = await conn.execute('EXPLAIN (ANALYZE, FORMAT JSON) ' + inner,
+                                         {'owner_id': owner, 'lat': Decimal('11'), 'lon': Decimal('20')})
+                plans.append((await cur.fetchone())[0][0]['Plan'])
+            async with pool.connection() as conn:
+                cur = await conn.execute(
+                    'EXPLAIN (ANALYZE, FORMAT JSON) SELECT id FROM trips '
+                    'WHERE account_id=%s AND id>%s ORDER BY id LIMIT 500', (account_id(conn), 5000),
+                )
+                plans.append((await cur.fetchone())[0][0]['Plan'])
+                cur = await conn.execute(
+                    'EXPLAIN (ANALYZE, FORMAT JSON) SELECT rounded_lat,rounded_lon FROM geocode_retry '
+                    'WHERE account_id=%s AND next_attempt_at<=now() ORDER BY next_attempt_at,'
+                    'attempted_at NULLS FIRST,rounded_lat,rounded_lon LIMIT 1', (account_id(conn),),
+                )
+                plans.append((await cur.fetchone())[0][0]['Plan'])
+            def nodes(plan):
+                yield plan
+                for child in plan.get('Plans', []):
+                    yield from nodes(child)
+            for plan in plans:
+                assert plan['Node Type'] == 'Limit'
+                assert not any(n['Node Type'] == 'Seq Scan' and n.get('Relation Name') in ('trips', 'geocode_retry')
+                               for n in nodes(plan)), plan
+            source_indexes = {n.get('Index Name') for n in nodes(plans[0])}
+            assert {'trips_geocode_start_idx', 'trips_geocode_end_idx'} <= source_indexes
+            discovery_indexes = {n.get('Index Name') for n in nodes(plans[1])}
+            assert discovery_indexes & {'trips_geocode_discovery_idx', 'trips_account_id_id_key', 'trips_pkey'}, discovery_indexes
+            assert all(n.get('Actual Rows', 0) <= 500 and n.get('Rows Removed by Filter', 0) == 0
+                       for n in nodes(plans[1]) if n.get('Relation Name') == 'trips')
+            assert any(n.get('Index Name') == 'geocode_retry_due_idx' for n in nodes(plans[2]))
+            assert [p['Actual Rows'] for p in plans] == [1, 500, 1]
+        finally:
+            await raw.close()
+    asyncio.run(scenario())
+
+
+def test_geocode_concurrent_failures_advance_retry_only_once():
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                await seed_tracking_device(conn, DEVICE, device_id=1)
+                await _insert_trip(conn, T0, T0 + timedelta(minutes=1), 47.1, -122.1)
+            both_started = asyncio.Event()
+            class Provider:
+                calls = 0
+                async def reverse(self, client, lat, lon):
+                    self.calls += 1
+                    if self.calls == 2:
+                        both_started.set()
+                    await asyncio.wait_for(both_started.wait(), 5)
+                    raise httpx.ConnectError('unavailable')
+            provider = Provider()
+            outcomes = await asyncio.gather(*[
+                GeocodeWorker(pool, None, provider, 0)._geocode_one(47.1, -122.1) for _ in range(2)
+            ])
+            assert provider.calls == 2
+            assert sum(o.attempted for o in outcomes) == 2
+            assert sum(o.retriable_failures for o in outcomes) == 1
+            async with pool.connection() as conn:
+                assert (await (await conn.execute(
+                    "SELECT failure_count,next_attempt_at-attempted_at FROM geocode_retry"
+                )).fetchone()) == (1, timedelta(seconds=60))
+        finally:
+            await raw.close()
+    asyncio.run(scenario())
+
+
+def test_geocode_cache_and_queue_completion_roll_back_together():
+    from psycopg.errors import CheckViolation
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                await seed_tracking_device(conn, DEVICE, device_id=1)
+                await _insert_trip(conn, T0, T0 + timedelta(minutes=1), 47.1, -122.1)
+            async with raw.connection() as conn:
+                await conn.execute("CREATE FUNCTION test_geocode_rollback() RETURNS trigger LANGUAGE plpgsql "
+                    "AS $$BEGIN RAISE EXCEPTION 'completion rejected' USING ERRCODE='23514'; END$$; "
+                    "CREATE TRIGGER test_geocode_rollback BEFORE DELETE ON geocode_retry "
+                    "FOR EACH ROW EXECUTE FUNCTION test_geocode_rollback()")
+            class Provider:
+                async def reverse(self, client, lat, lon):
+                    return 'Address'
+            try:
+                with pytest.raises(CheckViolation, match='completion rejected'):
+                    await GeocodeWorker(pool, None, Provider(), 0)._geocode_one(47.1, -122.1)
+                async with pool.connection() as conn:
+                    assert (await (await conn.execute("SELECT count(*) FROM geocode_cache")).fetchone()) == (0,)
+                    assert (await (await conn.execute(
+                        "SELECT attempted_at,failure_count FROM geocode_retry"
+                    )).fetchone()) == (None, 0)
+            finally:
+                async with raw.connection() as conn:
+                    await conn.execute("DROP TRIGGER test_geocode_rollback ON geocode_retry; "
+                                       "DROP FUNCTION test_geocode_rollback()")
+            assert (await GeocodeWorker(pool, None, Provider(), 0).run_once()).completed == 1
+        finally:
+            await raw.close()
+    asyncio.run(scenario())
+
+
+def test_geocode_endpoint_eligibility_behind_cursor_survives_round_and_restart():
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                await seed_tracking_device(conn, DEVICE, device_id=1)
+                await conn.execute("UPDATE tracking_devices SET enabled=false WHERE account_id=%s", (account_id(conn),))
+                await conn.execute(
+                    "INSERT INTO trips(account_id,tracking_device_id,device,source,started_at,ended_at,"
+                    "distance_m,point_count,start_geom) SELECT %s,1,%s,'manual',%s,%s,100,0,"
+                    "ST_SetSRID(ST_MakePoint(-122,47+i::float/10000),4326)::geography "
+                    "FROM generate_series(1,501) i", (account_id(conn), DEVICE, T0, T0 + timedelta(minutes=1)),
+                )
+            class Unused:
+                async def reverse(self, client, lat, lon):
+                    pytest.fail('discovery consumed HTTP')
+            assert (await GeocodeWorker(pool, None, Unused(), 0).run_turn()).ready
+            async with pool.connection() as conn:
+                assert (await (await conn.execute("SELECT count(*) FROM geocode_retry")).fetchone()) == (0,)
+                await conn.execute("UPDATE tracking_devices SET enabled=true WHERE account_id=%s", (account_id(conn),))
+            # Finish the old round, then start the changed generation's round.
+            await GeocodeWorker(pool, None, Unused(), 0)._discover()
+            await GeocodeWorker(pool, None, Unused(), 0)._discover()
+            async with pool.connection() as conn:
+                assert (await (await conn.execute("SELECT count(*) FROM geocode_retry")).fetchone()) == (501,)
+                assert (await (await conn.execute(
+                    "SELECT generation>scanned_generation,cursor_trip_id>0 FROM geocode_discovery"
+                )).fetchone()) == (True, True)
+            await GeocodeWorker(pool, None, Unused(), 0)._discover()
+            async with pool.connection() as conn:
+                assert (await (await conn.execute(
+                    "SELECT generation=scanned_generation,cursor_trip_id FROM geocode_discovery"
+                )).fetchone()) == (True, 0)
+        finally:
+            await raw.close()
+    asyncio.run(scenario())
+
+
+def test_geocode_source_disappearing_during_http_completes_orphan_without_null_cache():
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                await seed_tracking_device(conn, DEVICE, device_id=1)
+                trip = await _insert_trip(conn, T0, T0 + timedelta(minutes=1), 47.1, -122.1)
+            class Provider:
+                async def reverse(self, client, lat, lon):
+                    async with pool.connection() as conn:
+                        await conn.execute('DELETE FROM trips WHERE account_id=%s AND id=%s', (account_id(conn), trip))
+                    return None
+            result = await GeocodeWorker(pool, None, Provider(), 0).run_once()
+            assert (result.attempted, result.completed) == (1, 1)
+            async with pool.connection() as conn:
+                assert (await (await conn.execute('SELECT count(*) FROM geocode_cache')).fetchone()) == (0,)
+                assert (await (await conn.execute('SELECT count(*) FROM geocode_retry')).fetchone()) == (0,)
+        finally:
+            await raw.close()
+    asyncio.run(scenario())
+
+
+
+def test_geocode_malformed_nominatim_label_persists_parse_retry():
+    from app.geocode import NominatimProvider
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                await seed_tracking_device(conn, DEVICE, device_id=1)
+                await _insert_trip(conn, T0, T0 + timedelta(minutes=1), 47.1, -122.1)
+            async with httpx.AsyncClient(transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json={"display_name": True})
+            )) as client:
+                worker = GeocodeWorker(pool, client, NominatimProvider("http://nominatim", "", "test"), 0)
+                result = await worker.run_once()
+                assert (result.attempted, result.completed, result.retriable_failures) == (1, 0, 1)
+            async with pool.connection() as conn:
+                assert (await (await conn.execute(
+                    "SELECT failure_reason::text,next_attempt_at-attempted_at FROM geocode_retry"
+                )).fetchone()) == ('parse', timedelta(seconds=60))
+                assert (await (await conn.execute('SELECT count(*) FROM geocode_cache')).fetchone()) == (0,)
+        finally:
+            await raw.close()
+    asyncio.run(scenario())
+
+
+def test_geocode_new_coordinate_is_due_while_old_coordinate_remains_deferred():
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                await seed_tracking_device(conn, DEVICE, device_id=1)
+                await _insert_trip(conn, T0, T0 + timedelta(minutes=1), 47.1, -122.1)
+            class Provider:
+                calls = []
+                async def reverse(self, client, lat, lon):
+                    self.calls.append(lat)
+                    if lat == 47.1:
+                        raise httpx.ConnectError('unavailable')
+                    return 'Later address'
+            provider = Provider()
+            assert (await GeocodeWorker(pool, None, provider, 0).run_once()).retriable_failures == 1
+            deferred = await GeocodeWorker(pool, None, provider, 0).run_turn()
+            assert deferred.deferred_until > asyncio.get_running_loop().time()
+            async with pool.connection() as conn:
+                old_retry = (await (await conn.execute(
+                    'SELECT next_attempt_at FROM geocode_retry WHERE rounded_lat=47.1'
+                )).fetchone())[0]
+                await _insert_trip(conn, T0 + timedelta(hours=1), T0 + timedelta(hours=1, minutes=1), 47.2, -122.2)
+                due_rows = await (await conn.execute(
+                    'SELECT rounded_lat,next_attempt_at<=now() FROM geocode_retry ORDER BY rounded_lat'
+                )).fetchall()
+                assert [(float(lat), due) for lat, due in due_rows] == [(47.1, False), (47.2, True)]
+            # A refreshed continuation/restart reads the durable due queue.
+            # Discovery gets one alternating turn before the new coordinate.
+            results = [await GeocodeWorker(pool, None, provider, 0).run_turn() for _ in range(2)]
+            assert sum(r.batch.completed for r in results) == 1
+            assert provider.calls == [47.1, 47.2]
+            async with pool.connection() as conn:
+                assert (await (await conn.execute(
+                    'SELECT failure_count,next_attempt_at FROM geocode_retry'
+                )).fetchone()) == (1, old_retry)
         finally:
             await raw.close()
     asyncio.run(scenario())

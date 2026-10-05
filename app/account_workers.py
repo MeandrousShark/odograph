@@ -85,7 +85,7 @@ class AccountWorker(PokeSweepWorker):
     """
 
     def __init__(self, pools, config, factory, *, label, debounce_s, sweep_s, after_run=None,
-                 capacity=None, scheduler=None, before_turn=None):
+                 capacity=None, scheduler=None, before_turn=None, refresh_deferred_on_wake=False):
         super().__init__(task_name=label, log=log,
             failure_message=f"{label}: account enumeration failed",
             debounce_s=debounce_s, sweep_s=sweep_s)
@@ -100,13 +100,15 @@ class AccountWorker(PokeSweepWorker):
         self.last_outcome = BatchOutcome()
         self._produced_work = False
         self.before_turn = before_turn
+        self.refresh_deferred_on_wake = refresh_deferred_on_wake
         self._round: deque[AccountPrincipal] = deque()
         self._last_round_started: int | None = None
         self._continuations: dict[int, TurnOutcome] = {}
 
     def wake_cycle(self):
+        # Durable jobs recheck due times because a wake may introduce earlier work.
         for owner, continuation in self._continuations.items():
-            if continuation.deferred_until is None:
+            if continuation.deferred_until is None or self.refresh_deferred_on_wake:
                 self._continuations[owner] = TurnOutcome(ready=True, cursor=continuation.cursor)
 
     def _schedule_continuation(self):

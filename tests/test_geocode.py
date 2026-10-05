@@ -567,3 +567,12 @@ def test_contract_reverse_oversize_response_is_transient(contract):
     with pytest.raises(ProviderResponseTooLarge):
         _reverse_via(contract.make_provider(), lambda request: httpx.Response(
             200, content=b" " * (GEOCODE_RESPONSE_MAX_BYTES + 1)))
+
+
+@pytest.mark.parametrize("field", ["display_name", "error"])
+@pytest.mark.parametrize("value", [True, 7, {"label": "A place"}, ["A place"], None, "", " "])
+@pytest.mark.parametrize("omit_country", ["", "United States of America"])
+def test_nominatim_reverse_malformed_labels_are_transient(field, value, omit_country):
+    provider = NominatimProvider("http://nominatim", omit_country, "test")
+    with pytest.raises(ValueError):
+        _reverse_via(provider, lambda request: httpx.Response(200, json={field: value}))

@@ -97,7 +97,8 @@ separate actual, reserved, raw-message and optional-enhancement byte counts.
 Each retained point reserves capacity for detector output, including a
 durable high-water mark for copied device labels. These counts describe
 stored-value charges, not PostgreSQL disk usage. This accounting does not
-enforce account storage limits.
+enforce account storage limits. Durable geocode retry and discovery rows count
+toward actual usage.
 
 Startup verifies the counters against stored data once through the privileged
 setup connection. This scan can increase startup time for large histories.
@@ -239,7 +240,10 @@ coordinate, email kind or retention batch (at most 1,000 expired raw rows).
 Accounts rotate between those units, and ready backlogs continue without
 waiting for a periodic sweep. A whole detector device, complete report or SMTP
 transport can still take a long time; this is not a universal job deadline.
-Geocode failures can still delay later coordinates in the same account.
+Reverse-geocode retries persist per rounded endpoint coordinate. Transient
+failures defer that coordinate with exponential backoff from 60 seconds to a
+3,600-second maximum, allowing other due coordinates to proceed. Discovery
+processes at most 500 trips per turn and resumes its cursor after restart.
 Multi-account activation remains separately controlled.
 
 OIDC is optional. Set all three required provider values together and register

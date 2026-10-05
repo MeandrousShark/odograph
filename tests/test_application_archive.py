@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from datetime import timedelta
 
 import psycopg
 import pytest
@@ -68,6 +69,18 @@ async def _seed(database_url):
                         "VALUES(%s,'portable provenance','manual','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',%s,'business')",
                         (owner, owner * 100),
                     )
+                    await conn.execute(
+                        "INSERT INTO geocode_retry(account_id,rounded_lat,rounded_lon,attempted_at,"
+                        "next_attempt_at,failure_count,failure_reason) "
+                        "VALUES(%s,35.1234,139.5678,'2026-01-01','2026-01-01T01:00Z',4,'transport')",
+                        (owner,),
+                    )
+            async with pool.connection() as conn:
+                await conn.execute(
+                    "UPDATE geocode_discovery SET cursor_trip_id=73,generation=5,round_generation=4,"
+                    "scanned_generation=3,last_unit='discovery'")
+                assert await (await conn.execute(
+                    "SELECT public.storage_usage_consistent()")).fetchone() == (True,)
             return first["id"], roles.runtime.conninfo
     finally:
         await pool.close()
@@ -102,6 +115,12 @@ async def _verify(database_url, first, version=1):
                     "(SELECT array_agg(DISTINCT account_id) FROM tracking_devices),"
                     "(SELECT array_agg(DISTINCT account_id) FROM ingest_credentials)")).fetchone()
                 assert owners == ([owner], [owner], [owner])
+                assert await (await conn.execute(
+                    "SELECT account_id,failure_count,failure_reason::text,next_attempt_at-attempted_at "
+                    "FROM geocode_retry")).fetchall() == [(owner, 4, "transport", timedelta(hours=1))]
+                assert await (await conn.execute(
+                    "SELECT account_id,cursor_trip_id,generation,round_generation,scanned_generation,last_unit::text "
+                    "FROM geocode_discovery")).fetchall() == [(owner, 73, 5, 4, 3, "discovery")]
                 assert (await conn.execute("UPDATE trips SET notes='cross' WHERE account_id=%s",
                                            (other,))).rowcount == 0
                 with pytest.raises(psycopg.errors.InsufficientPrivilege):
