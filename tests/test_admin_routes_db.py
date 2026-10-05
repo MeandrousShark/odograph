@@ -455,7 +455,7 @@ def test_committed_admin_outcome_survives_saturated_identity_refresh(monkeypatch
         app.state.capacity = manager
         app.state.security_mail = SecurityMailAdmission(capacity=manager)
         original = admin._load_page_data
-        entered = [asyncio.Event(), asyncio.Event()]
+        entered = [asyncio.Event()]
         release = asyncio.Event()
         holders = []
 
@@ -465,7 +465,7 @@ def test_committed_admin_outcome_survives_saturated_identity_refresh(monkeypatch
                 await release.wait()
 
         async def busy_refresh(request, actor):
-            holders.extend(asyncio.create_task(occupy(i)) for i in range(2))
+            holders.extend(asyncio.create_task(occupy(i)) for i in range(len(entered)))
             await asyncio.gather(*(event.wait() for event in entered))
             return await original(request, actor)
 
