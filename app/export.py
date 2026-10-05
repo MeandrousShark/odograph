@@ -12,6 +12,7 @@ import csv
 import io
 import os
 import sys
+import time
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -169,7 +170,7 @@ def _populate_trips_sheet(ws, trips: list[dict], rates: dict[int, YearRate], tz:
     mi_col, km_col, ded_col = 7, 8, 16
     total_m = 0.0
     total_ded = 0.0
-    for t in trips:
+    for index, t in enumerate(trips, 1):
         row = _export_row(t, rates, tz)
         distance_m, ded = _trip_distance_and_deduction(t, rates, tz)
         if t.get("exclusion") != "not_my_vehicle":
@@ -182,6 +183,9 @@ def _populate_trips_sheet(ws, trips: list[dict], rates: dict[int, YearRate], tz:
                 ws, deduction_value, number_format='"$"#,##0.00'
             )
         ws.append(row)
+        if index % 64 == 0:
+            # Release the GIL so a large export's owned thread leaves intake responsive.
+            time.sleep(.001)
     totals = [""] * len(HEADERS)
     totals[0] = "Total"
     totals[mi_col - 1] = round(total_m / METERS_PER_MILE, 1)
