@@ -217,11 +217,11 @@ def test_mail_final_check_reserved_while_identity_and_lifecycle_are_full():
             nonlocal held
             async with manager.operation(lane):
                 held += 1
-                if held == 3:
+                if held == 2:
                     full.set()
                 await release.wait()
 
-        holders = [asyncio.create_task(occupy(lane)) for lane in ("identity", "identity", "lifecycle")]
+        holders = [asyncio.create_task(occupy(lane)) for lane in ("identity", "lifecycle")]
         await full.wait()
         try:
             assert await admission.send(Transport(), 1, admit=admit, lease=lease)

@@ -80,27 +80,33 @@ def _value(config, name, default):
 def validate_capacity_config(config):
     """Reject configurations that increase the reviewed resource envelope."""
     caps = {name: _value(config, name + "_slots", default) for name, default in (
-        ("ingest", 2), ("routine", 2), ("foreground", 1), ("background", 1),
-        ("ingest_identity", 1), ("identity", 2), ("lifecycle", 1), ("mail", 2),
+        ("ingest", 2), ("routine", 1), ("navigation", 1), ("foreground", 1),
+        ("background", 1), ("ingest_identity", 1), ("identity", 1),
+        ("lifecycle", 1), ("mail", 2),
         ("auth_ingest", 2), ("auth_interactive", 1))}
     if any(type(value) is not int or value <= 0 for value in caps.values()):
         raise ValueError("capacity slots must be positive integers")
-    if sum(caps[name] for name in ("ingest", "routine", "foreground", "background")) > 6:
+    if sum(caps[name] for name in (
+            "ingest", "routine", "navigation", "foreground", "background")) > 6:
         raise ValueError("runtime capacity reservations exceed six connections")
-    if sum(caps[name] for name in ("ingest_identity", "identity", "lifecycle", "mail")) > 6:
-        raise ValueError("control capacity reservations exceed six connections")
+    if sum(caps[name] for name in (
+            "ingest_identity", "identity", "lifecycle", "mail")) > 5:
+        raise ValueError("control capacity reservations exceed five connections")
     if any(caps[name] > maximum for name, maximum in (
-        ("foreground", 1), ("background", 1), ("ingest_identity", 1), ("mail", 2),
+        ("routine", 1), ("navigation", 1), ("foreground", 1), ("background", 1),
+        ("ingest_identity", 1), ("identity", 1), ("mail", 2),
         ("auth_ingest", 2), ("auth_interactive", 1))):
         raise ValueError("capacity exceeds the reviewed operation or authentication bound")
     for name, default, maximum in (
-            ("ingest", 4, 4), ("routine", 4, 4), ("foreground", 4, 4),
+            ("ingest", 4, 4), ("routine", 4, 4), ("navigation", 4, 4),
+            ("foreground", 4, 4),
             ("identity", 4, 4), ("auth_ingest", 8, 8),
             ("ingest_identity", 1, 1)):
         pending = _value(config, name + "_pending", default)
         if type(pending) is not int or not 0 <= pending <= maximum:
             raise ValueError(f"capacity {name} pending limit must be an integer from zero to {maximum}")
     for name, default in (("ingest_wait_s", .25), ("routine_wait_s", 1.),
+            ("navigation_wait_s", 1.),
             ("foreground_wait_s", 2.), ("identity_wait_s", 1.),
             ("auth_ingest_wait_s", 1.), ("ingest_identity_wait_s", .25),
             ("auth_body_timeout_s", 15.), ("ingest_body_timeout_s", 15.),
@@ -112,9 +118,12 @@ def validate_capacity_config(config):
         if name.endswith("sql_timeout_s") or name == "lock_timeout_s":
             if value > 2147483.647:
                 raise ValueError("capacity SQL deadlines exceed the supported database timeout")
-        maximum = {"auth_ingest_wait_s": 1., "ingest_identity_wait_s": .25}.get(name)
+        maximum = {
+            "auth_ingest_wait_s": 1., "ingest_identity_wait_s": .25,
+            "navigation_wait_s": 1.,
+        }.get(name)
         if maximum is not None and value > maximum:
-            raise ValueError("capacity authentication waits exceed the reviewed limit")
+            raise ValueError("capacity waits exceed the reviewed limit")
     for name, default, maximum in (("auth_form_max_bytes", 65536, 65536),
             ("basic_header_max_bytes", 8192, 8192),
             ("multipart_overhead_bytes", 65536, 65536),
@@ -130,9 +139,10 @@ class AdmissionManager:
         self.config = config
         self.lanes = {}
         for name, limit, pending, wait in (
-                ("ingest", 2, 4, .25), ("routine", 2, 4, 1.),
+                ("ingest", 2, 4, .25), ("routine", 1, 4, 1.),
+                ("navigation", 1, 4, 1.),
                 ("foreground", 1, 4, 2.), ("background", 1, 0, 0),
-                ("ingest_identity", 1, 1, .25), ("identity", 2, 4, 1.),
+                ("ingest_identity", 1, 1, .25), ("identity", 1, 4, 1.),
                 ("lifecycle", 1, 0, 0), ("mail", 2, 0, 0),
                 ("auth_ingest", 2, 8, 1.), ("auth_interactive", 1, 0, 0)):
             self.lanes[name] = Lane(_value(config, name + "_slots", limit),
@@ -183,16 +193,27 @@ class AdmissionManager:
         from app.account_context import AccountPrincipal
         if owner.principal is not None and not isinstance(owner.principal, AccountPrincipal):
             raise CapacityContractError("capacity identity requires an immutable validated principal")
-        if lane in ("ingest", "routine", "foreground", "background"):
+        if lane in ("ingest", "routine", "navigation", "foreground", "background"):
             if owner.principal is None or not owner.principal.enabled:
                 raise CapacityContractError("account admission requires a validated enabled principal")
-        self._promote(lane)
+        shared_lanes = ("navigation", "foreground")
+        if lane in shared_lanes:
+            # Expire or remove cancellations from both lanes before cross-lane
+            # account checks so stale tickets cannot reserve an account.
+            for shared_lane in shared_lanes:
+                self._promote(shared_lane)
+        else:
+            self._promote(lane)
         active, pending, spec = self._active[lane], self._pending[lane], self.lanes[lane]
         key = self._key(owner)
-        if key is not None and any(self._key(other) == key for other in active):
-            raise CapacityBusy("account already owns capacity")
-        if key is not None and any(self._key(ticket.owner) == key for ticket in pending):
-            raise CapacityBusy("account already awaits capacity")
+        exclusion_lanes = shared_lanes if lane in shared_lanes else (lane,)
+        if key is not None:
+            if any(self._key(other) == key for other_lane in exclusion_lanes
+                   for other in self._active[other_lane]):
+                raise CapacityBusy("account already owns capacity")
+            if any(self._key(ticket.owner) == key for other_lane in exclusion_lanes
+                   for ticket in self._pending[other_lane]):
+                raise CapacityBusy("account already awaits capacity")
         if not pending and len(active) < spec.limit:
             active.add(owner)
             self._drained.clear()
@@ -251,7 +272,8 @@ class AdmissionManager:
         if _borrow.get() is not None:
             raise CapacityContractError("nested database borrow")
         owner = current_owner()
-        if owner is not None and owner.manager is self and owner.lane in ("ingest", "foreground", "background"):
+        if owner is not None and owner.manager is self and owner.lane in (
+                "ingest", "navigation", "foreground", "background"):
             if owner.principal != principal or owner._lifetime.released:
                 raise CapacityContractError("runtime borrow does not match its operation principal")
             async with self._borrow_for(owner, "runtime"):
@@ -293,9 +315,12 @@ class AdmissionManager:
     @asynccontextmanager
     async def lease(self, account_ids):
         owner = current_owner()
-        if owner is None or owner.manager is not self or owner.lane not in ("foreground", "background", "mail"):
-            raise CapacityContractError("external work requires a foreground, background or mail owner")
-        if owner._lifetime.lease or len(self._leases) >= 4:
+        if owner is None or owner.manager is not self or owner.lane not in (
+                "navigation", "foreground", "background", "mail"):
+            raise CapacityContractError(
+                "external work requires a navigation, foreground, background or mail owner"
+            )
+        if owner._lifetime.lease or len(self._leases) >= 5:
             raise CapacityContractError("nested or excess lifecycle lease")
         if owner.principal is not None and owner.principal.account_id not in account_ids:
             raise CapacityContractError("lifecycle lease does not cover its owner")

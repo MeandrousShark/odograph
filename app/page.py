@@ -36,9 +36,9 @@ async def _fetch_review_count(conn: AccountConnection) -> int:
 
 
 async def render_template(request, template, context, **kwargs):
-    """Keep expensive template assembly under the actual foreground lifetime."""
+    """Keep expensive template assembly under the actual full-result operation lifetime."""
     render = lambda: request.app.state.templates.TemplateResponse(request, template, context, **kwargs)
     owner = current_owner()
-    if owner is not None and owner.lane == "foreground":
+    if owner is not None and owner.lane in ("navigation", "foreground"):
         return await owned_thread(render)
     return render()

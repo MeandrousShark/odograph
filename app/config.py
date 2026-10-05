@@ -118,11 +118,12 @@ class Config:
     account_avatar_max_bytes: int
 
     capacity_ingest_slots: int = 2
-    capacity_routine_slots: int = 2
+    capacity_routine_slots: int = 1
+    capacity_navigation_slots: int = 1
     capacity_foreground_slots: int = 1
     capacity_background_slots: int = 1
     capacity_ingest_identity_slots: int = 1
-    capacity_identity_slots: int = 2
+    capacity_identity_slots: int = 1
     capacity_lifecycle_slots: int = 1
     capacity_mail_slots: int = 2
     capacity_auth_ingest_slots: int = 2
@@ -130,6 +131,7 @@ class Config:
     capacity_auth_ingest_pending: int = 8
     capacity_ingest_pending: int = 4
     capacity_routine_pending: int = 4
+    capacity_navigation_pending: int = 4
     capacity_foreground_pending: int = 4
     capacity_identity_pending: int = 4
     capacity_ingest_identity_pending: int = 1
@@ -137,6 +139,7 @@ class Config:
     capacity_ingest_identity_wait_s: float = 0.25
     capacity_ingest_wait_s: float = 0.25
     capacity_routine_wait_s: float = 1.0
+    capacity_navigation_wait_s: float = 1.0
     capacity_foreground_wait_s: float = 2.0
     capacity_identity_wait_s: float = 1.0
     capacity_auth_body_timeout_s: float = 15.0
@@ -291,11 +294,12 @@ class Config:
 
         return cls(
             capacity_ingest_slots=int(os.environ.get("CAPACITY_INGEST_SLOTS", 2)),
-            capacity_routine_slots=int(os.environ.get("CAPACITY_ROUTINE_SLOTS", 2)),
+            capacity_routine_slots=int(os.environ.get("CAPACITY_ROUTINE_SLOTS", 1)),
+            capacity_navigation_slots=int(os.environ.get("CAPACITY_NAVIGATION_SLOTS", 1)),
             capacity_foreground_slots=int(os.environ.get("CAPACITY_FOREGROUND_SLOTS", 1)),
             capacity_background_slots=int(os.environ.get("CAPACITY_BACKGROUND_SLOTS", 1)),
             capacity_ingest_identity_slots=int(os.environ.get("CAPACITY_INGEST_IDENTITY_SLOTS", 1)),
-            capacity_identity_slots=int(os.environ.get("CAPACITY_IDENTITY_SLOTS", 2)),
+            capacity_identity_slots=int(os.environ.get("CAPACITY_IDENTITY_SLOTS", 1)),
             capacity_lifecycle_slots=int(os.environ.get("CAPACITY_LIFECYCLE_SLOTS", 1)),
             capacity_mail_slots=int(os.environ.get("CAPACITY_MAIL_SLOTS", 2)),
             capacity_auth_ingest_slots=int(os.environ.get("CAPACITY_AUTH_INGEST_SLOTS", 2)),
@@ -303,6 +307,7 @@ class Config:
             capacity_auth_ingest_pending=int(os.environ.get("CAPACITY_AUTH_INGEST_PENDING", 8)),
             capacity_ingest_pending=int(os.environ.get("CAPACITY_INGEST_PENDING", 4)),
             capacity_routine_pending=int(os.environ.get("CAPACITY_ROUTINE_PENDING", 4)),
+            capacity_navigation_pending=int(os.environ.get("CAPACITY_NAVIGATION_PENDING", 4)),
             capacity_foreground_pending=int(os.environ.get("CAPACITY_FOREGROUND_PENDING", 4)),
             capacity_identity_pending=int(os.environ.get("CAPACITY_IDENTITY_PENDING", 4)),
             capacity_ingest_identity_pending=int(os.environ.get("CAPACITY_INGEST_IDENTITY_PENDING", 1)),
@@ -310,6 +315,7 @@ class Config:
             capacity_ingest_identity_wait_s=float(os.environ.get("CAPACITY_INGEST_IDENTITY_WAIT_S", 0.25)),
             capacity_ingest_wait_s=float(os.environ.get("CAPACITY_INGEST_WAIT_S", 0.25)),
             capacity_routine_wait_s=float(os.environ.get("CAPACITY_ROUTINE_WAIT_S", 1.0)),
+            capacity_navigation_wait_s=float(os.environ.get("CAPACITY_NAVIGATION_WAIT_S", 1.0)),
             capacity_foreground_wait_s=float(os.environ.get("CAPACITY_FOREGROUND_WAIT_S", 2.0)),
             capacity_identity_wait_s=float(os.environ.get("CAPACITY_IDENTITY_WAIT_S", 1.0)),
             capacity_auth_body_timeout_s=float(os.environ.get("CAPACITY_AUTH_BODY_TIMEOUT_S", 15.0)),

@@ -41,7 +41,7 @@ def test_routine_pressure_is_retryable_before_any_connection(endpoint, accept):
             return {"id": 3, "is_admin": True}
 
         app.dependency_overrides[require_user] = account
-        ready = [asyncio.Event(), asyncio.Event()]
+        ready = [asyncio.Event()]
         release = asyncio.Event()
 
         async def hold(index):
@@ -51,7 +51,7 @@ def test_routine_pressure_is_retryable_before_any_connection(endpoint, accept):
                 ready[index].set()
                 await release.wait()
 
-        holders = [asyncio.create_task(hold(index)) for index in range(2)]
+        holders = [asyncio.create_task(hold(index)) for index in range(len(ready))]
         try:
             await asyncio.wait_for(asyncio.gather(*(event.wait() for event in ready)), 2)
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://test") as client:

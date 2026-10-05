@@ -33,6 +33,10 @@ CAPACITY_INGEST_AUTH_ENV_VARS = (
     "CAPACITY_AUTH_INGEST_PENDING", "CAPACITY_AUTH_INGEST_WAIT_S",
     "CAPACITY_INGEST_IDENTITY_PENDING", "CAPACITY_INGEST_IDENTITY_WAIT_S",
 )
+CAPACITY_NAVIGATION_ENV_VARS = (
+    "CAPACITY_NAVIGATION_SLOTS", "CAPACITY_NAVIGATION_PENDING",
+    "CAPACITY_NAVIGATION_WAIT_S",
+)
 
 
 @pytest.fixture
@@ -260,6 +264,48 @@ def test_ingest_authentication_queue_defaults(clean_env):
     assert cfg.capacity_auth_ingest_wait_s == 1.0
     assert cfg.capacity_ingest_identity_pending == 1
     assert cfg.capacity_ingest_identity_wait_s == 0.25
+
+
+def test_navigation_capacity_defaults_and_environment_roundtrip(clean_env):
+    for key in CAPACITY_NAVIGATION_ENV_VARS + (
+        "CAPACITY_ROUTINE_SLOTS", "CAPACITY_IDENTITY_SLOTS",
+    ):
+        clean_env.delenv(key, raising=False)
+
+    defaults = Config.from_env()
+    assert defaults.capacity_routine_slots == 1
+    assert defaults.capacity_identity_slots == 1
+    assert defaults.capacity_navigation_slots == 1
+    assert defaults.capacity_navigation_pending == 4
+    assert defaults.capacity_navigation_wait_s == 1.0
+
+    clean_env.setenv("CAPACITY_NAVIGATION_SLOTS", "1")
+    clean_env.setenv("CAPACITY_NAVIGATION_PENDING", "0")
+    clean_env.setenv("CAPACITY_NAVIGATION_WAIT_S", "0.75")
+    custom = Config.from_env()
+    assert custom.capacity_navigation_slots == 1
+    assert custom.capacity_navigation_pending == 0
+    assert custom.capacity_navigation_wait_s == .75
+
+
+@pytest.mark.parametrize(("name", "value"), [
+    ("CAPACITY_NAVIGATION_SLOTS", "2"),
+    ("CAPACITY_NAVIGATION_PENDING", "-1"),
+    ("CAPACITY_NAVIGATION_PENDING", "5"),
+    ("CAPACITY_NAVIGATION_WAIT_S", "0"),
+    ("CAPACITY_NAVIGATION_WAIT_S", "1.01"),
+    ("CAPACITY_NAVIGATION_WAIT_S", "nan"),
+    ("CAPACITY_NAVIGATION_WAIT_S", "inf"),
+    ("CAPACITY_ROUTINE_SLOTS", "2"),
+    ("CAPACITY_IDENTITY_SLOTS", "2"),
+])
+def test_navigation_capacity_environment_rejects_out_of_range_values(
+    clean_env, name, value,
+):
+    clean_env.setenv(name, value)
+
+    with pytest.raises(ValueError):
+        Config.from_env()
 
 
 def test_ingest_authentication_queue_custom_values(clean_env):

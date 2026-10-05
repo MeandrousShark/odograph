@@ -16,8 +16,11 @@ from app.capacity import CapacityBusy
 
 # These paths materialize complete selections or perform structural mutations.
 # The keys describe server-owned route definitions, never client account claims.
+NAVIGATION_ROUTES = frozenset({
+    ('GET', '/'), ('POST', '/trips/{trip_id}/tag'),
+})
 FOREGROUND_ROUTES = frozenset({
-    ('GET', '/'), ('GET', '/stats'), ('GET', '/expenses'),
+    ('GET', '/stats'), ('GET', '/expenses'),
     ('GET', '/trips/selection'), ('GET', '/trips/month/{year}/{month}'),
     ('GET', '/trips/{trip_id}'), ('GET', '/trips/{trip_id}/points'),
     ('GET', '/export'), ('GET', '/report/range'), ('GET', '/report/range/export'),
@@ -27,7 +30,6 @@ FOREGROUND_ROUTES = frozenset({
     ('POST', '/trips/batch_update'), ('POST', '/trips/batch_delete'),
     ('POST', '/trips/{trip_id}/merge_next'), ('POST', '/trips/{trip_id}/merge_prev'),
     ('POST', '/trips/merge_selected'), ('POST', '/trips/{trip_id}/split'),
-    ('POST', '/trips/{trip_id}/tag'),
     ('POST', '/settings/diagnostics/check'),
     ('POST', '/settings/boundary_overrides/{override_id}/delete'),
     ('POST', '/places'), ('POST', '/places/{place_id}/update'),
@@ -117,7 +119,7 @@ class AdmissionRoute(APIRoute):
                 from app.uploads import bounded_multipart_form
                 # Preserve framework field limits for large authenticated selections.
                 async with bounded_multipart_form(request, max_files=1000, max_fields=1000,
-                        max_part_size=1024 * 1024 if self.capacity_lane == "foreground" else 64 * 1024) as form:
+                        max_part_size=1024 * 1024 if self.capacity_lane in ("navigation", "foreground") else 64 * 1024) as form:
                     request._form = form
                     return await original(request)
             return await original(request)
@@ -128,6 +130,8 @@ class AdmissionRoute(APIRoute):
         explicit = getattr(self.endpoint, 'capacity_lane', None)
         if explicit:
             return explicit
+        if any((method, self.path) in NAVIGATION_ROUTES for method in self.methods):
+            return 'navigation'
         if any((method, self.path) in FOREGROUND_ROUTES for method in self.methods):
             return 'foreground'
         if any((method, self.path) in INTERACTIVE_ROUTES for method in self.methods):
@@ -149,6 +153,7 @@ class AdmissionRoute(APIRoute):
         importing = self.path == '/settings/import/data'
         avatar_upload = self.path == '/settings/account/avatar'
         response_started = False
+        body_receipt_busy = False
         started_send = None
         auth_stack = AsyncExitStack()
 
@@ -158,6 +163,10 @@ class AdmissionRoute(APIRoute):
 
         async def bounded_send(message):
             nonlocal response_started, started_send
+            # Framework form parsing converts receipt exceptions to HTTP 400.
+            # Restore admission expiry before any replacement response starts.
+            if body_receipt_busy and not response_started:
+                raise CapacityBusy('body deadline expired')
             if started_send is None:
                 await release_auth()
                 started_send = time.monotonic()
@@ -174,14 +183,16 @@ class AdmissionRoute(APIRoute):
             total = 0
 
             async def bounded_receive():
-                nonlocal total
+                nonlocal total, body_receipt_busy
                 remaining = body_timeout - (time.monotonic() - started_body)
                 if remaining <= 0:
+                    body_receipt_busy = True
                     raise CapacityBusy('body deadline expired')
                 try:
                     async with asyncio.timeout(remaining):
                         message = await receive()
                 except TimeoutError:
+                    body_receipt_busy = True
                     raise CapacityBusy('body deadline expired') from None
                 if message['type'] == 'http.request':
                     total += len(message.get('body', b''))

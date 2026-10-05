@@ -165,20 +165,19 @@ def test_reserved_runtime_connections_and_missing_raw_owner():
                     pass
             release = asyncio.Event()
             entered = asyncio.Event()
-            count = 0
             pids = []
 
             async def routine(account):
-                nonlocal count
                 async with account.connection() as conn:
                     pids.append((await (await conn.execute("SELECT pg_backend_pid()")).fetchone())[0])
-                    count += 1
-                    if count == 2:
-                        entered.set()
+                    entered.set()
                     await release.wait()
-            tasks = [asyncio.create_task(routine(account)) for account in accounts]
+            task = asyncio.create_task(routine(first))
             try:
                 await asyncio.wait_for(entered.wait(), 2)
+                with pytest.raises(CapacityBusy):
+                    async with second.connection():
+                        pass
                 with pytest.raises(CapacityBusy):
                     async with third.connection():
                         pass
@@ -187,19 +186,22 @@ def test_reserved_runtime_connections_and_missing_raw_owner():
                         pid = (await (await conn.execute("SELECT pg_backend_pid()")).fetchone())[0]
                         assert pid not in pids
                         assert await (await conn.execute("SELECT DISTINCT account_id FROM vehicles")).fetchall() == [(100,)]
-                assert manager.snapshot()["routine"]["active"] == 2
+                    assert manager.snapshot()["routine"]["active"] == 1
+                    assert manager.snapshot()["foreground"]["active"] == 1
+                assert manager.snapshot()["foreground"]["active"] == 0
             finally:
                 release.set()
-                await asyncio.gather(*tasks)
+                await task
     asyncio.run(run())
 
 
-def test_four_independent_leases_allow_disable_but_block_purge_until_release():
+def test_five_independent_leases_allow_disable_but_block_purge_until_release():
     async def run():
         async with _scenario() as (raw, manager, runtime, control, accounts):
             first, second = accounts
             third = await add_test_account(raw, 100)
             fourth = await add_test_account(raw, 101)
+            fifth = await add_test_account(raw, 102)
             release, entered = asyncio.Event(), asyncio.Event()
             count = 0
 
@@ -208,20 +210,26 @@ def test_four_independent_leases_allow_disable_but_block_purge_until_release():
                 async with manager.operation(lane, principal):
                     async with external_account_work(control, principal.account_id):
                         count += 1
-                        if count == 4:
+                        if count == 5:
                             entered.set()
                         await release.wait()
             tasks = [asyncio.create_task(lease(lane, principal)) for lane, principal in (
-                ("foreground", second.principal), ("background", first.principal),
-                ("mail", third.principal), ("mail", fourth.principal))]
+                ("foreground", second.principal), ("navigation", third.principal),
+                ("background", first.principal), ("mail", fourth.principal),
+                ("mail", fifth.principal))]
             try:
                 await asyncio.wait_for(entered.wait(), 5)
-                assert manager.snapshot()["leases"] == 4
+                assert manager.snapshot()["leases"] == 5
                 async with raw.connection() as conn:
-                    count = (await (await conn.execute(
+                    connection_count = (await (await conn.execute(
                         "SELECT count(*) FROM pg_stat_activity WHERE usename='odograph_control'"
                     )).fetchone())[0]
-                    assert count >= 5  # One pooled backend plus four independent leases.
+                    assert connection_count >= 6  # One pooled backend plus five independent leases.
+                    lease_backends = (await (await conn.execute(
+                        "SELECT count(DISTINCT pid) FROM pg_stat_activity "
+                        "WHERE usename='odograph_control' AND state='idle in transaction'"
+                    )).fetchone())[0]
+                    assert lease_backends == 5
                     actor_hash = (await (await conn.execute("SELECT password_hash FROM accounts WHERE id=41")).fetchone())[0]
                     await conn.execute("UPDATE accounts SET is_enabled=false,deletion_deadline=now()-interval '1 day' WHERE id=99")
                 async with control_connection(control, lane="lifecycle") as conn:

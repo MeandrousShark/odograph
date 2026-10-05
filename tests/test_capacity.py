@@ -19,8 +19,8 @@ pytestmark = [pytest.mark.unit, pytest.mark.capacity_contract]
 
 def async_test(test):
     @wraps(test)
-    def run():
-        return asyncio.run(test())
+    def run(*args, **kwargs):
+        return asyncio.run(test(*args, **kwargs))
     return run
 
 
@@ -36,34 +36,35 @@ async def wait_pending(manager, lane, count):
     raise AssertionError(manager.snapshot())
 
 
+@pytest.mark.parametrize("lane", ["foreground", "navigation"])
 @async_test
-async def test_distinct_accounts_fifo_and_predecessor_cannot_jump():
+async def test_distinct_accounts_fifo_and_predecessor_cannot_jump(lane):
     manager = AdmissionManager()
     first_exit = asyncio.Event()
     second_exit = asyncio.Event()
     order = []
 
     async def run(account, release):
-        async with manager.operation("foreground", principal(account)):
+        async with manager.operation(lane, principal(account)):
             order.append(account)
             await release.wait()
 
     first = asyncio.create_task(run(1, first_exit))
     await asyncio.sleep(0)
     second = asyncio.create_task(run(2, second_exit))
-    await wait_pending(manager, "foreground", 1)
+    await wait_pending(manager, lane, 1)
     with pytest.raises(CapacityBusy):
-        async with manager.operation("foreground", principal(2)):
+        async with manager.operation(lane, principal(2)):
             pass
     first_exit.set()
     await first
     again = asyncio.create_task(run(1, first_exit))
-    await wait_pending(manager, "foreground", 1)
+    await wait_pending(manager, lane, 1)
     assert order == [1, 2]
     second_exit.set()
     await asyncio.gather(second, again)
     assert order == [1, 2, 1]
-    assert manager.snapshot()["foreground"] == {"active": 0, "pending": 0}
+    assert manager.snapshot()[lane] == {"active": 0, "pending": 0}
 
 
 @async_test
@@ -121,6 +122,97 @@ async def test_reservations_do_not_share_and_no_nested_borrows():
         with pytest.raises(CapacityContractError):
             async with manager.operation("auth_ingest"):
                 pass
+
+
+@pytest.mark.parametrize(("active_lane", "contender_lane"), [
+    ("foreground", "navigation"), ("navigation", "foreground"),
+])
+@async_test
+async def test_navigation_and_foreground_share_account_exclusion(active_lane, contender_lane):
+    manager = AdmissionManager()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def run():
+        async with manager.operation(active_lane, principal(1)):
+            entered.set()
+            await release.wait()
+
+    active = asyncio.create_task(run())
+    await entered.wait()
+    with pytest.raises(CapacityBusy, match="account already owns capacity"):
+        async with manager.operation(contender_lane, principal(1)):
+            pass
+    async with manager.operation(contender_lane, principal(2)):
+        assert manager.snapshot()[active_lane]["active"] == 1
+        assert manager.snapshot()[contender_lane]["active"] == 1
+    release.set()
+    await active
+
+
+@pytest.mark.parametrize(("pending_lane", "contender_lane"), [
+    ("foreground", "navigation"), ("navigation", "foreground"),
+])
+@async_test
+async def test_navigation_and_foreground_share_pending_account_exclusion(
+    pending_lane, contender_lane,
+):
+    manager = AdmissionManager()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def hold():
+        async with manager.operation(pending_lane, principal(1)):
+            entered.set()
+            await release.wait()
+
+    async def wait_for_capacity():
+        async with manager.operation(pending_lane, principal(2)):
+            pass
+
+    active = asyncio.create_task(hold())
+    await entered.wait()
+    queued = asyncio.create_task(wait_for_capacity())
+    await wait_pending(manager, pending_lane, 1)
+    with pytest.raises(CapacityBusy, match="account already awaits capacity"):
+        async with manager.operation(contender_lane, principal(2)):
+            pass
+
+    queued.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await queued
+    async with manager.operation(contender_lane, principal(2)):
+        assert manager.snapshot()[contender_lane]["active"] == 1
+    release.set()
+    await active
+
+
+@async_test
+async def test_expired_cross_lane_ticket_does_not_hold_account():
+    manager = AdmissionManager(SimpleNamespace(capacity_foreground_wait_s=.01))
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def hold():
+        async with manager.operation("foreground", principal(1)):
+            entered.set()
+            await release.wait()
+
+    async def wait_for_capacity():
+        async with manager.operation("foreground", principal(2)):
+            pass
+
+    active = asyncio.create_task(hold())
+    await entered.wait()
+    queued = asyncio.create_task(wait_for_capacity())
+    await wait_pending(manager, "foreground", 1)
+    await asyncio.sleep(.02)
+    async with manager.operation("navigation", principal(2)):
+        assert manager.snapshot()["foreground"]["pending"] == 0
+    with pytest.raises(CapacityBusy, match="capacity wait expired"):
+        await queued
+    release.set()
+    await active
 
 
 @async_test
@@ -214,7 +306,7 @@ async def test_thread_cancel_retains_owner_and_lease_until_actual_return():
         return 42
 
     async def run():
-        async with manager.operation("foreground", principal()):
+        async with manager.operation("navigation", principal()):
             async with manager.lease((1,)):
                 await owned_thread(blocking)
 
@@ -224,11 +316,19 @@ async def test_thread_cancel_retains_owner_and_lease_until_actual_return():
     task.cancel()
     await asyncio.sleep(0)
     assert not task.done()
-    assert manager.snapshot()["foreground"]["active"] == 1
+    assert manager.snapshot()["navigation"]["active"] == 1
     assert manager.snapshot()["leases"] == 1
+    with pytest.raises(CapacityBusy, match="account already owns capacity"):
+        async with manager.operation("foreground", principal()):
+            pass
     shutdown = asyncio.create_task(manager.shutdown())
     await asyncio.sleep(0)
     assert not shutdown.done()
+    task.cancel()
+    await asyncio.sleep(0)
+    with pytest.raises(CapacityBusy, match="shutting down"):
+        async with manager.operation("foreground", principal()):
+            pass
     with pytest.raises(CapacityBusy):
         async with manager.operation("routine", principal(2)):
             pass
@@ -240,30 +340,36 @@ async def test_thread_cancel_retains_owner_and_lease_until_actual_return():
 
 
 @async_test
-async def test_shutdown_rejects_pending_and_drains_active():
+async def test_shutdown_rejects_cross_lane_pending_and_drains_active():
     manager = AdmissionManager()
     release = asyncio.Event()
 
-    async def run(account):
-        async with manager.operation("foreground", principal(account)):
+    async def run(lane, account):
+        async with manager.operation(lane, principal(account)):
             await release.wait()
-    active = asyncio.create_task(run(1))
+    active_foreground = asyncio.create_task(run("foreground", 1))
+    active_navigation = asyncio.create_task(run("navigation", 3))
     await asyncio.sleep(0)
-    pending = asyncio.create_task(run(2))
-    await wait_pending(manager, "foreground", 1)
+    pending = asyncio.create_task(run("navigation", 2))
+    await wait_pending(manager, "navigation", 1)
     shutdown = asyncio.create_task(manager.shutdown())
     with pytest.raises(CapacityBusy):
         await pending
     assert not shutdown.done()
     release.set()
-    await asyncio.gather(active, shutdown)
+    await asyncio.gather(active_foreground, active_navigation, shutdown)
+    assert manager.snapshot()["foreground"] == {"active": 0, "pending": 0}
+    assert manager.snapshot()["navigation"] == {"active": 0, "pending": 0}
 
 
 @pytest.mark.parametrize("setting,value", [
     ("foreground_slots", 2), ("background_slots", 2), ("mail_slots", 3),
     ("auth_ingest_slots", 3), ("auth_interactive_slots", 2),
-    ("ingest_slots", 3), ("identity_slots", 3), ("routine_pending", 5),
+    ("ingest_slots", 3), ("identity_slots", 2), ("routine_slots", 2),
+    ("navigation_slots", 2), ("navigation_pending", 5),
+    ("routine_pending", 5),
     ("ingest_pending", -1), ("foreground_wait_s", float("inf")),
+    ("navigation_wait_s", 0), ("navigation_wait_s", 1.01),
     ("auth_body_timeout_s", float("nan")), ("response_timeout_s", 0),
     ("basic_header_max_bytes", 8193), ("multipart_max_files", 2),
 ])
@@ -273,8 +379,9 @@ def test_config_rejects_unbounded_or_excess_capacity(setting, value):
 
 
 @pytest.mark.parametrize("lane,limit", [
-    ("ingest", 2), ("routine", 2), ("foreground", 1), ("background", 1),
-    ("ingest_identity", 1), ("identity", 2), ("lifecycle", 1), ("mail", 2),
+    ("ingest", 2), ("routine", 1), ("navigation", 1),
+    ("foreground", 1), ("background", 1),
+    ("ingest_identity", 1), ("identity", 1), ("lifecycle", 1), ("mail", 2),
     ("auth_ingest", 2), ("auth_interactive", 1),
 ])
 def test_every_lane_respects_active_limit(lane, limit):
@@ -306,7 +413,7 @@ def test_every_lane_respects_active_limit(lane, limit):
 
 
 @async_test
-async def test_four_physical_lease_owners_and_no_unadmitted_fifth():
+async def test_five_physical_lease_owners_and_no_unadmitted_sixth():
     manager = AdmissionManager()
     release = asyncio.Event()
     ready = asyncio.Event()
@@ -317,13 +424,14 @@ async def test_four_physical_lease_owners_and_no_unadmitted_fifth():
         async with manager.operation(lane, principal(account)):
             async with manager.lease((account,)):
                 count += 1
-                if count == 4:
+                if count == 5:
                     ready.set()
                 await release.wait()
     tasks = [asyncio.create_task(run(lane, account)) for lane, account in
-             (("foreground", 1), ("background", 2), ("mail", 3), ("mail", 4))]
+             (("navigation", 1), ("foreground", 2), ("background", 3),
+              ("mail", 4), ("mail", 5))]
     await ready.wait()
-    assert manager.snapshot()["leases"] == 4
+    assert manager.snapshot()["leases"] == 5
     with pytest.raises(CapacityBusy):
         async with manager.operation("mail", principal(5)):
             pass
@@ -386,6 +494,13 @@ async def test_managed_account_helper_sets_deadlines_and_rolls_back_before_retur
         assert manager.snapshot()["routine"]["active"] == 1
     assert ("SELECT set_config('statement_timeout', %s, true)", ("5000ms",)) in events
     assert manager.snapshot()["routine"]["active"] == 0
+    events.clear()
+    async with manager.operation("navigation", principal()):
+        async with bound.connection():
+            assert manager.snapshot()["navigation"]["active"] == 1
+            assert manager.snapshot()["routine"]["active"] == 0
+    assert ("SELECT set_config('statement_timeout', %s, true)", ("15000ms",)) in events
+    assert manager.snapshot()["navigation"]["active"] == 0
 
 
 @pytest.mark.parametrize("env,value", [

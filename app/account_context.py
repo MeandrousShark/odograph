@@ -292,7 +292,8 @@ async def _account_connection(
                         )
                     if manager is not None:
                         timeout_name = ("operation_sql_timeout_s" if owner.lane in
-                                        ("foreground", "background") else "routine_sql_timeout_s")
+                                        ("navigation", "foreground", "background")
+                                        else "routine_sql_timeout_s")
                         statement_s = _value(manager.config, timeout_name, 15. if timeout_name.startswith("operation") else 5.)
                         lock_s = _value(manager.config, "lock_timeout_s", 1.)
                         await conn.execute("SELECT set_config('statement_timeout', %s, true)",

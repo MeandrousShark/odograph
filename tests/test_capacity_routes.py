@@ -13,7 +13,7 @@ from app.account_context import AccountPrincipal, control_connection
 from app.auth import require_user
 from app.capacity import AdmissionManager, current_owner, owned_thread
 from app.capacity_routes import (
-    AdmissionRoute, FOREGROUND_ROUTES, INTERACTIVE_ROUTES, capacity_policy,
+    AdmissionRoute, FOREGROUND_ROUTES, INTERACTIVE_ROUTES, NAVIGATION_ROUTES, capacity_policy,
 )
 from app.ingest import FailedAuthLimiter
 from app.uploads import bounded_multipart_form
@@ -40,15 +40,27 @@ def test_audited_inventory_uses_actual_registered_routes():
     routes = [route for make in (auth_router, ingest_router, portable_router, ui_router)
               for route in make().routes]
     registered = {(method, route.path) for route in routes for method in route.methods}
+    assert NAVIGATION_ROUTES <= registered
+    assert NAVIGATION_ROUTES.isdisjoint(FOREGROUND_ROUTES)
     assert FOREGROUND_ROUTES <= registered
     assert INTERACTIVE_ROUTES <= registered
     for route in routes:
         assert isinstance(route, AdmissionRoute)
         for method in route.methods:
+            if (method, route.path) in NAVIGATION_ROUTES:
+                assert route.capacity_lane == 'navigation'
             if (method, route.path) in FOREGROUND_ROUTES:
                 assert route.capacity_lane == 'foreground'
             if (method, route.path) in INTERACTIVE_ROUTES:
                 assert route.capacity_lane == 'auth_interactive'
+    policies = {(method, route.path): route.capacity_lane
+                for route in routes for method in route.methods}
+    assert policies[('GET', '/trips/{trip_id}/card')] is None
+    assert policies[('GET', '/trips/{trip_id}/edit')] is None
+    assert policies[('POST', '/trips/{trip_id}/edit')] == 'form'
+    assert policies[('POST', '/trips/{trip_id}/delete')] == 'form'
+    assert policies[('GET', '/review')] is None
+    assert policies[('GET', '/settings')] is None
 
 
 def test_busy_auth_refuses_before_any_body_receive():
@@ -130,7 +142,8 @@ def test_auth_total_receipt_deadline_releases_owner():
     asyncio.run(run())
 
 
-def test_foreground_retains_owner_and_lease_through_response_send(monkeypatch):
+@pytest.mark.parametrize('path,lane', [('/export', 'foreground'), ('/', 'navigation')])
+def test_foreground_retains_owner_and_lease_through_response_send(monkeypatch, path, lane):
     async def run():
         app = FastAPI()
         manager = app.state.capacity = _manager()
@@ -139,7 +152,7 @@ def test_foreground_retains_owner_and_lease_through_response_send(monkeypatch):
         @asynccontextmanager
         async def lease(pool, *ids):
             nonlocal lease_live
-            assert current_owner().lane == 'foreground'
+            assert current_owner().lane == lane
             lease_live = True
             try:
                 yield
@@ -152,7 +165,7 @@ def test_foreground_retains_owner_and_lease_through_response_send(monkeypatch):
             return {'id': 1}
         app.dependency_overrides[require_user] = identity
         router = APIRouter(route_class=AdmissionRoute)
-        @router.get('/export')
+        @router.get(path)
         async def export(request: Request, user=Depends(require_user)):
             assert current_owner().principal == principal
             return Response(b'export')
@@ -161,9 +174,9 @@ def test_foreground_retains_owner_and_lease_through_response_send(monkeypatch):
             return {'type': 'http.request', 'body': b''}
         async def send(message):
             assert lease_live
-            assert len(manager._active['foreground']) == 1
+            assert len(manager._active[lane]) == 1
             await asyncio.sleep(.001)
-        await app(_scope('/export', 'GET'), receive, send)
+        await app(_scope(path, 'GET'), receive, send)
         assert not lease_live and not any(manager._active.values())
     asyncio.run(run())
 
@@ -218,7 +231,8 @@ def test_failed_auth_map_is_bounded_and_does_not_evict_failure_history():
     assert not limiter._failures
 
 
-def test_cancelled_render_keeps_asgi_lease_until_actual_thread_finishes(monkeypatch):
+@pytest.mark.parametrize('path,lane', [('/export', 'foreground'), ('/', 'navigation')])
+def test_cancelled_render_keeps_asgi_lease_until_actual_thread_finishes(monkeypatch, path, lane):
     import threading
     async def run():
         app = FastAPI()
@@ -244,7 +258,7 @@ def test_cancelled_render_keeps_asgi_lease_until_actual_thread_finishes(monkeypa
             started.set()
             release.wait(2)
             return b'done'
-        @router.get('/export')
+        @router.get(path)
         async def export(request: Request, user=Depends(require_user)):
             return Response(await owned_thread(render))
         app.include_router(router)
@@ -252,13 +266,16 @@ def test_cancelled_render_keeps_asgi_lease_until_actual_thread_finishes(monkeypa
             return {'type': 'http.request', 'body': b''}
         async def send(message):
             pass
-        task = asyncio.create_task(app(_scope('/export', 'GET'), receive, send))
+        task = asyncio.create_task(app(_scope(path, 'GET'), receive, send))
         while not started.is_set():
             await asyncio.sleep(.001)
         task.cancel()
         await asyncio.sleep(.01)
         assert not task.done()
-        assert lease_live and len(manager._active['foreground']) == 1
+        assert lease_live and len(manager._active[lane]) == 1
+        task.cancel()
+        await asyncio.sleep(.01)
+        assert not task.done() and lease_live
         release.set()
         with pytest.raises(asyncio.CancelledError):
             await task
@@ -266,7 +283,8 @@ def test_cancelled_render_keeps_asgi_lease_until_actual_thread_finishes(monkeypa
     asyncio.run(run())
 
 
-def test_foreground_send_deadline_releases_owner_and_lease(monkeypatch):
+@pytest.mark.parametrize('path,lane', [('/export', 'foreground'), ('/', 'navigation')])
+def test_foreground_send_deadline_releases_owner_and_lease(monkeypatch, path, lane):
     async def run():
         app = FastAPI()
         manager = app.state.capacity = _manager(capacity_response_timeout_s=.02)
@@ -286,7 +304,7 @@ def test_foreground_send_deadline_releases_owner_and_lease(monkeypatch):
             return {'id': 1}
         app.dependency_overrides[require_user] = identity
         router = APIRouter(route_class=AdmissionRoute)
-        @router.get('/export')
+        @router.get(path)
         async def export(user=Depends(require_user)):
             return Response(b'data')
         app.include_router(router)
@@ -295,7 +313,7 @@ def test_foreground_send_deadline_releases_owner_and_lease(monkeypatch):
         async def send(message):
             await asyncio.sleep(.05)
         with pytest.raises(TimeoutError):
-            await app(_scope('/export', 'GET'), receive, send)
+            await app(_scope(path, 'GET'), receive, send)
         assert not lease_live and not any(manager._active.values())
     asyncio.run(run())
 
@@ -375,7 +393,7 @@ def test_every_form_route_has_an_early_body_policy():
     for make in (auth_router, ui_router):
         for route in make().routes:
             if route.has_form:
-                assert route.capacity_lane in ('foreground', 'auth_interactive', 'form')
+                assert route.capacity_lane in ('navigation', 'foreground', 'auth_interactive', 'form')
 
 
 def test_small_authenticated_form_validates_before_body_and_releases_parse_owner():

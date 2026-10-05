@@ -136,12 +136,12 @@ def test_admin_settings_diagnostics_run_actual_sql_in_managed_helper(monkeypatch
 @asynccontextmanager
 async def _routine_saturation(manager):
     release = asyncio.Event()
-    entered = [asyncio.Event(), asyncio.Event()]
+    entered = [asyncio.Event()]
     async def occupy(index):
         async with manager.operation('routine', AccountPrincipal(index + 8, True, 1)):
             entered[index].set()
             await release.wait()
-    tasks = [asyncio.create_task(occupy(i)) for i in range(2)]
+    tasks = [asyncio.create_task(occupy(i)) for i in range(len(entered))]
     try:
         await asyncio.wait_for(asyncio.gather(*(event.wait() for event in entered)), 2)
         yield

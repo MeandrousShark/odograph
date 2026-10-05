@@ -17,6 +17,7 @@ from app.application_roles import (
     CONTROL_TABLES, OWNED_TABLES, PROTECTED_TABLES, REFERENCE_TABLES, TABLES, application_role_pools,
     prepare_application_roles, validate_application_contract,
 )
+from app.capacity import AdmissionManager
 from app.db import make_pool
 from app.role_setup import RoleSetupError
 from conftest import full_schema_reset
@@ -42,6 +43,8 @@ async def _scenario(callback):
 
 def test_live_pools_bootstrap_scoping_and_prepared_privileges():
     async def check(owner, pools, state):
+        assert pools.control.max_size == 5
+        assert pools.runtime.max_size == 6
         async with pools.control.connection() as conn:
             account = await create_admin(conn, "owner@example.invalid", "unused-test-hash", display_timezone="Asia/Tokyo")
             with pytest.raises(errors.InsufficientPrivilege):
@@ -55,6 +58,20 @@ def test_live_pools_bootstrap_scoping_and_prepared_privileges():
                 with pytest.raises(errors.InsufficientPrivilege):
                     async with conn.transaction():
                         await conn.execute(statement)
+        manager = AdmissionManager()
+        navigation_bound = AccountPool(
+            manager.manage_pool(pools.runtime, "runtime"),
+            AccountPrincipal(account["id"], True, 1),
+        )
+        async with manager.operation("navigation", navigation_bound.principal):
+            async with manager.lease((account["id"],)):
+                async with navigation_bound.connection() as conn:
+                    timeout = await (await conn.execute("SHOW statement_timeout")).fetchone()
+                    assert timeout == ("15s",)
+                    assert manager.snapshot()["navigation"]["active"] == 1
+                    assert manager.snapshot()["routine"]["active"] == 0
+                    assert manager.snapshot()["leases"] == 1
+        assert manager.snapshot()["leases"] == 0
         # Direct runtime SQL without an account context sees no owned rows.
         async with pools.runtime.connection() as conn:
             assert (await (await conn.execute("SELECT count(*) FROM vehicles")).fetchone())[0] == 0

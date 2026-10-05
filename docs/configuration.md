@@ -132,23 +132,26 @@ Run one application process with its background workers in that process.
 replicas or separately launched workers do not share these in-memory limits;
 startup cannot detect every externally launched duplicate process.
 
-The two restricted database pools each retain a maximum of six connections.
+The restricted runtime pool retains at most six connections and the control
+pool at most five.
 Reservations prevent an upload, report or background job from consuming every
 connection. Expensive operations include complete reports/exports, large trip
-selections and structural corrections. Their owners cover parsing, rendering
-and response transmission. Queued operations hold bounded metadata, without
+selections and structural corrections. The full-week dashboard and its tag
+refreshes have a separate navigation reservation. Their owners cover parsing,
+rendering and response transmission. Queued operations hold bounded metadata, without
 upload bodies, database connections or lifecycle leases. An account may have
-only one active or pending request in each account lane. Waiting accounts use
-FIFO order; repeated requests from an active or queued account receive busy.
+only one active or pending request across navigation and foreground together,
+and one in each other account lane. Waiting accounts use FIFO order; repeated requests from an active or queued account receive busy.
 
 | Variable | Default | Purpose |
 |---|---:|---|
 | `CAPACITY_INGEST_SLOTS` | `2` | Runtime connections reserved for authenticated intake. |
-| `CAPACITY_ROUTINE_SLOTS` | `2` | Runtime connections reserved for small reads, edits and account binding. |
-| `CAPACITY_FOREGROUND_SLOTS` | `1` | Concurrent expensive foreground operation, including rendering and send. |
+| `CAPACITY_ROUTINE_SLOTS` | `1` | Runtime connections reserved for small reads, edits and account binding. |
+| `CAPACITY_NAVIGATION_SLOTS` | `1` | Concurrent full-week dashboard or tag refresh, including rendering and send. |
+| `CAPACITY_FOREGROUND_SLOTS` | `1` | Concurrent other expensive foreground operation, including rendering and send. |
 | `CAPACITY_BACKGROUND_SLOTS` | `1` | Concurrent account job across all background worker types. |
 | `CAPACITY_INGEST_IDENTITY_SLOTS` | `1` | Control connections reserved for ingest credential lookup. |
-| `CAPACITY_IDENTITY_SLOTS` | `2` | Control connections for ordinary identity work and worker enumeration. |
+| `CAPACITY_IDENTITY_SLOTS` | `1` | Control connections for ordinary identity work and worker enumeration. |
 | `CAPACITY_LIFECYCLE_SLOTS` | `1` | Control connections for access, credential and lifecycle mutations. |
 | `CAPACITY_MAIL_SLOTS` | `2` | Control connections reserved for admitted security-mail final checks. |
 | `CAPACITY_AUTH_INGEST_SLOTS` | `2` | Concurrent ingest authentication operations. |
@@ -156,6 +159,7 @@ FIFO order; repeated requests from an active or queued account receive busy.
 | `CAPACITY_AUTH_INGEST_PENDING` | `8` | Maximum ingest authentication requests waiting for a verifier. |
 | `CAPACITY_INGEST_PENDING` | `4` | Maximum waiting authenticated intake tickets. |
 | `CAPACITY_ROUTINE_PENDING` | `4` | Maximum waiting ordinary runtime borrows. |
+| `CAPACITY_NAVIGATION_PENDING` | `4` | Maximum waiting navigation tickets from distinct accounts. |
 | `CAPACITY_FOREGROUND_PENDING` | `4` | Maximum waiting expensive-operation tickets. |
 | `CAPACITY_IDENTITY_PENDING` | `4` | Maximum waiting ordinary control borrows. |
 | `CAPACITY_INGEST_IDENTITY_PENDING` | `1` | Maximum waiting ingest credential lookup. |
@@ -163,14 +167,15 @@ FIFO order; repeated requests from an active or queued account receive busy.
 | `CAPACITY_INGEST_IDENTITY_WAIT_S` | `0.25` | Maximum ingest credential lookup wait in seconds. |
 | `CAPACITY_INGEST_WAIT_S` | `0.25` | Total intake admission wait in seconds. |
 | `CAPACITY_ROUTINE_WAIT_S` | `1` | Total ordinary runtime admission wait in seconds. |
+| `CAPACITY_NAVIGATION_WAIT_S` | `1` | Total navigation admission wait in seconds, at most one. |
 | `CAPACITY_FOREGROUND_WAIT_S` | `2` | Total expensive-operation admission wait in seconds. |
 | `CAPACITY_IDENTITY_WAIT_S` | `1` | Total ordinary control admission wait in seconds. |
 | `CAPACITY_AUTH_BODY_TIMEOUT_S` | `15` | Total interactive form receipt deadline in seconds. |
 | `CAPACITY_INGEST_BODY_TIMEOUT_S` | `15` | Total authenticated intake body receipt deadline in seconds. |
-| `CAPACITY_IMPORT_BODY_TIMEOUT_S` | `60` | Total portable upload receipt deadline in seconds. |
+| `CAPACITY_IMPORT_BODY_TIMEOUT_S` | `60` | Total owned upload or full-result form receipt deadline in seconds. |
 | `CAPACITY_RESPONSE_TIMEOUT_S` | `60` | Total owned response transmission deadline in seconds. |
 | `CAPACITY_ROUTINE_SQL_TIMEOUT_S` | `5` | Transaction-local routine/intake statement timeout in seconds. |
-| `CAPACITY_OPERATION_SQL_TIMEOUT_S` | `15` | Transaction-local foreground/background statement timeout in seconds. |
+| `CAPACITY_OPERATION_SQL_TIMEOUT_S` | `15` | Transaction-local navigation/foreground/background statement timeout in seconds. |
 | `CAPACITY_LOCK_TIMEOUT_S` | `1` | Transaction-local runtime lock timeout in seconds. |
 | `CAPACITY_AUTH_FORM_MAX_BYTES` | `65536` | Maximum authentication and small edit form bytes; input is never truncated. |
 | `CAPACITY_BASIC_HEADER_MAX_BYTES` | `8192` | Maximum Basic credential header bytes before decoding. |
@@ -178,16 +183,19 @@ FIFO order; repeated requests from an active or queued account receive busy.
 | `CAPACITY_MULTIPART_MAX_FIELDS` | `16` | Maximum fields in an owned multipart upload. |
 | `CAPACITY_MULTIPART_MAX_FILES` | `1` | Maximum files in an owned multipart upload. |
 
-Slot counts must be positive and the runtime/control reservation sums cannot
-exceed six. Foreground/background and ingest-identity maxima remain one, mail
-at most two, and authentication at most two ingest plus one interactive
+Slot counts must be positive. Runtime reservations cannot exceed six and
+control reservations cannot exceed five. Routine, navigation, foreground,
+background and both identity lane maxima remain one, mail at most two, and authentication at most two ingest plus one interactive
 operation. Pending queues cannot exceed four except ingest authentication
 (eight) and ingest identity lookup (one). Authentication waits cannot exceed
-one second for verification admission or 250 ms for identity lookup; waits and
-deadlines must stay positive and finite. Before a request takes an auth ticket,
+one second for verification admission or 250 ms for identity lookup. Navigation
+waits cannot exceed one second; waits and deadlines must stay positive and
+finite. Before a request takes an auth ticket,
 the server checks the failed-auth limiter and rejects an oversized Basic header
-without decoding it. Pending tickets contain no credential or account identity,
-and a waiting request rechecks the limiter before verification begins.
+without decoding it. Pending pre-authentication tickets contain no credential or
+account identity, and a waiting request rechecks the limiter before verification
+begins. Authenticated tickets retain a validated immutable account principal
+for per-account admission limits.
 Authentication forms, headers and multipart allowances cannot exceed the
 listed defaults. Invalid settings prevent startup. Connection reservations
 are independent; idle positions are not borrowed by another class.
@@ -205,9 +213,10 @@ uploads are not retained or automatically replayed. Oversized OwnTracks input
 keeps its successful poison-input acknowledgement. Failed-auth maps retain at
 most 1,024 active client keys and fail closed for new keys when full.
 
-Defaults permit at most four independent lifecycle leases (foreground,
-background and two security-mail owners), or 16 serving connections including
-the pools. Migration/maintenance connections and PostgreSQL administrative
+Defaults permit at most five independent lifecycle leases (navigation,
+foreground, background and two security-mail owners). The six runtime, five
+control and five lease connections total at most 16 serving connections.
+Migration/maintenance connections and PostgreSQL administrative
 headroom are separate. These limits bound concurrency and waits, not physical
 memory or total detector job duration. Large ledgers can still need substantial
 memory, and a slow background job can delay other jobs. Multi-account activation
