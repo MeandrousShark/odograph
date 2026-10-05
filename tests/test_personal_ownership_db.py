@@ -35,6 +35,15 @@ pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL")
 START = datetime(2026, 9, 1, 12, tzinfo=timezone.utc)
 
 
+async def _seed_trip_points(raw, owner, stream, started_at, ended_at):
+    await raw.execute(
+        "INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom) "
+        "VALUES(%s,%s,'phone',%s,ST_SetSRID(ST_MakePoint(1,1),4326)),"
+        "(%s,%s,'phone',%s,ST_SetSRID(ST_MakePoint(2,2),4326))",
+        (owner, stream, started_at, owner, stream, ended_at),
+    )
+
+
 async def _seed(raw):
     # Test-only second account; reset_db() recreates the singleton guard.
     await raw.execute("DROP INDEX accounts_singleton_idx")
@@ -72,11 +81,7 @@ async def _seed(raw):
             "INSERT INTO geocode_cache (account_id, lat, lon, address) VALUES (%s, 1, 1, %s)",
             (owner, name + " address"),
         )
-        await raw.execute(
-            "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, geom) "
-            "VALUES (%s, %s, 'phone', %s, ST_SetSRID(ST_MakePoint(1, 1), 4326))",
-            (owner, owner, START),
-        )
+        await _seed_trip_points(raw, owner, owner, START, START + timedelta(minutes=10))
         await raw.execute(
             "INSERT INTO expenses (account_id, vehicle_id, incurred_on, category, amount, treatment) "
             "VALUES (%s, %s, '2026-09-01', 'parking', 10, 'fully_business')",
@@ -131,9 +136,11 @@ async def _query_scenario():
             assert await cur.fetchall() == [(ids[41], "business"), (ids[73], "unclassified")]
             # Neither another account's same-label stream nor a second
             # same-label device in A may become A's predecessor.
+            await _seed_trip_points(raw, 73, 73, START - timedelta(hours=2), START - timedelta(hours=1))
             await raw.execute("UPDATE trips SET started_at = %s, ended_at = %s WHERE id = %s",
                               (START - timedelta(hours=2), START - timedelta(hours=1), ids[73]))
             await raw.execute("INSERT INTO tracking_devices (id, account_id, label) VALUES (42, 41, 'phone')")
+            await _seed_trip_points(raw, 41, 42, START - timedelta(hours=2), START - timedelta(hours=1))
             await raw.execute(
                 "INSERT INTO trips (account_id, tracking_device_id, device, started_at, ended_at, distance_m) "
                 "VALUES (41, 42, 'phone', %s, %s, 1000)",
@@ -141,6 +148,7 @@ async def _query_scenario():
             )
         assert (await _fetch_trip(apool, ids[41]))["prev_trip_ended_at"] is None
         async with pool.connection() as raw:
+            await _seed_trip_points(raw, 41, 41, START - timedelta(hours=2), START - timedelta(hours=1))
             await raw.execute(
                 "INSERT INTO trips (account_id, tracking_device_id, device, started_at, ended_at, distance_m) "
                 "VALUES (41, 41, 'phone', %s, %s, 1000)",

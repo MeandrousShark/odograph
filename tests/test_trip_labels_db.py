@@ -156,6 +156,14 @@ async def _insert_routed_manual(conn) -> int:
 
 
 async def _insert_detected(conn) -> int:
+    stream = await fixture_device(conn, 'phone')
+    await conn.execute(
+        "INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom) "
+        "SELECT %s,%s,'phone','2026-07-14T18:00:00Z'::timestamptz+n*interval '1 hour'/43,"
+        "ST_SetSRID(ST_MakePoint(-122.3+n*0.1/43,47.6+n*0.1/43),4326)::geography "
+        "FROM generate_series(0,43) n",
+        (account_id(conn), stream),
+    )
     row = await conn.execute(
         "INSERT INTO trips (account_id, tracking_device_id, device, source, started_at, ended_at, "
         "start_geom, end_geom, distance_m, point_count, path, has_gap, category, detector_version, "
@@ -163,7 +171,7 @@ async def _insert_detected(conn) -> int:
         "'2026-07-14T19:00:00Z', ST_SetSRID(ST_MakePoint(-122.3, 47.6), 4326)::geography, "
         "ST_SetSRID(ST_MakePoint(-122.2, 47.7), 4326)::geography, 3200, 44, "
         "ST_GeomFromText('LINESTRING(-122.3 47.6,-122.2 47.7)', 4326), true, 'business', 2, "
-        "'failed') RETURNING id", (account_id(conn), await fixture_device(conn, 'phone'),)
+        "'failed') RETURNING id", (account_id(conn), stream)
     )
     return (await row.fetchone())[0]
 

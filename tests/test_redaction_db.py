@@ -155,6 +155,13 @@ async def _insert_unsnappable_trip(conn) -> int:
         "VALUES (%s, %s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s)",
         (account_id(conn), device, DEVICE, T0, T0, -122.335678, 47.601234, 10.0, trip_id),
     )
+    # The device retains an earlier fix, but only the linked point is inside
+    # this trip's interval. Its route must still be unsnappable.
+    await conn.execute(
+        "INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom) "
+        "VALUES(%s,%s,%s,%s,ST_SetSRID(ST_MakePoint(-122.3,47.6),4326)::geography)",
+        (account_id(conn), device, DEVICE, T0 - timedelta(minutes=1)),
+    )
     return trip_id
 
 

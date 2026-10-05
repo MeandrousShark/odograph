@@ -235,11 +235,18 @@ async def _place_and_trip_tags_stay_consistent_scenario() -> None:
     try:
         pool = await reset_account_db(raw_pool)
         async with pool.connection() as conn:
+            stream = await fixture_device(conn, 'A')
+            await conn.execute(
+                "INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom) "
+                "VALUES(%s,%s,'A','2026-01-01T09:00:00Z',ST_SetSRID(ST_MakePoint(-122.3,47.6),4326)),"
+                "(%s,%s,'A','2026-01-01T09:30:00Z',ST_SetSRID(ST_MakePoint(-122.2,47.7),4326))",
+                (account_id(conn), stream, account_id(conn), stream),
+            )
             cur = await conn.execute(
                 "INSERT INTO trips (account_id, tracking_device_id, device, source, started_at, "
                 "ended_at, distance_m,  category, tag_source) VALUES (%s, %s, 'A', 'detected', "
                 "'2026-01-01T09:00:00Z', '2026-01-01T09:30:00Z', 1000, 'personal', 'rule') "
-                "RETURNING id", (account_id(conn), await fixture_device(conn, 'A'),)
+                "RETURNING id", (account_id(conn), stream)
             )
             trip_id = (await cur.fetchone())[0]
 

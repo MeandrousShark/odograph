@@ -207,6 +207,12 @@ async def _run_survives_autotag_pass_scenario() -> None:
                 "'rule', 'not_deductible') RETURNING id", (account_id(conn), await fixture_device(conn, 'A'),)
             )
             trip_id = (await cur.fetchone())[0]
+            await conn.execute(
+                "INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom,trip_id) "
+                "SELECT t.account_id,t.tracking_device_id,t.device,e.t, "
+                "ST_SetSRID(ST_MakePoint(-122.33,47.60),4326)::geography,t.id "
+                "FROM trips t CROSS JOIN LATERAL (VALUES(t.started_at),(t.ended_at)) e(t) WHERE t.id=%s",
+                (trip_id,))
 
         await reprocess_places(pool)
 

@@ -78,6 +78,16 @@ async def _insert_points(conn, points) -> None:
         )
 
 
+async def _retain_trip_endpoints(conn, trip_id):
+    """Give hand-written detector rows their retained point envelope."""
+    await conn.execute(
+        "INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom,trip_id) "
+        "SELECT t.account_id,t.tracking_device_id,t.device,e.t, "
+        "COALESCE(e.geom,ST_SetSRID(ST_MakePoint(-122.33,47.60),4326)::geography),t.id "
+        "FROM trips t CROSS JOIN LATERAL (VALUES(t.started_at,t.start_geom), "
+        "(t.ended_at,t.end_geom)) e(t,geom) WHERE t.id=%s", (trip_id,))
+
+
 async def _trip_counts(conn):
     """(trip_id, stored point_count, live count of points carrying its
     trip_id) per detected trip, oldest first."""
@@ -288,7 +298,9 @@ async def _run_reprocess_detaches_linked_expense_scenario(caplog) -> None:
         runner = DetectorRunner(pool, Params())
         assert await runner.run_once() is True
 
+        caplog.set_level(logging.WARNING, logger=runner_module.__name__)
         async with pool.connection() as conn:
+            await conn.execute("SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,))
             cur = await conn.execute(
                 "SELECT id FROM trips WHERE device = %s AND source = 'detected'",
                 (DEVICE,),
@@ -302,9 +314,8 @@ async def _run_reprocess_detaches_linked_expense_scenario(caplog) -> None:
                 (account_id(conn), trip_id),
             )
             await conn.execute("DELETE FROM points WHERE device = %s", (DEVICE,))
-
-        caplog.set_level(logging.WARNING, logger=runner_module.__name__)
-        await runner.reprocess_device_now(await _stream_id(pool))
+            # Deleting retained inputs reconciles their covered output atomically.
+            await runner.reprocess_device_in(conn, await _stream(conn))
 
         async with pool.connection() as conn:
             cur = await conn.execute("SELECT count(*) FROM trips WHERE id = %s", (trip_id,))
@@ -858,6 +869,7 @@ async def _run_reprocess_places_imported_guard_scenario():
                 (account_id(conn), await _stream(conn), DEVICE, T0 + timedelta(hours=1), T0 + timedelta(hours=1, minutes=20)),
             )
             live_id = (await cur.fetchone())[0]
+            await _retain_trip_endpoints(conn, live_id)
 
         await reprocess_places(pool)
 
@@ -924,6 +936,7 @@ async def _run_reprocess_places_human_tag_survives_matching_rule_scenario():
                 (account_id(conn), await _stream(conn), DEVICE, T0, T0 + timedelta(minutes=20)),
             )
             trip_id = (await cur.fetchone())[0]
+            await _retain_trip_endpoints(conn, trip_id)
 
         await reprocess_places(pool)
 
@@ -960,6 +973,7 @@ async def _run_apply_loop_sql_guard_scenario():
                 (account_id(conn), await _stream(conn), DEVICE, T0, T0 + timedelta(minutes=20)),
             )
             trip_id = (await cur.fetchone())[0]
+            await _retain_trip_endpoints(conn, trip_id)
 
             # Bypass plan_autotags' own human-tag_source filter (already
             # covered by tests/test_autotag.py) to isolate the apply loop's

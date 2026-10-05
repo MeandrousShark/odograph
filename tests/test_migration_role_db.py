@@ -54,7 +54,11 @@ def test_forced_rls_hides_owned_rows_from_the_plain_owning_role():
         async with admin.connection() as conn:
             assert (await (await conn.execute("SELECT count(*) FROM vehicles")).fetchone())[0] == 1
             async with conn.transaction(force_rollback=True):
-                await conn.execute("SET LOCAL ROLE odograph_migrate")
+                # The managed definer owner has an explicit accounting policy.
+                # Plain ownership alone still cannot bypass forced RLS.
+                await conn.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(sql.Identifier(PLAIN)))
+                await conn.execute(sql.SQL("ALTER TABLE vehicles OWNER TO {}").format(sql.Identifier(PLAIN)))
+                await conn.execute(sql.SQL("SET LOCAL ROLE {}").format(sql.Identifier(PLAIN)))
                 assert (await (await conn.execute("SELECT count(*) FROM vehicles")).fetchone())[0] == 0
                 with pytest.raises(MigrationRoleError):
                     await check_migration_role(conn)

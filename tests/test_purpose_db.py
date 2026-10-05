@@ -127,14 +127,20 @@ async def _purpose_edit_claims_human_ownership_scenario():
         pool = await reset_account_db(raw_pool)
 
         async with pool.connection() as conn:
-            # A rule-owned detected trip -- no geometry needed since there
-            # are no tag_rules or places in this scenario, and the point is
-            # only what happens to an already-rule-tagged trip.
+            # A rule-owned detected trip backed by retained endpoint fixes.
+            # Trip geometry is unnecessary for testing tag ownership.
+            stream = await fixture_device(conn, 'A')
+            await conn.execute(
+                "INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom) "
+                "VALUES(%s,%s,'A','2026-01-01T09:00:00Z',ST_SetSRID(ST_MakePoint(-122.3,47.6),4326)),"
+                "(%s,%s,'A','2026-01-01T09:30:00Z',ST_SetSRID(ST_MakePoint(-122.2,47.7),4326))",
+                (account_id(conn), stream, account_id(conn), stream),
+            )
             cur = await conn.execute(
                 "INSERT INTO trips (account_id, tracking_device_id, device, source, started_at, "
                 "ended_at, distance_m,  category, tag_source) VALUES (%s, %s, 'A', 'detected', "
                 "'2026-01-01T09:00:00Z', '2026-01-01T09:30:00Z', 1000, 'business', 'rule') "
-                "RETURNING id", (account_id(conn), await fixture_device(conn, 'A'),)
+                "RETURNING id", (account_id(conn), stream)
             )
             trip_id = (await cur.fetchone())[0]
 

@@ -104,7 +104,19 @@ async def _insert_trip(
             start_place_id, end_place_id,
         ),
     )
-    return (await cur.fetchone())[0]
+    trip_id = (await cur.fetchone())[0]
+    # Detector-owned fixtures retain the fixes funding their core output.
+    for recorded_at, point_lat, point_lon in (
+        (started_at, lat, lon),
+        (ended_at, end_lat if end_lat is not None else lat,
+         end_lon if end_lon is not None else lon),
+    ):
+        await conn.execute(
+            "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, geom, trip_id) "
+            "VALUES (%s, 1, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s)",
+            (account_id(conn), DEVICE, recorded_at, point_lon, point_lat, trip_id),
+        )
+    return trip_id
 
 
 class _FakeHTTP(httpx.AsyncClient):

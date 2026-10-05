@@ -80,7 +80,14 @@ async def _insert_detected(conn) -> int:
         "ST_GeomFromText('LINESTRING(-122.3 47.6,-122.2 47.7)', 4326), true, 2, 'pending') "
         "RETURNING id", (account_id(conn), await fixture_device(conn, 'phone'),)
     )
-    return (await row.fetchone())[0]
+    trip_id = (await row.fetchone())[0]
+    await conn.execute(
+        "INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom,trip_id) "
+        "SELECT t.account_id,t.tracking_device_id,t.device, "
+        "t.started_at+(t.ended_at-t.started_at)*(i::double precision/43), "
+        "ST_LineInterpolatePoint(t.path,i::double precision/43)::geography,t.id "
+        "FROM trips t CROSS JOIN generate_series(0,43)i WHERE t.id=%s", (trip_id,))
+    return trip_id
 
 
 def _run(coro_factory) -> None:

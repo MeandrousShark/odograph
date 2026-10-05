@@ -24,10 +24,23 @@ WINDOW_END = datetime(2026, 7, 12, 18, tzinfo=TZ)
 
 
 async def _insert_trip(conn, started_at, category="unclassified") -> None:
+    # Distinct retained fixes back each detected trip, including fixtures that
+    # intentionally share timestamps to test notification classification.
+    ended_at = started_at + timedelta(minutes=15)
+    await conn.execute(
+        "WITH endpoint_offset AS (SELECT count(*)*interval '1 microsecond' AS amount "
+        "FROM trips WHERE account_id=%s AND tracking_device_id=1 AND started_at=%s) "
+        "INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom) "
+        "SELECT %s,1,'phone',moment+direction*amount,"
+        "ST_SetSRID(ST_MakePoint(longitude,37),4326)::geography "
+        "FROM (VALUES(%s::timestamptz,-122.0,1),(%s::timestamptz,-121.9,-1)) "
+        "endpoint(moment,longitude,direction) CROSS JOIN endpoint_offset",
+        (account_id(conn), started_at, account_id(conn), started_at, ended_at),
+    )
     await conn.execute(
         "INSERT INTO trips (account_id, tracking_device_id, device, started_at, ended_at, distance_m, category) "
         "VALUES (%s, 1, 'phone', %s, %s, 1000, %s)",
-        (account_id(conn), started_at, started_at + timedelta(minutes=15), category),
+        (account_id(conn), started_at, ended_at, category),
     )
 
 

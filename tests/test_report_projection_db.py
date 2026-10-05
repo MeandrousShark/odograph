@@ -51,6 +51,13 @@ async def _seed(conn):
     async def trip(month, day, hour, *, source="detected", category="business", exclusion=None,
                    snapped=None, has_gap=False, labels=False):
         start = datetime(2026, month, day, hour, tzinfo=TZ)
+        if source == "detected":
+            await conn.execute(
+                "INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom) "
+                "VALUES(%s,%s,'phone',%s,ST_GeogFromText('POINT(-122.3 47.6)')),"
+                "(%s,%s,'phone',%s,ST_GeogFromText('POINT(-122.4 47.7)'))",
+                (owner, stream, start, owner, stream, start + timedelta(minutes=30)),
+            )
         cur = await conn.execute(
             "INSERT INTO trips(account_id,device,tracking_device_id,source,started_at,ended_at,"
             "distance_m,distance_snapped_m,snap_status,category,exclusion,vehicle_id,"

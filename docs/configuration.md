@@ -90,6 +90,21 @@ Use the [backup and fresh-target restore commands](backups.md) to preserve
 managed-role metadata and restore the required cluster roles, ownership, and
 grants. A database archive alone does not contain cluster-wide role definitions.
 
+### Logical storage accounting
+
+Schema 40 records versioned logical usage for stored personal data, with
+separate actual, reserved, raw-message and optional-enhancement byte counts.
+Each retained point reserves capacity for detector output, including a
+durable high-water mark for copied device labels. These counts describe
+stored-value charges, not PostgreSQL disk usage. This accounting does not
+enforce account storage limits.
+
+Startup verifies the counters against stored data once through the privileged
+setup connection. This scan can increase startup time for large histories.
+Counter drift stops startup; the supported fresh-target restore procedure
+reconciles restored counters after validating the security contract. Normal
+request connections cannot change counters directly or repair drift.
+
 ## Personal preferences
 
 **Settings > Time zone and notifications** owns the timezone, notification destinations,

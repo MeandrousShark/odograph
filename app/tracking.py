@@ -250,6 +250,12 @@ async def convert_legacy_device(conn, tracking_device_id: int) -> IssuedCredenti
     if row is None:
         raise TrackingNotFound("No such tracking device")
     label = row[0]
+    # Fresh ingest admission locks aliases before the usage row too.
+    await conn.execute(
+        "SELECT original_label FROM tracking_device_aliases "
+        "WHERE account_id = %s AND tracking_device_id = %s AND enabled "
+        "ORDER BY original_label FOR UPDATE", (owner, tracking_device_id),
+    )
     cur = await conn.execute(
         "UPDATE tracking_device_aliases SET enabled = false "
         "WHERE account_id = %s AND tracking_device_id = %s AND enabled RETURNING original_label",
@@ -290,6 +296,13 @@ async def rotate_credential(conn, public_id: str) -> IssuedCredential:
 async def revoke_credential(conn, public_id: str) -> None:
     owner = account_id(conn)
     await _provision_lock(conn)
+    # An admitted sender holds this row before taking its usage lock.
+    cur = await conn.execute(
+        "SELECT public_id FROM ingest_credentials "
+        "WHERE account_id = %s AND public_id = %s FOR UPDATE", (owner, public_id),
+    )
+    if await cur.fetchone() is None:
+        raise TrackingNotFound("No such tracking credential")
     cur = await conn.execute(
         "UPDATE ingest_credentials SET revoked_at = COALESCE(revoked_at, now()), "
         "generation = generation + 1, updated_at = now() "
