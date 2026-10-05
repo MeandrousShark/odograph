@@ -24,3 +24,16 @@ def test_development_lock_contains_the_runtime_lock_and_pinned_pytest():
         "Pygments==2.19.2",
         "pytest==9.1.1",
     } <= development
+
+
+def test_openpyxl_uses_the_locked_lxml_xml_backend():
+    import openpyxl
+
+    runtime_source = _pinned_requirements(ROOT / "requirements.txt")
+    runtime = _pinned_requirements(ROOT / "requirements.lock")
+    development = _pinned_requirements(ROOT / "requirements-dev.lock")
+
+    assert "lxml>=6.1.3" in runtime_source
+    assert "lxml==6.1.3" in runtime
+    assert "lxml==6.1.3" in development
+    assert openpyxl.LXML is True
