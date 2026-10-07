@@ -17,6 +17,7 @@ from app.auth import require_csrf
 from app.db import make_pool
 from app.account_context import account_id
 from personal_support import personal_request
+from prepared_report_support import report_response
 from app.detector.core import Params
 from app.main import make_templates
 from app.ui import make_router
@@ -204,14 +205,16 @@ async def _expense_only_report_scenario():
                 (account_id(conn), vehicle_id,),
             )
         request = _request(pool)
-        response = await _route("/report/{year}").endpoint(request, year=2026, user=USER)
+        response = await report_response(pool, "/report/2026", request.state.config)
+        assert response.status_code == 200
         body = response.body.decode()
         assert "No trips recorded in 2026" in body
         assert "Standard vs. actual expense estimate" in body
         assert "Unavailable" in body
         assert "$30.00" in body
 
-        export = await _route("/report/{year}/export").endpoint(request, year=2026, user=USER)
+        export = await report_response(pool, "/report/2026/export", request.state.config)
+        assert export.status_code == 200
         wb = load_workbook(BytesIO(export.body))
         assert wb.sheetnames == ["Summary", "Trips", "Expenses"]
         assert wb["Expenses"]["D2"].value == 30
@@ -251,9 +254,8 @@ async def _inconsistent_odometer_report_scenario():
                 (account_id(conn), vehicle_id, 1000 * 1609.344, vehicle_id, 1050 * 1609.344,),
             )
 
-        response = await _route("/report/{year}").endpoint(
-            _request(pool), year=2026, user=USER
-        )
+        response = await report_response(pool, "/report/2026", _request(pool).state.config)
+        assert response.status_code == 200
         body = response.body.decode()
         assert "Provisional (odometer ignored)" in body
         assert "smaller than recorded business miles" in body
@@ -296,9 +298,8 @@ async def _not_deductible_trip_report_scenario():
                 (account_id(conn), vehicle_id,),
             )
 
-        response = await _route("/report/{year}").endpoint(
-            _request(pool), year=2026, user=USER
-        )
+        response = await report_response(pool, "/report/2026", _request(pool).state.config)
+        assert response.status_code == 200
         body = response.body.decode()
         # 80 deductible miles out of 100 GPS-total miles in the
         # actual-expense comparison specifically: the excluded trip's 20
@@ -339,22 +340,27 @@ async def _link_unlink_preserves_report_outputs_scenario():
             )).fetchone())[0]
 
         request = _request(pool)
-        annual = _route("/report/{year}").endpoint
-        date_range = _route("/report/range").endpoint
+        from app.ui.reports import _build_annual_report_data, _build_range_report_data
         dashboard = _route("/").endpoint
 
         async def outputs():
-            annual_response = await annual(request, year=2026, user=USER)
-            range_response = await date_range(
-                request, from_="2026-06-01", to="2026-06-07", user=USER
+            annual_response = await report_response(pool, "/report/2026", request.state.config)
+            range_response = await report_response(
+                pool, "/report/range?from=2026-06-01&to=2026-06-07", request.state.config,
             )
+            assert annual_response.status_code == range_response.status_code == 200
+            annual = await _build_annual_report_data(request, 2026)
+            date_range = await _build_range_report_data(request, "2026-06-01", "2026-06-07")
+            for amount in (annual.report.total_deduction, annual.expense_report.allocated_total):
+                assert f"${amount:.2f}".encode() in annual_response.body
+            assert f"${date_range.report.total_deduction:.2f}".encode() in range_response.body
             dashboard_response = await dashboard(
                 request, user=USER, week="2026-06-01"
             )
             return (
-                annual_response.context["report"].total_deduction,
-                annual_response.context["expense_report"].allocated_total,
-                range_response.context["report"].total_deduction,
+                annual.report.total_deduction,
+                annual.expense_report.allocated_total,
+                date_range.report.total_deduction,
                 dashboard_response.context["dashboard"].deduction.amount,
                 annual_response.body,
                 range_response.body,

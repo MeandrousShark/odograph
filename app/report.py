@@ -242,6 +242,13 @@ def _rate_periods(month_rates: dict[int, float | None]) -> list[tuple[float, int
     return periods
 
 
+def validate_range_dates(start: date, end: date) -> None:
+    if start > end:
+        raise ValueError(f"start date {start} is after end date {end}")
+    if start.year != end.year:
+        raise ValueError(f"date range {start}..{end} crosses a calendar year boundary")
+
+
 def build_range_report(
     trips: list[dict], rates: dict[int, YearRate], tz: ZoneInfo, start: date, end: date
 ) -> RangeReport:
@@ -260,10 +267,7 @@ def build_range_report(
     need neither motivating use case (quarterly estimates, mid-year checks)
     has ever hit.
     """
-    if start > end:
-        raise ValueError(f"start date {start} is after end date {end}")
-    if start.year != end.year:
-        raise ValueError(f"date range {start}..{end} crosses a calendar year boundary")
+    validate_range_dates(start, end)
     year = start.year
 
     business_by_month: dict[int, float] = {}

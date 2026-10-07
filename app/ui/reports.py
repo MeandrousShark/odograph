@@ -24,6 +24,7 @@ from app.report import (
     default_report_year,
     next_year_disabled,
     range_filename_slug,
+    validate_range_dates,
 )
 
 from app.ui._common import (
@@ -56,6 +57,15 @@ class _AnnualReportData:
     odometer_coverage: list[VehicleCoverage]
     expenses: list[dict]
     expense_report: ExpenseReport
+
+
+def _parse_report_range(from_str: str, to_str: str) -> tuple[date, date]:
+    start, end = _parse_range_query_dates(from_str, to_str)
+    try:
+        validate_range_dates(start, end)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return start, end
 
 
 def _multiyear_window(
@@ -283,7 +293,7 @@ def register(router: APIRouter) -> None:
             user: dict = Depends(require_report_user),
         ):
             from app.report_preparation import prepare_report
-            start, end = _parse_range_query_dates(from_, to)
+            start, end = _parse_report_range(from_, to)
             return await prepare_report(request, user, "range_html", start=start, end=end)
 
         @router.get("/report/range/export")
@@ -294,7 +304,7 @@ def register(router: APIRouter) -> None:
             user: dict = Depends(require_report_user),
         ):
             from app.report_preparation import prepare_report
-            start, end = _parse_range_query_dates(from_, to)
+            start, end = _parse_report_range(from_, to)
             return await prepare_report(request, user, "range_xlsx", start=start, end=end)
 
         @router.get("/report/{year}")

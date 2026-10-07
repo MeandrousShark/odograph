@@ -1,9 +1,7 @@
 """DB-backed tests for the arbitrary date-range/quarterly report routes:
-`/report/range` and `/report/range/export`. Route
-handlers are invoked directly, same convention `tests/test_odometer_db.py`/
-`tests/test_review_db.py` use. Also covers `/report/{year}`'s next-year
-guard's timezone wiring (`test_report_page_...`), since this is the DB-backed
-report-route file with the `_endpoint`/`_request` harness that test needs.
+`/report/range` and `/report/range/export`. Requests use real ASGI admission,
+preparation, helper rendering and response cleanup. Also covers the annual
+report's next-year guard across the display timezone's New Year boundary.
 """
 from __future__ import annotations
 
@@ -15,30 +13,20 @@ from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
-from fastapi import HTTPException
 from openpyxl import load_workbook
 
 from app.db import make_pool
 from app.account_context import account_id
 from personal_support import personal_request
+from prepared_report_support import freeze_report_time, report_response
 from app.export import HEADERS
 from app.main import make_templates
-from app.ui import make_router
-import app.ui.reports as ui
 from conftest import reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
 
 TZ = ZoneInfo("America/Los_Angeles")
-USER = {"sub": "test"}
-
-
-def _endpoint(path: str):
-    for route in make_router().routes:
-        if getattr(route, "path", None) == path:
-            return route.endpoint
-    raise AssertionError(f"route {path} missing")
 
 
 def _request(pool):
@@ -100,8 +88,7 @@ async def _range_page_scenario():
             )
 
         request = _request(pool)
-        page = _endpoint("/report/range")
-        response = await page(request, from_="2026-04-01", to="2026-06-30", user=USER)
+        response = await report_response(pool, "/report/range?from=2026-04-01&to=2026-06-30", request.state.config)
         assert response.status_code == 200
         body = response.body.decode()
         assert "2026 Q2" in body
@@ -145,23 +132,17 @@ async def _range_page_invalid_params_scenario():
     try:
         pool = await reset_account_db(raw_pool)
         request = _request(pool)
-        page = _endpoint("/report/range")
 
-        with pytest.raises(HTTPException) as malformed:
-            await page(request, from_="not-a-date", to="2026-06-30", user=USER)
-        assert malformed.value.status_code == 400
-
-        with pytest.raises(HTTPException) as missing:
-            await page(request, from_="", to="2026-06-30", user=USER)
-        assert missing.value.status_code == 400
-
-        with pytest.raises(HTTPException) as reversed_range:
-            await page(request, from_="2026-06-30", to="2026-04-01", user=USER)
-        assert reversed_range.value.status_code == 400
-
-        with pytest.raises(HTTPException) as cross_year:
-            await page(request, from_="2025-12-15", to="2026-01-15", user=USER)
-        assert cross_year.value.status_code == 400
+        for start, end in (
+            ("not-a-date", "2026-06-30"),
+            ("", "2026-06-30"),
+            ("2026-06-30", "2026-04-01"),
+            ("2025-12-15", "2026-01-15"),
+        ):
+            response = await report_response(
+                pool, f"/report/range?from={start}&to={end}", request.state.config,
+            )
+            assert response.status_code == 400, response.body
     finally:
         await raw_pool.close()
 
@@ -176,19 +157,16 @@ async def _range_export_invalid_params_scenario():
     try:
         pool = await reset_account_db(raw_pool)
         request = _request(pool)
-        export = _endpoint("/report/range/export")
 
-        with pytest.raises(HTTPException) as malformed:
-            await export(request, from_="2026-13-40", to="2026-06-30", user=USER)
-        assert malformed.value.status_code == 400
-
-        with pytest.raises(HTTPException) as reversed_range:
-            await export(request, from_="2026-06-30", to="2026-04-01", user=USER)
-        assert reversed_range.value.status_code == 400
-
-        with pytest.raises(HTTPException) as cross_year:
-            await export(request, from_="2025-12-15", to="2026-01-15", user=USER)
-        assert cross_year.value.status_code == 400
+        for start, end in (
+            ("2026-13-40", "2026-06-30"),
+            ("2026-06-30", "2026-04-01"),
+            ("2025-12-15", "2026-01-15"),
+        ):
+            response = await report_response(
+                pool, f"/report/range/export?from={start}&to={end}", request.state.config,
+            )
+            assert response.status_code == 400, response.body
     finally:
         await raw_pool.close()
 
@@ -212,8 +190,8 @@ async def _range_export_scenario():
             )
 
         request = _request(pool)
-        export = _endpoint("/report/range/export")
-        response = await export(request, from_="2026-04-01", to="2026-06-30", user=USER)
+        response = await report_response(pool, "/report/range/export?from=2026-04-01&to=2026-06-30", request.state.config)
+        assert response.status_code == 200
         assert response.media_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         assert response.headers["Content-Disposition"] == 'attachment; filename="mileage-report-2026-Q2.xlsx"'
 
@@ -264,8 +242,8 @@ async def _range_export_endpoint_label_scenario():
             )
 
         request = _request(pool)
-        export = _endpoint("/report/range/export")
-        response = await export(request, from_="2026-04-01", to="2026-06-30", user=USER)
+        response = await report_response(pool, "/report/range/export?from=2026-04-01&to=2026-06-30", request.state.config)
+        assert response.status_code == 200
 
         wb = load_workbook(BytesIO(response.body))
         trips_ws = wb["Trips"]
@@ -279,34 +257,18 @@ def test_range_report_export_resolves_endpoint_labels_through_trip_columns():
     asyncio.run(_range_export_endpoint_label_scenario())
 
 
-class _FrozenDatetime(datetime):
-    """`datetime.now(tz)` fixed at 2027-01-01 03:00 UTC (2026-12-31 19:00 in
-    `America/Los_Angeles`) -- the instant a UTC-based "current year" would
-    already read 2027 while the display timezone's hasn't rolled over yet.
-    Subclasses the real `datetime`, not a bare stub, so every other
-    `datetime(...)` construction `app.ui` does elsewhere (e.g. `_fetch_range_trips`'s
-    day boundaries) keeps working unchanged; only `.now()` is fixed.
-    """
-
-    _instant = datetime(2027, 1, 1, 3, 0, tzinfo=timezone.utc)
-
-    @classmethod
-    def now(cls, tz=None):
-        return cls._instant if tz is None else cls._instant.astimezone(tz)
-
-
 async def _report_page_year_boundary_scenario():
     raw_pool = make_pool(TEST_DB)
     await raw_pool.open(wait=True)
     try:
         pool = await reset_account_db(raw_pool)
         request = _request(pool)
-        page = _endpoint("/report/{year}")
 
         # The operator's local year is still 2026 at this instant, so 2027
         # hasn't started for them -- the control offering it must be
         # disabled even though UTC already reads January 2027.
-        current = await page(request, year=2026, user=USER)
+        current = await report_response(pool, "/report/2026", request.state.config)
+        assert current.status_code == 200
         current_body = current.body.decode()
         assert '<span class="report-year-next" aria-disabled="true">2027 →</span>' in current_body
         assert 'href="/report/2027"' not in current_body
@@ -315,7 +277,8 @@ async def _report_page_year_boundary_scenario():
         # 2026 itself, one year forward from 2025, has already started (most
         # of it happened before this instant) -- its own control must stay
         # enabled, which is what catches an off-by-one the other way.
-        past = await page(request, year=2025, user=USER)
+        past = await report_response(pool, "/report/2025", request.state.config)
+        assert past.status_code == 200
         past_body = past.body.decode()
         assert '<a href="/report/2026">2026 →</a>' in past_body
         assert 'aria-disabled="true"' not in past_body
@@ -323,12 +286,8 @@ async def _report_page_year_boundary_scenario():
         await raw_pool.close()
 
 
-def test_report_page_next_year_guard_uses_display_timezone_at_new_years_eve_boundary(monkeypatch):
-    # Proves app/ui/reports.py's report_page route passes a tz-localized `now` (not
-    # a naive/UTC one) into next_year_disabled: patching ui.datetime.now to a
-    # fixed instant and letting the route localize it via `datetime.now(tz)`
-    # is the only way this test can distinguish the two -- a plain
-    # `datetime.now()` call site would see the frozen instant's UTC year
-    # (2027) instead and fail the assertions above.
-    monkeypatch.setattr(ui, "datetime", _FrozenDatetime)
+def test_report_page_next_year_guard_uses_display_timezone_at_new_years_eve_boundary(monkeypatch, tmp_path):
+    # Freeze the actual renderer process at an instant when UTC reads 2027
+    # but America/Los_Angeles still reads 2026. A UTC-based guard fails.
+    freeze_report_time(monkeypatch, tmp_path, datetime(2027, 1, 1, 3, tzinfo=timezone.utc))
     asyncio.run(_report_page_year_boundary_scenario())
