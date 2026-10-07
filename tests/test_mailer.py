@@ -121,3 +121,87 @@ def test_unknown_security_mode_raises():
     mailer = _mailer(security="bogus")
     with pytest.raises(ValueError, match="bogus"):
         smtp_transport(mailer, mailer.compose("subject", "body"))
+
+
+def test_cancelled_serialization_drains_actual_thread_before_return(monkeypatch):
+    import threading
+    from app import mailer as mailer_module
+
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    launched = []
+
+    class SlowMessage:
+        def as_bytes(self):
+            entered.set()
+            release.wait(3)
+            finished.set()
+            return b"From: a@example.test\nTo: b@example.test\n\nbody\n"
+
+    async def capture(payload):
+        launched.append(payload)
+
+    monkeypatch.setattr(mailer_module, "send_payload", capture)
+
+    async def scenario():
+        task = asyncio.create_task(_mailer().send(SlowMessage()))
+        try:
+            while not entered.is_set():
+                await asyncio.sleep(.001)
+            task.cancel()
+            for _ in range(10):
+                await asyncio.sleep(0)
+                task.cancel()
+            assert not task.done()
+            assert not finished.is_set()
+            assert not launched
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert finished.is_set()
+            assert not launched
+        finally:
+            release.set()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("parents", [(41, 42), (42,)])
+def test_linux_parent_identity_is_checked_around_pdeathsig(monkeypatch, parents):
+    from app import smtp_helper
+
+    class GuardExit(BaseException):
+        pass
+
+    seen = []
+    identities = iter(parents)
+    libc = MagicMock()
+    libc.prctl.return_value = 0
+    monkeypatch.setattr(smtp_helper.sys, "platform", "linux")
+    monkeypatch.setattr(smtp_helper.os, "getppid", lambda: next(identities))
+    monkeypatch.setattr(smtp_helper.ctypes, "CDLL", lambda *args, **kwargs: libc)
+
+    def exit_guard(code):
+        seen.append(code)
+        raise GuardExit
+
+    monkeypatch.setattr(smtp_helper.os, "_exit", exit_guard)
+    with pytest.raises(GuardExit):
+        smtp_helper._guard_parent(41)
+    assert seen == [71]
+    assert libc.prctl.call_count == (1 if len(parents) == 2 else 0)
+
+
+def test_linux_pdeathsig_installation_failure_is_fail_closed(monkeypatch):
+    from app import smtp_helper
+
+    class GuardExit(BaseException):
+        pass
+
+    libc = MagicMock()
+    libc.prctl.return_value = -1
+    monkeypatch.setattr(smtp_helper.sys, "platform", "linux")
+    monkeypatch.setattr(smtp_helper.os, "getppid", lambda: 41)
+    monkeypatch.setattr(smtp_helper.ctypes, "CDLL", lambda *args, **kwargs: libc)
+    monkeypatch.setattr(smtp_helper.os, "_exit", lambda code: (_ for _ in ()).throw(GuardExit(code)))
+    with pytest.raises(GuardExit) as failure:
+        smtp_helper._guard_parent(41)
+    assert failure.value.args == (72,)

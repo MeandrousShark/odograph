@@ -2,8 +2,8 @@
 
 Everything here goes through real routes on the application built by
 create_app, so the real restricted role pools, RecoveryQueue and Mailer are in
-play. Only the SMTP socket is replaced, by a capture of what the real Mailer
-would have sent.
+play. An explicitly injected cooperative transport captures composed mail;
+SMTP deadline and process cleanup are covered separately.
 """
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ import app.main as main_module
 from app.account_context import AccountPool, AccountPrincipal, control_connection
 from app.config import Config
 from app.db import make_pool
+from app.mailer import Mailer
 from conftest import full_schema_reset
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -142,28 +143,16 @@ def m2_stall_probe(request):
         probe.stop()
 
 
-class _CaptureSMTP:
-    """Stands in for smtplib.SMTP so the real Mailer runs end to end."""
+class _CaptureTransport:
+    """Cooperative capture for composition and authority checks only."""
 
     sent: list = []
 
-    def __init__(self, host, port=0, timeout=None):
-        assert host == "smtp.example.invalid"
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_exc):
-        return False
-
-    def starttls(self, context=None):
-        assert context is not None
-
-    def login(self, *_args):
-        raise AssertionError("no SMTP credentials are configured")
-
-    def send_message(self, message):
-        type(self).sent.append(message)
+    @classmethod
+    def send(cls, mailer, message):
+        assert mailer.host == "smtp.example.invalid"
+        assert not mailer.username
+        cls.sent.append(message)
 
 
 def _form_csrf(page: httpx.Response) -> str:
@@ -196,7 +185,7 @@ async def _redeem(client, token: str, password: str) -> httpx.Response:
 
 
 def _mail(subject: str, to: str | None = None) -> list:
-    return [m for m in _CaptureSMTP.sent
+    return [m for m in _CaptureTransport.sent
             if m["Subject"] == subject and (to is None or m["To"] == to)]
 
 
@@ -273,7 +262,7 @@ async def _scenario(owner, secrets_seen: list[str], unverified_processed: asynci
         gated = await admin1.post("/admin/invitations", data={
             "csrf_token": admin_csrf, "email": VERIFIED_EMAIL, "send_email": "1"})
         assert gated.status_code == 409
-        assert not _CaptureSMTP.sent
+        assert not _CaptureTransport.sent
 
         # Test-only stand-in for the activation gate, as in the other
         # acceptance tests: remove the singleton guards on this disposable DB.
@@ -352,7 +341,7 @@ async def _scenario(owner, secrets_seen: list[str], unverified_processed: asynci
         assert denied.status_code == 403
 
         # Unverified target: no queue entry, mail or proof, by admin or public request.
-        mails_before = len(_CaptureSMTP.sent)
+        mails_before = len(_CaptureTransport.sent)
         unverified = await admin1.post(f"/admin/accounts/{unverified_id}/recovery",
                                        data={"csrf_token": admin_csrf})
         assert unverified.status_code == 200
@@ -375,7 +364,7 @@ async def _scenario(owner, secrets_seen: list[str], unverified_processed: asynci
         await _wait_for(lambda: _mail("Reset your Odograph password"), "the reset message")
         await app.state.security_mail.drain()
         (reset_mail,) = _mail("Reset your Odograph password")
-        assert len(_CaptureSMTP.sent) == mails_before + 1
+        assert len(_CaptureTransport.sent) == mails_before + 1
         assert reset_mail["To"] == VERIFIED_EMAIL
         body = reset_mail.get_content()
         token = re.search(rf"{LINK_BASE}/reset-password#token=([A-Za-z0-9_-]{{43}})\n", body).group(1)
@@ -455,8 +444,13 @@ def test_full_app_bootstrap_onboarding_and_admin_recovery_keep_proofs_private(
     for name in ("EMAIL_TO", "OSRM_URL", "GEOCODE_API_KEY", "GEOCODE_PROVIDER", "NTFY_URL",
                  "OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET"):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr("smtplib.SMTP", _CaptureSMTP)
-    monkeypatch.setattr(_CaptureSMTP, "sent", [])
+    def captured_mailer(*args, **kwargs):
+        return Mailer(*args, **kwargs, transport=_CaptureTransport.send)
+
+    monkeypatch.setattr(main_module, "Mailer", captured_mailer)
+    monkeypatch.setattr("app.admin.Mailer", captured_mailer)
+    monkeypatch.setattr("app.auth.Mailer", captured_mailer)
+    monkeypatch.setattr(_CaptureTransport, "sent", [])
     secrets_seen: list[str] = []
 
     async def run():
