@@ -48,7 +48,8 @@ def _deadline(monkeypatch, seconds=3):
 
     async def capture_child(*args, **kwargs):
         process = await original(*args, **kwargs)
-        children.append(process)
+        if len(args) > 2 and os.path.basename(os.fspath(args[2])) == "smtp_helper.py":
+            children.append(process)
         return process
 
     monkeypatch.setattr(smtp_supervisor.asyncio, "create_subprocess_exec", capture_child)

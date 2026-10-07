@@ -450,6 +450,8 @@ def test_full_app_bootstrap_onboarding_and_admin_recovery_keep_proofs_private(
     monkeypatch.setattr(main_module, "Mailer", captured_mailer)
     monkeypatch.setattr("app.admin.Mailer", captured_mailer)
     monkeypatch.setattr("app.auth.Mailer", captured_mailer)
+    from security_mail_support import fixture_send_prepared
+    monkeypatch.setattr(Mailer, "send_prepared", fixture_send_prepared)
     monkeypatch.setattr(_CaptureTransport, "sent", [])
     secrets_seen: list[str] = []
 
