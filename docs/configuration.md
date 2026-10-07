@@ -296,7 +296,10 @@ separate from the response transmission deadline. Each operation reserves up to
 512 MiB of spool space; one spool root admits at most four operations and
 2 GiB in total, including orphaned files. Intermediate sort, worksheet and ZIP
 files count toward the same reservation. Exhaustion returns busy before the
-response starts, without a truncated report. Resources remain reserved until
+response starts, without a truncated report. Digest and reminder notifications,
+plus security email, use the same preparation reservations for settings, message
+bodies, MIME and transport metadata. Notification preparation failure leaves
+delivery unrecorded for its existing retry behavior. Resources remain reserved until
 helpers are reaped and files are removed.
 
 `PREPARATION_SPOOL_DIR` optionally selects the spool root. Its default is a
@@ -308,7 +311,8 @@ The isolated renderer receives bounded text frames and no database connection
 or credential environment. On Linux, a 256 MiB virtual-address-space limit is
 installed before renderer imports. Native macOS uses a sampled 256 MiB resident
 memory stop with possible overshoot; that diagnostic is not a hard memory
-quota. Authentication and unrelated notifications retain their existing limits.
+quota. Startup configuration parsing and already-held HTTP cookie state retain
+their existing authority; the preparation limits do not bound whole-app memory.
 
 Reverse-geocode retries persist per rounded endpoint coordinate. Transient
 failures defer that coordinate with exponential backoff from 60 seconds to a
@@ -422,6 +426,11 @@ are not cached as permanent missing addresses. SMTP sends retain their
 Set `NTFY_URL` for the shared transport, then save your topic and reminder
 choices in Settings. `NTFY_TOPIC` is only a legacy upgrade input.
 
+After preparation, each send uses a fresh helper with the 15-second whole
+HTTP deadline and 64 KiB decoded response limit. Admission and files remain
+reserved through confirmed helper exit and cleanup. Failed or ambiguous sends
+remain unrecorded and can be retried even if the server accepted the message.
+
 | Variable | Default | Purpose |
 |---|---:|---|
 | `NTFY_URL` | unset | ntfy server base URL. |
@@ -451,8 +460,11 @@ Every admitted email send runs in a fresh helper process with a fixed
 message transfer and SMTP session cleanup. The deadline starts before helper
 launch; slow progress does not extend it. Timeout or cancellation terminates
 the helper, and the send retains its admission and lifecycle lease until
-confirmed exit. Message serialization drains outside the event loop before
-launch; composing messages and preparing reports are outside this deadline.
+confirmed exit. Message composition and serialization run in an isolated
+preparation helper under the separate 60-second preparation deadline. The
+transport helper receives verified read-only artifacts. Configuration,
+authentication and TLS allocations remain subject to the helper's memory stop
+throughout transport.
 The separate SMTP connectivity diagnostic is unchanged.
 
 Success requires session cleanup, a valid result and confirmed helper exit

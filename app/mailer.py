@@ -20,7 +20,7 @@ from typing import Callable
 from app.capacity import owned_thread
 
 from app.smtp_helper import SMTP_TIMEOUT_S, smtp_transport
-from app.smtp_supervisor import send_payload, serialize_payload
+from app.smtp_supervisor import send_payload, send_prepared, serialize_payload
 
 
 BlockingTransport = Callable[["Mailer", EmailMessage], None]
@@ -63,3 +63,9 @@ class Mailer:
             await send_payload(payload)
         else:
             await owned_thread(self.transport, self, message)
+
+    async def send_prepared(self, prepared, *, before_transport=None) -> None:
+        """Send complete spool artifacts without parent MIME/config parsing."""
+        if self.transport is not smtp_transport:
+            raise ValueError('prepared mail requires supervised SMTP transport')
+        await send_prepared(prepared, before_transport=before_transport)

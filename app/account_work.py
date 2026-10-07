@@ -38,13 +38,24 @@ async def external_account_work(pool, *account_ids: int):
     from app.capacity import ManagedPool
     admission = pool.capacity.lease(account_ids) if isinstance(pool, ManagedPool) else nullcontext()
     async with admission:
-        async with _lease_connection(pool) as conn:
-            async with conn.transaction():
-                await conn.execute("SET LOCAL lock_timeout = '5s'")
-                await conn.execute("SET LOCAL statement_timeout = '15s'")
-                for account_id in sorted(set(account_ids)):
-                    await conn.execute("SELECT pg_advisory_xact_lock_shared(%s)", (-account_id,))
-                yield
+        try:
+            async with _lease_connection(pool) as conn:
+                async with conn.transaction():
+                    await conn.execute("SET LOCAL lock_timeout = '5s'")
+                    await conn.execute("SET LOCAL statement_timeout = '15s'")
+                    for account_id in sorted(set(account_ids)):
+                        await conn.execute("SELECT pg_advisory_xact_lock_shared(%s)", (-account_id,))
+                    yield
+        except (OperationalError, InterfaceError) as exc:
+            if exc.sqlstate is not None:
+                raise
+            log.error('external lease backend cleanup unconfirmed (%s)', type(exc).__name__)
+            # A closed client cannot acknowledge the server's transaction end.
+            while True:
+                try:
+                    await asyncio.Future()
+                except asyncio.CancelledError:
+                    continue
 
 
 @asynccontextmanager

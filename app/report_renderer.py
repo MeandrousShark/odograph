@@ -18,7 +18,7 @@ from app.rates import YearRate, deduction, rate_for
 from app.expenses import ExpenseReport, ExpenseComparison, _money, _decimal
 from app.odometer import VehicleCoverage
 
-_TOKEN = re.compile(rb'__ODOGRAPH_TEXT_([0-9a-f]{16})_([0-9a-f]{16})__')
+_TOKEN = re.compile(rb'__ODOGRAPH_TEXT_([0-9a-f]{16})_([0-9a-f]{16})(?:_([0-9a-f]+)_([0-9a-f]{16}))?__')
 _TOKEN_PREFIX = b'__ODOGRAPH_TEXT_'
 
 
@@ -117,7 +117,8 @@ class Renderer:
         self.expenses = budget.open('report-expenses')
 
     def chunks(self, ref):
-        decoder = codecs.getincrementaldecoder('utf-8')()
+        decoder = codecs.getincrementaldecoder(ref[2] if len(ref) >= 3 else 'utf-8')()
+        characters = ref[3] if len(ref) == 4 else None
         with self.budget.open('report-text', 'rb') as source:
             source.seek(ref[0])
             left = ref[1]
@@ -126,7 +127,14 @@ class Renderer:
                 if not data:
                     raise ValueError('incomplete report text spool')
                 left -= len(data)
-                yield decoder.decode(data)
+                text = decoder.decode(data)
+                if characters is not None:
+                    text = text[:characters]
+                    characters -= len(text)
+                if text:
+                    yield text
+                if characters == 0:
+                    return
             tail = decoder.decode(b'', final=True)
             if tail:
                 yield tail
@@ -134,9 +142,12 @@ class Renderer:
     def whole(self, name):
         return ''.join(self.chunks(self.refs[name]))
 
-    def text(self, key, size, channel):
+    def text(self, key, size, channel, encoding=None):
         if key not in ('display_tz', 'email', 'app_version', 'rate1', 'rate2', 'vehicle_name', 'expense_amount', 'csrf', 'csp_nonce', 'timezone_paths') and key not in ('field:purpose', 'field:notes', 'field:vehicle_name', 'field:start_place_name', 'field:end_place_name', 'field:start_address', 'field:end_address'):
             raise ValueError('unknown report metadata')
+        if key in ('email', 'display_tz') and encoding == 'ascii':
+            raise TypeError('timezone key must be str')
+        decoder = codecs.getincrementaldecoder(encoding or 'utf8')()
         self.texts.seek(0, 2)
         start = self.texts.tell()
         left = size
@@ -144,14 +155,17 @@ class Renderer:
             data = channel.recv_text()
             if not data or len(data) > left:
                 raise ValueError('invalid report text length')
+            decoder.decode(data)
             self.texts.write(data)
             left -= len(data)
+        decoder.decode(b'', final=True)
         self.texts.flush()
-        self.refs[key] = (start, size)
+        self.refs[key] = (start, size, encoding) if encoding else (start, size)
 
     @staticmethod
     def token(ref):
-        return f'__ODOGRAPH_TEXT_{ref[0]:016x}_{ref[1]:016x}__'
+        suffix = '' if len(ref) == 2 else f'_{ref[2].encode("ascii").hex()}_{ref[3] if len(ref) == 4 else 2**64-1:016x}'
+        return f'__ODOGRAPH_TEXT_{ref[0]:016x}_{ref[1]:016x}{suffix}__'
 
     def prefix(self, ref, limit=32767):
         if not ref[1]:
@@ -213,6 +227,14 @@ class Renderer:
         self.coverage_delta = self.coverage_detected = 0.0
         self.trip_iterator = None
         self.lookahead = None
+
+    def trip(self, row):
+        row = dict(row)
+        if 'purpose' in row:
+            value = row.pop('purpose')
+            row['purpose_nonblank'] = bool(value) and any(
+                not character.isspace() for chunk in self.chunks(value['text']) for character in chunk)
+        return _decode(row)
 
     def group_trip(self, row):
         if self.fold.add(row) and self.annual and self.group is not None and self.refs['vehicle_name'][1]:
@@ -453,10 +475,10 @@ class Renderer:
         local_size = 0
         for chars in self.chunks(email_ref):
             before, found, _ = chars.partition('@')
-            local_size += len(before.encode())
+            local_size += len(before)
             if found:
                 break
-        name_ref = (email_ref[0], local_size)
+        name_ref = (email_ref[0], email_ref[1], email_ref[2] if len(email_ref) == 3 else 'utf8', local_size)
         user['name'], user['email'] = self.token(name_ref) if local_size else '', self.token(email_ref)
         words = 0
         first = last = ''
@@ -508,10 +530,16 @@ class Renderer:
                     match = _TOKEN.match(pending, at)
                     if match is None:
                         pending = pending[at:]
-                        if len(pending) > 64:
+                        # Locked psycopg codec names are at most 14 ASCII bytes.
+                        if len(pending) > 128:
                             raise ValueError('invalid report replay token')
                         break
                     ref = (int(match[1], 16), int(match[2], 16))
+                    if match[3] is not None:
+                        ref += (bytes.fromhex(match[3].decode('ascii')).decode('ascii'),)
+                        limit = int(match[4], 16)
+                        if limit != 2**64-1:
+                            ref += (limit,)
                     if ref[0] + ref[1] > self.texts.seek(0, 2):
                         raise ValueError('invalid report replay reference')
                     for text in self.chunks(ref):
@@ -538,17 +566,17 @@ def render(channel, budget):
             command = channel.recv_command()
             kind = command['type']
             if kind == 'text':
-                renderer.text(command['key'], command['size'], channel)
+                renderer.text(command['key'], command['size'], channel, command.get('encoding'))
             elif kind == 'initialize':
                 channel.send_response(renderer.initialize(command['metadata']))
             elif kind == 'rate':
                 renderer.rate(command['row'])
             elif kind == 'global_trip':
-                renderer.global_fold.add(_decode(command['row']))
+                renderer.global_fold.add(renderer.trip(command['row']))
             elif kind == 'vehicle_start':
                 renderer.begin_group(command['id'])
             elif kind == 'vehicle_trip':
-                renderer.group_trip(_decode(command['row']))
+                renderer.group_trip(renderer.trip(command['row']))
             elif kind == 'vehicle_expense':
                 renderer.group_expense(renderer.decoded(command['row']))
             elif kind == 'reading':

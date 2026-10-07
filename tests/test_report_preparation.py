@@ -1,10 +1,11 @@
 import asyncio
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
-from app.preparation import _json_frame
+from app.preparation import _json_frame, FRAME_BYTES
 from app.report_preparation import Projection, TEXT_CHARS, FETCH_ROWS, _encode, _WHITESPACE, _whitespace_bytes, _purpose_projection
 
 pytestmark = pytest.mark.unit
@@ -28,21 +29,22 @@ class Session:
 class TextProjection(Projection):
     def __init__(self, text):
         super().__init__(Operation(),Session())
-        self.source = text
+        self.source = text.encode()
         self.reads = []
     async def scalar(self, conn, query, params=()):
         assert 'substring(' in query
-        position,size,*identity = params
-        assert size == TEXT_CHARS and identity == [7]
+        encoding,position,size,*identity = params
+        assert encoding == 'UTF8' and size == FRAME_BYTES and identity == [7]
         self.reads.append((position,size))
         return {'value':self.source[position-1:position-1+size]}
 
 
-def test_source_chunks_are_character_bounded_before_parent_decode():
+def test_source_chunks_are_byte_bounded_without_parent_decode():
     value = '😀<&ß' * 40000
     projection = TextProjection(value)
-    ref = asyncio.run(projection.text(None,'email',len(value.encode()),'email','accounts','id=%s',(7,)))
-    assert ref == [0,len(value.encode())]
+    conn=SimpleNamespace(info=SimpleNamespace(encoding='utf8',parameter_status=lambda key:'UTF8'))
+    ref = asyncio.run(projection.text(conn,'email',len(value.encode()),'email','accounts','id=%s',(7,)))
+    assert ref == [0,len(value.encode()),'utf8']
     assert b''.join(projection.session.chunks) == value.encode()
     assert max(map(len,projection.session.chunks)) <= 65520
     assert len(projection.reads) > 1
@@ -165,7 +167,7 @@ def test_previous_scalar_batch_is_released_before_next_fetch():
     asyncio.run(run())
 
 
-def test_detail_batch_single_row_stream_preserves_refs_and_prefix():
+def test_detail_batch_single_row_stream_preserves_full_client_encoded_refs():
     from app.report_preparation import _DETAIL_TEXT
     fields=tuple(_DETAIL_TEXT)
     sources={}
@@ -174,7 +176,6 @@ def test_detail_batch_single_row_stream_preserves_refs_and_prefix():
         row={'id':i}
         for field in fields:
             value=('車ß<&' * 12000) if field=='notes' else str(i)+field
-            value=value[:32767]
             sources[i,field]=value
             row[field+'_size']=len(value.encode())
         batch.append(row)
@@ -182,14 +183,16 @@ def test_detail_batch_single_row_stream_preserves_refs_and_prefix():
         async def __aenter__(self): return self
         async def __aexit__(self,*args): pass
         async def stream(self,query,params,*,size):
-            assert size==1 and params[:4]==(TEXT_CHARS,)*4 and params[4:]==(7,[2,10])
+            assert size==1 and params==(FRAME_BYTES,FRAME_BYTES,*(['UTF8']*len(fields)),FRAME_BYTES,FRAME_BYTES,7,[2,10])
+            assert 'substring(name from 1 for 32767)' not in query
             assert 'generate_series' in query
             for i in (2,10):
                 for number,field in enumerate(fields):
-                    value=sources[i,field]
-                    for offset in range(0,len(value),TEXT_CHARS):
-                        yield {'id':i,'number':number,'part':offset//TEXT_CHARS+1,'value':value[offset:offset+TEXT_CHARS]}
+                    value=sources[i,field].encode()
+                    for offset in range(0,len(value),FRAME_BYTES):
+                        yield {'id':i,'number':number,'part':offset//FRAME_BYTES+1,'value':value[offset:offset+FRAME_BYTES]}
     class Connection:
+        info=SimpleNamespace(encoding='utf8',parameter_status=lambda key:'UTF8')
         def cursor(self,**kwargs): return Cursor()
         async def execute(self,*args): pass
     projection=Projection(Operation(),Session())
@@ -197,8 +200,8 @@ def test_detail_batch_single_row_stream_preserves_refs_and_prefix():
     spool=b''.join(projection.session.chunks)
     for row in batch:
         for field in fields:
-            offset,length=row[field]['text']
-            assert spool[offset:offset+length].decode()==sources[row['id'],field]
+            offset,length,codec=row[field]['text']
+            assert spool[offset:offset+length].decode(codec)==sources[row['id'],field]
     assert len(projection.session.commands)==len(fields)*2
 
 

@@ -150,6 +150,8 @@ def _bare_app(*, signup: bool, oidc: bool, account=None, linked=False):
         oidc_configured=oidc,
         oidc_issuer="https://idp.example.com",
     )
+    from app.config import security_link_base
+    app.state.security_link_base = security_link_base(getattr(app.state.config, "app_url", ""))
     app.state.control_pool = _FakePool(account, {"id": 1} if linked else None)
     app.state.oauth = _FakeOAuth() if oidc else None
     app.state.templates = SimpleNamespace(

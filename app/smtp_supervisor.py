@@ -12,7 +12,8 @@ import struct
 import sys
 import time
 
-from app.smtp_helper import CHUNK_SIZE, READY
+from app.capacity import owned_thread
+from app.smtp_helper import CHUNK_SIZE, READY, PREPARED_READY
 
 TRANSPORT_TIMEOUT_S = 30.0
 TERMINATE_GRACE_S = 1.0
@@ -100,6 +101,26 @@ async def _drain_cleanup(cleanup):
 
 
 async def send_payload(payload):
+    return await _send(payload=payload)
+
+
+async def send_prepared(prepared, *, before_transport=None):
+    # A cancelled owned thread still settles before this scope closes its files.
+    retained = {}
+    def open_files():
+        retained['files'] = prepared.open_descriptors()
+    try:
+        await owned_thread(open_files)
+        _, descriptors, guard = retained['files']
+        if before_transport is not None:
+            await before_transport()
+        return await _send(prepared=(descriptors, guard))
+    finally:
+        if 'files' in retained:
+            await owned_thread(retained['files'][0].close)
+
+
+async def _send(*, payload=None, prepared=None):
     started = time.monotonic()
     deadline = started + TRANSPORT_TIMEOUT_S
     lifetime_read, lifetime_write = os.pipe()
@@ -108,26 +129,43 @@ async def send_payload(payload):
     failure = None
     phase = "launch"
     try:
+        descriptors = ()
+        guard = None
+        if prepared is not None:
+            descriptors, guard = prepared
+        arguments = ('fd2',) if prepared is not None else ()
+        inherited = (lifetime_read, *descriptors, guard) if prepared is not None else (lifetime_read,)
         # create_subprocess_exec runs on the event-loop thread; no preexec_fn,
         # shell, inherited environment, extra descriptors or unrestricted logs.
         spawn = asyncio.create_task(asyncio.create_subprocess_exec(
             sys.executable, "-I", str(HELPER_PATH), str(deadline), str(os.getpid()),
-            str(lifetime_read), stdin=asyncio.subprocess.PIPE,
+            str(lifetime_read), *arguments, stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-            env={}, close_fds=True, pass_fds=(lifetime_read,), limit=RESULT_LIMIT))
+            env={}, close_fds=True, pass_fds=inherited, limit=RESULT_LIMIT))
         async with asyncio.timeout(max(0, deadline - time.monotonic())):
             process = await asyncio.shield(spawn)
             os.close(lifetime_read)
             lifetime_read = None
             phase = "readiness"
-            if await process.stdout.readexactly(len(READY)) != READY:
+            ready = PREPARED_READY if prepared is not None else READY
+            try:
+                actual_ready = await process.stdout.readexactly(len(ready))
+            except asyncio.IncompleteReadError:
+                if prepared is not None and await process.wait() == 73:
+                    raise SMTPTransportError('SMTP helper resource stop', failure='resource', phase=phase) from None
+                raise SMTPTransportError('SMTP helper readiness failed', failure='readiness', phase=phase) from None
+            if actual_ready != ready:
                 raise SMTPTransportError("SMTP helper readiness failed", failure="readiness", phase=phase)
             phase = "payload"
-            process.stdin.write(struct.pack("!Q", len(payload)))
-            await process.stdin.drain()
-            for offset in range(0, len(payload), CHUNK_SIZE):
-                process.stdin.write(payload[offset:offset + CHUNK_SIZE])
+            if prepared is not None:
+                process.stdin.write(struct.pack('!4i', *descriptors))
                 await process.stdin.drain()
+            else:
+                process.stdin.write(struct.pack("!Q", len(payload)))
+                await process.stdin.drain()
+                for offset in range(0, len(payload), CHUNK_SIZE):
+                    process.stdin.write(payload[offset:offset + CHUNK_SIZE])
+                    await process.stdin.drain()
             process.stdin.close()
             # Read only a bounded result, and require EOF as well as confirmed
             # clean exit. DATA alone is never sufficient delivery evidence.
@@ -144,6 +182,10 @@ async def send_payload(payload):
             returncode = await process.wait()
             if result == b"OK\n" and returncode == 0 and time.monotonic() < deadline:
                 return
+            if returncode == 73:
+                resource_phase = next((step for step in ('input', 'tls', 'connect', 'starttls', 'auth', 'data', 'quit')
+                                       if result == b'FAIL resource ' + step.encode('ascii') + b'\n'), phase)
+                raise SMTPTransportError('SMTP helper resource stop', failure='resource', phase=resource_phase)
             if returncode == 70:
                 raise SMTPTransportTimeout("SMTP transport deadline expired", failure="deadline", phase=phase)
             safe_failures = {

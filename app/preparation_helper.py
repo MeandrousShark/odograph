@@ -110,11 +110,18 @@ def main():
     channel = Channel()
     try:
         dispatch = channel.recv_command()
-        if dispatch is None or dispatch.get('mode') != 'report':
+        if dispatch is None or dispatch.get('mode') not in ('report', 'notification', 'security', 'ntfy'):
             raise ValueError('unknown preparation mode')
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
         from app.preparation_resources import ResourceBudget, PreparationResourceError
-        from app.report_renderer import render
+        if dispatch['mode'] == 'notification':
+            from app.notification_renderer import render
+        elif dispatch['mode'] == 'security':
+            from app.security_mail_renderer import render
+        elif dispatch['mode'] == 'ntfy':
+            from app.ntfy_renderer import render
+        else:
+            from app.report_renderer import render
         render(channel, ResourceBudget('.', directory_fd, relative_paths=True))
     except MemoryError:
         # Use a preallocated constant frame when the address-space limit fires.
@@ -123,7 +130,12 @@ def main():
     except Exception as exc:
         resource_failure = type(exc).__name__ in ('PreparationResourceError', 'PreparationBusy') or (
             isinstance(exc, OSError) and exc.errno in (28, 122))
-        channel.send_response({'error': 'resource' if resource_failure else 'preparation'})
+        category = type(exc).__name__
+        if category not in ('ValueError', 'TypeError', 'DataError', 'OverflowError', 'UnicodeEncodeError',
+                            'UnicodeDecodeError', 'ZoneInfoNotFoundError', 'HeaderParseError'):
+            category = None
+        channel.send_response({'error': 'resource' if resource_failure else 'preparation',
+                               'category': category})
         return 73 if resource_failure else 74
     # The inherited guard shares the parent's open file description until exit.
     os.close(guard)

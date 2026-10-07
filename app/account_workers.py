@@ -85,7 +85,8 @@ class AccountWorker(PokeSweepWorker):
     """
 
     def __init__(self, pools, config, factory, *, label, debounce_s, sweep_s, after_run=None,
-                 capacity=None, scheduler=None, before_turn=None, refresh_deferred_on_wake=False):
+                 capacity=None, scheduler=None, before_turn=None, refresh_deferred_on_wake=False,
+                 admitted_turn=None):
         super().__init__(task_name=label, log=log,
             failure_message=f"{label}: account enumeration failed",
             debounce_s=debounce_s, sweep_s=sweep_s)
@@ -100,6 +101,7 @@ class AccountWorker(PokeSweepWorker):
         self.last_outcome = BatchOutcome()
         self._produced_work = False
         self.before_turn = before_turn
+        self.admitted_turn = admitted_turn
         self.refresh_deferred_on_wake = refresh_deferred_on_wake
         self._round: deque[AccountPrincipal] = deque()
         self._last_round_started: int | None = None
@@ -117,6 +119,40 @@ class AccountWorker(PokeSweepWorker):
                      for outcome in self._continuations.values()
                      if outcome.ready or outcome.deferred_until is not None]
         self._continuation_at = min(deadlines) if deadlines else None
+
+    async def _run_admitted(self, principal, cursor, *, legacy=False):
+        self._admitted_failed = False
+        if self.admitted_turn is not None:
+            return await self.admitted_turn(self, principal, cursor, legacy=legacy)
+        return await self._default_admitted(principal, cursor, legacy=legacy)
+
+    async def _default_admitted(self, principal, cursor, *, legacy=False):
+        async with external_account_work(self.pools.control, principal.account_id):
+            pool = AccountPool(self.pools.runtime, principal)
+            async with pool.connection() as conn:
+                settings = await load_account_settings(conn)
+            config = config_for_account(self.config, settings)
+            worker = self.factory(pool, config)
+            if worker is None:
+                return TurnOutcome(skipped=legacy)
+            try:
+                if not legacy and hasattr(worker, "run_turn"):
+                    result = await worker.run_turn(cursor)
+                else:
+                    value = await worker.run_once()
+                    result = TurnOutcome(
+                        batch=value if isinstance(value, BatchOutcome) else BatchOutcome(),
+                        skipped=_did_not_run(value),
+                    )
+            finally:
+                produced = bool(getattr(worker, "produced_work", False))
+                self._produced_work = (self._produced_work or produced) if legacy else produced
+            status = getattr(worker, "status", None)
+            if status is not None and status.last_failure_at is not None:
+                self._admitted_failed = True
+                self.status.last_failure_at = status.last_failure_at
+                self.status.last_failure_type = status.last_failure_type
+            return result
 
     async def run_turn(self):
         """Rotate accounts after one atomic unit, reconstructing each round live."""
@@ -152,26 +188,7 @@ class AccountWorker(PokeSweepWorker):
             async with self.scheduler.turn(self._task_name, principal):
                 admitted = True
                 self._last_account_started = owner
-                async with external_account_work(self.pools.control, owner):
-                    pool = AccountPool(self.pools.runtime, principal)
-                    async with pool.connection() as conn:
-                        settings = await load_account_settings(conn)
-                    config = config_for_account(self.config, settings)
-                    worker = self.factory(pool, config)
-                    if worker is not None:
-                        try:
-                            if hasattr(worker, "run_turn"):
-                                result = await worker.run_turn(cursor)
-                            else:
-                                legacy = await worker.run_once()
-                                result = TurnOutcome(batch=legacy if isinstance(legacy, BatchOutcome)
-                                                     else BatchOutcome(), skipped=_did_not_run(legacy))
-                        finally:
-                            self._produced_work = bool(getattr(worker, "produced_work", False))
-                        status = getattr(worker, "status", None)
-                        if status is not None and status.last_failure_at is not None:
-                            self.status.last_failure_at = status.last_failure_at
-                            self.status.last_failure_type = status.last_failure_type
+                result = await self._run_admitted(principal, cursor)
             self.last_outcome = result.batch
             if result.batch.retriable_failures:
                 self.status.record_failure_type(result.batch.failure_type or "RetriableFailure")
@@ -212,36 +229,14 @@ class AccountWorker(PokeSweepWorker):
                     if first_start:
                         self._last_account_started = principal.account_id
                         first_start = False
-                    async with external_account_work(self.pools.control, principal.account_id):
-                        pool = AccountPool(self.pools.runtime, principal)
-                        async with pool.connection() as conn:
-                            settings = await load_account_settings(conn)
-                        config = config_for_account(self.config, settings)
-                        worker = self.factory(pool, config)
-                        if worker is None:
-                            continue
-                        try:
-                            result = await worker.run_once()
-                        finally:
-                            # A detector may commit one stream before another
-                            # fails. Keep its downstream poke even when it raises.
-                            self._produced_work |= bool(getattr(worker, "produced_work", False))
-                        ran |= not _did_not_run(result)
-                        if isinstance(result, BatchOutcome):
-                            self.last_outcome += result
-                            if result.retriable_failures:
-                                failed = True
-                                self.status.record_failure_type(result.failure_type or "RetriableFailure")
-                        # Not every wrapped job is a _LoopWorker: DetectorRunner owns
-                        # no WorkerStatus and reports failure by raising, which the
-                        # clause below already records. Reading `.status` off it
-                        # unconditionally turns every sweep, successful or not, into
-                        # an AttributeError logged as an account-job failure.
-                        status = getattr(worker, "status", None)
-                        if status is not None and status.last_failure_at is not None:
-                            failed = True
-                            self.status.last_failure_at = status.last_failure_at
-                            self.status.last_failure_type = status.last_failure_type
+                    outcome = await self._run_admitted(principal, None, legacy=True)
+                    ran |= not outcome.skipped
+                    self.last_outcome += outcome.batch
+                    if outcome.batch.retriable_failures:
+                        failed = True
+                        self.status.record_failure_type(outcome.batch.failure_type or "RetriableFailure")
+                    if self._admitted_failed:
+                        failed = True
             except CapacityBusy as exc:
                 # Preserve downstream pokes after an earlier stream committed.
                 if admitted:

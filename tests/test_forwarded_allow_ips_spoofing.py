@@ -194,6 +194,7 @@ class _CapturingTemplates:
 
 def _login_app(*, trusted_hosts):
     app = FastAPI()
+    app.state.security_link_base = ""
     app.add_middleware(
         SessionMiddleware, secret_key="test-secret", same_site="lax", https_only=False
     )

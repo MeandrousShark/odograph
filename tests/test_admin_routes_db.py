@@ -54,6 +54,8 @@ def _app(pools, *, config=None):
     app.add_middleware(SessionMiddleware, secret_key="admin-route-test-secret", https_only=False)
     app.add_middleware(SecurityHeadersMiddleware, tile_host="https://tiles.example", hsts_max_age=0)
     app.state.config = cfg
+    from app.config import security_link_base
+    app.state.security_link_base = security_link_base(cfg.app_url)
     app.state.control_pool = pools.control
     app.state.runtime_pool = pools.runtime
     app.state.templates = make_templates(cfg)
@@ -273,6 +275,7 @@ def test_cancelled_invitation_send_owns_its_real_pool_connection(monkeypatch, ba
         admission = SecurityMailAdmission(limit=1)
         request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
             control_pool=pools.control, security_mail=admission, config=cfg,
+            security_link_base=cfg.security_link_base,
         )))
         entered, release = asyncio.Event(), asyncio.Event()
         sent = []
@@ -497,3 +500,10 @@ def test_committed_admin_outcome_survives_saturated_identity_refresh(monkeypatch
             await manager.shutdown()
 
     asyncio.run(_scenario(check))
+
+
+@pytest.fixture(autouse=True)
+def _prepared_security_mail_receiver(monkeypatch):
+    from app.mailer import Mailer
+    from security_mail_support import fixture_send_prepared
+    monkeypatch.setattr(Mailer, 'send_prepared', fixture_send_prepared)
