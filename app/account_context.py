@@ -34,11 +34,12 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from contextlib import asynccontextmanager, nullcontext
 from dataclasses import dataclass
 from typing import AsyncIterator, Any
 
-from psycopg import AsyncConnection
+from psycopg import AsyncConnection, sql
 from psycopg.errors import LockNotAvailable, QueryCanceled
 from psycopg_pool import PoolTimeout
 from psycopg.pq import TransactionStatus
@@ -145,11 +146,12 @@ class AccountPool:
     @asynccontextmanager
     async def connection(
         self, *, timeout=None, consistent_snapshot: bool = False,
-        import_lock_timeout: bool = False,
+        import_lock_timeout: bool = False, snapshot_id: str | None = None,
     ) -> AsyncIterator[AccountConnection]:
         async with _account_connection(
             self.runtime_pool, self.principal, timeout=timeout,
             consistent_snapshot=consistent_snapshot,
+            snapshot_id=snapshot_id,
         ) as conn:
             if import_lock_timeout:
                 await conn.execute("SET LOCAL lock_timeout = '1s'")
@@ -257,7 +259,7 @@ async def _serving_timeout_errors(managed):
 @asynccontextmanager
 async def _account_connection(
     pool: AsyncConnectionPool, principal: AccountPrincipal, *, timeout=None,
-    consistent_snapshot: bool = False,
+    consistent_snapshot: bool = False, snapshot_id: str | None = None,
 ) -> AsyncIterator[AsyncConnection]:
     """Borrow a connection, open a transaction, and scope it to one account.
 
@@ -272,6 +274,11 @@ async def _account_connection(
     """
     if not isinstance(principal, AccountPrincipal):
         raise TypeError("principal must be an AccountPrincipal")
+    if snapshot_id is not None and (
+        not isinstance(snapshot_id, str) or len(snapshot_id) > 64
+        or re.fullmatch(r"[0-9A-Fa-f]+-[0-9A-Fa-f]+-[0-9]+", snapshot_id) is None
+    ):
+        raise ValueError("invalid exported snapshot identifier")
     if not principal.enabled:
         raise AccountDisabledError(
             f"account {principal.account_id} is not enabled"
@@ -283,12 +290,16 @@ async def _account_connection(
         async with admission as owner:
             async with pool.connection(**({"timeout": timeout} if timeout is not None else {})) as conn:
                 async with conn.transaction():
-                    if consistent_snapshot:
+                    if consistent_snapshot or snapshot_id is not None:
                         # SET TRANSACTION must precede the first query, including
                         # transaction-local account context and admission. Portable
                         # export opts in so its separate reads share one snapshot.
                         await conn.execute(
                             "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"
+                        )
+                    if snapshot_id is not None:
+                        await conn.execute(
+                            sql.SQL("SET TRANSACTION SNAPSHOT {}").format(sql.Literal(snapshot_id))
                         )
                     if manager is not None:
                         timeout_name = ("operation_sql_timeout_s" if owner.lane in

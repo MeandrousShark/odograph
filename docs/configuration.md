@@ -287,9 +287,29 @@ memory or total detector job duration. Large ledgers can still need substantial
 memory. Background types rotate after each completed device, snap trip, geocode
 coordinate, email kind or retention batch (at most 1,000 expired raw rows).
 Accounts rotate between those units, and ready backlogs continue without
-waiting for a periodic sweep. A whole detector device or complete report can still take a long time;
-these controls do not establish a universal job deadline. SMTP sends have
+waiting for a periodic sweep. A whole detector device or generic export can still take a long time;
+these controls do not establish a universal job deadline for every job. SMTP sends have
 the separate whole transport deadline described below.
+Annual and date-range HTML reports and their XLSX downloads prepare complete
+files before sending a response. Preparation has a 60-second stop deadline,
+separate from the response transmission deadline. Each operation reserves up to
+512 MiB of spool space; one spool root admits at most four operations and
+2 GiB in total, including orphaned files. Intermediate sort, worksheet and ZIP
+files count toward the same reservation. Exhaustion returns busy before the
+response starts, without a truncated report. Resources remain reserved until
+helpers are reaped and files are removed.
+
+`PREPARATION_SPOOL_DIR` optionally selects the spool root. Its default is a
+stable directory below the system temporary directory for the application
+user. The root must be owned by that user, have mode `0700`, and be a directory
+rather than a symlink. Processes using the same root share file-backed
+reservations; separate containers need a shared root to share this budget.
+The isolated renderer receives bounded text frames and no database connection
+or credential environment. On Linux, a 256 MiB virtual-address-space limit is
+installed before renderer imports. Native macOS uses a sampled 256 MiB resident
+memory stop with possible overshoot; that diagnostic is not a hard memory
+quota. Authentication and unrelated notifications retain their existing limits.
+
 Reverse-geocode retries persist per rounded endpoint coordinate. Transient
 failures defer that coordinate with exponential backoff from 60 seconds to a
 3,600-second maximum, allowing other due coordinates to proceed. Discovery
