@@ -58,6 +58,7 @@ async def _seed_every_owned_table(conn, owner: int) -> None:
     await conn.execute("INSERT INTO tag_rules(account_id,a_place,b_kind,category) VALUES(%s,%s,'home','business')",
                        (owner, place))
     await conn.execute("INSERT INTO geocode_cache(account_id,lat,lon) VALUES(%s,1,1)", (owner,))
+    await conn.execute("INSERT INTO geocode_retry(account_id,rounded_lat,rounded_lon) VALUES(%s,2,2)", (owner,))
     vehicle = await one("INSERT INTO vehicles(account_id,name) VALUES(%s,%s) RETURNING id", (owner, label))
     await conn.execute("INSERT INTO mileage_rates(account_id,year,rate_per_mi) VALUES(%s,2099,1)", (owner,))
     await conn.execute("INSERT INTO odometer_readings(account_id,vehicle_id,recorded_at,odometer_m) "

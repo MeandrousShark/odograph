@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 # carries at all, so each listed transition is lossless. Schema 25 adds
 # nullable trips.start_label and trips.end_label; a bundle from any older
 # schema simply has no value for either, so both default to null on import.
-# Schemas 27 through 40 change no column a bundle carries: 27 deletes stored
+# Schemas 27 through 41 change no column a bundle carries: 27 deletes stored
 # configuration dumps, 28 enforces row-level security, 29 adds invitations,
 # 30 adds email challenges, 31 adds password reset challenges, 32 adds
 # OIDC-only account methods and protected OIDC attempts, and 33 adds an
@@ -32,7 +32,8 @@ log = logging.getLogger(__name__)
 # invitation metadata, 35 adds administrator recovery functions, and 36 adds
 # account administration and audit state; 37 adds deletion lifecycle state.
 # Schema 38 adds internal snap retry state, 39 adds import admission, and
-# 40 adds protected logical storage accounting.
+# 40 adds protected logical storage accounting; 41 adds internal durable
+# geocode retry and discovery state.
 # None changes the portable bundle.
 # Keep the tuples explicit so a future migration never becomes cross-schema
 # compatible merely because its version is adjacent.
@@ -75,6 +76,11 @@ _COMPATIBLE_SCHEMA_TRANSITIONS = {
     (3, 26, 40), (3, 27, 40), (3, 28, 40), (3, 29, 40), (3, 30, 40),
     (3, 31, 40), (3, 32, 40), (3, 33, 40), (3, 34, 40), (3, 35, 40),
     (3, 36, 40), (3, 37, 40), (3, 38, 40), (3, 39, 40), (3, 40, 40),
+    (1, 21, 41), (2, 22, 41), (2, 23, 41), (2, 24, 41), (2, 25, 41),
+    (3, 26, 41), (3, 27, 41), (3, 28, 41), (3, 29, 41), (3, 30, 41),
+    (3, 31, 41), (3, 32, 41), (3, 33, 41), (3, 34, 41), (3, 35, 41),
+    (3, 36, 41), (3, 37, 41), (3, 38, 41), (3, 39, 41), (3, 40, 41),
+    (3, 41, 41),
 }
 
 

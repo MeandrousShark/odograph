@@ -47,7 +47,8 @@ def _migrations_through(tmp_path: Path, version: int) -> Path:
 
 async def _provision_schema_29_roles() -> None:
     """Provision the schema-29 contract before later migrations."""
-    owned_tables = application_roles.OWNED_TABLES
+    owned_tables = tuple(table for table in application_roles.OWNED_TABLES
+                         if table not in application_roles.GEOCODE_TABLES)
     control_tables = tuple(table for table in application_roles.CONTROL_TABLES
                            if table not in (
                                "oidc_attempts", "oidc_action_proofs", "account_security_audit",
@@ -62,6 +63,7 @@ async def _provision_schema_29_roles() -> None:
         and function not in application_roles.ACCOUNT_LIFECYCLE_FUNCTIONS
         and function not in application_roles.IMPORT_ADMISSION_FUNCTIONS
         and function not in application_roles.STORAGE_FUNCTIONS
+        and function not in application_roles.GEOCODE_FUNCTIONS
         and function != application_roles.INVITATION_FUNCTIONS[2]
     }
     with pytest.MonkeyPatch.context() as patch:

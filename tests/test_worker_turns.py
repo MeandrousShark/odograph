@@ -14,7 +14,8 @@ from app.worker import BatchOutcome, TurnOutcome
 pytestmark = pytest.mark.capacity_contract
 
 
-def _workers(monkeypatch, accounts, factory, *, scheduler=None, before_turn=None, label="test"):
+def _workers(monkeypatch, accounts, factory, *, scheduler=None, before_turn=None,
+             label="test", refresh_deferred_on_wake=False):
     async def enabled(_pool):
         return [AccountPrincipal(owner, True, 1) for owner in accounts]
 
@@ -43,7 +44,8 @@ def _workers(monkeypatch, accounts, factory, *, scheduler=None, before_turn=None
     capacity = scheduler.capacity if scheduler else AdmissionManager()
     return AccountWorker(SimpleNamespace(runtime=None, control=None), None, factory,
                          label=label, debounce_s=0, sweep_s=3600, capacity=capacity,
-                         scheduler=scheduler, before_turn=before_turn)
+                         scheduler=scheduler, before_turn=before_turn,
+                         refresh_deferred_on_wake=refresh_deferred_on_wake)
 
 
 def test_accounts_rotate_continuations_and_fresh_round_starts(monkeypatch):
@@ -305,4 +307,34 @@ def test_pre_admission_token_is_closed_when_cancellation_removes_queued_type(mon
             assert token.closed
             assert scheduler._registrations == {"holder"}
         assert scheduler._active is None
+    asyncio.run(scenario())
+
+
+def test_durable_retry_wakes_recheck_new_work_without_waiting_for_old_backoff(monkeypatch):
+    async def scenario():
+        has_new_work = False
+        calls = []
+
+        class Job:
+            async def run_turn(self, cursor):
+                calls.append(has_new_work)
+                return (TurnOutcome(BatchOutcome(1, 1)) if has_new_work else
+                        TurnOutcome(deferred_until=asyncio.get_running_loop().time() + 3600))
+
+        worker = _workers(monkeypatch, [1], lambda pool, config: Job(),
+                          refresh_deferred_on_wake=True)
+        await worker.run_turn()
+        await worker.run_turn()
+        assert calls == [False]
+        worker.wake_cycle()
+        await worker.run_turn()
+        assert calls == [False, False]
+        assert worker._continuation_at > asyncio.get_running_loop().time() + 3500
+        has_new_work = True
+        worker.wake_cycle()
+        result = await worker.run_turn()
+        assert calls == [False, False, True]
+        assert result.batch.completed == 1
+        assert worker.capacity.snapshot()["background"]["active"] == 0
+        assert worker._continuation_at is None
     asyncio.run(scenario())

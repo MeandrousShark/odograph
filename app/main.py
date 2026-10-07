@@ -344,12 +344,13 @@ def create_app(config: Config | None = None) -> FastAPI:
             app.state.geocode_pacer = geocode_pacer
 
             async def start_worker(name, factory, debounce, sweep, *, enabled=True, after_run=None,
-                                   before_turn=None):
+                                   before_turn=None, refresh_deferred_on_wake=False):
                 worker = None
                 if enabled:
                     worker = AccountWorker(pools, cfg, factory, label=name.replace("_", "-"),
                         debounce_s=debounce, sweep_s=sweep, after_run=after_run,
-                        capacity=capacity, scheduler=scheduler, before_turn=before_turn)
+                        capacity=capacity, scheduler=scheduler, before_turn=before_turn,
+                        refresh_deferred_on_wake=refresh_deferred_on_wake)
                     await worker.start()
                     stack.push_async_callback(worker.stop)
                 setattr(app.state, name, worker)
@@ -369,9 +370,9 @@ def create_app(config: Config | None = None) -> FastAPI:
 
             geocode_worker = await start_worker("geocode_worker", lambda pool, c: GeocodeWorker(
                 pool, geocode_http, provider, c.geocode_min_interval_s,
-                pacer=geocode_pacer, retry_s=c.geocode_sweep_s),
+                pacer=geocode_pacer),
                 cfg.geocode_debounce_s, cfg.geocode_sweep_s, enabled=provider is not None,
-                before_turn=prepare_geocode)
+                before_turn=prepare_geocode, refresh_deferred_on_wake=True)
             await start_worker("retention_worker", lambda pool, c: RetentionWorker(
                 pool, c.raw_message_retention_days), 1, 86400, enabled=cfg.retention_enabled)
             await start_worker("nudge_worker", lambda pool, c: NudgeWorker(

@@ -118,16 +118,25 @@ def test_geocode_worker_lookup_failure_never_logs_coordinate_or_api_key(caplog):
 
 
 class _FakeCursor:
+    def __init__(self, query=""):
+        self.query = query
+
     async def fetchall(self):
         return [(1, datetime(2024, 1, 1, tzinfo=timezone.utc), None, None)]
 
     async def fetchone(self):
+        if "SELECT attempted_at,next_attempt_at,failure_count" in self.query:
+            return (None, datetime(2024, 1, 1, tzinfo=timezone.utc), 0)
+        if "SELECT * FROM geocode_representative_source" in self.query:
+            return (1, 1, None, None, None, 'start')
+        if "SELECT 1 FROM geocode_cache" in self.query:
+            return None
         return (1,)
 
 
 class _FakeConn:
-    async def execute(self, *args, **kwargs):
-        return _FakeCursor()
+    async def execute(self, query, *args, **kwargs):
+        return _FakeCursor(query)
 
 
 class _FakeConnCtx:

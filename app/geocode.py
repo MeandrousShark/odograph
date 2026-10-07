@@ -11,7 +11,6 @@ without changing anything in this module's Geoapify section.
 from __future__ import annotations
 
 from app.account_context import account_id
-from app.account_jobs import lock_device_generation
 from app.worker import BatchOutcome
 from app.provider_http import bounded_json, GEOCODE_RESPONSE_MAX_BYTES
 from app.provider_pacing import ProviderPacer
@@ -244,7 +243,10 @@ class NominatimProvider:
             params={"lat": lat, "lon": lon, "format": "jsonv2"},
             headers=self._headers,
         )
-        if not isinstance(body, dict) or not ("error" in body or body.get("display_name")):
+        if not isinstance(body, dict):
+            raise ValueError("malformed geocode response")
+        label = body.get("error") if "error" in body else body.get("display_name")
+        if not isinstance(label, str) or not label.strip():
             raise ValueError("malformed geocode response")
         return await _parse_response(parse_nominatim_reverse_response, body, self.omit_country)
 
@@ -316,28 +318,12 @@ def build_geocode_provider(
 
 
 class GeocodeWorker:
-    """Fills `geocode_cache` for trip endpoints that resolved to neither a
-    named place nor (already) a cached address. Lighter than `SnapWorker`:
-    "needs geocoding" is a pure SQL query over `trips` LEFT JOIN-equivalent
-    (an `EXCEPT`) against `geocode_cache`, not a stored per-trip status
-    column, so there's no terminal-failure enum to manage -- a cache row's
-    existence (even with a NULL address) *is* the "don't retry" signal.
-
-    `AccountWorker` calls `run_turn()` once per coordinate, after waiting
-    for the shared provider pacer outside background ownership. Each result
-    (hit or genuine miss) commits independently. Transient errors defer the
-    account; discovery still lacks durable retry ordering, so an early
-    failure can starve its later coordinates until durable retries exist.
-    """
+    """Discover bounded trip pages and complete one durable coordinate per turn."""
 
     def __init__(
-        self,
-        pool: AsyncConnectionPool,
-        http_client: httpx.AsyncClient,
-        provider: GeocodeProvider,
-        min_interval_s: float,
-        batch_size: int = 20,
-        *, pacer: ProviderPacer | None = None, retry_s: float = 300.0,
+        self, pool: AsyncConnectionPool, http_client: httpx.AsyncClient,
+        provider: GeocodeProvider, min_interval_s: float, batch_size: int = 20,
+        *, pacer: ProviderPacer | None = None,
     ):
         self.pool = pool
         self.http = http_client
@@ -345,59 +331,62 @@ class GeocodeWorker:
         self.min_interval_s = min_interval_s
         self.batch_size = batch_size
         self.pacer = pacer
-        self.retry_s = retry_s
 
     async def _coordinates(self, limit):
         async with self.pool.connection() as conn:
             cur = await conn.execute(
-                f"""
-                WITH eligible AS (
-                    SELECT t.start_geom,t.end_geom,t.start_place_id,t.end_place_id
-                    FROM trips t LEFT JOIN tracking_devices d
-                      ON d.account_id=t.account_id AND d.id=t.tracking_device_id
-                    WHERE t.account_id=%s AND
-                      (t.tracking_device_id IS NULL OR (d.enabled AND d.revoked_at IS NULL))
-                )
-                SELECT lat, lon FROM (
-                    SELECT DISTINCT ROUND(ST_Y(start_geom::geometry)::numeric, {GEOCODE_PRECISION}) AS lat,
-                                    ROUND(ST_X(start_geom::geometry)::numeric, {GEOCODE_PRECISION}) AS lon
-                    FROM eligible WHERE start_place_id IS NULL AND start_geom IS NOT NULL
-                    UNION
-                    SELECT DISTINCT ROUND(ST_Y(end_geom::geometry)::numeric, {GEOCODE_PRECISION}),
-                                    ROUND(ST_X(end_geom::geometry)::numeric, {GEOCODE_PRECISION})
-                    FROM eligible WHERE end_place_id IS NULL AND end_geom IS NOT NULL
-                ) endpoints
-                EXCEPT
-                SELECT lat, lon FROM geocode_cache WHERE account_id = %s
-                LIMIT %s
-                """,
-                (account_id(conn), account_id(conn), limit),
+                "SELECT rounded_lat,rounded_lon FROM geocode_retry WHERE account_id=%s "
+                "AND next_attempt_at<=now() ORDER BY next_attempt_at,attempted_at NULLS FIRST,"
+                "rounded_lat,rounded_lon LIMIT %s", (account_id(conn), limit),
             )
-            coords = [(float(r[0]), float(r[1])) for r in await cur.fetchall()]
-        return coords
+            return await cur.fetchall()
+
+    async def _progress(self):
+        async with self.pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT generation>scanned_generation OR cursor_trip_id>0,last_unit FROM geocode_discovery "
+                "WHERE account_id=%s", (account_id(conn),),
+            )
+            state = await cur.fetchone()
+            cur = await conn.execute(
+                "SELECT next_attempt_at<=now(),GREATEST(0,EXTRACT(EPOCH FROM next_attempt_at-now())) "
+                "FROM geocode_retry WHERE account_id=%s "
+                "ORDER BY next_attempt_at,attempted_at NULLS FIRST,rounded_lat,rounded_lon LIMIT 1",
+                (account_id(conn),),
+            )
+            next_row = await cur.fetchone()
+        return state, next_row
+
+    async def _discover(self):
+        async with self.pool.connection() as conn:
+            await conn.execute("SELECT * FROM geocode_discover_page(%s)", (account_id(conn),))
 
     async def run_turn(self, cursor=None):
         from app.worker import TurnOutcome
-
-        # Durable retry ordering is separate work. An early failed
-        # coordinate can still starve later coordinates in this account.
-        coords = await self._coordinates(1)
-        if not coords:
-            return TurnOutcome()
-        lat, lon = coords[0]
-        outcome = await self._geocode_one(lat, lon, ticket=cursor)
-        if outcome is None:
-            return TurnOutcome(deferred_until=self.pacer.next_start)
-        if outcome.retriable_failures:
-            return TurnOutcome(batch=outcome,
-                deferred_until=asyncio.get_running_loop().time() + self.retry_s)
-        return TurnOutcome(batch=outcome, ready=True)
+        state, next_retry = await self._progress()
+        pending = state is not None and state[0]
+        due = next_retry is not None and next_retry[0]
+        if pending and (state[1] != 'discovery' or not due):
+            await self._discover()
+            return TurnOutcome(ready=True)
+        if due:
+            coords = await self._coordinates(1)
+            if coords:
+                outcome = await self._geocode_one(*coords[0], ticket=cursor)
+                if outcome is None:
+                    return TurnOutcome(deferred_until=self.pacer.next_start)
+                return TurnOutcome(batch=outcome, ready=True)
+            return TurnOutcome(ready=True)
+        if next_retry is not None:
+            return TurnOutcome(deferred_until=asyncio.get_running_loop().time() + float(next_retry[1]))
+        return TurnOutcome()
 
     async def run_once(self) -> BatchOutcome:
-        """Compatibility batch entry point; production uses one run_turn."""
+        """Compatibility batch entry point; production rotates every atomic unit."""
+        state, _ = await self._progress()
+        if state is not None and state[0]:
+            await self._discover()
         coords = await self._coordinates(self.batch_size)
-        if not coords:
-            return BatchOutcome()
         outcome = BatchOutcome()
         for i, (lat, lon) in enumerate(coords):
             if i > 0:
@@ -407,64 +396,109 @@ class GeocodeWorker:
                 outcome += item
         return outcome
 
-    async def _sources(self, conn, lat: float, lon: float, *, lock=False):
+    async def _source(self, conn, lat, lon):
         cur = await conn.execute(
-            f"""SELECT t.id,t.updated_at,t.tracking_device_id,d.generation
-            FROM trips t LEFT JOIN tracking_devices d
-              ON d.account_id=t.account_id AND d.id=t.tracking_device_id
-            WHERE t.account_id=%s AND
-              (t.tracking_device_id IS NULL OR (d.enabled AND d.revoked_at IS NULL)) AND (
-              (t.start_place_id IS NULL AND ROUND(ST_Y(t.start_geom::geometry)::numeric,{GEOCODE_PRECISION})=%s
-               AND ROUND(ST_X(t.start_geom::geometry)::numeric,{GEOCODE_PRECISION})=%s) OR
-              (t.end_place_id IS NULL AND ROUND(ST_Y(t.end_geom::geometry)::numeric,{GEOCODE_PRECISION})=%s
-               AND ROUND(ST_X(t.end_geom::geometry)::numeric,{GEOCODE_PRECISION})=%s))"""
-            + (" FOR SHARE OF t" if lock else ""),
-            (account_id(conn), lat, lon, lat, lon),
+            "SELECT * FROM geocode_representative_source(%s,%s::numeric,%s::numeric)",
+            (account_id(conn), lat, lon),
         )
-        return await cur.fetchall()
+        return await cur.fetchone()
+
+    async def _queue_row(self, conn, lat, lon, *, lock=False):
+        cur = await conn.execute(
+            "SELECT attempted_at,next_attempt_at,failure_count FROM geocode_retry "
+            "WHERE account_id=%s AND rounded_lat=%s::numeric AND rounded_lon=%s::numeric"
+            + (" FOR UPDATE" if lock else " AND next_attempt_at<=now()"),
+            (account_id(conn), lat, lon),
+        )
+        return await cur.fetchone()
+
+    async def _delete(self, conn, lat, lon):
+        await conn.execute(
+            "DELETE FROM geocode_retry WHERE account_id=%s AND rounded_lat=%s::numeric AND rounded_lon=%s::numeric",
+            (account_id(conn), lat, lon),
+        )
+
+    async def _retry(self, conn, lat, lon, count, reason):
+        count = min(31, count + 1)
+        delay = min(3600, 60 * 2 ** min(count - 1, 6))
+        await conn.execute(
+            "UPDATE geocode_retry SET attempted_at=now(),next_attempt_at=now()+%s*interval '1 second',"
+            "failure_count=%s,failure_reason=%s WHERE account_id=%s AND rounded_lat=%s::numeric AND rounded_lon=%s::numeric",
+            (delay, count, reason, account_id(conn), lat, lon),
+        )
+
+    async def _valid_source(self, conn, source, lat, lon):
+        trip_id, generation, device_id, device_generation, eligibility_generation, side = source
+        if device_id is not None:
+            cur = await conn.execute(
+                "SELECT 1 FROM tracking_devices WHERE account_id=%s AND id=%s AND generation=%s "
+                "AND geocode_generation=%s AND enabled AND revoked_at IS NULL FOR SHARE",
+                (account_id(conn), device_id, device_generation, eligibility_generation),
+            )
+            if await cur.fetchone() is None:
+                return False
+        cur = await conn.execute(
+            f"SELECT 1 FROM trips WHERE account_id=%s AND id=%s AND geocode_generation=%s "
+            f"AND tracking_device_id IS NOT DISTINCT FROM %s AND {side}_place_id IS NULL "
+            f"AND ROUND(ST_Y({side}_geom::geometry)::numeric,4)=%s::numeric "
+            f"AND ROUND(ST_X({side}_geom::geometry)::numeric,4)=%s::numeric FOR SHARE",
+            (account_id(conn), trip_id, generation, device_id, lat, lon),
+        )
+        return await cur.fetchone() is not None
 
     async def _geocode_one(self, lat: float, lon: float, *, ticket=None) -> BatchOutcome | None:
         async with self.pool.connection() as conn:
-            sources = await self._sources(conn, lat, lon)
-        if not sources:
-            return BatchOutcome()
-        if self.pacer is not None:
+            queued = await self._queue_row(conn, lat, lon)
+            if queued is None:
+                return BatchOutcome()
+            source = await self._source(conn, lat, lon)
+            cur = await conn.execute(
+                "SELECT 1 FROM geocode_cache WHERE account_id=%s AND lat=%s::numeric AND lon=%s::numeric",
+                (account_id(conn), lat, lon),
+            )
+            cached = await cur.fetchone() is not None
+        attempted = source is not None and not cached
+        if attempted and self.pacer is not None:
             if ticket is None or not self.pacer.try_start(ticket):
                 return None
-        try:
-            address = await self.provider.reverse(self.http, lat, lon)
-        except (httpx.HTTPError, ValueError) as e:
-            # Neither the coordinate nor str(e): a raise_for_status()
-            # HTTPStatusError's message embeds the full request URL, and a
-            # provider API key rides along as a query parameter on every
-            # call (see app/main.py's httpx log-level note) -- the
-            # exception's type alone is enough to tell "transient" from
-            # "misconfigured" apart without putting the key or a precise
-            # location in logs.
-            log.warning("geocode: lookup failed (%s), leaving uncached", type(e).__name__)
-            return BatchOutcome(attempted=1, retriable_failures=1, failure_type=type(e).__name__)
+        failure = None
+        address = None
+        if attempted:
+            try:
+                address = await self.provider.reverse(self.http, float(lat), float(lon))
+            except (httpx.HTTPError, ValueError) as exc:
+                failure = exc
+                reason = ('parse' if isinstance(exc, ValueError) else
+                          'http' if isinstance(exc, httpx.HTTPStatusError) else 'transport')
+                log.warning("geocode: lookup failed (%s), leaving uncached", type(exc).__name__)
         async with self.pool.connection() as conn:
-            current_sources = set(await self._sources(conn, lat, lon, lock=True))
-            eligible = False
-            for trip_id, trip_generation, device_id, device_generation in sources:
-                if (trip_id, trip_generation, device_id, device_generation) not in current_sources:
-                    continue
-                if device_id is not None and not await lock_device_generation(conn, device_id, device_generation):
-                    continue
-                cur = await conn.execute(
-                    "SELECT 1 FROM trips WHERE account_id=%s AND id=%s AND updated_at=%s FOR SHARE",
-                    (account_id(conn), trip_id, trip_generation),
-                )
-                if await cur.fetchone() is not None:
-                    eligible = True
-                    break
-            if not eligible:
+            # All personal writes acquire usage first. Take that same lock
+            # before device/trip validation to avoid reversing writer order.
+            await conn.execute("SELECT geocode_record_coordinate_turn(%s)", (account_id(conn),))
+            current_queue = await self._queue_row(conn, lat, lon, lock=True)
+            if current_queue != queued:
+                return BatchOutcome(attempted=int(attempted))
+            if not attempted:
+                # A new source may have appeared while this turn was outside
+                # its transaction. Keep its intent instead of losing that work.
+                if cached or await self._source(conn, lat, lon) is None:
+                    await self._delete(conn, lat, lon)
+                    return BatchOutcome(completed=1)
+                return BatchOutcome()
+            if not await self._valid_source(conn, source, lat, lon):
+                if await self._source(conn, lat, lon) is None:
+                    await self._delete(conn, lat, lon)
+                    return BatchOutcome(attempted=1, completed=1)
+                await self._retry(conn, lat, lon, queued[2], 'source_changed')
                 return BatchOutcome(attempted=1)
+            if failure is not None:
+                await self._retry(conn, lat, lon, queued[2], reason)
+                return BatchOutcome(attempted=1, retriable_failures=1, failure_type=type(failure).__name__)
             await conn.execute(
-                "INSERT INTO geocode_cache (account_id, lat, lon, address) VALUES (%s, %s, %s, %s) "
-                "ON CONFLICT (account_id, lat, lon) DO NOTHING",
-                (account_id(conn), lat, lon, address),
+                "INSERT INTO geocode_cache(account_id,lat,lon,address) VALUES(%s,%s,%s,%s) "
+                "ON CONFLICT(account_id,lat,lon) DO NOTHING", (account_id(conn), lat, lon, address),
             )
+            await self._delete(conn, lat, lon)
         if address is None:
             log.info("geocode: lookup complete, no address found")
         return BatchOutcome(attempted=1, completed=1)

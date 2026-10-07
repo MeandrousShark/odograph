@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -24,7 +25,7 @@ from psycopg import errors, sql
 import app.db as db_module
 from app import application_roles
 from app.application_roles import (
-    OWNED_TABLES, _load_state, finalize_application_restore, prepare_application_roles,
+    _load_state, finalize_application_restore, prepare_application_roles,
     validate_application_contract,
 )
 from app.db import MIGRATIONS_DIR, make_pool, run_migrations
@@ -40,6 +41,8 @@ PREPARED_SCHEMA = 26
 ACTIVATED_SCHEMA = 28
 PROVISIONED_SCHEMAS = pytest.mark.parametrize("provisioned_schema", [PREPARED_SCHEMA, ACTIVATED_SCHEMA])
 HISTORICAL_SQL = Path(__file__).parent / "fixtures" / "schema26_roles"
+OWNED_TABLES = tuple(table for table in application_roles.OWNED_TABLES
+                    if table not in application_roles.GEOCODE_TABLES)
 
 
 def _historical_table_rights(role, table):
@@ -82,7 +85,8 @@ async def _provision(pool, monkeypatch, schema):
                             + application_roles.OIDC_METHOD_FUNCTIONS
                             + application_roles.ACCOUNT_LIFECYCLE_FUNCTIONS
                             + application_roles.IMPORT_ADMISSION_FUNCTIONS
-                            + application_roles.STORAGE_FUNCTIONS)
+                            + application_roles.STORAGE_FUNCTIONS
+                            + application_roles.GEOCODE_FUNCTIONS)
         patch.setattr(application_roles, "OWNED_TABLES", owned_tables)
         patch.setattr(application_roles, "PROTECTED_TABLES", ())
         patch.setattr(application_roles, "CONTROL_TABLES", control_tables)
@@ -121,13 +125,34 @@ async def _provision(pool, monkeypatch, schema):
 
 async def _prepare_before_039(monkeypatch):
     with monkeypatch.context() as patch:
+        patch.setattr(application_roles, "OWNED_TABLES", OWNED_TABLES)
         patch.setattr(application_roles, "PROTECTED_TABLES", ("email_challenges",))
         patch.setattr(application_roles, "TABLES", tuple(
-            table for table in application_roles.TABLES if table not in application_roles.STORAGE_TABLES))
+            table for table in application_roles.TABLES
+            if table not in application_roles.STORAGE_TABLES + application_roles.GEOCODE_TABLES))
         patch.setattr(application_roles, "FUNCTIONS", {
             key: value for key, value in application_roles.FUNCTIONS.items()
-            if key not in application_roles.IMPORT_ADMISSION_FUNCTIONS + application_roles.STORAGE_FUNCTIONS
+            if key not in (application_roles.IMPORT_ADMISSION_FUNCTIONS + application_roles.STORAGE_FUNCTIONS
+                           + application_roles.GEOCODE_FUNCTIONS)
         })
+        await prepare_application_roles(TEST_DB)
+
+
+async def _prepare_schema_40(monkeypatch):
+    with monkeypatch.context() as patch:
+        patch.setattr(application_roles, "OWNED_TABLES", OWNED_TABLES)
+        patch.setattr(application_roles, "PROTECTED_TABLES", ("email_challenges",) + application_roles.STORAGE_TABLES)
+        patch.setattr(application_roles, "TABLES", tuple(
+            table for table in application_roles.TABLES if table not in application_roles.GEOCODE_TABLES))
+        patch.setattr(application_roles, "FUNCTIONS", {
+            key: value for key, value in application_roles.FUNCTIONS.items()
+            if key not in application_roles.GEOCODE_FUNCTIONS
+        })
+        patch.setattr(application_roles, "FUNCTION_SPECS", tuple(
+            replace(spec, source="040_storage_accounting.sql")
+            if spec.signature == "public.storage_expected_usage()" else spec
+            for spec in application_roles.FUNCTION_SPECS
+        ))
         await prepare_application_roles(TEST_DB)
 
 
@@ -362,12 +387,14 @@ def test_storage_upgrade_keeps_contract_without_reprovisioning(monkeypatch, tmp_
             monkeypatch.setattr(db_module, "MIGRATIONS_DIR", _migration_dir(tmp_path, "before_storage", through=39))
             await run_migrations(pool)
             with monkeypatch.context() as patch:
+                patch.setattr(application_roles, "OWNED_TABLES", OWNED_TABLES)
                 patch.setattr(application_roles, "PROTECTED_TABLES", ("email_challenges",))
                 patch.setattr(application_roles, "TABLES", tuple(
-                    table for table in application_roles.TABLES if table not in application_roles.STORAGE_TABLES))
+                    table for table in application_roles.TABLES
+                    if table not in application_roles.STORAGE_TABLES + application_roles.GEOCODE_TABLES))
                 patch.setattr(application_roles, "FUNCTIONS", {
                     key: value for key, value in application_roles.FUNCTIONS.items()
-                    if key not in application_roles.STORAGE_FUNCTIONS
+                    if key not in application_roles.STORAGE_FUNCTIONS + application_roles.GEOCODE_FUNCTIONS
                 })
                 await prepare_application_roles(TEST_DB)
             async with pool.connection() as conn:
@@ -388,8 +415,62 @@ def test_storage_upgrade_keeps_contract_without_reprovisioning(monkeypatch, tmp_
                 assert await (await conn.execute("SELECT public.storage_usage_consistent()")).fetchone() == (True,)
                 assert await (await conn.execute(
                     "SELECT charge_version,actual_bytes,raw_bytes,reserved_bytes FROM account_usage WHERE account_id=41"
-                )).fetchone() == (1, 128 + 6 + 9 + 128 + len('{"kind": "legacy"}'),
+                )).fetchone() == (1, 128 + 6 + 9 + 128 + len('{"kind": "legacy"}') + 138,
                                   128 + len('{"kind": "legacy"}'), 0)
+        finally:
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
+            await full_schema_reset(pool)
+            await pool.close()
+    asyncio.run(scenario())
+
+
+def test_geocode_upgrade_keeps_contract_without_reprovisioning(monkeypatch, tmp_path):
+    async def scenario():
+        pool = make_pool(TEST_DB)
+        await pool.open(wait=True)
+        try:
+            await drop_and_recreate_schema(pool)
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", _migration_dir(tmp_path, "before_geocode", through=40))
+            await run_migrations(pool)
+            await _prepare_schema_40(monkeypatch)
+            async with pool.connection() as conn:
+                await conn.execute(
+                    "INSERT INTO accounts(id,email,password_hash,is_admin) "
+                    "VALUES(41,'upgrade-geocode@example.invalid','unused',true)")
+                await conn.execute(
+                    "INSERT INTO trips(account_id,device,source,started_at,ended_at,distance_m,start_geom,end_geom) "
+                    "VALUES(41,'manual','manual','2026-07-01','2026-07-01',100,"
+                    "ST_SetSRID(ST_MakePoint(1,2),4326)::geography,"
+                    "ST_SetSRID(ST_MakePoint(3,4),4326)::geography)")
+                before = (await (await conn.execute(
+                    "SELECT actual_bytes,reserved_bytes,raw_bytes,enhancement_bytes "
+                    "FROM account_usage WHERE account_id=41")).fetchone())
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
+            await run_migrations(pool)
+
+            async def forbidden_reprovision(conn):
+                raise AssertionError("upgrade must validate rather than provision")
+
+            monkeypatch.setattr(application_roles, "_provision", forbidden_reprovision)
+            await prepare_application_roles(TEST_DB)
+            async with application_roles.application_role_pools(TEST_DB) as roles:
+                from app.account_context import AccountPool, AccountPrincipal
+                bound = AccountPool(roles.runtime, AccountPrincipal(41, True, 1))
+                async with bound.connection() as conn:
+                    assert await (await conn.execute(
+                        "SELECT cursor_trip_id,generation,round_generation,scanned_generation FROM geocode_discovery"
+                    )).fetchone() == (0, 1, 1, 0)
+                    page = await (await conn.execute("SELECT * FROM public.geocode_discover_page(41)")).fetchone()
+                    assert page[:2] == (1, 2)
+                    assert await (await conn.execute(
+                        "SELECT rounded_lat,rounded_lon FROM geocode_retry ORDER BY rounded_lat"
+                    )).fetchall() == [(2, 1), (4, 3)]
+            async with pool.connection() as conn:
+                assert await (await conn.execute(
+                    "SELECT actual_bytes,reserved_bytes,raw_bytes,enhancement_bytes "
+                    "FROM account_usage WHERE account_id=41"
+                )).fetchone() == (before[0] + 393, *before[1:])
+                assert await (await conn.execute("SELECT public.storage_usage_consistent()")).fetchone() == (True,)
         finally:
             monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
             await full_schema_reset(pool)

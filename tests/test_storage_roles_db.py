@@ -195,7 +195,17 @@ def test_real_account_purge_cascades_protected_usage_and_envelopes():
                 "VALUES(73,%s,'phone','detected','2026-07-01T00:01Z','2026-07-01T00:02Z',100,"
                 "ST_GeomFromText('LINESTRING(1 2,2 3)',4326))", (stream,),
             )
+        async with target.connection() as conn:
+            await conn.execute(
+                "INSERT INTO geocode_retry(account_id,rounded_lat,rounded_lon,attempted_at,"
+                "next_attempt_at,failure_count,failure_reason) "
+                "VALUES(73,2,1,now(),now()+interval '1 hour',3,'transport')")
         async with owner.connection() as conn:
+            await conn.execute(
+                "UPDATE geocode_discovery SET cursor_trip_id=4,generation=3,round_generation=2 "
+                "WHERE account_id=73")
+            assert await (await conn.execute(
+                "SELECT count(*) FROM geocode_discovery WHERE account_id=73")).fetchone() == (1,)
             preserved = await (await conn.execute(
                 "SELECT * FROM account_usage WHERE account_id=%s", (account,)
             )).fetchone()
@@ -215,7 +225,7 @@ def test_real_account_purge_cascades_protected_usage_and_envelopes():
                 verified_password_hash="unused-test-hash",
             ) == "purged"
         async with owner.connection() as conn:
-            for table in STORAGE_TABLES + OWNED_TABLES:
+            for table in STORAGE_TABLES + OWNED_TABLES + application_roles.GEOCODE_PROTECTED_TABLES:
                 assert await (await conn.execute(sql.SQL(
                     "SELECT count(*) FROM {} WHERE account_id=73"
                 ).format(sql.Identifier(table)))).fetchone() == (0,)
