@@ -73,6 +73,7 @@ def test_giant_timezone_paths_json_memory_failure_is_reaped(tmp_path):
                     await session.send_text(b'"]')
                     await session.request({'type':'initialize','metadata':metadata()})
                 with pytest.raises(PreparationResourceError): await operation.perform(prepare)
+                await asyncio.wait_for(asyncio.shield(operation.process.wait()),5)
             assert operation.closed and operation.process.returncode==73
             assert not operation.directory.exists()
     asyncio.run(run())

@@ -10,6 +10,39 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
+def test_real_connection_failure_is_sanitized_before_account_work(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from psycopg import AsyncConnection, OperationalError
+    from app.account_context import AccountPrincipal
+    from app.account_work import report_account_work
+    from app.capacity import AdmissionManager
+    from app.role_setup import RoleSetupError
+
+    attempts = []
+
+    async def fail_connect(cls, *args, **kwargs):
+        attempts.append(cls)
+        raise OperationalError('injected connection failure')
+
+    monkeypatch.setattr(AsyncConnection, 'connect', classmethod(fail_connect))
+
+    async def run():
+        manager = AdmissionManager()
+        pool = manager.manage_pool(SimpleNamespace(conninfo='postgresql://unused'), 'control')
+        principal = AccountPrincipal(1, True, 1)
+        async with manager.operation('foreground', principal) as owner:
+            with pytest.raises(RoleSetupError, match='^database connection failed$'):
+                async with report_account_work(pool, principal):
+                    pytest.fail('account work began after connection failure')
+            assert not owner._lifetime.lease_connection
+            assert manager.snapshot()['leases'] == 0
+        assert manager.snapshot()['foreground']['active'] == 0
+
+    asyncio.run(run())
+    assert len(attempts) == 1
+
+
 @pytest.mark.parametrize('phase',['connect','setup','acquire','unlock','close'])
 def test_unknown_lease_backend_fault_retains_owner_after_repeated_cancellation(phase):
     code = textwrap.dedent('''
@@ -57,7 +90,8 @@ def test_unknown_lease_backend_fault_retains_owner_after_repeated_cancellation(p
             os._exit(0)
         asyncio.run(run())
     ''').replace('PHASE_VALUE',repr(phase))
-    # The process exit is the declared recovery boundary for an unknown backend.
+    # This injects raw wrapper faults; the real pre-lock connection path is above.
+    # Process exit is the recovery boundary for an unknown established backend.
     result = subprocess.run([sys.executable,'-I','-c',
                              'import sys; sys.path.insert(0,'+repr(str(Path(__file__).resolve().parents[1]))+');\n'+code],
                             capture_output=True,timeout=5,env={})
