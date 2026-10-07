@@ -30,14 +30,12 @@ import jinja2
 from psycopg_pool import AsyncConnectionPool
 
 from app.db import EMAIL_DIGEST_ADVISORY_LOCK_KEY
-from app.capacity import owned_thread
+from app.digest_summary import owned_digest_turn
 from app.formatting import format_miles, format_usd
 from app.mailer import Mailer
 from app.notifications import notification_preferences_current, count_unclassified_trips, odometer_reminder_vehicles
 from app.nudge import latest_window_end
 from app.odometer import latest_quarter_start
-from app.report import build_annual_report, build_range_report
-from app.ui import _fetch_range_trips_in
 from app.worker import BatchOutcome, TurnOutcome, WorkerStatus
 
 log = logging.getLogger(__name__)
@@ -293,6 +291,9 @@ class EmailDigestWorker:
             log.info("email digest: weekly_nudge no unclassified trips for this window")
 
     async def _run_monthly_summary(self, now: datetime) -> None:
+        await owned_digest_turn(self._monthly_summary_turn, now)
+
+    async def _monthly_summary_turn(self, now: datetime, turn) -> None:
         period_end = latest_month_boundary(now, self.digest_hour)
         year, month = covered_month(period_end)
         month_start, month_end = _calendar_month_days(year, month)
@@ -300,8 +301,7 @@ class EmailDigestWorker:
             async with conn.transaction():
                 if await self._already_delivered(conn, "monthly_summary", period_end):
                     return
-                trips, rates = await _fetch_range_trips_in(conn, self.display_tz, month_start, month_end)
-                report = await owned_thread(build_range_report, trips, rates, self.display_tz, month_start, month_end)
+                report = await turn.summarize(conn, self.display_tz, month_start, month_end)
                 body = _render(
                     "monthly_summary.txt",
                     month_label=f"{MONTH_ABBR[month]} {year}",
@@ -311,29 +311,34 @@ class EmailDigestWorker:
                         if report.nondeductible_m else ""
                     ),
                     deduction=format_usd(report.total_deduction),
-                    unclassified=report.caveats.unclassified_trips,
+                    unclassified=report.unclassified_trips,
                     report_url=_url(
                         self.app_url,
                         f"/report/range?from={month_start.isoformat()}&to={month_end.isoformat()}",
                     ),
                 )
-                await self.mailer.send(
-                    self.mailer.compose(f"Odograph: {MONTH_ABBR[month]} summary", body)
+                turn.check()
+                await turn.perform(
+                    self.mailer.send,
+                    self.mailer.compose(f"Odograph: {MONTH_ABBR[month]} summary", body),
                 )
+                turn.check()
                 await self._record_delivery(conn, "monthly_summary", period_end, True)
         log.info("email digest: monthly_summary sent for %s %d", MONTH_ABBR[month], year)
 
     async def _run_filing_reminder(self, now: datetime) -> None:
+        await owned_digest_turn(self._filing_reminder_turn, now)
+
+    async def _filing_reminder_turn(self, now: datetime, turn) -> None:
         period_end = latest_filing_reminder_at(now, self.filing_reminder_mmdd, self.digest_hour)
         year = period_end.year - 1
         async with self.pool.connection() as conn:
             async with conn.transaction():
                 if await self._already_delivered(conn, "filing_reminder", period_end):
                     return
-                trips, rates = await _fetch_range_trips_in(
+                report = await turn.summarize(
                     conn, self.display_tz, date(year, 1, 1), date(year, 12, 31)
                 )
-                report = await owned_thread(build_annual_report, trips, rates, self.display_tz, year)
                 body = _render(
                     "filing_reminder.txt",
                     year=year,
@@ -346,9 +351,12 @@ class EmailDigestWorker:
                     report_url=_url(self.app_url, f"/report/{year}"),
                     export_url=_url(self.app_url, f"/report/{year}/export"),
                 )
-                await self.mailer.send(
-                    self.mailer.compose(f"Odograph: {year} filing reminder", body)
+                turn.check()
+                await turn.perform(
+                    self.mailer.send,
+                    self.mailer.compose(f"Odograph: {year} filing reminder", body),
                 )
+                turn.check()
                 await self._record_delivery(conn, "filing_reminder", period_end, True)
         log.info("email digest: filing_reminder sent for %d", year)
 

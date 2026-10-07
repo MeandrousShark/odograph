@@ -206,7 +206,6 @@ def test_cancellation_keeps_scheduler_owner_until_actual_report_thread_ends(monk
 def test_digest_cancel_keeps_transaction_and_owner_through_actual_cpu_or_transport(monkeypatch, phase):
     import threading
     from zoneinfo import ZoneInfo
-    import app.email_digest as digest_module
     from app.email_digest import EmailDigestWorker
     from app.mailer import Mailer
 
@@ -234,16 +233,12 @@ def test_digest_cancel_keeps_transaction_and_owner_through_actual_cpu_or_transpo
                 connections.append(conn)
                 yield conn
 
+        import app.digest_summary as summary_module
         async def fetch(*args):
-            return [], {}
-        monkeypatch.setattr(digest_module, "_fetch_range_trips_in", fetch)
-        builder_name = "build_annual_report" if phase == "annual_report" else "build_range_report"
-        original = getattr(digest_module, builder_name)
-        if phase != "smtp":
-            def build(*args):
-                blocking()
-                return original(*args)
-            monkeypatch.setattr(digest_module, builder_name, build)
+            if phase != "smtp":
+                await owned_thread(blocking)
+            return summary_module.DigestSummary()
+        monkeypatch.setattr(summary_module, "fetch_digest_summary", fetch)
         def transport(mailer, message):
             if phase == "smtp":
                 blocking()

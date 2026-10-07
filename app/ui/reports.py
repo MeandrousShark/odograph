@@ -103,7 +103,7 @@ async def _fetch_range_trips_in(conn, tz: ZoneInfo, start: date, end: date) -> t
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         f"SELECT {REPORT_TRIP_COLUMNS} FROM trips WHERE started_at >= %s AND started_at < %s"
-        " AND account_id = %s ORDER BY started_at",
+        " AND account_id = %s ORDER BY started_at ASC, id ASC",
         (range_start, range_end, account_id(conn)),
     )
     trips = await cur.fetchall()
