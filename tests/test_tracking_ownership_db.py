@@ -118,10 +118,10 @@ def test_identical_labels_and_timestamps_are_separate_authenticated_streams():
                 assert rows == [(42, first.tracking_device_id, 1), (42, second.tracking_device_id, 1),
                                 (84, third.tracking_device_id, 1)]
                 assert (await (await conn.execute("SELECT count(*) FROM raw_messages WHERE account_id IS NULL")).fetchone())[0] == 0
-                # 4 location posts + the invalid-location post (still _type
-                # "location") are stored; the "status" post is not (see
-                # STORED_MESSAGE_TYPES in app/ingest.py).
-                assert (await (await conn.execute("SELECT count(*) FROM raw_messages")).fetchone())[0] == 5
+                # Three distinct streams plus the invalid-location post are
+                # stored. The repeated fix is an exact replay of the first.
+                assert (await (await conn.execute("SELECT count(*) FROM raw_messages")).fetchone())[0] == 4
+                assert (await (await conn.execute("SELECT count(*) FROM raw_replay_receipts")).fetchone())[0] == 4
             # poke() carries no per-account/device target (AccountWorker's
             # wake-key bookkeeping was unused dead weight -- every sweep
             # already revalidates every enabled principal); just confirm the

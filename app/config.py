@@ -20,6 +20,11 @@ DEFAULT_MISSING_TRIP_GAP_M = 1000.0
 # app/auth.py as the getattr fallback for test doubles whose config double
 # predates this field.
 DEFAULT_ACCOUNT_AVATAR_MAX_BYTES = 512000
+DEFAULT_STORAGE_ACCOUNT_LIMIT_BYTES = 2 * 1024 ** 3
+DEFAULT_STORAGE_RAW_LIMIT_BYTES = 256 * 1024 ** 2
+DEFAULT_STORAGE_ENHANCEMENT_LIMIT_BYTES = 128 * 1024 ** 2
+DEFAULT_STORAGE_INSTANCE_BUDGET_BYTES = 12 * 1024 ** 3
+DEFAULT_STORAGE_INSTANCE_RESERVE_BYTES = 2 * 1024 ** 3
 
 
 def security_link_base(app_url: str) -> str:
@@ -47,6 +52,16 @@ def security_link_base(app_url: str) -> str:
 
 def _f(name: str, default: float) -> float:
     return float(os.environ.get(name, default))
+
+
+def _storage_bytes(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, default))
+    except ValueError:
+        raise RuntimeError(f"{name} must be a positive integer") from None
+    if value <= 0 or value > 2 ** 63 - 1:
+        raise RuntimeError(f"{name} must be a positive bigint-sized integer")
+    return value
 
 
 @dataclass
@@ -116,6 +131,11 @@ class Config:
     hsts_max_age: int
     portable_import_max_bytes: int
     account_avatar_max_bytes: int
+    storage_account_limit_bytes: int = DEFAULT_STORAGE_ACCOUNT_LIMIT_BYTES
+    storage_raw_limit_bytes: int = DEFAULT_STORAGE_RAW_LIMIT_BYTES
+    storage_enhancement_limit_bytes: int = DEFAULT_STORAGE_ENHANCEMENT_LIMIT_BYTES
+    storage_instance_budget_bytes: int = DEFAULT_STORAGE_INSTANCE_BUDGET_BYTES
+    storage_instance_reserve_bytes: int = DEFAULT_STORAGE_INSTANCE_RESERVE_BYTES
 
     capacity_ingest_slots: int = 2
     capacity_routine_slots: int = 1
@@ -158,6 +178,10 @@ class Config:
     def __post_init__(self):
         from app.capacity import validate_capacity_config
         validate_capacity_config(self)
+        if (self.storage_raw_limit_bytes > self.storage_account_limit_bytes
+                or self.storage_enhancement_limit_bytes > self.storage_account_limit_bytes
+                or self.storage_instance_reserve_bytes >= self.storage_instance_budget_bytes):
+            raise RuntimeError("storage limits must fit account and instance allowances")
 
     @property
     def map_tile_host(self) -> str:
@@ -300,6 +324,16 @@ class Config:
             raise RuntimeError("OSRM_MAX_COORDS must be an integer from 2 through 10000")
 
         return cls(
+            storage_account_limit_bytes=_storage_bytes(
+                "STORAGE_ACCOUNT_LIMIT_BYTES", DEFAULT_STORAGE_ACCOUNT_LIMIT_BYTES),
+            storage_raw_limit_bytes=_storage_bytes(
+                "STORAGE_RAW_LIMIT_BYTES", DEFAULT_STORAGE_RAW_LIMIT_BYTES),
+            storage_enhancement_limit_bytes=_storage_bytes(
+                "STORAGE_ENHANCEMENT_LIMIT_BYTES", DEFAULT_STORAGE_ENHANCEMENT_LIMIT_BYTES),
+            storage_instance_budget_bytes=_storage_bytes(
+                "STORAGE_INSTANCE_BUDGET_BYTES", DEFAULT_STORAGE_INSTANCE_BUDGET_BYTES),
+            storage_instance_reserve_bytes=_storage_bytes(
+                "STORAGE_INSTANCE_RESERVE_BYTES", DEFAULT_STORAGE_INSTANCE_RESERVE_BYTES),
             capacity_ingest_slots=int(os.environ.get("CAPACITY_INGEST_SLOTS", 2)),
             capacity_routine_slots=int(os.environ.get("CAPACITY_ROUTINE_SLOTS", 1)),
             capacity_navigation_slots=int(os.environ.get("CAPACITY_NAVIGATION_SLOTS", 1)),

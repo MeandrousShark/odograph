@@ -33,6 +33,10 @@ def _snapshot(database_url):
             ("odograph_service", "managed_role_state"),
             ("odograph_service", "recovery_metadata"),
         ]:
+            # Restore reconciliation starts a fresh transaction baseline.
+            # Its previous transaction's counters and xid are transient.
+            if table == "storage_quota_baseline":
+                continue
             data = conn.execute(sql.SQL("SELECT * FROM {}.{}").format(
                 sql.Identifier(schema), sql.Identifier(table))).fetchall()
             rows.append((schema, table, sorted(data, key=repr)))
@@ -63,7 +67,14 @@ async def _seed(database_url):
             for owner in (first["id"], 73):
                 bound = AccountPool(roles.runtime, AccountPrincipal(owner, True, 1))
                 async with bound.connection() as conn:
-                    await create_device(conn, "same-label")
+                    issued = await create_device(conn, "same-label")
+                    message_id = (await (await conn.execute(
+                        "INSERT INTO raw_messages(account_id,tracking_device_id,payload) "
+                        "VALUES(%s,%s,'{\"_type\":\"waypoint\"}'::jsonb) RETURNING id",
+                        (owner, issued.tracking_device_id),
+                    )).fetchone())[0]
+                    await conn.execute("SELECT public.storage_record_replay(%s,%s,'device',%s)",
+                                       (owner, message_id, str(issued.tracking_device_id)))
                     await conn.execute(
                         "INSERT INTO trips(account_id,device,source,started_at,ended_at,distance_m,category) "
                         "VALUES(%s,'portable provenance','manual','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',%s,'business')",
@@ -71,8 +82,8 @@ async def _seed(database_url):
                     )
                     await conn.execute(
                         "INSERT INTO geocode_retry(account_id,rounded_lat,rounded_lon,attempted_at,"
-                        "next_attempt_at,failure_count,failure_reason) "
-                        "VALUES(%s,35.1234,139.5678,'2026-01-01','2026-01-01T01:00Z',4,'transport')",
+                        "next_attempt_at,failure_count,failure_reason,capacity_paused,capacity_needed_bytes) "
+                        "VALUES(%s,35.1234,139.5678,'2026-01-01','2026-01-01T01:00Z',4,'transport',true,128)",
                         (owner,),
                     )
             async with pool.connection() as conn:
@@ -121,6 +132,19 @@ async def _verify(database_url, first, version=1):
                 assert await (await conn.execute(
                     "SELECT account_id,cursor_trip_id,generation,round_generation,scanned_generation,last_unit::text "
                     "FROM geocode_discovery")).fetchall() == [(owner, 73, 5, 4, 3, "discovery")]
+                assert await (await conn.execute(
+                    "SELECT account_id,capacity_paused,capacity_needed_bytes FROM geocode_retry"
+                )).fetchall() == [(owner, True, 128)]
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    async with conn.transaction():
+                        await conn.execute("SELECT * FROM raw_replay_receipts")
+                message_id, device_id, payload = (await (await conn.execute(
+                    "SELECT id,tracking_device_id,payload::text FROM raw_messages"
+                )).fetchone())
+                assert await (await conn.execute(
+                    "SELECT public.storage_find_replay(%s,'device',%s,%s,%s)",
+                    (owner, str(device_id), hashlib.sha256(payload.encode()).digest(), payload),
+                )).fetchone() == (message_id,)
                 assert (await conn.execute("UPDATE trips SET notes='cross' WHERE account_id=%s",
                                            (other,))).rowcount == 0
                 with pytest.raises(psycopg.errors.InsufficientPrivilege):
@@ -147,6 +171,10 @@ def test_application_archive_preserves_rows_credentials_sequences_and_restricted
         source, target = clusters.start(), clusters.start()
         _assert_pg16_clients(source)
         first, runtime_info = asyncio.run(_seed(source.database_url))
+        with psycopg.connect(source.database_url) as conn:
+            conn.execute(
+                "UPDATE storage_grants SET account_limit_bytes=1,raw_limit_bytes=1,"
+                "enhancement_limit_bytes=1")
         before = _snapshot(source.database_url)
         security_before = _row_security(source.database_url)
         assert [row[0] for row in security_before[0] if row[1:] == (True, True)] == sorted(OWNED_TABLES + PROTECTED_TABLES)
@@ -169,6 +197,12 @@ def test_application_archive_preserves_rows_credentials_sequences_and_restricted
             assert conn.execute("SELECT array_agg(DISTINCT auth_version) FROM accounts").fetchone() == (
                 [restored_version],)
             conn.execute("UPDATE accounts SET auth_version=auth_version-%s", (RESTORE_AUTH_VERSION_STEP,))
+            assert conn.execute("SELECT public.storage_usage_consistent()").fetchone() == (True,)
+            assert conn.execute("SELECT COUNT(*) FROM storage_quota_baseline").fetchone() == (2,)
+            assert conn.execute(
+                "SELECT count(*) FROM account_usage u JOIN storage_grants g USING(account_id) "
+                "WHERE u.actual_bytes+u.reserved_bytes>g.account_limit_bytes"
+            ).fetchone() == (2,)
         assert _snapshot(target.database_url) == before
         with psycopg.connect(target.database_url) as conn:
             conn.execute("UPDATE accounts SET auth_version=auth_version+%s", (RESTORE_AUTH_VERSION_STEP,))

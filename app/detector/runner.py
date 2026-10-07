@@ -500,6 +500,8 @@ class DetectorRunner:
                 " detector_version = %s, updated_at = now(), path = prior.path, "
                 " snap_status = CASE WHEN prior.preserve_snap "
                 "   THEN t.snap_status ELSE 'pending'::snap_state END, "
+                " snap_capacity_needed_bytes = CASE WHEN prior.preserve_snap "
+                "   THEN t.snap_capacity_needed_bytes ELSE 0 END, "
                 " snap_attempted_at = CASE WHEN prior.preserve_snap "
                 "   THEN t.snap_attempted_at ELSE NULL END, "
                 " path_snapped = CASE WHEN prior.preserve_snap THEN t.path_snapped ELSE NULL END, "

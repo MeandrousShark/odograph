@@ -51,6 +51,7 @@ from app.places_desc import describe_compact_endpoint, describe_endpoint
 from app.report import caveat_lines, format_rate_periods, quarter_bounds, range_label
 from app.retention import RetentionWorker
 from app.snap import SnapWorker
+from app.storage_errors import register_storage_errors
 from app.ui import EXCLUSION_LABELS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -300,7 +301,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                 await run_migrations(bootstrap_pool, cfg)
             finally:
                 await bootstrap_pool.close()
-            pools = await stack.enter_async_context(application_role_pools(cfg.database_url))
+            pools = await stack.enter_async_context(
+                application_role_pools(cfg.database_url, storage_config=cfg))
             app.state.control_pool = pools.control
             app.state.runtime_pool = pools.runtime
             app.state.make_detector_runner = lambda pool: DetectorRunner(
@@ -477,6 +479,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         if getattr(request.state, "_capacity_mutation_committed", False):
             return Response(status_code=204, headers={"HX-Refresh": "true"})
         return busy_response(request)
+
+    register_storage_errors(app)
 
     @app.get("/healthz")
     async def healthz(request: Request):

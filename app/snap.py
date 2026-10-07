@@ -19,10 +19,17 @@ from psycopg_pool import AsyncConnectionPool
 
 from app.capacity import current_owner, owned_thread
 from app.provider_http import SNAP_RESPONSE_MAX_BYTES, bounded_json
+from app.storage import enhancement_available, is_storage_capacity_error
 from app.validation import parse_finite_number
 from app.worker import BatchOutcome, TurnOutcome
 
 log = logging.getLogger(__name__)
+PROVIDER_ROUTE_MAX_VERTICES = 100_000
+SNAP_MIN_ROUTE_BYTES = 54  # EWKB MultiLineString with one two-vertex segment.
+
+
+class ProviderOutputTooLarge(ValueError):
+    """A provider route exceeds the stored geometry limit."""
 
 
 @dataclass(frozen=True)
@@ -229,6 +236,8 @@ def _parse_route_line(body) -> Optional[RoutedLine]:
     coordinates = geometry.get("coordinates")
     if not isinstance(coordinates, list) or len(coordinates) < 2:
         return None
+    if len(coordinates) > PROVIDER_ROUTE_MAX_VERTICES:
+        raise ProviderOutputTooLarge("provider route exceeds 100000 vertices")
 
     # Rebuilt from validated floats rather than passing the parsed response
     # through: this is what guarantees nothing unvalidated and no extra
@@ -348,6 +357,7 @@ def _parse_and_serialize_match(body, min_confidence, input_count, raw_distance_m
     tracepoints = body.get("tracepoints") or []
     if not isinstance(matchings, list) or not isinstance(tracepoints, list):
         raise ValueError("malformed OSRM match response")
+    vertices = 0
     for matching in matchings:
         if not isinstance(matching, dict):
             raise ValueError("malformed OSRM matching")
@@ -360,6 +370,9 @@ def _parse_and_serialize_match(body, min_confidence, input_count, raw_distance_m
         coordinates = geometry.get("coordinates") or []
         if not isinstance(coordinates, list):
             raise ValueError("malformed OSRM coordinates")
+        vertices += len(coordinates)
+        if vertices > PROVIDER_ROUTE_MAX_VERTICES:
+            raise ProviderOutputTooLarge("provider route exceeds 100000 vertices")
         for coordinate in coordinates:
             if (not isinstance(coordinate, (list, tuple)) or len(coordinate) != 2
                     or parse_finite_number(coordinate[0], minimum=-180, maximum=180) is None
@@ -410,7 +423,7 @@ class SnapWorker:
             cur = await conn.execute(
                 "SELECT t.id, GREATEST(0, EXTRACT(EPOCH FROM "
                 "t.snap_attempted_at + %s * interval '1 second' - now())), "
-                "COALESCE(t.snap_attempted_at,t.created_at) "
+                "COALESCE(t.snap_attempted_at,t.created_at), t.snap_capacity_needed_bytes "
                 "FROM trips t JOIN tracking_devices d "
                 "ON d.account_id=t.account_id AND d.id=t.tracking_device_id "
                 "WHERE t.account_id=%s AND t.snap_status='pending' "
@@ -429,7 +442,7 @@ class SnapWorker:
             if cursor is not None and await self._next_trip() is not None:
                 return TurnOutcome(deferred_until=asyncio.get_running_loop().time() + self.retry_s)
             return TurnOutcome()
-        trip_id, delay, selection_age = row
+        trip_id, delay, selection_age, _ = row
         if delay > 0:
             return TurnOutcome(deferred_until=asyncio.get_running_loop().time() + float(delay))
         outcome = await self._snap_one(trip_id)
@@ -476,13 +489,27 @@ class SnapWorker:
         return [MatchPoint(t=r[0], lat=r[1], lon=r[2], accuracy_m=r[3])
                 for r in await cur.fetchall()]
 
+    async def _pause_for_capacity(self, trip_id, generation, device_id,
+                                  device_generation, needed_bytes):
+        async with self.pool.connection() as conn:
+            if not await lock_device_generation(conn, device_id, device_generation):
+                return
+            await conn.execute(
+                "UPDATE trips SET snap_capacity_needed_bytes=%s,snap_attempted_at=now() "
+                "WHERE account_id=%s AND id=%s AND tracking_device_id=%s "
+                "AND updated_at=%s AND snap_status='pending' "
+                "AND source='detected' AND NOT imported",
+                (needed_bytes, account_id(conn), trip_id, device_id, generation),
+            )
+
     async def _snap_one(self, trip_id: int) -> BatchOutcome:
         async with self.pool.connection(consistent_snapshot=True) as conn:
             # Trip token, point count and sampled rows share one snapshot.
             # The terminal write uses a fresh transaction and rejects any
             # rewrite that committed while the snapshot/provider was active.
             cur = await conn.execute(
-                "SELECT t.updated_at, t.distance_m, t.tracking_device_id, d.generation FROM trips t "
+                "SELECT t.updated_at, t.distance_m, t.tracking_device_id, d.generation, "
+                "t.snap_capacity_needed_bytes FROM trips t "
                 "JOIN tracking_devices d ON d.account_id=t.account_id AND d.id=t.tracking_device_id "
                 "WHERE t.account_id=%s AND t.id=%s AND t.snap_status='pending' "
                 "AND t.source='detected' AND NOT t.imported AND d.enabled AND d.revoked_at IS NULL",
@@ -491,7 +518,7 @@ class SnapWorker:
             row = await cur.fetchone()
             if row is None:
                 return BatchOutcome()
-            generation, raw_distance_m, device_id, device_generation = row
+            generation, raw_distance_m, device_id, device_generation, needed_bytes = row
             points = await self._load_points(conn, trip_id)
         if len(points) < 2:
             # A detected trip should always have >= 2 points; if one somehow
@@ -504,7 +531,8 @@ class SnapWorker:
                 if not await lock_device_generation(conn, device_id, device_generation):
                     return BatchOutcome()
                 cur = await conn.execute(
-                    "UPDATE trips SET snap_status = 'failed', snapped_at = now() "
+                    "UPDATE trips SET snap_status = 'failed', snapped_at = now(), "
+                    "snap_capacity_needed_bytes = 0 "
                     "WHERE account_id = %s AND id = %s AND updated_at = %s",
                     (account_id(conn), trip_id, generation),
                 )
@@ -516,6 +544,17 @@ class SnapWorker:
                 return BatchOutcome()
             log.warning("snap: trip %s has < 2 usable points, marking failed", trip_id)
             return BatchOutcome(attempted=1, completed=1)
+
+        async with self.pool.connection() as conn:
+            can_snap = await enhancement_available(
+                conn, needed_bytes=max(SNAP_MIN_ROUTE_BYTES, needed_bytes),
+            )
+        if not can_snap:
+            await self._pause_for_capacity(
+                trip_id, generation, device_id, device_generation,
+                max(SNAP_MIN_ROUTE_BYTES, needed_bytes),
+            )
+            return BatchOutcome()
 
         sampled = downsample(points, self.max_coords)
         coords = ";".join(f"{p.lon:.6f},{p.lat:.6f}" for p in sampled)
@@ -541,7 +580,7 @@ class SnapWorker:
             if not await lock_device_generation(conn, device_id, device_generation):
                 return BatchOutcome()
             cur = await conn.execute(
-                "UPDATE trips SET snap_attempted_at = now() "
+                "UPDATE trips SET snap_attempted_at = now(), snap_capacity_needed_bytes = 0 "
                 "WHERE account_id = %s AND id = %s AND tracking_device_id = %s "
                 "AND snap_status = 'pending' AND source = 'detected' AND NOT imported "
                 "AND updated_at = %s",
@@ -578,18 +617,36 @@ class SnapWorker:
         except (TypeError, ValueError, KeyError) as exc:
             return BatchOutcome(attempted=1, retriable_failures=1,
                                 failure_type=type(exc).__name__)
-        async with self.pool.connection() as conn:
-            if not await lock_device_generation(conn, device_id, device_generation):
-                return BatchOutcome(attempted=1)
-            cur = await conn.execute(
-                "UPDATE trips SET path_snapped = ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326), "
-                " distance_snapped_m = %s, snap_status = %s, snapped_at = now() "
-                "WHERE account_id = %s AND id = %s AND updated_at = %s",
-                (
-                    geometry_json,
-                    result.distance_m, result.status, account_id(conn), trip_id, generation,
-                ),
+        geometry_bytes = 0
+        if geometry_json is not None:
+            async with self.pool.connection() as conn:
+                cur = await conn.execute(
+                    "SELECT octet_length(ST_AsEWKB(ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326), 'NDR'))",
+                    (geometry_json,),
+                )
+                geometry_bytes = (await cur.fetchone())[0]
+        try:
+            async with self.pool.connection() as conn:
+                if not await lock_device_generation(conn, device_id, device_generation):
+                    return BatchOutcome(attempted=1)
+                cur = await conn.execute(
+                    "UPDATE trips SET path_snapped = ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326), "
+                    " distance_snapped_m = %s, snap_status = %s, snapped_at = now(), "
+                    "snap_capacity_needed_bytes = 0 "
+                    "WHERE account_id = %s AND id = %s AND updated_at = %s",
+                    (
+                        geometry_json,
+                        result.distance_m, result.status, account_id(conn), trip_id, generation,
+                    ),
+                )
+        except Exception as exc:
+            if not is_storage_capacity_error(exc):
+                raise
+            log.info("snap: trip %s remains pending at storage capacity", trip_id)
+            await self._pause_for_capacity(
+                trip_id, generation, device_id, device_generation, geometry_bytes,
             )
+            return BatchOutcome(attempted=1)
         if cur.rowcount == 0:
             # A detector rewrite landed between the point load and this write
             # (or the trip vanished). It already reset snap_status back to

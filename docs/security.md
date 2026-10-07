@@ -64,6 +64,12 @@ Every network-reachable route, and what actually guards it:
 - **`/ingest`**: HTTP Basic auth resolves a durable, hashed credential to an
   enabled account and stable device before accepting data. Credential and
   device generation/revocation are checked again in the write transaction.
+  Logical storage admission is transaction-final. New growth beyond the
+  account or raw allowance returns `503` with `Retry-After`, with the entire
+  write rolled back. Exact retained-raw retries still require a current valid
+  credential and compare the complete canonical payload in its durable device
+  or unresolved legacy credential namespace. Deleting the raw row ends its
+  replay recognition. See [Logical storage accounting](configuration.md#logical-storage-accounting).
   A new device's payload `tid` cannot select another device or account. Only
   the migrated shared-login adapter uses its account's legacy alias map.
   Environment credentials cannot restore a revoked or replaced login.
@@ -225,6 +231,13 @@ cross-account references. The live role contract and saved credentials must
 validate exactly; there is no privileged fallback for failed startup checks.
 See [Database roles](configuration.md#account-ownership-and-database-roles).
 
+Protected logical usage counters, funded grants, replay receipts, charge
+functions, and deferred capacity checks are part of that startup contract.
+Runtime roles cannot edit counters or grants directly. Optional provider
+output has independent size caps and capacity checks; excess output is
+refused without truncation or a cached false miss. Logical allowances do not
+cover PostgreSQL overhead or security records and do not replace disk monitoring.
+
 Private responses carry `Cache-Control: no-store`. HTMX history snapshots are
 disabled, and account-marker checks discard responses or reload old tabs after
 an account change. These are browser privacy defenses; server-side session and
@@ -280,6 +293,10 @@ last success, last failure's exception type, next scheduled run), and
 configuration **presence** booleans (for example, "is a geocoder key set"),
 never the values themselves. Neither surface ever contains a coordinate,
 an address, a secret, or a raw payload.
+
+Administrator storage diagnostics expose only instance budget, reserve,
+funded grant total, and counts of accounts approaching or at an allowance.
+Each account's Settings page shows its own usage and recovery options.
 
 Reachability of OSRM, the geocoder, ntfy, and SMTP is checked only on an
 explicit "check now" click on the Settings page (or by running the CLI

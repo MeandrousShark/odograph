@@ -182,6 +182,11 @@ def test_schema_version_is_queried_live_and_detector_version_stays_two():
 
 
 def test_authenticated_settings_context_uses_config_and_live_schema(monkeypatch):
+    async def storage_status(conn):
+        assert conn.principal.account_id == 41
+        return {"warning": False}
+
+    monkeypatch.setattr("app.page.storage_status", storage_status)
     async def empty_rows(*args, **kwargs):
         return []
 

@@ -33,10 +33,11 @@ from hashlib import sha256
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Request, Response
-from psycopg.errors import InsufficientPrivilege
+from psycopg.errors import InsufficientPrivilege, LockNotAvailable
 
 from app.account_context import AccountPool
 from app.capacity import await_completion
+from app.storage import is_storage_capacity_error
 from app.tracking import (
     TrackingNotFound, TrackingStream, TrackingUnavailable, admit_ingest,
     authenticate_ingest, resolve_ingest_stream,
@@ -215,6 +216,11 @@ def _bad_auth_response() -> Response:
     )
 
 
+def _storage_busy_response(retry_after: int = 60) -> Response:
+    # A phone must retain and retry a fix refused by capacity or lock pressure.
+    return Response(status_code=503, headers={"Retry-After": str(retry_after)})
+
+
 def preflight_authentication_request(request: Request) -> Response | None:
     """Reject blocked and oversized requests without taking a queue ticket."""
     limiter: FailedAuthLimiter = request.app.state.ingest_limiter
@@ -334,6 +340,7 @@ def make_router() -> APIRouter:
         reason = _validate_location(payload) if location else None
         label = str(payload.get("tid") or "default")
         admitted = False
+        should_poke = False
         try:
             async with pool.connection() as conn:
                 if location and reason is None:
@@ -364,39 +371,67 @@ def make_router() -> APIRouter:
                         "ingest: discarding message type %s", _discarded_type_for_log(payload)
                     )
                     return _ok()
-                await conn.execute(
-                    "INSERT INTO raw_messages (account_id, tracking_device_id, payload) "
-                    "VALUES (%s, %s, %s)",
-                    (credential.account.account_id,
-                     stream.tracking_device_id if stream is not None else None, serialized),
+                canonical = (await (await conn.execute(
+                    "SELECT %s::jsonb::text", (serialized,),
+                )).fetchone())[0]
+                namespace_kind = "device" if stream is not None else "credential"
+                namespace_key = (
+                    str(stream.tracking_device_id) if stream is not None else credential.public_id
                 )
-                if not location:
-                    return _ok()
-                if reason:
-                    log.info("ingest: dropping location payload: %s", reason)
-                    return _ok()
-                recorded_at = datetime.fromtimestamp(payload["tst"], tz=timezone.utc)
-                await conn.execute(
-                    "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, "
-                    "geom, accuracy_m, velocity_kmh, altitude_m, battery_pct, trigger) "
-                    "VALUES (%s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,"
-                    " %s, %s, %s, %s, %s) "
-                    "ON CONFLICT (tracking_device_id, recorded_at) DO NOTHING",
-                    (
-                        credential.account.account_id, stream.tracking_device_id, label,
-                        recorded_at, payload["lon"], payload["lat"], _num(payload.get("acc")),
-                        _num(payload.get("vel")), _num(payload.get("alt")),
-                        _int(payload.get("batt")), payload.get("t"),
-                    ),
+                digest = sha256(canonical.encode("utf-8")).digest()
+                cur = await conn.execute(
+                    "SELECT public.storage_find_replay(%s, %s, %s, %s, %s)",
+                    (credential.account.account_id, namespace_kind, namespace_key, digest, canonical),
                 )
+                if (await cur.fetchone())[0] is not None:
+                    # A lost response may leave detector work pending. Wake
+                    # it only after this admission transaction has closed.
+                    should_poke = True
+                else:
+                    cur = await conn.execute(
+                        "INSERT INTO raw_messages (account_id, tracking_device_id, payload) "
+                        "VALUES (%s, %s, %s) RETURNING id",
+                        (credential.account.account_id,
+                         stream.tracking_device_id if stream is not None else None, serialized),
+                    )
+                    raw_id = (await cur.fetchone())[0]
+                    await conn.execute(
+                        "SELECT public.storage_record_replay(%s, %s, %s, %s)",
+                        (credential.account.account_id, raw_id, namespace_kind, namespace_key),
+                    )
+                    if location and reason:
+                        log.info("ingest: dropping location payload: %s", reason)
+                    elif location:
+                        recorded_at = datetime.fromtimestamp(payload["tst"], tz=timezone.utc)
+                        await conn.execute(
+                            "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, "
+                            "geom, accuracy_m, velocity_kmh, altitude_m, battery_pct, trigger) "
+                            "VALUES (%s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,"
+                            " %s, %s, %s, %s, %s) "
+                            "ON CONFLICT (tracking_device_id, recorded_at) DO NOTHING",
+                            (
+                                credential.account.account_id, stream.tracking_device_id, label,
+                                recorded_at, payload["lon"], payload["lat"], _num(payload.get("acc")),
+                                _num(payload.get("vel")), _num(payload.get("alt")),
+                                _int(payload.get("batt")), payload.get("t"),
+                            ),
+                        )
+                        should_poke = True
         except (TrackingNotFound, InsufficientPrivilege):
             # Rotation, revocation and legacy-alias conversion may commit while
             # the body is in flight. Final admission must fail before storage.
             if admitted:
                 raise
             return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="ingest"'})
+        except LockNotAvailable:
+            return _storage_busy_response(1)
+        except Exception as exc:
+            if admitted and is_storage_capacity_error(exc):
+                return _storage_busy_response()
+            raise
 
-        request.app.state.detector_scheduler.poke()
+        if should_poke:
+            request.app.state.detector_scheduler.poke()
         return _ok()
 
     return router

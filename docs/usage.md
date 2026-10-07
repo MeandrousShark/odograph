@@ -352,6 +352,26 @@ Use the output that matches the job:
 
 An import temporarily pauses other work for that account. If an import is
 busy, wait briefly and submit it again. Imports are never retried automatically.
+Imports must fit the account's transaction-final allowance. Dry run validates
+that allowance without retaining data or charges; a failed import rolls back
+the entire import, including settings.
+
+Settings also shows your logical storage allowance, including capacity reserved
+for processing accepted location fixes. Warnings begin at 80% of the account,
+raw-message, or optional-enhancement allowance. At a ceiling, growth pauses;
+existing history, exports, sign-in, recovery and changes that do not increase
+usage remain available. Ask the operator to raise capacity, or export a copy
+and deliberately remove unneeded data. Odograph never silently deletes trips
+to make space. Raw-message retention can free allowance without deleting trips.
+
+Optional route/address work pauses independently when its allowance is full.
+Recorded routes, distances and coordinate fallbacks stay available, and saved
+enhancements are preserved. Eligible work resumes when capacity returns.
+An exact tracking-message retry is recognized while its original raw message
+remains stored, even at a ceiling. Once retention or cleanup deletes that raw
+message, the retry needs capacity as new raw data. Changed messages also need
+capacity. A full allowance returns retryable HTTP 503, preserving the existing
+queued-fix response contract for supported tracking clients.
 
 In controlled activated fixtures, scheduling deletion disables the account
 immediately. Its owner can download this bundle before the account is disabled

@@ -36,12 +36,14 @@ OWNED_TABLES = (
     "tracking_devices", "tracking_device_aliases", "ingest_credentials", "geocode_retry",
 )
 STORAGE_TABLES = ("account_usage", "device_storage_envelopes")
+S2_PROTECTED_TABLES = ("storage_grants", "storage_quota_baseline", "raw_replay_receipts")
+S2_TABLES = S2_PROTECTED_TABLES + ("storage_policy",)
 GEOCODE_TABLES = ("geocode_retry", "geocode_discovery")
 GEOCODE_PROTECTED_TABLES = ("geocode_discovery",)
-PROTECTED_TABLES = ("email_challenges",) + STORAGE_TABLES + GEOCODE_PROTECTED_TABLES
+PROTECTED_TABLES = ("email_challenges",) + STORAGE_TABLES + GEOCODE_PROTECTED_TABLES + S2_PROTECTED_TABLES
 CONTROL_TABLES = (
     "accounts", "oidc_identities", "instance_state", "invitations",
-    "oidc_attempts", "oidc_action_proofs", "account_security_audit",
+    "oidc_attempts", "oidc_action_proofs", "account_security_audit", "storage_policy",
 )
 REFERENCE_TABLES = ("schema_migrations", "reference_mileage_rates")
 TABLES = OWNED_TABLES + PROTECTED_TABLES + CONTROL_TABLES + REFERENCE_TABLES
@@ -175,10 +177,67 @@ FUNCTION_SPECS = tuple(
 ) + GEOCODE_FUNCTION_SPECS
 STORAGE_FUNCTIONS += tuple(spec.signature for spec in GEOCODE_FUNCTION_SPECS
                            if spec.signature.startswith("public.storage_charge_"))
+S2_FUNCTION_SPECS = (
+    FunctionSpec("public.storage_charge_raw_replay_receipts(public.raw_replay_receipts)",
+                 MIGRATE_ROLE, "042_storage_ceiling.sql", MIGRATE_ROLE, False, "sql", "i"),
+    FunctionSpec("public.storage_grant_account()", MIGRATE_ROLE,
+                 "042_storage_ceiling.sql", MIGRATE_ROLE),
+    FunctionSpec("public.storage_capture_quota_baseline()", MIGRATE_ROLE,
+                 "042_storage_ceiling.sql", MIGRATE_ROLE),
+    FunctionSpec("public.storage_check_ceiling()", MIGRATE_ROLE,
+                 "042_storage_ceiling.sql", MIGRATE_ROLE),
+    FunctionSpec("public.storage_find_replay(bigint,text,text,bytea,text)", RUNTIME_ROLE,
+                 "042_storage_ceiling.sql", MIGRATE_ROLE),
+    FunctionSpec("public.storage_record_replay(bigint,bigint,text,text)", RUNTIME_ROLE,
+                 "042_storage_ceiling.sql", MIGRATE_ROLE),
+    FunctionSpec("public.storage_configure_limits(bigint,bigint,bigint,bigint,bigint)", MIGRATE_ROLE,
+                 "042_storage_ceiling.sql", MIGRATE_ROLE),
+    FunctionSpec("public.storage_instance_status()", CONTROL_ROLE,
+                 "042_storage_ceiling.sql", MIGRATE_ROLE, True, "sql", "s"),
+    FunctionSpec("public.storage_geocode_room(bigint,bigint)", MIGRATE_ROLE,
+                 "042_storage_ceiling.sql", MIGRATE_ROLE),
+    FunctionSpec("public.geocode_refresh_capacity_pause(bigint)", RUNTIME_ROLE,
+                 "042_storage_ceiling.sql", MIGRATE_ROLE),
+    FunctionSpec("public.geocode_record_capacity_pause(bigint)", RUNTIME_ROLE,
+                 "042_storage_ceiling.sql", MIGRATE_ROLE),
+)
+S2_FUNCTIONS = tuple(spec.signature for spec in S2_FUNCTION_SPECS)
+FUNCTION_SPECS = tuple(
+    replace(spec, source="042_storage_ceiling.sql")
+    if spec.signature in ("public.storage_expected_usage()",
+                          "public.reconcile_storage_usage()",
+                          "public.geocode_endpoint_intents()",
+                          "public.geocode_record_coordinate_turn(bigint)",
+                          "public.geocode_discover_page(bigint)") else spec
+    for spec in FUNCTION_SPECS
+) + S2_FUNCTION_SPECS
+STORAGE_FUNCTIONS += ("public.storage_charge_raw_replay_receipts(public.raw_replay_receipts)",)
 FUNCTIONS = {spec.signature: spec.caller for spec in FUNCTION_SPECS}
 FUNCTION_OWNERS = {spec.signature: spec.owner for spec in FUNCTION_SPECS}
 RESTORE_AUTH_VERSION_STEP = 1_000_000_000
 PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER")
+
+
+def _contract_function_specs(schema_version: int) -> tuple[FunctionSpec, ...]:
+    specs = []
+    for spec in FUNCTION_SPECS:
+        if schema_version < 42 and spec.signature in S2_FUNCTIONS:
+            continue
+        if schema_version < 41 and spec.signature in GEOCODE_FUNCTIONS:
+            continue
+        if schema_version < 42 and spec.signature == "public.storage_expected_usage()":
+            source = "041_geocode_progress.sql" if schema_version >= 41 else "040_storage_accounting.sql"
+            spec = replace(spec, source=source)
+        if schema_version < 42 and spec.signature == "public.reconcile_storage_usage()":
+            spec = replace(spec, source="040_storage_accounting.sql")
+        if schema_version == 41 and spec.signature in (
+            "public.geocode_endpoint_intents()",
+            "public.geocode_record_coordinate_turn(bigint)",
+            "public.geocode_discover_page(bigint)",
+        ):
+            spec = replace(spec, source="041_geocode_progress.sql")
+        specs.append(spec)
+    return tuple(specs)
 
 
 def _require(ok: bool) -> None:
@@ -231,7 +290,7 @@ async def _check_role_database_ownership(conn) -> None:
 
 def _table_rights(role: str, table: str) -> set[str]:
     if role == RUNTIME_ROLE:
-        if table in STORAGE_TABLES + GEOCODE_PROTECTED_TABLES:
+        if table in STORAGE_TABLES + GEOCODE_PROTECTED_TABLES + ("storage_grants",):
             return {"SELECT"}
         if table in OWNED_TABLES:
             return {"INSERT", "UPDATE", "DELETE"} | ({"SELECT"} if table != "ingest_credentials" else set())
@@ -266,11 +325,12 @@ def _table_rights(role: str, table: str) -> set[str]:
     return set()
 
 
-def _policy_contract() -> dict[tuple[str, str], tuple[str, str, str | None, str | None]]:
+def _policy_contract(schema_version: int = 42) -> dict[tuple[str, str], tuple[str, str, str | None, str | None]]:
     expression = "account_id = NULLIF(current_setting('app.account_id'::text,true),''::text)::bigint"
     policies = {(table, "account_isolation"): (RUNTIME_ROLE, "ALL", expression, expression)
-                for table in OWNED_TABLES + PROTECTED_TABLES}
-    for table in STORAGE_TABLES + GEOCODE_PROTECTED_TABLES:
+                for table in OWNED_TABLES + PROTECTED_TABLES
+                if table not in ("storage_quota_baseline", "raw_replay_receipts")}
+    for table in STORAGE_TABLES + GEOCODE_PROTECTED_TABLES + ("storage_grants",):
         if table in PROTECTED_TABLES:
             policies[table, "account_isolation"] = (RUNTIME_ROLE, "SELECT", expression, None)
     if "public.storage_usage_consistent()" in FUNCTIONS:
@@ -281,7 +341,16 @@ def _policy_contract() -> dict[tuple[str, str], tuple[str, str, str | None, str 
     for table in OWNED_TABLES + PROTECTED_TABLES:
         if _table_rights(BOOTSTRAP_ROLE, table):
             policies[table, "bootstrap_defaults"] = (BOOTSTRAP_ROLE, "ALL", "true", "true")
+    if schema_version < 42:
+        policies = {key: value for key, value in policies.items() if key[0] not in S2_TABLES}
+    if schema_version < 41:
+        policies = {key: value for key, value in policies.items() if key[0] not in GEOCODE_TABLES}
     return policies
+
+
+async def _installed_schema_version(conn) -> int:
+    cur = await conn.execute("SELECT COALESCE(MAX(version),0) FROM public.schema_migrations")
+    return (await cur.fetchone())[0]
 
 
 async def _sequences(conn):
@@ -307,6 +376,13 @@ async def _load_state(conn) -> ManagedRoleState:
 
 async def _provision(conn) -> None:
     """Initial provisioning or explicit restore only, never a startup repair."""
+    schema_version = await _installed_schema_version(conn)
+    contract_tables = tuple(table for table in TABLES
+                            if (schema_version >= 42 or table not in S2_TABLES)
+                            and (schema_version >= 41 or table not in GEOCODE_TABLES))
+    contract_functions = {signature: caller for signature, caller in FUNCTIONS.items()
+                          if (schema_version >= 42 or signature not in S2_FUNCTIONS)
+                          and (schema_version >= 41 or signature not in GEOCODE_FUNCTIONS)}
     await conn.execute("REVOKE CREATE ON SCHEMA public FROM PUBLIC")
     await conn.execute("GRANT USAGE,CREATE ON SCHEMA public TO odograph_migrate")
     await conn.execute(sql.SQL("REVOKE CREATE ON DATABASE {} FROM PUBLIC").format(
@@ -321,7 +397,7 @@ async def _provision(conn) -> None:
         await conn.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(ident))
     await conn.execute("ALTER SCHEMA odograph_service OWNER TO odograph_migrate")
     await conn.execute("REVOKE ALL ON SCHEMA odograph_service FROM PUBLIC")
-    for table in TABLES:
+    for table in contract_tables:
         ident = sql.Identifier("public", table)
         await conn.execute(sql.SQL("ALTER TABLE {} OWNER TO odograph_migrate").format(ident))
         await conn.execute(sql.SQL("REVOKE ALL ON {} FROM PUBLIC").format(ident))
@@ -332,10 +408,14 @@ async def _provision(conn) -> None:
                 await conn.execute(sql.SQL("GRANT {} ON {} TO {}").format(
                     sql.SQL(",".join(sorted(rights))), ident, sql.Identifier(role)))
     for table in OWNED_TABLES + PROTECTED_TABLES:
+        if table not in contract_tables:
+            continue
         ident = sql.Identifier("public", table)
         await conn.execute(sql.SQL("ALTER TABLE {} ENABLE ROW LEVEL SECURITY").format(ident))
         await conn.execute(sql.SQL("ALTER TABLE {} FORCE ROW LEVEL SECURITY").format(ident))
     for (role, table), columns in COLUMN_SELECT.items():
+        if table not in contract_tables:
+            continue
         await conn.execute(sql.SQL("GRANT SELECT ({}) ON {} TO {}").format(
             sql.SQL(",").join(map(sql.Identifier, columns)), sql.Identifier("public", table), sql.Identifier(role)))
     await conn.execute(sql.SQL("GRANT UPDATE ({}) ON public.accounts TO odograph_control").format(
@@ -346,7 +426,9 @@ async def _provision(conn) -> None:
         for role in (CONTROL_ROLE, RUNTIME_ROLE, BOOTSTRAP_ROLE):
             if "INSERT" in _table_rights(role, table):
                 await conn.execute(sql.SQL("GRANT USAGE ON SEQUENCE {} TO {}").format(ident, sql.Identifier(role)))
-    for (table, name), (role, command, using, check) in _policy_contract().items():
+    for (table, name), (role, command, using, check) in _policy_contract(schema_version).items():
+        if table not in contract_tables:
+            continue
         ident = sql.Identifier("public", table)
         await conn.execute(sql.SQL("DROP POLICY IF EXISTS {} ON {}").format(sql.Identifier(name), ident))
         statement = sql.SQL("CREATE POLICY {} ON {} FOR {} TO {}").format(
@@ -358,7 +440,7 @@ async def _provision(conn) -> None:
         await conn.execute(statement)
     for filename in FUNCTION_FILES:
         await conn.execute((SQL_DIR / filename).read_text())
-    for function, role in FUNCTIONS.items():
+    for function, role in contract_functions.items():
         owner = FUNCTION_OWNERS[function]
         await conn.execute(sql.SQL("ALTER FUNCTION {} OWNER TO {}").format(
             sql.SQL(function), sql.Identifier(owner)))
@@ -403,6 +485,13 @@ async def _revoke_restored_security_state(conn) -> None:
 
 async def validate_application_contract(conn, state: ManagedRoleState) -> None:
     """Validate effective privileges and policies without fixing drift."""
+    schema_version = await _installed_schema_version(conn)
+    contract_tables = tuple(table for table in TABLES
+                            if (schema_version >= 42 or table not in S2_TABLES)
+                            and (schema_version >= 41 or table not in GEOCODE_TABLES))
+    contract_functions = {signature: caller for signature, caller in FUNCTIONS.items()
+                          if (schema_version >= 42 or signature not in S2_FUNCTIONS)
+                          and (schema_version >= 41 or signature not in GEOCODE_FUNCTIONS)}
     cur = await conn.execute(
         "SELECT c.relname,pg_get_userbyid(c.relowner),c.relrowsecurity,c.relforcerowsecurity "
         "FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
@@ -410,13 +499,13 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
         "AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid=c.oid AND d.deptype='e')")
     rows = await cur.fetchall()
     found_tables = {row[0] for row in rows}
-    _require_contract(found_tables == set(TABLES),
-        f"relation set: unexpected {sorted(found_tables - set(TABLES))} missing {sorted(set(TABLES) - found_tables)}")
+    _require_contract(found_tables == set(contract_tables),
+        f"relation set: unexpected {sorted(found_tables - set(contract_tables))} missing {sorted(set(contract_tables) - found_tables)}")
     bad_relations = sorted(row[0] for row in rows
                            if row[1:] != (MIGRATE_ROLE, row[0] in OWNED_TABLES + PROTECTED_TABLES,
                                           row[0] in OWNED_TABLES + PROTECTED_TABLES))
     _require_contract(not bad_relations, f"relation ownership or RLS flags: {bad_relations}")
-    await _check_contract_functions_exist(conn, FUNCTIONS)
+    await _check_contract_functions_exist(conn, contract_functions)
     cur = await conn.execute(
         "SELECT p.oid::regprocedure::text FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace "
         "WHERE p.prosecdef AND p.oid <> ALL(%s::regprocedure[]) "
@@ -425,7 +514,7 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
         "AND EXISTS (SELECT 1 FROM unnest(%s::text[]) role_name "
         "WHERE has_schema_privilege(role_name,n.oid,'USAGE') "
         "AND has_function_privilege(role_name,p.oid,'EXECUTE'))",
-        (list(FUNCTIONS), [CONTROL_ROLE, RUNTIME_ROLE]),
+        (list(contract_functions), [CONTROL_ROLE, RUNTIME_ROLE]),
     )
     extra_functions = [row[0] for row in await cur.fetchall()]
     _require_contract(not extra_functions, f"extra security-definer function: {extra_functions}")
@@ -475,12 +564,13 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
         " SELECT DISTINCT o.name FROM objects o CROSS JOIN LATERAL aclexplode(o.acl) x"
         " WHERE x.grantee=0 OR x.grantee NOT IN (SELECT oid FROM pg_roles WHERE rolname=ANY(%s))"
         " OR (x.is_grantable AND x.grantee<>o.owner)",
-        (list(TABLES), list(TABLES), list(TABLES), list(FUNCTIONS), list(ALL_ROLES)))
+        (list(contract_tables), list(contract_tables), list(contract_tables),
+         list(contract_functions), list(ALL_ROLES)))
     extra_grants = [row[0] for row in await cur.fetchall()]
     _require_contract(not extra_grants, f"table/column/sequence/function privilege: unexpected grant on {extra_grants}")
     cur = await conn.execute("SELECT tablename,policyname,roles,cmd,qual,with_check,permissive FROM pg_policies WHERE schemaname='public'")
     rows = await cur.fetchall()
-    expected = _policy_contract()
+    expected = _policy_contract(schema_version)
     found_policies = {(row[0], row[1]) for row in rows}
     _require_contract(found_policies == set(expected),
         f"policy set: unexpected {sorted(found_policies - set(expected))} missing {sorted(set(expected) - found_policies)}")
@@ -495,7 +585,7 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
     for role in (CONTROL_ROLE, RUNTIME_ROLE, BOOTSTRAP_ROLE):
         cur = await conn.execute("SELECT has_database_privilege(%s,current_database(),'CREATE'),has_schema_privilege(%s,'public','CREATE')", (role, role))
         _require_contract(await cur.fetchone() == (False, False), f"database or schema privilege: {role}")
-        for table in TABLES:
+        for table in contract_tables:
             rights = _table_rights(role, table)
             cur = await conn.execute(
                 "SELECT privilege,has_table_privilege(%s,%s,privilege) FROM unnest(%s::text[]) privilege",
@@ -515,7 +605,7 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
                 if allowed != expected_allowed:
                     bad_columns.append((column, privilege))
             _require_contract(not bad_columns, f"column privilege: {role} public.{table} {bad_columns}")
-        for function, caller in FUNCTIONS.items():
+        for function, caller in contract_functions.items():
             cur = await conn.execute("SELECT has_function_privilege(%s,%s,'EXECUTE')", (role, function))
             allowed = (await cur.fetchone())[0]
             _require_contract(allowed == (role in (caller, FUNCTION_OWNERS[function])),
@@ -534,15 +624,17 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
             bad_privileges = [privilege for privilege, allowed in await cur.fetchall()
                               if allowed != (privilege == "SELECT" and table == "recovery_metadata" and role in (RUNTIME_ROLE, CONTROL_ROLE))]
             _require_contract(not bad_privileges, f"table privilege: {role} {STATE_SCHEMA}.{table} {bad_privileges}")
-    if "public.storage_usage_consistent()" in FUNCTIONS:
-        await _validate_storage_triggers(conn)
-    if "public.geocode_discover_page(bigint)" in FUNCTIONS:
-        await _validate_geocode_schema(conn)
-        await _validate_geocode_indexes(conn)
+    if "public.storage_usage_consistent()" in contract_functions:
+        await _validate_storage_triggers(conn, schema_version)
+    if "public.geocode_discover_page(bigint)" in contract_functions:
+        await _validate_geocode_schema(conn, schema_version)
+        await _validate_geocode_indexes(conn, schema_version)
+    if schema_version >= 42 and "public.storage_find_replay(bigint,text,text,bytea,text)" in contract_functions:
+        await _validate_s2_schema(conn)
     sources = {}
-    for spec in FUNCTION_SPECS:
+    for spec in _contract_function_specs(schema_version):
         function = spec.signature
-        if function not in FUNCTIONS:
+        if function not in contract_functions:
             continue
         cur = await conn.execute(
             "SELECT pg_get_userbyid(p.proowner),p.prosecdef,p.proconfig,p.prosrc,l.lanname,p.provolatile "
@@ -559,7 +651,117 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
             f"function definition: {function}")
 
 
-async def _validate_geocode_schema(conn) -> None:
+async def _validate_s2_schema(conn) -> None:
+    columns = {
+        "storage_policy": ("id", "account_default_bytes", "raw_default_bytes",
+                           "enhancement_default_bytes", "instance_budget_bytes",
+                           "instance_reserve_bytes"),
+        "storage_grants": ("account_id", "account_limit_bytes", "raw_limit_bytes",
+                           "enhancement_limit_bytes"),
+        "storage_quota_baseline": ("account_id", "transaction_id", "actual_bytes",
+                                   "reserved_bytes", "raw_bytes", "enhancement_bytes"),
+        "raw_replay_receipts": ("account_id", "raw_message_id", "namespace_kind",
+                                "namespace_key", "payload_sha256"),
+    }
+    cur = await conn.execute(
+        "SELECT c.relname,a.attname,format_type(a.atttypid,a.atttypmod),a.attnotnull,"
+        "pg_get_expr(d.adbin,d.adrelid),a.attidentity,a.attgenerated "
+        "FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid "
+        "LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum "
+        "WHERE c.relnamespace='public'::regnamespace AND a.attnum>0 AND NOT a.attisdropped "
+        "AND (c.relname=ANY(%s) OR "
+        "(c.relname='trips' AND a.attname='snap_capacity_needed_bytes')) "
+        "ORDER BY c.relname,a.attnum", (list(columns),))
+    found = {}
+    for table, name, data_type, required, default, identity, generated in await cur.fetchall():
+        found.setdefault(table, []).append((name, data_type, required, default, identity, generated))
+    _require_contract({name: tuple(row[0] for row in found.get(name, ()))
+                       for name in columns} == columns, "S2 column set")
+    _require_contract(found.get("trips") == [
+        ("snap_capacity_needed_bytes", "bigint", True, "0", "", "")],
+        "S2 snap capacity column")
+    expected_types = {
+        "storage_policy": ("smallint",) + ("bigint",) * 5,
+        "storage_grants": ("bigint",) * 4,
+        "storage_quota_baseline": ("bigint", "xid8") + ("bigint",) * 4,
+        "raw_replay_receipts": ("bigint", "bigint", "text", "text", "bytea"),
+    }
+    for table, expected in expected_types.items():
+        _require_contract(tuple((row[1], row[2], row[3], row[4], row[5])
+                                for row in found[table]) ==
+                          tuple((data_type, True, None, "", "") for data_type in expected),
+                          f"S2 column definition: {table}")
+    constraints = {
+        "raw_messages_account_id_id_key": "UNIQUE (account_id, id)",
+        "raw_replay_receipts_account_id_raw_message_id_fkey":
+            "FOREIGN KEY (account_id, raw_message_id) REFERENCES raw_messages(account_id, id) ON DELETE CASCADE",
+        "raw_replay_receipts_namespace_key_check": "CHECK ((namespace_key <> ''::text))",
+        "raw_replay_receipts_namespace_kind_check":
+            "CHECK ((namespace_kind = ANY (ARRAY['device'::text, 'credential'::text])))",
+        "raw_replay_receipts_payload_sha256_check": "CHECK ((octet_length(payload_sha256) = 32))",
+        "raw_replay_receipts_pkey": "PRIMARY KEY (account_id, raw_message_id)",
+        "storage_grants_account_id_fkey": "FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE",
+        "storage_grants_account_limit_bytes_check": "CHECK ((account_limit_bytes > 0))",
+        "storage_grants_check": "CHECK ((raw_limit_bytes <= account_limit_bytes))",
+        "storage_grants_check1": "CHECK ((enhancement_limit_bytes <= account_limit_bytes))",
+        "storage_grants_enhancement_limit_bytes_check": "CHECK ((enhancement_limit_bytes > 0))",
+        "storage_grants_pkey": "PRIMARY KEY (account_id)",
+        "storage_grants_raw_limit_bytes_check": "CHECK ((raw_limit_bytes > 0))",
+        "storage_policy_account_default_bytes_check": "CHECK ((account_default_bytes > 0))",
+        "storage_policy_check": "CHECK ((raw_default_bytes <= account_default_bytes))",
+        "storage_policy_check1": "CHECK ((enhancement_default_bytes <= account_default_bytes))",
+        "storage_policy_check2": "CHECK ((instance_reserve_bytes < instance_budget_bytes))",
+        "storage_policy_enhancement_default_bytes_check": "CHECK ((enhancement_default_bytes > 0))",
+        "storage_policy_id_check": "CHECK ((id = 1))",
+        "storage_policy_instance_budget_bytes_check": "CHECK ((instance_budget_bytes > 0))",
+        "storage_policy_instance_reserve_bytes_check": "CHECK ((instance_reserve_bytes > 0))",
+        "storage_policy_pkey": "PRIMARY KEY (id)",
+        "storage_policy_raw_default_bytes_check": "CHECK ((raw_default_bytes > 0))",
+        "storage_quota_baseline_account_id_fkey": "FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE",
+        "storage_quota_baseline_pkey": "PRIMARY KEY (account_id)",
+        "trips_snap_capacity_needed_bytes_check": "CHECK ((snap_capacity_needed_bytes >= 0))",
+    }
+    cur = await conn.execute(
+        "SELECT co.conname,pg_get_constraintdef(co.oid),co.convalidated,co.condeferrable,co.condeferred "
+        "FROM pg_constraint co JOIN pg_class c ON c.oid=co.conrelid "
+        "WHERE c.relnamespace='public'::regnamespace AND (c.relname=ANY(%s) "
+        "OR co.conname IN ('raw_messages_account_id_id_key','trips_snap_capacity_needed_bytes_check'))",
+        (list(columns),))
+    found_constraints = {name: (definition, valid, deferrable, deferred)
+                         for name, definition, valid, deferrable, deferred in await cur.fetchall()}
+    _require_contract(found_constraints == {name: (definition, True, False, False)
+                                            for name, definition in constraints.items()},
+                      "S2 constraint definition")
+    index_definitions = {
+        "raw_messages_account_id_id_key":
+            "CREATE UNIQUE INDEX raw_messages_account_id_id_key ON public.raw_messages USING btree (account_id, id)",
+        "raw_replay_receipts_lookup_idx":
+            "CREATE INDEX raw_replay_receipts_lookup_idx ON public.raw_replay_receipts USING btree (account_id, namespace_kind, namespace_key, payload_sha256)",
+        "raw_replay_receipts_pkey":
+            "CREATE UNIQUE INDEX raw_replay_receipts_pkey ON public.raw_replay_receipts USING btree (account_id, raw_message_id)",
+        "storage_grants_pkey": "CREATE UNIQUE INDEX storage_grants_pkey ON public.storage_grants USING btree (account_id)",
+        "storage_policy_pkey": "CREATE UNIQUE INDEX storage_policy_pkey ON public.storage_policy USING btree (id)",
+        "storage_quota_baseline_pkey":
+            "CREATE UNIQUE INDEX storage_quota_baseline_pkey ON public.storage_quota_baseline USING btree (account_id)",
+        "trips_snap_capacity_pending_idx":
+            "CREATE INDEX trips_snap_capacity_pending_idx ON public.trips USING btree (account_id) "
+            "WHERE (snap_capacity_needed_bytes > 0)",
+    }
+    cur = await conn.execute(
+        "SELECT c.relname,pg_get_userbyid(c.relowner),i.indisvalid,i.indisready,i.indislive,"
+        "pg_get_indexdef(c.oid) FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid "
+        "JOIN pg_class t ON t.oid=i.indrelid WHERE t.relname=ANY(%s) "
+        "OR c.relname IN ('raw_messages_account_id_id_key','trips_snap_capacity_pending_idx')",
+        (list(columns),))
+    rows = await cur.fetchall()
+    _require_contract({row[0] for row in rows} == set(index_definitions), "S2 index set")
+    for name, owner, valid, ready, live, definition in rows:
+        _require_contract((owner, valid, ready, live, definition) ==
+                          (MIGRATE_ROLE, True, True, True, index_definitions[name]),
+                          f"S2 index definition: {name}")
+
+
+async def _validate_geocode_schema(conn, schema_version: int = 42) -> None:
     columns = {
         "geocode_retry": (
             ("account_id", "bigint", True, None),
@@ -569,6 +771,8 @@ async def _validate_geocode_schema(conn) -> None:
             ("next_attempt_at", "timestamp with time zone", True, "now()"),
             ("failure_count", "integer", True, "0"),
             ("failure_reason", "geocode_failure_reason", False, None),
+            *((("capacity_paused", "boolean", True, "false"),
+               ("capacity_needed_bytes", "bigint", True, "0")) if schema_version >= 42 else ()),
         ),
         "geocode_discovery": (
             ("account_id", "bigint", True, None),
@@ -577,6 +781,7 @@ async def _validate_geocode_schema(conn) -> None:
             ("round_generation", "bigint", True, "1"),
             ("scanned_generation", "bigint", True, "0"),
             ("last_unit", "geocode_work_unit", True, "'coordinate'::geocode_work_unit"),
+            *(((("capacity_paused", "boolean", True, "false"),) if schema_version >= 42 else ())),
         ),
         "trips": (("geocode_generation", "bigint", True, "1"),),
         "tracking_devices": (("geocode_generation", "bigint", True, "1"),),
@@ -608,6 +813,9 @@ async def _validate_geocode_schema(conn) -> None:
         "trips_geocode_generation_check": ("trips", "CHECK ((geocode_generation > 0))"),
         "tracking_devices_geocode_generation_check": ("tracking_devices", "CHECK ((geocode_generation > 0))"),
     }
+    if schema_version >= 42:
+        constraints["geocode_retry_capacity_needed_bytes_check"] = (
+            "geocode_retry", "CHECK ((capacity_needed_bytes >= 0))")
     for axis, limit in (("lat", 90), ("lon", 180)):
         constraints[f"geocode_retry_rounded_{axis}_check"] = (
             "geocode_retry", f"CHECK (((rounded_{axis} >= ('-{limit}'::integer)::numeric) "
@@ -633,7 +841,7 @@ async def _validate_geocode_schema(conn) -> None:
     ] + [("geocode_work_unit", unit) for unit in ("discovery", "coordinate")], "geocode enum definition")
 
 
-async def _validate_geocode_indexes(conn) -> None:
+async def _validate_geocode_indexes(conn, schema_version: int = 42) -> None:
     definitions = {
         "geocode_retry_pkey": "CREATE UNIQUE INDEX geocode_retry_pkey ON public.geocode_retry "
             "USING btree (account_id, rounded_lat, rounded_lon)",
@@ -644,6 +852,10 @@ async def _validate_geocode_indexes(conn) -> None:
         "trips_geocode_discovery_idx": "CREATE INDEX trips_geocode_discovery_idx ON public.trips "
             "USING btree (account_id, id)",
     }
+    if schema_version >= 42:
+        definitions["geocode_retry_capacity_paused_idx"] = (
+            "CREATE INDEX geocode_retry_capacity_paused_idx ON public.geocode_retry "
+            "USING btree (account_id) WHERE capacity_paused")
     for endpoint in ("start", "end"):
         name = "trips_geocode_" + endpoint + "_idx"
         definitions[name] = (
@@ -670,9 +882,15 @@ async def _validate_geocode_indexes(conn) -> None:
                           f"geocode index definition: {name}")
 
 
-async def _validate_storage_triggers(conn) -> None:
+async def _validate_storage_triggers(conn, schema_version: int = 42) -> None:
     expected = {}
-    for table in OWNED_TABLES + tuple(table for table in GEOCODE_PROTECTED_TABLES if table in PROTECTED_TABLES):
+    charged_tables = tuple(table for table in OWNED_TABLES
+                           if schema_version >= 41 or table not in GEOCODE_TABLES)
+    if schema_version >= 41:
+        charged_tables += GEOCODE_PROTECTED_TABLES
+    if schema_version >= 42:
+        charged_tables += ("raw_replay_receipts",)
+    for table in charged_tables:
         for event, kind, old_table, new_table in (
             ("insert", 4, None, "storage_new_rows"),
             ("update", 16, "storage_old_rows", "storage_new_rows"),
@@ -693,7 +911,16 @@ async def _validate_storage_triggers(conn) -> None:
         ("device_storage_envelopes", "storage_envelope_final"):
             ("storage_check_envelope", 29, (), True, True, None, None),
     })
-    if "public.geocode_discover_page(bigint)" in FUNCTIONS:
+    if schema_version >= 42:
+        expected.update({
+            ("accounts", "a_storage_grant_account"):
+                ("storage_grant_account", 5, (), False, False, None, None),
+            ("account_usage", "storage_capture_quota_baseline"):
+                ("storage_capture_quota_baseline", 23, (), False, False, None, None),
+            ("account_usage", "storage_ceiling_final"):
+                ("storage_check_ceiling", 21, (), True, True, None, None),
+        })
+    if schema_version >= 41 and "public.geocode_discover_page(bigint)" in FUNCTIONS:
         expected["trips", "geocode_trip_generation"] = (
             "geocode_trip_generation", 23, (), False, False, None, None)
         expected["tracking_devices", "geocode_device_generation"] = (
@@ -719,7 +946,9 @@ async def _validate_storage_triggers(conn) -> None:
         "FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid "
         "JOIN pg_proc p ON p.oid=t.tgfoid WHERE NOT t.tgisinternal "
         "AND c.relnamespace='public'::regnamespace AND c.relname=ANY(%s)",
-        (list(TABLES),))
+        (list(table for table in TABLES
+              if (schema_version >= 42 or table not in S2_TABLES)
+              and (schema_version >= 41 or table not in GEOCODE_TABLES)),))
     rows = await cur.fetchall()
     found = {(row[0], row[1]) for row in rows}
     _require_contract(found == set(expected),
@@ -748,12 +977,14 @@ def _function_body(source: str, signature: str) -> str:
     raise _ContractMismatch("application database security contract mismatch: function source " + signature)
 
 
-async def prepare_application_roles(database_url: str, *, restoring: bool = False) -> ManagedRoleState:
+async def prepare_application_roles(database_url: str, *, restoring: bool = False,
+                                    storage_config=None) -> ManagedRoleState:
     try:
         async with await _SafeConnection.connect(database_url) as conn:
             await conn.execute("SELECT pg_advisory_xact_lock(%s)", (ROLE_SETUP_ADVISORY_LOCK_KEY,))
             cur = await conn.execute("SELECT security_contract_version FROM public.instance_state WHERE id=1")
             _require_contract(await cur.fetchone() == (CONTRACT_VERSION,), "security contract version")
+            schema_version = await _installed_schema_version(conn)
             cur = await conn.execute("SELECT to_regclass('odograph_service.managed_role_state')")
             new = (await cur.fetchone())[0] is None
             if new or restoring:
@@ -781,7 +1012,9 @@ async def prepare_application_roles(database_url: str, *, restoring: bool = Fals
                 if restoring:
                     await _check_contract_functions_exist(
                         conn, (spec.signature for spec in FUNCTION_SPECS
-                               if spec.signature in FUNCTIONS and spec.source not in FUNCTION_FILES))
+                               if spec.signature in FUNCTIONS and spec.source not in FUNCTION_FILES
+                               and (schema_version >= 42 or spec.signature not in S2_FUNCTIONS)
+                               and (schema_version >= 41 or spec.signature not in GEOCODE_FUNCTIONS)))
                 for role, password in ((CONTROL_ROLE, state.control_password), (RUNTIME_ROLE, state.runtime_password)):
                     verifier = conn.pgconn.encrypt_password(password.encode(), role.encode(), b"scram-sha-256").decode()
                     await conn.execute(sql.SQL("ALTER ROLE {} LOGIN PASSWORD {}").format(sql.Identifier(role), sql.Literal(verifier)))
@@ -794,6 +1027,24 @@ async def prepare_application_roles(database_url: str, *, restoring: bool = Fals
                     await conn.execute("SELECT public.reconcile_storage_usage()")
                 cur = await conn.execute("SELECT public.storage_usage_consistent()")
                 _require_contract(await cur.fetchone() == (True,), "storage accounting data")
+            if schema_version >= 42:
+                cur = await conn.execute(
+                    "SELECT (SELECT COUNT(*) FROM public.storage_policy)=1 "
+                    "AND NOT EXISTS(SELECT 1 FROM public.accounts a LEFT JOIN public.storage_grants g "
+                    "ON g.account_id=a.id WHERE g.account_id IS NULL) "
+                    "AND (SELECT COALESCE(SUM(g.account_limit_bytes),0) FROM public.storage_grants g) "
+                    "<= (SELECT p.instance_budget_bytes-p.instance_reserve_bytes "
+                    "FROM public.storage_policy p WHERE p.id=1)")
+                _require_contract(await cur.fetchone() == (True,), "storage grant data")
+            if storage_config is not None and schema_version >= 42:
+                await conn.execute(
+                    "SELECT public.storage_configure_limits(%s,%s,%s,%s,%s)",
+                    (storage_config.storage_account_limit_bytes,
+                     storage_config.storage_raw_limit_bytes,
+                     storage_config.storage_enhancement_limit_bytes,
+                     storage_config.storage_instance_budget_bytes,
+                     storage_config.storage_instance_reserve_bytes),
+                )
             return state
     except _RolesUsedElsewhere:
         raise
@@ -804,8 +1055,8 @@ async def prepare_application_roles(database_url: str, *, restoring: bool = Fals
 
 
 @asynccontextmanager
-async def application_role_pools(database_url: str):
-    state = await prepare_application_roles(database_url)
+async def application_role_pools(database_url: str, *, storage_config=None):
+    state = await prepare_application_roles(database_url, storage_config=storage_config)
     pools = []
     try:
         for role in (CONTROL_ROLE, RUNTIME_ROLE):

@@ -18,7 +18,8 @@ from app.auth import require_csrf, require_user
 from app.formatting import format_miles
 from app.page import render_page
 from app.rates import METERS_PER_MILE
-from app.snap import route_distance_m, route_line
+from app.snap import ProviderOutputTooLarge, route_distance_m, route_line
+from app.storage import storage_status
 from app.validation import parse_finite_number
 from app.vehicles import list_vehicles
 
@@ -437,6 +438,13 @@ def register(router: APIRouter) -> None:
                 # slow/hung outbound route request must never hold a pooled
                 # database connection while it waits.
                 async with request.state.account_pool.connection() as conn:
+                    usage = await storage_status(conn)
+                    if usage["account_blocked"]:
+                        raise HTTPException(
+                            status_code=503,
+                            detail="Storage allowance reached. Ask the operator to raise it, "
+                                   "or remove unneeded data before adding a route.",
+                        )
                     endpoints = await _resolve_manual_route_endpoints(
                         conn, route_mode, start_place, end_place,
                         start_lat, start_lon, end_lat, end_lon,
@@ -453,6 +461,12 @@ def register(router: APIRouter) -> None:
                             http_client, cfg.osrm_url,
                             endpoints.from_lat, endpoints.from_lon,
                             endpoints.to_lat, endpoints.to_lon,
+                        )
+                    except ProviderOutputTooLarge:
+                        raise HTTPException(
+                            status_code=503,
+                            detail="The routing provider returned a route larger than the supported "
+                                   "limit. The trip was not saved. Retry later or enter a distance without a route.",
                         )
                     except (httpx.HTTPError, ValueError) as e:
                         # Not str(e): see manual_route_preview above for why.

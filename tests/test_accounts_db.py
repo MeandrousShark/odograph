@@ -139,6 +139,8 @@ async def _migration_preserves_local_admin_scenario():
                     "CREATE TABLE schema_migrations (version int PRIMARY KEY, "
                     "applied_at timestamptz NOT NULL DEFAULT now())"
                 )
+                await conn.execute("INSERT INTO schema_migrations(version) SELECT unnest(%s::int[])",
+                                   ([int(path.name.split("_", 1)[0]) for path in paths],))
             async with pool.connection() as conn:
                 for filename in ("account_bootstrap.sql", "account_admission.sql", "tracking_admission.sql"):
                     await conn.execute((MIGRATIONS_DIR.parent / "scripts" / "sql" / filename).read_text())
@@ -158,9 +160,8 @@ async def _migration_preserves_local_admin_scenario():
                 assert (await cur.fetchone())[0] is None
         finally:
             # The loops above apply every migration by executing the files
-            # directly, which bypasses the runner: schema_migrations is
-            # never populated. Correctness must not depend on collection
-            # order, so restore canonical, fully-migrated state before any
+            # directly, which bypasses the runner. Correctness must not
+            # depend on collection order, so restore canonical state before any
             # other test can see this one, regardless of whether the
             # assertions above passed.
             await full_schema_reset(pool)

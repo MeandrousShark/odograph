@@ -381,6 +381,20 @@
       });
     })();
   </script>
+  {% if storage and (storage.warning or storage.enhancement_paused) %}
+  <aside class="notice storage-notice" role="status" aria-label="Storage allowance">
+    {% if storage.account_blocked %}
+    <strong>Storage is full.</strong> New data can't be saved until there's more space.
+    {% elif storage.raw_blocked %}
+    <strong>Storage for tracking messages is full.</strong> New messages can't be saved until there's more space.
+    {% elif storage.enhancement_paused %}
+    <strong>Road matching and address lookups are paused.</strong> Your saved routes and addresses still work.
+    {% else %}
+    <strong>You're getting close to your storage limit.</strong>
+    {% endif %}
+    Your existing trips are still available. <a href="/settings#storage-allowance">See how to make room</a>.
+  </aside>
+  {% endif %}
   {% block content %}{% endblock %}
   {% if user %}
   <footer>

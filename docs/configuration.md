@@ -96,15 +96,64 @@ Schema 40 records versioned logical usage for stored personal data, with
 separate actual, reserved, raw-message and optional-enhancement byte counts.
 Each retained point reserves capacity for detector output, including a
 durable high-water mark for copied device labels. These counts describe
-stored-value charges, not PostgreSQL disk usage. This accounting does not
-enforce account storage limits. Durable geocode retry and discovery rows count
-toward actual usage.
+stored-value charges, not PostgreSQL disk usage. Durable geocode retry and
+discovery rows count toward actual usage. Schema 42 enforces funded
+account/raw/enhancement allowances using transaction-final net growth.
 
 Startup verifies the counters against stored data once through the privileged
 setup connection. This scan can increase startup time for large histories.
 Counter drift stops startup; the supported fresh-target restore procedure
 reconciles restored counters after validating the security contract. Normal
 request connections cannot change counters directly or repair drift.
+
+| Variable | Default | Purpose |
+| --- | ---: | --- |
+| `STORAGE_ACCOUNT_LIMIT_BYTES` | `2147483648` (2 GiB) | Default allowance for each account, including stored data and prepaid core processing. |
+| `STORAGE_RAW_LIMIT_BYTES` | `268435456` (256 MiB) | Raw messages and their exact-replay receipts; a subset of the account allowance. |
+| `STORAGE_ENHANCEMENT_LIMIT_BYTES` | `134217728` (128 MiB) | Optional snapped geometry and cached addresses; also a subset of the account allowance. |
+| `STORAGE_INSTANCE_BUDGET_BYTES` | `12884901888` (12 GiB) | Total funded logical grant budget. This is not database free space. |
+| `STORAGE_INSTANCE_RESERVE_BYTES` | `2147483648` (2 GiB) | Unallocated logical reserve, unavailable for ordinary account growth. |
+
+All values must be positive integers. Raw and enhancement limits cannot exceed
+the account limit; reserve must be smaller than budget. At validated restart,
+the default grant applies to every extant account, including disabled accounts.
+The sum of grants must fit budget minus reserve, or startup refuses to serve.
+Account creation acquires a funded grant before any account state commits.
+Disabled accounts retain their grant until actual purge. These controls do not
+enable multi-account activation or provide a browser quota editor.
+
+Lowering allowances never removes history. Positive net growth pauses at a
+ceiling, while reads, exports, sign-in, recovery, cleanup and zero/negative net
+changes remain available. Reserved detector output for accepted points remains
+funded. Raise limits through a validated restart with enough grant budget, or
+deliberately clean up unneeded data; eligible work resumes when capacity returns.
+Settings shows actual/reserved usage, each subset, warnings from 80%, and
+over-budget state. Operator diagnostics expose aggregate grants and counts,
+without another account's history.
+
+At account or enhancement capacity, new optional provider work pauses and
+existing enhancements remain. Trips use raw routes/distances and coordinate
+fallbacks as needed. Provider routes exceeding 100,000 vertices and cached
+addresses exceeding 4,096 UTF-8 bytes are rejected, never clipped or stored as
+false misses. Manual route additions must fit the actual account allowance.
+
+After fresh tracking admission, an identical retained raw message succeeds
+without adding raw data, points or receipt charges, including at a ceiling.
+Recognition uses a digest search plus exact canonical PostgreSQL JSON text
+equality in the durable device namespace, so changed fields or numeric
+representations remain new messages. Raw retention cascades receipt deletion
+and refunds both; replay never extends retention. After deletion, the same
+request needs allowance again and may receive retryable HTTP 503 with
+`Retry-After`. With retention disabled, raw data and receipts remain charged.
+
+Credential rotation preserves a resolved device's replay namespace. Unresolved
+legacy raw-only messages use their credential's stable public ID; credential
+replacement or conversion to a device starts a new namespace. Upgrade backfills
+known durable-device history only: old unresolved raw rows lack a recorded
+credential, so their replay recognition starts with newly stored receipts.
+Existing point deduplication remains unchanged, and revoked/disabled credentials
+cannot bypass fresh admission through replay. OwnTracks iOS retry evidence is
+version-specific; recovery does not depend on clients honoring `Retry-After`.
 
 ## Personal preferences
 
@@ -298,7 +347,7 @@ points.
 
 | Variable | Default | Purpose |
 |---|---:|---|
-| `RAW_MESSAGE_RETENTION_DAYS` | `365` | Deletes old rows only from the raw ingest payload table. Values at or below 0 disable pruning. Points, trips, and other derived data are unaffected. Backup retention is independent. |
+| `RAW_MESSAGE_RETENTION_DAYS` | `365` | Deletes old raw messages and their replay receipts, refunding logical usage. Values at or below 0 disable pruning. Points, trips, and other derived data are unaffected. Backup retention is independent. |
 
 See [Backups and disaster recovery](backups.md#retention) before shortening
 retention for privacy reasons. Older backups can still contain rows already

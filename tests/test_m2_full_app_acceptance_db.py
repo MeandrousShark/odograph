@@ -12,7 +12,11 @@ import hashlib
 import logging
 import os
 import re
+import sys
+import threading
+import traceback
 from contextlib import AsyncExitStack
+from pathlib import Path
 
 import httpx
 import psycopg
@@ -36,6 +40,106 @@ VERIFIED_PASSWORD = "verified member password"
 UNVERIFIED_PASSWORD = "unverified member password"
 RESET_PASSWORD = "replacement member password"
 LINK_BASE = "https://odograph.example.invalid"
+
+
+class _StallProbe:
+    """Report where this acceptance test waits if it runs for 90 seconds."""
+
+    def __init__(self, terminal, database_url: str, *, delay_s: float = 90):
+        self.terminal = terminal
+        self.database_url = database_url
+        self.loop = None
+        self.stopped = threading.Event()
+        self.timer = threading.Timer(delay_s, self._fire)
+        self.timer.daemon = True
+
+    def start(self) -> None:
+        self.timer.start()
+
+    def stop(self) -> None:
+        self.stopped.set()
+        self.timer.cancel()
+        self.timer.join(timeout=8)
+
+    def bind_loop(self) -> None:
+        self.loop = asyncio.get_running_loop()
+
+    def _emit(self, message: str) -> None:
+        if not self.stopped.is_set():
+            line = f"M2 stall probe: {message}"
+            if self.terminal is None:
+                print(line, file=sys.__stderr__, flush=True)
+            else:
+                self.terminal.write_line(line)
+
+    @staticmethod
+    def _location(frame) -> str:
+        return f"{Path(frame.f_code.co_filename).name}:{frame.f_lineno} {frame.f_code.co_name}"
+
+    def _dump_tasks(self) -> None:
+        if self.stopped.is_set() or self.loop is None:
+            return
+        for index, task in enumerate(asyncio.all_tasks(self.loop), start=1):
+            self._emit(f"async task {index}:")
+            awaitable = task.get_coro()
+            for _ in range(16):
+                frame = getattr(awaitable, "cr_frame", None) or getattr(awaitable, "gi_frame", None)
+                if frame is not None:
+                    self._emit(f"  {self._location(frame)}")
+                awaitable = getattr(awaitable, "cr_await", None) or getattr(
+                    awaitable, "gi_yieldfrom", None
+                )
+                if awaitable is None:
+                    break
+
+    def _dump_database_waits(self) -> None:
+        try:
+            with psycopg.connect(
+                self.database_url, connect_timeout=3,
+                options="-c statement_timeout=3000",
+            ) as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT COALESCE(state, 'unknown'), "
+                        "COALESCE(wait_event_type, 'none'), COALESCE(wait_event, 'none'), "
+                        "count(*), COALESCE(sum(cardinality(pg_blocking_pids(pid))), 0) "
+                        "FROM pg_stat_activity "
+                        "WHERE datname = current_database() AND pid <> pg_backend_pid() "
+                        "GROUP BY 1, 2, 3 ORDER BY 1, 2, 3"
+                    )
+                    for state, wait_type, wait_event, count, blockers in cursor.fetchall():
+                        self._emit(
+                            f"database state={state} wait={wait_type}/{wait_event} "
+                            f"sessions={count} blockers={blockers}"
+                        )
+        except Exception as exc:
+            self._emit(f"database wait probe failed: {type(exc).__name__}")
+
+    def _fire(self) -> None:
+        if self.stopped.is_set():
+            return
+        self._emit("still running after 90 seconds")
+        for index, frame in enumerate(sys._current_frames().values(), start=1):
+            self._emit(f"thread {index}:")
+            for entry in traceback.extract_stack(frame)[-16:]:
+                self._emit(f"  {Path(entry.filename).name}:{entry.lineno} {entry.name}")
+        if self.loop is not None and self.loop.is_running():
+            try:
+                self.loop.call_soon_threadsafe(self._dump_tasks)
+            except RuntimeError:
+                self._emit("event loop closed before task dump")
+        self._dump_database_waits()
+
+
+@pytest.fixture
+def m2_stall_probe(request):
+    terminal = request.config.pluginmanager.get_plugin("terminalreporter")
+    probe = _StallProbe(terminal, TEST_DB)
+    probe.start()
+    try:
+        yield probe
+    finally:
+        probe.stop()
 
 
 class _CaptureSMTP:
@@ -333,7 +437,9 @@ async def _scenario(owner, secrets_seen: list[str], unverified_processed: asynci
         secrets_seen += [ADMIN_PASSWORD, VERIFIED_PASSWORD, UNVERIFIED_PASSWORD, RESET_PASSWORD]
 
 
-def test_full_app_bootstrap_onboarding_and_admin_recovery_keep_proofs_private(monkeypatch, caplog):
+def test_full_app_bootstrap_onboarding_and_admin_recovery_keep_proofs_private(
+    m2_stall_probe, monkeypatch, caplog,
+):
     monkeypatch.setenv("DATABASE_URL", TEST_DB)
     monkeypatch.setenv("SESSION_SECRET", "disposable-session-secret")
     monkeypatch.setenv("INITIAL_ADMIN_SIGNUP", "1")
@@ -354,6 +460,7 @@ def test_full_app_bootstrap_onboarding_and_admin_recovery_keep_proofs_private(mo
     secrets_seen: list[str] = []
 
     async def run():
+        m2_stall_probe.bind_loop()
         owner = make_pool(TEST_DB)
         await owner.open(wait=True)
         try:
