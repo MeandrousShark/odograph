@@ -12,6 +12,8 @@ if __name__ == '__main__' and sys.platform == 'linux':
     resource.setrlimit(resource.RLIMIT_AS, (_ceiling, _ceiling))
 
 try:
+    import errno
+    import encodings.idna
     import asyncio
     import fcntl
     from pathlib import Path
@@ -21,6 +23,10 @@ try:
     import time
 except MemoryError:
     os._exit(73)
+except OSError as exc:
+    if exc.errno == errno.ENOMEM:
+        os._exit(73)
+    raise
 
 READY = b'NTFYFD2 READY\n'
 CHUNK_BYTES = 64 * 1024
@@ -198,6 +204,9 @@ def main():
         os.write(1, _RESOURCE_FRAMES[state['phase']])
         return 73
     except Exception as exc:
+        if isinstance(exc, OSError) and exc.errno == errno.ENOMEM:
+            os.write(1, _RESOURCE_FRAMES[state['phase']])
+            return 73
         # Never emit provider text, endpoints, body or credentials.
         name = type(exc).__name__
         if name not in ('HTTPStatusError', 'ProviderResponseTooLarge', 'TimeoutException',
@@ -213,4 +222,11 @@ def main():
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except MemoryError:
+        os._exit(73)
+    except OSError as exc:
+        if exc.errno == errno.ENOMEM:
+            os._exit(73)
+        raise

@@ -17,6 +17,9 @@ if _PREPARED_ENTRY and sys.platform == 'linux':
     resource.setrlimit(resource.RLIMIT_AS, (_ceiling, _ceiling))
 
 try:
+    import errno
+    if _PREPARED_ENTRY:
+        import encodings.idna
     import base64
     import ctypes
     import json
@@ -32,6 +35,10 @@ try:
     from types import SimpleNamespace
 except MemoryError:
     if _PREPARED_ENTRY:
+        os._exit(73)
+    raise
+except OSError as exc:
+    if _PREPARED_ENTRY and exc.errno == errno.ENOMEM:
         os._exit(73)
     raise
 
@@ -191,6 +198,9 @@ def main():
         os.write(1, _RESOURCE_RESULTS[state['phase']])
         return 73
     except Exception as exc:
+        if isinstance(exc, OSError) and exc.errno == errno.ENOMEM:
+            os.write(1, _RESOURCE_RESULTS[state['phase']])
+            return 73
         # No server text, message, recipient, hostname or credential escapes.
         os.write(1, b"FAIL " + _failure(exc).encode("ascii") + b" "
                  + state["phase"].encode("ascii") + b"\n")
@@ -200,4 +210,13 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except MemoryError:
+        if _PREPARED_ENTRY:
+            os._exit(73)
+        raise
+    except OSError as exc:
+        if _PREPARED_ENTRY and exc.errno == errno.ENOMEM:
+            os._exit(73)
+        raise
