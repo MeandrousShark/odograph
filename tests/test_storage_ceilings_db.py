@@ -128,6 +128,59 @@ def test_concurrent_device_writes_do_not_overshoot_account_boundary():
     _run(body)
 
 
+@pytest.mark.parametrize("repair_drift", [False, True])
+def test_maintenance_reconciliation_preserves_existing_overbudget_data(repair_drift):
+    async def body(raw, pool):
+        async with pool.connection() as conn:
+            owner = account_id(conn)
+            await conn.execute(
+                "INSERT INTO raw_messages(account_id,payload) VALUES(%s,'{\"preserved\":true}')",
+                (owner,),
+            )
+            before = await (await conn.execute(
+                "SELECT actual_bytes,reserved_bytes,raw_bytes,enhancement_bytes "
+                "FROM account_usage WHERE account_id=%s", (owner,),
+            )).fetchone()
+        async with raw.connection() as conn:
+            await conn.execute(
+                "UPDATE storage_grants SET account_limit_bytes=1,raw_limit_bytes=1,"
+                "enhancement_limit_bytes=1 WHERE account_id=%s", (owner,),
+            )
+        if repair_drift:
+            async with raw.connection() as conn:
+                await conn.execute(
+                    "UPDATE account_usage SET actual_bytes=0,reserved_bytes=0,raw_bytes=0,"
+                    "enhancement_bytes=0 WHERE account_id=%s", (owner,),
+                )
+                assert not (await (await conn.execute(
+                    "SELECT public.storage_usage_consistent()"
+                )).fetchone())[0]
+        async with raw.connection() as conn:
+            await conn.execute("SELECT public.reconcile_storage_usage()")
+        async with pool.connection() as conn:
+            assert await (await conn.execute(
+                "SELECT actual_bytes,reserved_bytes,raw_bytes,enhancement_bytes "
+                "FROM account_usage WHERE account_id=%s", (owner,),
+            )).fetchone() == before
+            assert (await storage_status(conn))["account_blocked"]
+            assert (await (await conn.execute("SELECT count(*) FROM raw_messages")).fetchone())[0] == 1
+        async with raw.connection() as conn:
+            assert (await (await conn.execute("SELECT public.storage_usage_consistent()"))
+                    .fetchone())[0]
+        with pytest.raises(psycopg.errors.RaiseException) as refused:
+            async with pool.connection() as conn:
+                await conn.execute("INSERT INTO raw_messages(account_id,payload) VALUES(%s,'{}')", (owner,))
+        assert is_storage_capacity_error(refused.value)
+        async with pool.connection() as conn:
+            await conn.execute("UPDATE raw_messages SET payload=payload WHERE account_id=%s", (owner,))
+        async with pool.connection() as conn:
+            await conn.execute("DELETE FROM raw_messages WHERE account_id=%s", (owner,))
+        async with raw.connection() as conn:
+            assert (await (await conn.execute("SELECT public.storage_usage_consistent()"))
+                    .fetchone())[0]
+    _run(body)
+
+
 def test_grant_budget_creation_disable_and_purge_release():
     async def body(raw, pool):
         async with raw.connection() as conn:
@@ -298,6 +351,9 @@ def test_pre_s2_role_contract_restores_without_new_schema(monkeypatch, tmp_path,
     ("CREATE OR REPLACE FUNCTION public.storage_check_ceiling() RETURNS trigger "
      "LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp "
      "AS $body$ BEGIN RETURN NULL; END $body$", "function definition"),
+    ("CREATE OR REPLACE FUNCTION public.reconcile_storage_usage() RETURNS void "
+     "LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp "
+     "AS $body$ BEGIN RETURN; END $body$", "function definition"),
 ])
 def test_quota_contract_drift_refuses_startup(statement, cause):
     async def body(raw, pool):

@@ -530,6 +530,31 @@ SELECT t.account_id, public.storage_charge_ingest_credentials(t) AS charge FROM 
     LEFT JOIN reserves e ON e.account_id = a.id;
 $body$;
 
+CREATE OR REPLACE FUNCTION public.reconcile_storage_usage() RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp
+AS $body$
+BEGIN
+    -- Migration/restore authority runs this under its maintenance lock, never runtime.
+    INSERT INTO public.device_storage_envelopes
+    SELECT * FROM public.storage_expected_envelopes()
+    ON CONFLICT (tracking_device_id) DO UPDATE SET label_bytes = EXCLUDED.label_bytes,
+        point_count = EXCLUDED.point_count, stay_count = EXCLUDED.stay_count, trip_count = EXCLUDED.trip_count,
+        path_vertices = EXCLUDED.path_vertices, core_bytes = EXCLUDED.core_bytes;
+    INSERT INTO public.account_usage(account_id,actual_bytes,reserved_bytes,raw_bytes,enhancement_bytes)
+    SELECT * FROM public.storage_expected_usage()
+    ON CONFLICT (account_id) DO UPDATE SET actual_bytes = EXCLUDED.actual_bytes,
+        reserved_bytes = EXCLUDED.reserved_bytes, raw_bytes = EXCLUDED.raw_bytes,
+        enhancement_bytes = EXCLUDED.enhancement_bytes, charge_version = 1;
+    -- Repairing counters for existing data does not admit new personal data.
+    UPDATE public.storage_quota_baseline b SET
+        transaction_id = pg_catalog.pg_current_xact_id(), actual_bytes = u.actual_bytes,
+        reserved_bytes = u.reserved_bytes, raw_bytes = u.raw_bytes,
+        enhancement_bytes = u.enhancement_bytes
+    FROM public.account_usage u WHERE u.account_id = b.account_id;
+END
+$body$;
+
+REVOKE ALL ON FUNCTION public.reconcile_storage_usage() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.storage_charge_raw_replay_receipts(public.raw_replay_receipts) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.storage_grant_account() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.storage_capture_quota_baseline() FROM PUBLIC;
@@ -576,6 +601,9 @@ BEGIN
         ALTER FUNCTION public.geocode_endpoint_intents() OWNER TO odograph_migrate;
         ALTER FUNCTION public.geocode_discover_page(bigint) OWNER TO odograph_migrate;
         ALTER FUNCTION public.storage_expected_usage() OWNER TO odograph_migrate;
+        ALTER FUNCTION public.reconcile_storage_usage() OWNER TO odograph_migrate;
+        REVOKE ALL ON FUNCTION public.reconcile_storage_usage()
+            FROM PUBLIC,odograph_runtime,odograph_control,odograph_bootstrap;
         GRANT EXECUTE ON FUNCTION public.storage_find_replay(bigint,text,text,bytea,text),
             public.storage_record_replay(bigint,bigint,text,text),
             public.geocode_refresh_capacity_pause(bigint),

@@ -171,6 +171,10 @@ def test_application_archive_preserves_rows_credentials_sequences_and_restricted
         source, target = clusters.start(), clusters.start()
         _assert_pg16_clients(source)
         first, runtime_info = asyncio.run(_seed(source.database_url))
+        with psycopg.connect(source.database_url) as conn:
+            conn.execute(
+                "UPDATE storage_grants SET account_limit_bytes=1,raw_limit_bytes=1,"
+                "enhancement_limit_bytes=1")
         before = _snapshot(source.database_url)
         security_before = _row_security(source.database_url)
         assert [row[0] for row in security_before[0] if row[1:] == (True, True)] == sorted(OWNED_TABLES + PROTECTED_TABLES)
@@ -195,6 +199,10 @@ def test_application_archive_preserves_rows_credentials_sequences_and_restricted
             conn.execute("UPDATE accounts SET auth_version=auth_version-%s", (RESTORE_AUTH_VERSION_STEP,))
             assert conn.execute("SELECT public.storage_usage_consistent()").fetchone() == (True,)
             assert conn.execute("SELECT COUNT(*) FROM storage_quota_baseline").fetchone() == (2,)
+            assert conn.execute(
+                "SELECT count(*) FROM account_usage u JOIN storage_grants g USING(account_id) "
+                "WHERE u.actual_bytes+u.reserved_bytes>g.account_limit_bytes"
+            ).fetchone() == (2,)
         assert _snapshot(target.database_url) == before
         with psycopg.connect(target.database_url) as conn:
             conn.execute("UPDATE accounts SET auth_version=auth_version+%s", (RESTORE_AUTH_VERSION_STEP,))

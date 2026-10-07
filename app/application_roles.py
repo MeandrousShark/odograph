@@ -205,6 +205,7 @@ S2_FUNCTIONS = tuple(spec.signature for spec in S2_FUNCTION_SPECS)
 FUNCTION_SPECS = tuple(
     replace(spec, source="042_storage_ceiling.sql")
     if spec.signature in ("public.storage_expected_usage()",
+                          "public.reconcile_storage_usage()",
                           "public.geocode_endpoint_intents()",
                           "public.geocode_record_coordinate_turn(bigint)",
                           "public.geocode_discover_page(bigint)") else spec
@@ -227,6 +228,8 @@ def _contract_function_specs(schema_version: int) -> tuple[FunctionSpec, ...]:
         if schema_version < 42 and spec.signature == "public.storage_expected_usage()":
             source = "041_geocode_progress.sql" if schema_version >= 41 else "040_storage_accounting.sql"
             spec = replace(spec, source=source)
+        if schema_version < 42 and spec.signature == "public.reconcile_storage_usage()":
+            spec = replace(spec, source="040_storage_accounting.sql")
         if schema_version == 41 and spec.signature in (
             "public.geocode_endpoint_intents()",
             "public.geocode_record_coordinate_turn(bigint)",
