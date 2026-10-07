@@ -1,4 +1,4 @@
-"""The report projection omits continuity badges without changing report data."""
+"""The report projection omits UI state without changing report data."""
 from __future__ import annotations
 
 import asyncio
@@ -29,6 +29,7 @@ BADGE_FIELDS = {
     "prev_end_gap_m", "prev_trip_ended_at", "prev_trip_end_lat",
     "prev_trip_end_lon", "prev_trip_end_place_name", "missing_trip_covered",
 }
+DETAIL_ONLY_FIELDS = BADGE_FIELDS | {"snap_capacity_needed_bytes"}
 
 
 async def _seed(conn):
@@ -132,9 +133,9 @@ async def _equivalence_scenario():
         async with pool.connection() as conn:
             full = await _full_rows(conn, start, end)
             projected, rates = await reports._fetch_range_trips_in(conn, TZ, start, end)
-        assert projected == [{key: value for key, value in trip.items() if key not in BADGE_FIELDS}
+        assert projected == [{key: value for key, value in trip.items() if key not in DETAIL_ONLY_FIELDS}
                              for trip in full]
-        assert set(full[0]) - set(projected[0]) == BADGE_FIELDS
+        assert set(full[0]) - set(projected[0]) == DETAIL_ONLY_FIELDS
         by_id = {trip["id"]: trip for trip in full}
         assert by_id[covered]["missing_trip_covered"] is True
         assert by_id[uncovered]["missing_trip_covered"] is False
