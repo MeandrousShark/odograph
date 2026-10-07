@@ -5,7 +5,7 @@ from decimal import Decimal
 import pytest
 
 from app.preparation import _json_frame
-from app.report_preparation import Projection, TEXT_CHARS, FETCH_ROWS, _encode, _WHITESPACE
+from app.report_preparation import Projection, TEXT_CHARS, FETCH_ROWS, _encode, _WHITESPACE, _whitespace_bytes, _purpose_projection
 
 pytestmark = pytest.mark.unit
 
@@ -61,6 +61,52 @@ def test_scalar_codec_preserves_float_bits_and_decimal_text():
 
 def test_python_strip_set_includes_all_unicode_whitespace():
     assert _WHITESPACE == ''.join(chr(i) for i in range(0x110000) if chr(i).isspace())
+
+
+@pytest.mark.parametrize('server,expected',[
+    ('UTF8',_WHITESPACE),('LATIN1',''.join(c for c in _WHITESPACE if ord(c)<256)),
+])
+def test_trim_bytes_follow_server_encoding_independently_of_client(server,expected):
+    class Info:
+        def parameter_status(self,name):
+            assert name=='server_encoding'
+            return server
+        @property
+        def encoding(self):
+            raise AssertionError('client encoding must not filter stored characters')
+    class Connection:
+        info=Info()
+    assert _whitespace_bytes(Connection())==expected.encode('utf8')
+
+
+@pytest.mark.parametrize('server',['EUC_TW','MULE_INTERNAL'])
+def test_unmapped_server_trim_fallback_is_ascii_and_character_chunked(server):
+    import re
+    from types import SimpleNamespace
+    conn=SimpleNamespace(info=SimpleNamespace(parameter_status=lambda name:server))
+    sql,pattern=_purpose_projection(conn)
+    assert 'generate_series' in sql and sql.count(str(TEXT_CHARS))==2
+    assert "convert_to(substring(purpose" in sql
+    assert len(pattern.encode('ascii'))==163
+    whitespace=re.compile(pattern)
+    for value in (_WHITESPACE*2000,'\u3000'*TEXT_CHARS+'Visit','\u3000'*TEXT_CHARS+'\xa0','','\x85',None):
+        text=value or ''
+        actual=any(whitespace.fullmatch(text[i:i+TEXT_CHARS].encode('utf8').hex()) is None for i in range(0,len(text),TEXT_CHARS))
+        assert actual==bool(text.strip())
+
+
+def test_sql_ascii_removes_complete_utf8_whitespace_across_byte_boundaries():
+    from types import SimpleNamespace
+    conn=SimpleNamespace(info=SimpleNamespace(parameter_status=lambda name:'SQL_ASCII'))
+    sql,param=_purpose_projection(conn)
+    assert sql.count('replace(')==29 and sql.count('%s')==1
+    assert len(sql.encode('ascii'))<2500
+    assert param==b'\xe3\x80\x80'
+    for text in ('\u0085'*8191+'\u3000','\u3000'*5460+'\u0085','\u3000'*5461+'Visit','車','\u0085\u2003\u3000',''):
+        value=text.encode('utf8')
+        for character in _WHITESPACE:
+            value=value.replace(character.encode('utf8'),b'')
+        assert bool(value)==bool(text.strip())
 
 
 def test_server_portal_fetches_no_more_than_256_without_prefetch():

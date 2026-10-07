@@ -8,6 +8,8 @@ import json
 import zoneinfo
 
 from psycopg.rows import dict_row
+from psycopg._encodings import pg2pyenc
+from psycopg.errors import NotSupportedError
 
 from app.account_context import account_id
 from app.page import _fetch_review_count
@@ -22,9 +24,11 @@ FETCH_ROWS = 256
 TEXT_CHARS = 16380
 # PostgreSQL btrim's explicit set matches Python's Unicode str.strip().
 _WHITESPACE = ''.join(chr(i) for i in range(0x3100) if chr(i).isspace())
+_PURPOSE_NONBLANK = "length(btrim(COALESCE(purpose,''), convert_from(%s,'UTF8'))) > 0"
+_WHITESPACE_HEX = '^(' + '|'.join(c.encode('utf8').hex() for c in _WHITESPACE) + ')*$'
 _TRIP_SCALARS = f"""id, vehicle_id, started_at, category::text AS category,
     exclusion::text AS exclusion, {DISPLAY_DISTANCE_SQL} AS display_distance_m,
-    length(btrim(COALESCE(purpose,''), %s)) > 0 AS purpose_nonblank,
+    {_PURPOSE_NONBLANK} AS purpose_nonblank,
     has_gap, snap_status::text AS snap_status, source::text AS source"""
 _DETAIL_TEXT = {
     'start_place_name': f'COALESCE(start_label, {_START_PLACE_NAME_SQL})',
@@ -51,6 +55,42 @@ def _encode(row):
     return {key: value.isoformat() if isinstance(value, (date, datetime)) else
             value.hex() if isinstance(value, float) else str(value) if isinstance(value, Decimal) else value
             for key, value in row.items()}
+
+
+def _whitespace_bytes(conn):
+    server = conn.info.parameter_status('server_encoding')
+    if server == 'SQL_ASCII':
+        raise NotSupportedError('SQL_ASCII has no character trim semantics')
+    codec = pg2pyenc(server.encode('ascii'))
+    characters = []
+    for character in _WHITESPACE:
+        try:
+            character.encode(codec)
+        except UnicodeEncodeError:
+            continue
+        characters.append(character)
+    # bytea adaptation avoids the client's potentially narrower text encoding.
+    return ''.join(characters).encode('utf8')
+
+
+def _purpose_projection(conn):
+    if conn.info.parameter_status('server_encoding') == 'SQL_ASCII':
+        # Byte-position chunks can split UTF-8 characters in SQL_ASCII. Remove
+        # complete fixed whitespace sequences instead; never trim their bytes.
+        expression = "COALESCE(purpose,'')"
+        for character in _WHITESPACE[:-1]:
+            hex_value = character.encode('utf8').hex()
+            expression = f"replace({expression},convert_from(decode('{hex_value}','hex'),'UTF8'),'')"
+        return f"length(replace({expression},convert_from(%s,'UTF8'),''))>0", _WHITESPACE[-1].encode('utf8')
+    try:
+        return _PURPOSE_NONBLANK, _whitespace_bytes(conn)
+    except NotSupportedError:
+        # A server codec without a Python mapping still gets exact Unicode
+        # semantics. Character chunks prevent whole-purpose hex duplication.
+        return f"""EXISTS (SELECT 1 FROM generate_series(
+            1,char_length(COALESCE(purpose,'')),{TEXT_CHARS}) AS purpose_chunks(position)
+            WHERE encode(convert_to(substring(purpose from purpose_chunks.position
+                for {TEXT_CHARS}),'UTF8'),'hex') !~ %s)""", _WHITESPACE_HEX
 
 
 class Projection:
@@ -148,15 +188,16 @@ class Projection:
         await self.text(conn,'vehicle_name',row['size'],'name','vehicles','account_id=%s AND id=%s',(owner,vehicle))
 
     async def groups(self, conn, owner, bounds, year, annual):
+        purpose_sql, purpose_param = _purpose_projection(conn)
         query = f"""SELECT vehicle_id, 0 AS event, id, started_at,
             category::text AS category, exclusion::text AS exclusion,
             {DISPLAY_DISTANCE_SQL} AS display_distance_m,
-            length(btrim(COALESCE(purpose,''), %s))>0 AS purpose_nonblank,
+            {purpose_sql} AS purpose_nonblank,
             has_gap, snap_status::text AS snap_status, source::text AS source,
             NULL::date AS incurred_on, NULL::bigint AS amount_size, NULL::text AS treatment,
             NULL::timestamptz AS recorded_at, NULL::double precision AS odometer_m
             FROM trips WHERE account_id=%s AND started_at >= %s AND started_at < %s"""
-        params = [_WHITESPACE,owner,bounds['start'],bounds['end']]
+        params = [purpose_param,owner,bounds['start'],bounds['end']]
         if annual:
             query += """ UNION ALL SELECT vehicle_id,1,id,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,
                 incurred_on,octet_length(convert_to(amount::text,'UTF8')),treatment::text,NULL,NULL FROM expenses
@@ -309,8 +350,10 @@ async def prepare_report(request, user, kind, year=None, start=None, end=None):
                 review_count=review_count,storage=storage,request_path=request.url.path)})
             bounds = {k:datetime.fromisoformat(v) for k,v in bounds.items()}
             await projection.rates(conn,owner,year)
-            query = f'SELECT {_TRIP_SCALARS} FROM trips WHERE account_id=%s AND started_at >= %s AND started_at < %s ORDER BY started_at,id'
-            async for row in projection.rows(conn,query,(_WHITESPACE,owner,bounds['start'],bounds['end'])):
+            purpose_sql, purpose_param = _purpose_projection(conn)
+            scalars = _TRIP_SCALARS.replace(_PURPOSE_NONBLANK,purpose_sql)
+            query = f'SELECT {scalars} FROM trips WHERE account_id=%s AND started_at >= %s AND started_at < %s ORDER BY started_at,id'
+            async for row in projection.rows(conn,query,(purpose_param,owner,bounds['start'],bounds['end'])):
                 await projection.command_row('global_trip',row)
                 del row
             await projection.groups(conn,owner,bounds,year,annual)
