@@ -18,6 +18,7 @@ from fastapi import HTTPException
 from app.db import make_pool
 from app.account_context import account_id
 from personal_support import personal_request
+from prepared_report_support import report_response
 from app.main import make_templates
 from app.ui import make_router
 from conftest import reset_account_db
@@ -263,15 +264,15 @@ async def _report_page_scenario():
                 ),
             )
 
-        report_page = _endpoint("/report/{year}")
         request = _request(pool)
-        response = await report_page(request, year=2026, user=USER)
+        response = await report_response(pool, "/report/2026", request.state.config)
+        assert response.status_code == 200
         body = response.body.decode()
         assert "Odometer coverage" in body
         assert "GPS captured 60.0% of odometer miles (40.0 mi unaccounted)" in body
 
-        report_export = _endpoint("/report/{year}/export")
-        export_response = await report_export(request, year=2026, user=USER)
+        export_response = await report_response(pool, "/report/2026/export", request.state.config)
+        assert export_response.status_code == 200
 
         from io import BytesIO
 
@@ -327,9 +328,9 @@ async def _fully_bracketed_scenario():
         assert len(coverage) == 1
         assert coverage[0].fully_bracketed is True
 
-        report_page = _endpoint("/report/{year}")
         request = _request(pool)
-        response = await report_page(request, year=2026, user=USER)
+        response = await report_response(pool, "/report/2026", request.state.config)
+        assert response.status_code == 200
         body = response.body.decode()
         assert "GPS captured 60.0% of odometer miles (40.0 mi unaccounted)" in body
         assert "partial-year" not in body
@@ -352,9 +353,9 @@ async def _report_page_no_readings_scenario():
                 conn, truck_id, datetime(2026, 3, 15, 12, tzinfo=timezone.utc), 60 * 1609.344
             )
 
-        report_page = _endpoint("/report/{year}")
         request = _request(pool)
-        response = await report_page(request, year=2026, user=USER)
+        response = await report_response(pool, "/report/2026", request.state.config)
+        assert response.status_code == 200
         body = response.body.decode()
         assert "Odometer coverage" not in body
     finally:

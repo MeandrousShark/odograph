@@ -10,7 +10,7 @@ from psycopg.rows import dict_row
 from starlette.responses import RedirectResponse, Response
 
 from app.account_context import account_id
-from app.auth import require_user
+from app.auth import require_report_user, require_user
 from app.page import render_page
 from app.export import to_csv, to_range_report_xlsx, to_report_xlsx, to_xlsx
 from app.expenses import ExpenseReport, build_expense_report
@@ -24,6 +24,7 @@ from app.report import (
     default_report_year,
     next_year_disabled,
     range_filename_slug,
+    validate_range_dates,
 )
 
 from app.ui._common import (
@@ -56,6 +57,15 @@ class _AnnualReportData:
     odometer_coverage: list[VehicleCoverage]
     expenses: list[dict]
     expense_report: ExpenseReport
+
+
+def _parse_report_range(from_str: str, to_str: str) -> tuple[date, date]:
+    start, end = _parse_range_query_dates(from_str, to_str)
+    try:
+        validate_range_dates(start, end)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return start, end
 
 
 def _multiyear_window(
@@ -280,81 +290,37 @@ def register(router: APIRouter) -> None:
             request: Request,
             from_: str = Query("", alias="from"),
             to: str = Query(""),
-            user: dict = Depends(require_user),
+            user: dict = Depends(require_report_user),
         ):
-            data = await _build_range_report_data(request, from_, to)
-            return await render_page(
-                request, "report_range.html",
-                {
-                    "report": data.report,
-                    "user": user, "csrf": request.session.get("csrf", ""),
-                },
-            )
+            from app.report_preparation import prepare_report
+            start, end = _parse_report_range(from_, to)
+            return await prepare_report(request, user, "range_html", start=start, end=end)
 
         @router.get("/report/range/export")
         async def report_range_export(
             request: Request,
             from_: str = Query("", alias="from"),
             to: str = Query(""),
-            user: dict = Depends(require_user),
+            user: dict = Depends(require_report_user),
         ):
-            data = await _build_range_report_data(request, from_, to)
-            # XLSX serialization is CPU-bound; offload so it doesn't block the
-            # event loop for other requests while the report builds.
-            content = await owned_thread(
-                to_range_report_xlsx,
-                data.report,
-                data.trips,
-                data.rates,
-                data.tz,
-            )
-            filename = f"mileage-report-{range_filename_slug(data.start, data.end)}.xlsx"
-            return Response(
-                content=content,
-                media_type=EXPORT_MEDIA_TYPES["xlsx"],
-                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-            )
+            from app.report_preparation import prepare_report
+            start, end = _parse_report_range(from_, to)
+            return await prepare_report(request, user, "range_xlsx", start=start, end=end)
 
         @router.get("/report/{year}")
         async def report_page(
             request: Request,
-            year: int = Path(ge=1, le=9998),  # +1 must also stay in datetime's 1-9999 range
-            user: dict = Depends(require_user),
+            year: int = Path(ge=1, le=9998),
+            user: dict = Depends(require_report_user),
         ):
-            data = await _build_annual_report_data(request, year)
-            return await render_page(
-                request, "report.html",
-                {
-                    "report": data.report, "odometer_coverage": data.odometer_coverage,
-                    "expenses": data.expenses, "expense_report": data.expense_report,
-                    "user": user, "csrf": request.session.get("csrf", ""),
-                    "next_year_disabled": next_year_disabled(
-                        data.report.year, datetime.now(data.tz)
-                    ),
-                },
-            )
+            from app.report_preparation import prepare_report
+            return await prepare_report(request, user, "annual_html", year=year)
 
         @router.get("/report/{year}/export")
         async def report_export(
             request: Request,
             year: int = Path(ge=1, le=9998),
-            user: dict = Depends(require_user),
+            user: dict = Depends(require_report_user),
         ):
-            data = await _build_annual_report_data(request, year)
-            # XLSX serialization is CPU-bound; offload so it doesn't block the
-            # event loop for other requests while the report builds.
-            content = await owned_thread(
-                to_report_xlsx,
-                data.report,
-                data.trips,
-                data.rates,
-                data.tz,
-                data.odometer_coverage,
-                data.expense_report,
-                data.expenses,
-            )
-            return Response(
-                content=content,
-                media_type=EXPORT_MEDIA_TYPES["xlsx"],
-                headers={"Content-Disposition": f'attachment; filename="mileage-report-{year}.xlsx"'},
-            )
+            from app.report_preparation import prepare_report
+            return await prepare_report(request, user, "annual_xlsx", year=year)

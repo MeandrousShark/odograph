@@ -136,6 +136,7 @@ class Config:
     storage_enhancement_limit_bytes: int = DEFAULT_STORAGE_ENHANCEMENT_LIMIT_BYTES
     storage_instance_budget_bytes: int = DEFAULT_STORAGE_INSTANCE_BUDGET_BYTES
     storage_instance_reserve_bytes: int = DEFAULT_STORAGE_INSTANCE_RESERVE_BYTES
+    preparation_spool_dir: str = ""
 
     capacity_ingest_slots: int = 2
     capacity_routine_slots: int = 1
@@ -483,4 +484,5 @@ class Config:
             account_avatar_max_bytes=int(
                 os.environ.get("ACCOUNT_AVATAR_MAX_BYTES", DEFAULT_ACCOUNT_AVATAR_MAX_BYTES)
             ),
+            preparation_spool_dir=os.environ.get("PREPARATION_SPOOL_DIR", ""),
         )

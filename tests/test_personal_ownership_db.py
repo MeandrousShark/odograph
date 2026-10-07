@@ -16,6 +16,7 @@ from fastapi import HTTPException
 
 from app.db import make_pool
 from app.auth import require_user
+from app.capacity import AdmissionManager
 from app.account_settings import load_account_settings
 from app.detector.core import Params
 from app.main import make_templates
@@ -159,7 +160,7 @@ async def _query_scenario():
         await pool.close()
 
 
-async def _http_scenario():
+async def _http_scenario(spool_root):
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
@@ -169,6 +170,8 @@ async def _http_scenario():
         apool, bpool = await account_pool(pool, 41), await account_pool(pool, 73)
         cfg = SimpleNamespace(
             display_tz=ZoneInfo("UTC"), app_version="test", app_git_revision="test",
+            dev_no_auth=True,
+            preparation_spool_dir=str(spool_root),
             trips_page_size=20, detector_params=Params(),
             missing_trip_gap_m=500, geocode_provider=None, osrm_url=None,
         )
@@ -176,8 +179,10 @@ async def _http_scenario():
         app.add_middleware(SessionMiddleware, secret_key="test-only-session-secret")
         app.state.templates = make_templates(cfg)
         app.state.config = cfg
+        app.state.capacity = AdmissionManager(cfg)
         app.state.control_pool = apool.control_pool
         app.state.runtime_pool = apool.runtime_pool
+        app.state.dev_principal = apool.principal
 
         async def account_request(request: Request):
             request.state.principal = apool.principal
@@ -195,6 +200,11 @@ async def _http_scenario():
                 response = await client.get(url)
                 assert response.status_code == 200, (url, response.text[:300])
                 assert "Beta" not in response.text, url
+                if url == "/report/2026":
+                    assert "Alpha" in response.text
+                    assert int(response.headers["content-length"]) == len(response.content)
+                    assert app.state.capacity.snapshot()["leases"] == 0
+                    assert not list(spool_root.glob("op-*"))
                 if url == "/settings":
                     assert 'name="email_digest_hour" min="0" max="23" value="9"' in response.text
                     assert 'name="email_filing_reminder_mmdd" value="01-15"' in response.text
@@ -228,8 +238,8 @@ async def _http_scenario():
         await pool.close()
 
 
-def test_personal_http_pages_and_preferences_scope_account_with_rls():
-    asyncio.run(_http_scenario())
+def test_personal_http_pages_and_preferences_scope_account_with_rls(tmp_path):
+    asyncio.run(_http_scenario(tmp_path / "spool"))
 
 
 def test_personal_queries_and_mutations_scope_account_with_rls():

@@ -16,6 +16,7 @@ from authlib.integrations.base_client import OAuthError
 from authlib.integrations.starlette_client import OAuth
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
 from psycopg import errors
+from psycopg.rows import dict_row
 from starlette.datastructures import UploadFile
 from starlette.responses import JSONResponse, RedirectResponse
 
@@ -338,9 +339,21 @@ async def _oidc_login_available(request: Request) -> bool:
 
 async def _bind_account(
     request: Request, account: dict, *, import_lock_timeout: bool = False,
+    report_profile: bool = False,
 ) -> dict:
     principal = AccountPrincipal(account["id"], account["is_enabled"], account["auth_version"])
     pool = AccountPool(request.app.state.runtime_pool, principal)
+    if report_profile:
+        request.state.principal = principal
+        request.state.account_pool = pool
+        request.state.config = request.app.state.config
+        _ensure_csrf(request)
+        return {
+            "id": account["id"], "is_admin": account["is_admin"],
+            "is_enabled": account["is_enabled"], "legacy_oidc": False,
+            "has_avatar": account["has_avatar"],
+            "avatar_version": _avatar_version(account["avatar_updated_at"]),
+        }
     async with pool.connection(import_lock_timeout=import_lock_timeout) as conn:
         settings = await load_account_settings(conn)
     request.state.principal = principal
@@ -354,6 +367,22 @@ async def _bind_account(
 
 async def require_user(request: Request) -> dict:
     return await _require_user(request)
+
+
+async def require_report_user(request: Request) -> dict:
+    """Authenticate report identity before admitting variable-size preparation."""
+    return await _require_user(request, report_profile=True)
+
+
+async def _get_report_account(conn, owner: int) -> dict | None:
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(
+        "SELECT id, is_admin, is_enabled, auth_version, "
+        "avatar_mime IS NOT NULL AS has_avatar, avatar_updated_at "
+        "FROM accounts WHERE id = %s",
+        (owner,),
+    )
+    return await cur.fetchone()
 
 
 def import_busy_response() -> JSONResponse:
@@ -371,19 +400,22 @@ async def require_import_user(request: Request) -> dict | JSONResponse:
         return import_busy_response()
 
 
-async def _require_user(request: Request, *, import_lock_timeout: bool = False) -> dict:
+async def _require_user(request: Request, *, import_lock_timeout: bool = False,
+                        report_profile: bool = False) -> dict:
     cached = getattr(getattr(request, "state", None), "_capacity_authenticated_user", None)
     if cached is not None:
         return cached
     cfg = request.app.state.config
+    lookup_account = _get_report_account if report_profile else get_account
     if cfg.dev_no_auth:
         principal = request.app.state.dev_principal
         async with control_connection(request.app.state.control_pool) as conn:
-            account = await get_account(conn, principal.account_id)
+            account = await lookup_account(conn, principal.account_id)
         if account is None or not account["is_enabled"]:
             raise AuthRedirect()
         return await _bind_account(
-            request, account, **({"import_lock_timeout": True} if import_lock_timeout else {})
+            request, account, **({"report_profile": True} if report_profile else {}),
+            **({"import_lock_timeout": True} if import_lock_timeout else {})
         )
 
     has_account_id = "account_id" in request.session
@@ -400,7 +432,7 @@ async def _require_user(request: Request, *, import_lock_timeout: bool = False) 
             request.session.clear()
             raise AuthRedirect()
         async with control_connection(request.app.state.control_pool) as conn:
-            account = await get_account(conn, account_id)
+            account = await lookup_account(conn, account_id)
         if (
             account is not None
             and account["is_enabled"]
@@ -410,7 +442,8 @@ async def _require_user(request: Request, *, import_lock_timeout: bool = False) 
             if page_account is not None and page_account != str(account_id):
                 raise HTTPException(status_code=409, detail="Account changed. Reload the page.")
             return await _bind_account(
-                request, account, **({"import_lock_timeout": True} if import_lock_timeout else {})
+                request, account, **({"report_profile": True} if report_profile else {}),
+                **({"import_lock_timeout": True} if import_lock_timeout else {})
             )
         request.session.clear()
         raise AuthRedirect()

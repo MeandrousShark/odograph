@@ -71,9 +71,9 @@ COPY scripts/sql/account_bootstrap.sql scripts/sql/account_admission.sql \
 # Fixed numeric UID/GID, not a named user: rootless Podman and rootful Docker
 # both map a numeric identity the same way, while a name would need an
 # /etc/passwd entry the image may or may not carry consistently. The app
-# writes nothing to disk at runtime, so no directory needs a chown -- root's
-# default umask already leaves the copied sources and installed packages
-# world-readable.
+# writes report spools to a private directory below /tmp by default. An
+# operator-selected spool mount must be owned by this identity with mode 0700.
+# Root's default umask leaves copied sources and installed packages readable.
 RUN groupadd --gid 10001 odograph \
     && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin odograph
 USER 10001:10001

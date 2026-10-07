@@ -9,10 +9,12 @@ import time
 from fastapi import HTTPException, Request
 from fastapi.routing import APIRoute
 from fastapi.params import Form as FormParameter
+from psycopg.pq import TransactionStatus
 from starlette.responses import HTMLResponse, JSONResponse, Response
 
-from app.account_work import external_account_work
+from app.account_work import external_account_work, report_account_work
 from app.capacity import CapacityBusy
+from app.preparation_resources import PreparationBusy, PreparationResourceError
 
 # These paths materialize complete selections or perform structural mutations.
 # The keys describe server-owned route definitions, never client account claims.
@@ -38,6 +40,9 @@ FOREGROUND_ROUTES = frozenset({
     ('POST', '/places'), ('POST', '/places/{place_id}/update'),
     ('POST', '/places/{place_id}/delete'), ('POST', '/rules'),
     ('POST', '/rules/{rule_id}/delete'),
+})
+PREPARED_REPORT_ROUTES = frozenset({
+    '/report/range', '/report/range/export', '/report/{year}', '/report/{year}/export',
 })
 INTERACTIVE_ROUTES = frozenset({
     ('POST', '/login/local'), ('POST', '/signup'), ('POST', '/invite'),
@@ -101,14 +106,14 @@ class AdmissionRoute(APIRoute):
         return self.body_field is not None and isinstance(self.body_field.field_info, FormParameter)
 
     def protected_dependency(self):
-        from app.auth import require_admin, require_legacy_establishment, require_user
+        from app.auth import require_admin, require_legacy_establishment, require_report_user, require_user
         calls = []
         def visit(dependant):
             calls.append(dependant.call)
             for child in dependant.dependencies:
                 visit(child)
         visit(self.dependant)
-        for dependency in (require_admin, require_legacy_establishment, require_user):
+        for dependency in (require_admin, require_legacy_establishment, require_report_user, require_user):
             if dependency in calls:
                 return dependency
         return None
@@ -156,6 +161,7 @@ class AdmissionRoute(APIRoute):
         importing = self.path == '/settings/import/data'
         avatar_upload = self.path == '/settings/account/avatar'
         response_started = False
+        response_complete = False
         body_receipt_busy = False
         started_send = None
         auth_stack = AsyncExitStack()
@@ -165,7 +171,7 @@ class AdmissionRoute(APIRoute):
             scope.setdefault('state', {}).pop('_capacity_release_auth', None)
 
         async def bounded_send(message):
-            nonlocal response_started, started_send
+            nonlocal response_started, response_complete, started_send
             # Framework form parsing converts receipt exceptions to HTTP 400.
             # Restore admission expiry before any replacement response starts.
             if body_receipt_busy and not response_started:
@@ -173,13 +179,20 @@ class AdmissionRoute(APIRoute):
             if started_send is None:
                 await release_auth()
                 started_send = time.monotonic()
+                scope.setdefault("state", {}).setdefault("_capacity_response_deadline",
+                    started_send + capacity_setting(manager, "capacity_response_timeout_s"))
             if message['type'] == 'http.response.start':
+                metadata = getattr(request.state, '_report_control_connection', None)
+                if metadata is not None and metadata.info.transaction_status != TransactionStatus.IDLE:
+                    raise RuntimeError('report metadata snapshot must close before response')
                 response_started = True
-            remaining = capacity_setting(manager, "capacity_response_timeout_s") - (time.monotonic() - started_send)
+            remaining = scope['state']['_capacity_response_deadline'] - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError('response deadline expired')
             async with asyncio.timeout(remaining):
                 await send(message)
+            if message['type'] == 'http.response.body' and not message.get('more_body', False):
+                response_complete = True
 
         async def invoke(body_cap=None, body_timeout=None):
             started_body = time.monotonic()
@@ -274,6 +287,36 @@ class AdmissionRoute(APIRoute):
                 scope.setdefault('state', {})['_capacity_authenticated_user'] = user
                 principal = request.state.principal
                 async with manager.operation(lane, principal=principal):
+                    if self.path in PREPARED_REPORT_ROUTES:
+                        from app.preparation import PreparationOperation
+                        async with PreparationOperation(spool_root=getattr(request.app.state.config, 'preparation_spool_dir', '')) as preparation:
+                            scope.setdefault('state', {})['_preparation'] = preparation
+                            async def report_response():
+                                async def disconnect():
+                                    while True:
+                                        message = await receive()
+                                        if message['type'] == 'http.disconnect':
+                                            if not response_complete:
+                                                preparation.stop()
+                                            return
+                                        await asyncio.sleep(0)
+                                listener = asyncio.create_task(disconnect())
+                                try:
+                                    async with report_account_work(request.app.state.control_pool, principal) as conn:
+                                        scope['state']['_report_control_connection'] = conn
+                                        try:
+                                            await invoke()
+                                        except BaseException as exc:
+                                            await preparation.backend_failure(exc)
+                                            raise
+                                        finally:
+                                            await preparation.close()
+                                            scope['state'].pop('_report_control_connection', None)
+                                finally:
+                                    listener.cancel()
+                                    await asyncio.gather(listener, return_exceptions=True)
+                            await preparation.perform(report_response)
+                        return
                     async with external_account_work(request.app.state.control_pool, principal.account_id):
                         if importing or avatar_upload:
                             cfg = request.app.state.config
@@ -286,7 +329,7 @@ class AdmissionRoute(APIRoute):
                         else:
                             await invoke(body_timeout=capacity_setting(manager, "capacity_import_body_timeout_s")
                                          if self.has_form else None)
-        except (CapacityBusy, TimeoutError):
+        except (CapacityBusy, TimeoutError, PreparationBusy, PreparationResourceError):
             if response_started:
                 raise
             if getattr(request.state, '_capacity_mutation_committed', False):
