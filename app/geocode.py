@@ -15,6 +15,7 @@ from app.worker import BatchOutcome
 from app.provider_http import bounded_json, GEOCODE_RESPONSE_MAX_BYTES
 from app.provider_pacing import ProviderPacer
 from app.capacity import current_owner, owned_thread
+from app.storage import enhancement_available, is_storage_capacity_error
 
 import asyncio
 import logging
@@ -26,6 +27,16 @@ from psycopg_pool import AsyncConnectionPool
 log = logging.getLogger(__name__)
 
 GEOCODE_PRECISION = 4  # keep in sync with migration 006's numeric(8,4)
+CACHED_ADDRESS_MAX_BYTES = 4_096
+CAPACITY_RECHECK_S = 300.0
+
+
+def _validate_cacheable_address(address: str | None) -> str | None:
+    if address is not None and (
+        not isinstance(address, str) or len(address.encode("utf-8")) > CACHED_ADDRESS_MAX_BYTES
+    ):
+        raise ValueError("provider address exceeds cached address limit")
+    return address
 
 
 def _parse_provider_response(parser, body, omit_country):
@@ -335,7 +346,7 @@ class GeocodeWorker:
     async def _coordinates(self, limit):
         async with self.pool.connection() as conn:
             cur = await conn.execute(
-                "SELECT rounded_lat,rounded_lon FROM geocode_retry WHERE account_id=%s "
+                "SELECT rounded_lat,rounded_lon,capacity_needed_bytes FROM geocode_retry WHERE account_id=%s "
                 "AND next_attempt_at<=now() ORDER BY next_attempt_at,attempted_at NULLS FIRST,"
                 "rounded_lat,rounded_lon LIMIT %s", (account_id(conn), limit),
             )
@@ -360,6 +371,18 @@ class GeocodeWorker:
     async def _discover(self):
         async with self.pool.connection() as conn:
             await conn.execute("SELECT * FROM geocode_discover_page(%s)", (account_id(conn),))
+            cur = await conn.execute(
+                "SELECT capacity_paused FROM geocode_discovery WHERE account_id=%s",
+                (account_id(conn),),
+            )
+            return (await cur.fetchone())[0]
+
+    async def _capacity_paused(self):
+        async with self.pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT geocode_refresh_capacity_pause(%s)", (account_id(conn),),
+            )
+            return (await cur.fetchone())[0]
 
     async def run_turn(self, cursor=None):
         from app.worker import TurnOutcome
@@ -367,14 +390,27 @@ class GeocodeWorker:
         pending = state is not None and state[0]
         due = next_retry is not None and next_retry[0]
         if pending and (state[1] != 'discovery' or not due):
-            await self._discover()
+            if await self._capacity_paused():
+                return TurnOutcome(deferred_until=asyncio.get_running_loop().time() + CAPACITY_RECHECK_S)
+            if await self._discover():
+                return TurnOutcome(deferred_until=asyncio.get_running_loop().time() + CAPACITY_RECHECK_S)
             return TurnOutcome(ready=True)
         if due:
             coords = await self._coordinates(1)
             if coords:
-                outcome = await self._geocode_one(*coords[0], ticket=cursor)
+                lat, lon, needed_bytes = coords[0]
+                outcome = await self._geocode_one(lat, lon, ticket=cursor)
                 if outcome is None:
                     return TurnOutcome(deferred_until=self.pacer.next_start)
+                if not outcome.attempted and not outcome.completed:
+                    if await self._capacity_paused():
+                        return TurnOutcome(deferred_until=asyncio.get_running_loop().time() + CAPACITY_RECHECK_S)
+                    async with self.pool.connection() as conn:
+                        ready = await enhancement_available(
+                            conn, needed_bytes=max(128, needed_bytes), account_credit_bytes=128,
+                        )
+                    if not ready:
+                        return TurnOutcome(deferred_until=asyncio.get_running_loop().time() + CAPACITY_RECHECK_S)
                 return TurnOutcome(batch=outcome, ready=True)
             return TurnOutcome(ready=True)
         if next_retry is not None:
@@ -385,10 +421,11 @@ class GeocodeWorker:
         """Compatibility batch entry point; production rotates every atomic unit."""
         state, _ = await self._progress()
         if state is not None and state[0]:
-            await self._discover()
+            if await self._capacity_paused() or await self._discover():
+                return BatchOutcome()
         coords = await self._coordinates(self.batch_size)
         outcome = BatchOutcome()
-        for i, (lat, lon) in enumerate(coords):
+        for i, (lat, lon, _) in enumerate(coords):
             if i > 0:
                 await asyncio.sleep(self.min_interval_s)
             item = await self._geocode_one(lat, lon)
@@ -405,7 +442,7 @@ class GeocodeWorker:
 
     async def _queue_row(self, conn, lat, lon, *, lock=False):
         cur = await conn.execute(
-            "SELECT attempted_at,next_attempt_at,failure_count FROM geocode_retry "
+            "SELECT attempted_at,next_attempt_at,failure_count,capacity_needed_bytes FROM geocode_retry "
             "WHERE account_id=%s AND rounded_lat=%s::numeric AND rounded_lon=%s::numeric"
             + (" FOR UPDATE" if lock else " AND next_attempt_at<=now()"),
             (account_id(conn), lat, lon),
@@ -423,9 +460,23 @@ class GeocodeWorker:
         delay = min(3600, 60 * 2 ** min(count - 1, 6))
         await conn.execute(
             "UPDATE geocode_retry SET attempted_at=now(),next_attempt_at=now()+%s*interval '1 second',"
-            "failure_count=%s,failure_reason=%s WHERE account_id=%s AND rounded_lat=%s::numeric AND rounded_lon=%s::numeric",
+            "failure_count=%s,failure_reason=%s,capacity_paused=false,capacity_needed_bytes=0 "
+            "WHERE account_id=%s AND rounded_lat=%s::numeric AND rounded_lon=%s::numeric",
             (delay, count, reason, account_id(conn), lat, lon),
         )
+
+    async def _pause_capacity_retry(self, lat, lon, queued, needed_bytes):
+        async with self.pool.connection() as conn:
+            await conn.execute("SELECT geocode_record_capacity_pause(%s)", (account_id(conn),))
+            if await self._queue_row(conn, lat, lon, lock=True) != queued:
+                return
+            await conn.execute(
+                "UPDATE geocode_retry SET attempted_at=now(),"
+                "next_attempt_at=now()+%s*interval '1 second',capacity_paused=true,"
+                "capacity_needed_bytes=%s WHERE account_id=%s "
+                "AND rounded_lat=%s::numeric AND rounded_lon=%s::numeric",
+                (CAPACITY_RECHECK_S, needed_bytes, account_id(conn), lat, lon),
+            )
 
     async def _valid_source(self, conn, source, lat, lon):
         trip_id, generation, device_id, device_generation, eligibility_generation, side = source
@@ -457,7 +508,16 @@ class GeocodeWorker:
                 (account_id(conn), lat, lon),
             )
             cached = await cur.fetchone() is not None
+            can_cache = (
+                not (source is not None and not cached)
+                or await enhancement_available(
+                    conn, needed_bytes=max(128, queued[3]), account_credit_bytes=128,
+                )
+            )
         attempted = source is not None and not cached
+        if attempted and not can_cache:
+            await self._pause_capacity_retry(lat, lon, queued, max(128, queued[3]))
+            return BatchOutcome()
         if attempted and self.pacer is not None:
             if ticket is None or not self.pacer.try_start(ticket):
                 return None
@@ -465,40 +525,50 @@ class GeocodeWorker:
         address = None
         if attempted:
             try:
-                address = await self.provider.reverse(self.http, float(lat), float(lon))
+                address = _validate_cacheable_address(
+                    await self.provider.reverse(self.http, float(lat), float(lon))
+                )
             except (httpx.HTTPError, ValueError) as exc:
                 failure = exc
                 reason = ('parse' if isinstance(exc, ValueError) else
                           'http' if isinstance(exc, httpx.HTTPStatusError) else 'transport')
                 log.warning("geocode: lookup failed (%s), leaving uncached", type(exc).__name__)
-        async with self.pool.connection() as conn:
-            # All personal writes acquire usage first. Take that same lock
-            # before device/trip validation to avoid reversing writer order.
-            await conn.execute("SELECT geocode_record_coordinate_turn(%s)", (account_id(conn),))
-            current_queue = await self._queue_row(conn, lat, lon, lock=True)
-            if current_queue != queued:
-                return BatchOutcome(attempted=int(attempted))
-            if not attempted:
-                # A new source may have appeared while this turn was outside
-                # its transaction. Keep its intent instead of losing that work.
-                if cached or await self._source(conn, lat, lon) is None:
-                    await self._delete(conn, lat, lon)
-                    return BatchOutcome(completed=1)
-                return BatchOutcome()
-            if not await self._valid_source(conn, source, lat, lon):
-                if await self._source(conn, lat, lon) is None:
-                    await self._delete(conn, lat, lon)
-                    return BatchOutcome(attempted=1, completed=1)
-                await self._retry(conn, lat, lon, queued[2], 'source_changed')
-                return BatchOutcome(attempted=1)
-            if failure is not None:
-                await self._retry(conn, lat, lon, queued[2], reason)
-                return BatchOutcome(attempted=1, retriable_failures=1, failure_type=type(failure).__name__)
-            await conn.execute(
-                "INSERT INTO geocode_cache(account_id,lat,lon,address) VALUES(%s,%s,%s,%s) "
-                "ON CONFLICT(account_id,lat,lon) DO NOTHING", (account_id(conn), lat, lon, address),
+        try:
+            async with self.pool.connection() as conn:
+                # All personal writes acquire usage first. Take that same lock
+                # before device/trip validation to avoid reversing writer order.
+                await conn.execute("SELECT geocode_record_coordinate_turn(%s)", (account_id(conn),))
+                current_queue = await self._queue_row(conn, lat, lon, lock=True)
+                if current_queue != queued:
+                    return BatchOutcome(attempted=int(attempted))
+                if not attempted:
+                    # A new source may have appeared while this turn was outside
+                    # its transaction. Keep its intent instead of losing that work.
+                    if cached or await self._source(conn, lat, lon) is None:
+                        await self._delete(conn, lat, lon)
+                        return BatchOutcome(completed=1)
+                    return BatchOutcome()
+                if not await self._valid_source(conn, source, lat, lon):
+                    if await self._source(conn, lat, lon) is None:
+                        await self._delete(conn, lat, lon)
+                        return BatchOutcome(attempted=1, completed=1)
+                    await self._retry(conn, lat, lon, queued[2], 'source_changed')
+                    return BatchOutcome(attempted=1)
+                if failure is not None:
+                    await self._retry(conn, lat, lon, queued[2], reason)
+                    return BatchOutcome(attempted=1, retriable_failures=1, failure_type=type(failure).__name__)
+                await conn.execute(
+                    "INSERT INTO geocode_cache(account_id,lat,lon,address) VALUES(%s,%s,%s,%s) "
+                    "ON CONFLICT(account_id,lat,lon) DO NOTHING", (account_id(conn), lat, lon, address),
+                )
+                await self._delete(conn, lat, lon)
+        except Exception as exc:
+            if not is_storage_capacity_error(exc):
+                raise
+            await self._pause_capacity_retry(
+                lat, lon, queued, 128 + (len(address.encode("utf-8")) if address else 0),
             )
-            await self._delete(conn, lat, lon)
+            return BatchOutcome(attempted=int(attempted))
         if address is None:
             log.info("geocode: lookup complete, no address found")
         return BatchOutcome(attempted=1, completed=1)

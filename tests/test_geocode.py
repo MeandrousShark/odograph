@@ -14,6 +14,7 @@ import httpx
 import pytest
 
 from app.geocode import (
+    CACHED_ADDRESS_MAX_BYTES,
     GEOCODE_PRECISION,
     GeoapifyProvider,
     NominatimProvider,
@@ -23,10 +24,19 @@ from app.geocode import (
     parse_nominatim_reverse_response,
     round_coord,
     strip_country_suffix,
+    _validate_cacheable_address,
 )
 from app.ui import TRIP_COLUMNS
 
 US_SUFFIX = "United States of America"
+
+
+def test_cached_address_limit_uses_utf8_bytes_and_never_truncates():
+    address = "é" * (CACHED_ADDRESS_MAX_BYTES // 2)
+    assert _validate_cacheable_address(address) == address
+    assert _validate_cacheable_address(None) is None
+    with pytest.raises(ValueError, match="cached address limit"):
+        _validate_cacheable_address(address + "x")
 
 # ---- round_coord ----
 

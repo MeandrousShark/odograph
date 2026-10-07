@@ -301,6 +301,58 @@ def test_routing_unavailable_with_blank_distance_returns_400_and_stores_nothing(
     _run(scenario)
 
 
+def test_oversized_route_refuses_even_a_filled_distance_without_saving(monkeypatch):
+    from app.snap import ProviderOutputTooLarge
+
+    async def oversized(*args):
+        raise ProviderOutputTooLarge("provider route exceeds 100000 vertices")
+
+    monkeypatch.setattr("app.ui.manual.route_line", oversized)
+
+    async def scenario(pool):
+        async with httpx.AsyncClient(transport=httpx.MockTransport(_ok_handler(1000))) as client:
+            request = _request(pool, http_client=client)
+            with pytest.raises(HTTPException) as exc:
+                await _add(request, route_mode="map", distance="8.5",
+                           start_lat="47.60", start_lon="-122.33",
+                           end_lat="47.70", end_lon="-122.20")
+        assert exc.value.status_code == 503
+        assert "trip was not saved" in exc.value.detail
+        assert "distance without a route" in exc.value.detail
+        assert await _trip_count(pool) == 0
+
+    _run(scenario)
+
+
+def test_full_allowance_skips_manual_provider_and_preserves_existing_data(monkeypatch):
+    from app.storage import storage_status
+
+    async def unexpected_provider(*args):
+        raise AssertionError("provider must not be called at account capacity")
+
+    monkeypatch.setattr("app.ui.manual.route_line", unexpected_provider)
+
+    async def scenario(pool):
+        async with pool.connection() as conn:
+            usage = await storage_status(conn)
+        async with pool.admin_pool.connection() as conn:
+            await conn.execute("UPDATE storage_grants SET account_limit_bytes=%s,"
+                               "raw_limit_bytes=1,enhancement_limit_bytes=1 WHERE account_id=%s",
+                               (usage["total_bytes"], pool.principal.account_id))
+        async with httpx.AsyncClient(transport=httpx.MockTransport(_ok_handler(1000))) as client:
+            with pytest.raises(HTTPException) as exc:
+                await _add(_request(pool, http_client=client), route_mode="map", distance="8.5",
+                           start_lat="47.60", start_lon="-122.33",
+                           end_lat="47.70", end_lon="-122.20")
+        assert exc.value.status_code == 503
+        assert "Storage allowance reached" in exc.value.detail
+        assert await _trip_count(pool) == 0
+        async with pool.connection() as conn:
+            assert (await storage_status(conn))["total_bytes"] == usage["total_bytes"]
+
+    _run(scenario)
+
+
 def test_route_mode_none_never_calls_osrm():
     async def scenario(pool):
         called = {"count": 0}

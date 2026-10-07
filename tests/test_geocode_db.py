@@ -16,6 +16,7 @@ from psycopg.rows import dict_row
 
 from app.db import make_pool
 from app.geocode import GeoapifyProvider, GeocodeWorker
+from app.storage import storage_status
 from app.ui import TRIP_COLUMNS
 from conftest import reset_account_db, seed_tracking_device
 from app.account_context import account_id
@@ -90,6 +91,239 @@ def test_geocode_source_disappearing_before_provider_call_is_not_attempted():
 
             outcome = await GeocodeWorker(pool, None, Provider(), 0)._geocode_one(47.1, -122.1)
             assert (outcome.attempted, outcome.completed, outcome.retriable_failures) == (0, 0, 0)
+        finally:
+            await raw.close()
+    asyncio.run(scenario())
+
+
+def test_geocode_capacity_pause_retains_retry_and_resumes_without_repeat_calls():
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                owner = account_id(conn)
+                await seed_tracking_device(conn, DEVICE, device_id=1)
+                await _insert_trip(conn, T0, T0 + timedelta(minutes=1), 47.1, -122.1)
+            async with raw.connection() as conn:
+                await conn.execute(
+                    "UPDATE storage_grants SET enhancement_limit_bytes=128 WHERE account_id=%s",
+                    (owner,),
+                )
+
+            class Provider:
+                calls = 0
+
+                async def reverse(self, client, lat, lon):
+                    self.calls += 1
+                    return "A"
+
+            provider = Provider()
+            worker = GeocodeWorker(pool, None, provider, 0)
+            first = await worker._geocode_one(47.1, -122.1)
+            assert first.attempted == 1 and first.completed == 0
+            assert provider.calls == 1
+            async with pool.connection() as conn:
+                retry = await (await conn.execute(
+                    "SELECT capacity_paused,capacity_needed_bytes FROM geocode_retry "
+                    "WHERE account_id=%s AND rounded_lat=47.1 AND rounded_lon=-122.1",
+                    (owner,),
+                )).fetchone()
+                assert retry == (True, 129)
+                await conn.execute(
+                    "UPDATE geocode_retry SET next_attempt_at=now() WHERE account_id=%s", (owner,),
+                )
+            pause = None
+            for _ in range(3):
+                pause = await worker.run_turn()
+                assert provider.calls == 1
+                if pause.deferred_until is not None:
+                    break
+            assert pause.deferred_until is not None
+
+            async with raw.connection() as conn:
+                await conn.execute(
+                    "UPDATE storage_grants SET enhancement_limit_bytes=129 WHERE account_id=%s",
+                    (owner,),
+                )
+            async with pool.connection() as conn:
+                await conn.execute(
+                    "UPDATE geocode_retry SET next_attempt_at=now() WHERE account_id=%s", (owner,),
+                )
+            completed = None
+            for _ in range(3):
+                completed = await worker.run_turn()
+                if completed.batch.completed:
+                    break
+            assert completed.batch.completed == 1
+            assert provider.calls == 2
+            async with pool.connection() as conn:
+                assert (await (await conn.execute(
+                    "SELECT address FROM geocode_cache WHERE account_id=%s AND lat=47.1 AND lon=-122.1",
+                    (owner,),
+                )).fetchone()) == ("A",)
+                assert (await (await conn.execute(
+                    "SELECT count(*) FROM geocode_retry WHERE account_id=%s", (owner,),
+                )).fetchone())[0] == 0
+        finally:
+            await raw.close()
+    asyncio.run(scenario())
+
+
+def test_geocode_preflight_pause_is_visible_and_resumes_without_provider_probe():
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                owner = account_id(conn)
+                await seed_tracking_device(conn, DEVICE, device_id=1)
+                await _insert_trip(conn, T0, T0 + timedelta(minutes=1), 47.1, -122.1)
+                usage_before = await (await conn.execute(
+                    "SELECT actual_bytes,reserved_bytes,enhancement_bytes "
+                    "FROM account_usage WHERE account_id=%s", (owner,),
+                )).fetchone()
+            async with raw.connection() as conn:
+                await conn.execute(
+                    "UPDATE storage_grants SET enhancement_limit_bytes=1 WHERE account_id=%s",
+                    (owner,),
+                )
+
+            class Provider:
+                calls = 0
+
+                async def reverse(self, client, lat, lon):
+                    self.calls += 1
+                    return None
+
+            provider = Provider()
+            worker = GeocodeWorker(pool, None, provider, 0)
+            paused = await worker._geocode_one(47.1, -122.1)
+            assert paused.attempted == 0 and provider.calls == 0
+            async with pool.connection() as conn:
+                assert (await (await conn.execute(
+                    "SELECT capacity_paused,capacity_needed_bytes FROM geocode_retry "
+                    "WHERE account_id=%s AND rounded_lat=47.1 AND rounded_lon=-122.1",
+                    (owner,),
+                )).fetchone()) == (True, 128)
+                assert (await storage_status(conn))["enhancement_paused"]
+                assert await (await conn.execute(
+                    "SELECT actual_bytes,reserved_bytes,enhancement_bytes "
+                    "FROM account_usage WHERE account_id=%s", (owner,),
+                )).fetchone() == usage_before
+
+            async with raw.connection() as conn:
+                await conn.execute(
+                    "UPDATE storage_grants SET enhancement_limit_bytes=256 WHERE account_id=%s",
+                    (owner,),
+                )
+            async with pool.connection() as conn:
+                await conn.execute(
+                    "UPDATE geocode_retry SET next_attempt_at=now() WHERE account_id=%s", (owner,),
+                )
+            for _ in range(4):
+                turn = await worker.run_turn()
+                if turn.batch.completed:
+                    break
+            assert turn.batch.completed == 1 and provider.calls == 1
+            await worker._capacity_paused()
+            async with pool.connection() as conn:
+                assert not (await storage_status(conn))["enhancement_paused"]
+        finally:
+            await raw.close()
+    asyncio.run(scenario())
+
+
+def test_oversized_utf8_provider_address_is_retried_without_caching_a_miss():
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                owner = account_id(conn)
+                await seed_tracking_device(conn, DEVICE, device_id=1)
+                await _insert_trip(conn, T0, T0 + timedelta(minutes=1), 47.1, -122.1)
+
+            class Provider:
+                address = "é" * 2049
+
+                async def reverse(self, client, lat, lon):
+                    return self.address
+
+            provider = Provider()
+            worker = GeocodeWorker(pool, None, provider, 0)
+            failed = await worker._geocode_one(47.1, -122.1)
+            assert failed.retriable_failures == 1 and failed.completed == 0
+            async with pool.connection() as conn:
+                assert (await (await conn.execute(
+                    "SELECT count(*) FROM geocode_cache WHERE account_id=%s", (owner,),
+                )).fetchone())[0] == 0
+                assert (await (await conn.execute(
+                    "SELECT failure_reason::text FROM geocode_retry WHERE account_id=%s",
+                    (owner,),
+                )).fetchone()) == ("parse",)
+                await conn.execute(
+                    "UPDATE geocode_retry SET next_attempt_at=now() WHERE account_id=%s", (owner,),
+                )
+
+            provider.address = "é" * 2048
+            assert (await worker._geocode_one(47.1, -122.1)).completed == 1
+            async with pool.connection() as conn:
+                assert (await (await conn.execute(
+                    "SELECT address FROM geocode_cache WHERE account_id=%s", (owner,),
+                )).fetchone()) == (provider.address,)
+        finally:
+            await raw.close()
+    asyncio.run(scenario())
+
+
+def test_geocode_capacity_race_can_pause_when_discovery_turn_byte_cannot_grow():
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                owner = account_id(conn)
+                await seed_tracking_device(conn, DEVICE, device_id=1)
+                await _insert_trip(conn, T0, T0 + timedelta(minutes=1), 47.1, -122.1)
+            worker = GeocodeWorker(pool, None, None, 0)
+            await worker._discover()
+            async with raw.connection() as conn:
+                used = (await (await conn.execute(
+                    "SELECT actual_bytes+reserved_bytes FROM account_usage WHERE account_id=%s",
+                    (owner,),
+                )).fetchone())[0]
+                await conn.execute(
+                    "UPDATE storage_grants SET account_limit_bytes=%s,raw_limit_bytes=1,"
+                    "enhancement_limit_bytes=129 WHERE account_id=%s",
+                    (used, owner),
+                )
+
+            class Provider:
+                calls = 0
+
+                async def reverse(self, client, lat, lon):
+                    self.calls += 1
+                    return "A"
+
+            provider = Provider()
+            worker.provider = provider
+            result = await worker._geocode_one(47.1, -122.1)
+            assert result.attempted == 1 and result.completed == 0
+            assert provider.calls == 1
+            async with pool.connection() as conn:
+                assert (await (await conn.execute(
+                    "SELECT capacity_paused,capacity_needed_bytes FROM geocode_retry "
+                    "WHERE account_id=%s AND rounded_lat=47.1 AND rounded_lon=-122.1",
+                    (owner,),
+                )).fetchone()) == (True, 129)
+                assert (await (await conn.execute(
+                    "SELECT count(*) FROM geocode_cache WHERE account_id=%s", (owner,),
+                )).fetchone())[0] == 0
         finally:
             await raw.close()
     asyncio.run(scenario())

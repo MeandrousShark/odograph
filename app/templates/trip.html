@@ -51,6 +51,8 @@
         <span class="trip-detail-snap">Road-snap incomplete, showing raw GPS distance</span>
         {% elif trip.snap_status in ('ok', 'low_confidence') %}
         <span class="trip-detail-snap">Road-snapped{% if trip.snap_status == 'low_confidence' %}, low confidence{% endif %}; raw GPS {{ trip.distance_m | mi }} mi</span>
+        {% elif trip.snap_capacity_needed_bytes | default(0) > 0 %}
+        <span class="trip-detail-snap">Route enhancement paused for storage capacity; showing raw GPS distance. <a href="/settings#storage-allowance">Recovery options</a></span>
         {% elif trip.snap_status == 'pending' %}
         <span class="trip-detail-snap">Not yet road-snapped</span>
         {% elif trip.snap_status == 'failed' %}

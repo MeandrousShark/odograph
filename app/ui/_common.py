@@ -78,6 +78,7 @@ REPORT_TRIP_COLUMNS = f"""
 # free of the predecessor/overlap lookups while trip and review queries
 # retain the complete projection.
 TRIP_COLUMNS = f"""{REPORT_TRIP_COLUMNS},
+    snap_capacity_needed_bytes,
     -- Missing-trip detection: four near-identical subselects for the
     -- previous included trip, because one SELECT item can't reference
     -- another's alias (and a LATERAL join would mean touching every FROM

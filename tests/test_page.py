@@ -3,9 +3,23 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from app.page import render_page
 from app.account_context import AccountConnection, AccountPrincipal
 from app.ui import review
+
+
+@pytest.fixture(autouse=True)
+def storage_reads(monkeypatch):
+    reads = []
+
+    async def status(conn):
+        reads.append(conn)
+        return {"total_bytes": 128, "warning": False}
+
+    monkeypatch.setattr("app.page.storage_status", status)
+    return reads
 
 
 class _Cursor:
@@ -50,7 +64,7 @@ class _Templates:
         return context
 
 
-def test_render_page_queries_only_its_account_unclassified_count_once():
+def test_render_page_queries_its_account_count_and_storage_once(storage_reads):
     pool = _Pool()
     templates = _Templates()
     request = SimpleNamespace(state=SimpleNamespace(account_pool=pool), app=SimpleNamespace(state=SimpleNamespace(templates=templates)))
@@ -59,6 +73,9 @@ def test_render_page_queries_only_its_account_unclassified_count_once():
 
     assert pool.conn.queries == [("SELECT count(*) FROM trips WHERE account_id = %s AND category = 'unclassified'", (41,))]
     assert context["review_count"] == 5
+    assert context["storage"] == {"total_bytes": 128, "warning": False}
+    assert len(storage_reads) == 1
+    assert storage_reads[0].principal.account_id == 41
     assert templates.calls[0][1] == "dashboard.html"
 
 
@@ -72,7 +89,7 @@ def test_render_page_preserves_a_nondefault_status_code():
     assert templates.calls[0][3] == 400
 
 
-def test_render_page_reuses_an_explicit_account_connection_without_another_borrow():
+def test_render_page_reuses_an_explicit_account_connection_without_another_borrow(storage_reads):
     raw = _Connection()
     conn = AccountConnection(raw, AccountPrincipal(41, True, 1))
     templates = _Templates()
@@ -82,6 +99,7 @@ def test_render_page_reuses_an_explicit_account_connection_without_another_borro
 
     assert raw.queries == [("SELECT count(*) FROM trips WHERE account_id = %s AND category = 'unclassified'", (41,))]
     assert context["review_count"] == 5
+    assert storage_reads == [conn]
 
 
 def test_review_full_page_reuses_its_open_account_connection(monkeypatch):

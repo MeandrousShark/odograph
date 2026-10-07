@@ -126,7 +126,7 @@ class _FakeCursor:
 
     async def fetchone(self):
         if "SELECT attempted_at,next_attempt_at,failure_count" in self.query:
-            return (None, datetime(2024, 1, 1, tzinfo=timezone.utc), 0)
+            return (None, datetime(2024, 1, 1, tzinfo=timezone.utc), 0, 0)
         if "SELECT * FROM geocode_representative_source" in self.query:
             return (1, 1, None, None, None, 'start')
         if "SELECT 1 FROM geocode_cache" in self.query:

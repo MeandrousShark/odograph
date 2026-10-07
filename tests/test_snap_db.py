@@ -19,7 +19,8 @@ import httpx
 import pytest
 
 from app.db import make_pool
-from app.snap import MatchPoint, SnapWorker, downsample
+from app.snap import MatchPoint, SNAP_MIN_ROUTE_BYTES, SnapWorker, downsample
+from app.storage import storage_status
 from app.worker import BatchOutcome
 from app.detector.runner import load_trip_points
 from conftest import reset_account_db, seed_tracking_device
@@ -181,6 +182,110 @@ async def _tidy_disabled_scenario():
 
 def test_snapworker_requests_osrm_match_with_tidy_disabled():
     asyncio.run(_tidy_disabled_scenario())
+
+
+def test_snap_capacity_pause_keeps_pending_route_and_resumes_after_grant_rises():
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            pool = await reset_account_db(raw)
+            async with pool.connection() as conn:
+                owner = account_id(conn)
+                await seed_tracking_device(conn, DEVICE, device_id=1)
+                trip = await _insert_trip(conn, T0, T0 + timedelta(seconds=15), 2)
+                await _insert_point(conn, T0, trip)
+                await _insert_point(conn, T0 + timedelta(seconds=15), trip)
+                route_bytes = (await (await conn.execute(
+                    "SELECT octet_length(ST_AsEWKB(ST_SetSRID(ST_GeomFromGeoJSON(%s),4326),'NDR'))",
+                    ('{"type":"MultiLineString","coordinates":[[[-122.33,47.6],[-122.331,47.601],[-122.33,47.6]]]}',),
+                )).fetchone())[0]
+                minimum_bytes = (await (await conn.execute(
+                    "SELECT octet_length(ST_AsEWKB(ST_GeomFromText(%s,4326),'NDR'))",
+                    ("MULTILINESTRING((0 0,1 1))",),
+                )).fetchone())[0]
+                assert minimum_bytes == SNAP_MIN_ROUTE_BYTES
+                usage_before = await (await conn.execute(
+                    "SELECT actual_bytes,reserved_bytes,enhancement_bytes "
+                    "FROM account_usage WHERE account_id=%s", (owner,),
+                )).fetchone()
+            calls = 0
+
+            def handler(request):
+                nonlocal calls
+                calls += 1
+                return httpx.Response(200, json={
+                    "code": "Ok",
+                    "matchings": [{"distance": 1000, "confidence": 1,
+                                   "geometry": {"coordinates": [
+                                       [-122.33, 47.6], [-122.331, 47.601], [-122.33, 47.6]
+                                   ]}}],
+                    "tracepoints": [{}, {}],
+                })
+
+            async with raw.connection() as conn:
+                await conn.execute(
+                    "UPDATE storage_grants SET enhancement_limit_bytes=1 WHERE account_id=%s",
+                    (owner,),
+                )
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                worker = SnapWorker(pool, client, "http://osrm", 0.5, 250)
+                assert (await worker.run_turn()).deferred_until is not None
+                assert calls == 0
+                async with pool.connection() as conn:
+                    assert (await (await conn.execute(
+                        "SELECT snap_capacity_needed_bytes FROM trips WHERE id=%s", (trip,),
+                    )).fetchone()) == (SNAP_MIN_ROUTE_BYTES,)
+                    assert (await storage_status(conn))["enhancement_paused"]
+                    assert await (await conn.execute(
+                        "SELECT actual_bytes,reserved_bytes,enhancement_bytes "
+                        "FROM account_usage WHERE account_id=%s", (owner,),
+                    )).fetchone() == usage_before
+                    await conn.execute(
+                        "UPDATE trips SET snap_attempted_at=now()-interval '1000 seconds' WHERE id=%s",
+                        (trip,),
+                    )
+
+                async with raw.connection() as conn:
+                    await conn.execute(
+                        "UPDATE storage_grants SET enhancement_limit_bytes=%s WHERE account_id=%s",
+                        (route_bytes - 1, owner),
+                    )
+                assert (await worker.run_turn()).batch.attempted == 1
+                assert calls == 1
+                async with pool.connection() as conn:
+                    assert (await (await conn.execute(
+                        "SELECT snap_status::text,snap_capacity_needed_bytes FROM trips WHERE id=%s",
+                        (trip,),
+                    )).fetchone()) == ("pending", route_bytes)
+                    await conn.execute(
+                        "UPDATE trips SET snap_attempted_at=now()-interval '1000 seconds' WHERE id=%s",
+                        (trip,),
+                    )
+                assert (await worker.run_turn()).deferred_until is not None
+                assert calls == 1
+
+                async with raw.connection() as conn:
+                    await conn.execute(
+                        "UPDATE storage_grants SET enhancement_limit_bytes=%s WHERE account_id=%s",
+                        (route_bytes + 1, owner),
+                    )
+                async with pool.connection() as conn:
+                    await conn.execute(
+                        "UPDATE trips SET snap_attempted_at=now()-interval '1000 seconds' WHERE id=%s",
+                        (trip,),
+                    )
+                assert (await worker.run_turn()).batch.completed == 1
+                assert calls == 2
+                async with pool.connection() as conn:
+                    assert (await (await conn.execute(
+                        "SELECT snap_status::text,snap_capacity_needed_bytes FROM trips WHERE id=%s",
+                        (trip,),
+                    )).fetchone()) == ("ok", 0)
+                    assert not (await storage_status(conn))["enhancement_paused"]
+        finally:
+            await raw.close()
+    asyncio.run(scenario())
 
 
 async def _retry_order_scenario():

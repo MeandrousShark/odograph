@@ -5,7 +5,26 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.snap import MatchPoint, downsample, parse_match_response, radiuses, sample_ordinals
+from app.snap import (
+    MatchPoint, PROVIDER_ROUTE_MAX_VERTICES, ProviderOutputTooLarge,
+    _parse_and_serialize_match, downsample, parse_match_response, radiuses,
+    sample_ordinals,
+)
+
+
+def test_match_route_vertex_limit_counts_all_segments_without_truncation():
+    coordinates = [[0, 0]] * (PROVIDER_ROUTE_MAX_VERTICES // 2)
+    body = {"code": "Ok", "matchings": [
+        {"distance": 1, "confidence": 1, "geometry": {"coordinates": coordinates}},
+        {"distance": 1, "confidence": 1, "geometry": {"coordinates": coordinates}},
+    ], "tracepoints": [object(), object()]}
+    result, geometry = _parse_and_serialize_match(body, 0.5, 2, 2)
+    assert result.status == "ok"
+    assert geometry.count("[0, 0]") == PROVIDER_ROUTE_MAX_VERTICES
+
+    body["matchings"][1]["geometry"]["coordinates"] = coordinates + [[0, 0]]
+    with pytest.raises(ProviderOutputTooLarge):
+        _parse_and_serialize_match(body, 0.5, 2, 2)
 
 
 def _pts(n: int, accuracy=10.0) -> list[MatchPoint]:

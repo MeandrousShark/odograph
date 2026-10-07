@@ -1166,6 +1166,50 @@ def test_dry_run_produces_same_summary_and_leaves_target_unchanged():
     _scenario(run)
 
 
+def test_import_and_dry_run_refuse_positive_net_growth_at_account_ceiling():
+    async def run(pool):
+        await _populate_source(pool)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=_bare_app(pool)), base_url="http://testserver",
+        ) as client:
+            bundle = await _export(client)
+
+        await reset_account_db(pool.admin_pool)
+        async with pool.admin_pool.connection() as conn:
+            await conn.execute(
+                "UPDATE storage_grants g SET account_limit_bytes = u.actual_bytes + u.reserved_bytes, "
+                "raw_limit_bytes = LEAST(g.raw_limit_bytes, u.actual_bytes + u.reserved_bytes), "
+                "enhancement_limit_bytes = LEAST(g.enhancement_limit_bytes, "
+                "u.actual_bytes + u.reserved_bytes) "
+                "FROM account_usage u WHERE g.account_id = u.account_id AND g.account_id = %s",
+                (pool.principal.account_id,),
+            )
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=_bare_app(pool)), base_url="http://testserver",
+        ) as client:
+            csrf = await _csrf(client)
+            async with pool.connection() as conn:
+                before_rows = await _row_counts(conn)
+                before_usage = (await (await conn.execute(
+                    "SELECT actual_bytes, reserved_bytes FROM account_usage WHERE account_id = %s",
+                    (pool.principal.account_id,),
+                )).fetchone())
+
+            for dry_run in (True, False):
+                response = await _import(client, csrf, bundle, dry_run=dry_run)
+                assert response.status_code == 409
+                assert response.json()["error"] == "storage_capacity_exceeded"
+                async with pool.connection() as conn:
+                    assert await _row_counts(conn) == before_rows
+                    assert (await (await conn.execute(
+                        "SELECT actual_bytes, reserved_bytes FROM account_usage WHERE account_id = %s",
+                        (pool.principal.account_id,),
+                    )).fetchone()) == before_usage
+
+    _scenario(run)
+
+
 @pytest.mark.parametrize("bad_token", ["wrong-token", ""])
 def test_import_requires_csrf_token(bad_token):
     async def run(pool):

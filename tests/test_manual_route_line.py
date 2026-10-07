@@ -13,7 +13,10 @@ import httpx
 import pytest
 from fastapi import Request
 
-from app.snap import RoutedLine, route_line
+from app.snap import (
+    PROVIDER_ROUTE_MAX_VERTICES, ProviderOutputTooLarge, RoutedLine,
+    _parse_route_line, route_line,
+)
 
 
 def _client(handler) -> httpx.AsyncClient:
@@ -72,6 +75,15 @@ def test_route_line_drops_extra_geometry_keys():
         "coordinates": [[-122.0, 47.0], [-122.0, 47.02]],
     }
     assert set(result.geojson.keys()) == {"type", "coordinates"}
+
+
+def test_route_line_rejects_excess_provider_vertices_without_clipping():
+    coordinates = [[-122.0, 47.0]] * PROVIDER_ROUTE_MAX_VERTICES
+    assert len(_parse_route_line(_ok_body(coordinates=coordinates)).geojson["coordinates"]) == (
+        PROVIDER_ROUTE_MAX_VERTICES
+    )
+    with pytest.raises(ProviderOutputTooLarge):
+        _parse_route_line(_ok_body(coordinates=coordinates + [[-122.0, 47.02]]))
 
 
 def test_route_line_returns_none_on_bad_code():

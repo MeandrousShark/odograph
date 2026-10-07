@@ -33,6 +33,7 @@ from app.portable.export import (
 )
 from app.portable.importer import PortableImportError, _apply_import
 from app.portable.normalize import normalize_bundle
+from app.storage import is_storage_capacity_error
 from app.uploads import bounded_multipart_form, read_capped_upload
 
 log = logging.getLogger(__name__)
@@ -196,13 +197,23 @@ def make_router() -> APIRouter:
                         summary = await _apply_import(conn, normalized)
                         if is_dry_run:
                             # Runs the identical validate-then-mutate path so a
-                            # dry run genuinely exercises conflict detection,
+                            # dry run genuinely exercises deferred ceilings,
                             # then discards the mutation instead of committing it.
+                            await conn.execute("SET CONSTRAINTS storage_ceiling_final IMMEDIATE")
                             raise Rollback()
             except PortableImportError as exc:
                 return JSONResponse(exc.to_response(), status_code=exc.status_code)
             except LockNotAvailable:
                 return import_busy_response()
+            except Exception as exc:
+                if not is_storage_capacity_error(exc):
+                    raise
+                refusal = PortableImportError(
+                    "storage_capacity_exceeded",
+                    "The import needs more storage allowance. Raise the account limit or "
+                    "remove existing data, then retry the whole import.",
+                )
+                return JSONResponse(refusal.to_response(), status_code=refusal.status_code)
 
             return JSONResponse({"ok": True, "dry_run": is_dry_run, "counts": summary})
 

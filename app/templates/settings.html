@@ -21,6 +21,34 @@
 
 <p><a href="/settings/tracking">Tracking devices and credentials</a></p>
 
+{% if storage %}
+<section class="settings-section" id="storage-allowance" aria-labelledby="storage-heading">
+<h2 id="storage-heading">Storage allowance</h2>
+<p>This includes saved data and space reserved to turn received location fixes into trips. It differs from the space used by the database on disk.</p>
+<div class="storage-allowance-grid">
+{% for label, used, limit in (("All saved data", storage.total_bytes, storage.account_limit_bytes), ("Tracking messages", storage.raw_bytes, storage.raw_limit_bytes), ("Road matching and saved addresses", storage.enhancement_bytes, storage.enhancement_limit_bytes)) %}
+  <div class="storage-allowance-item">
+    <strong>{{ label }}</strong>
+    <p>{% if limit < 1048576 %}{{ used }} bytes of {{ limit }} bytes{% else %}{{ "%.1f"|format(used / 1048576) }} MiB of {{ "%.1f"|format(limit / 1048576) }} MiB{% endif %} ({{ "%.1f"|format(100 * used / limit) }}%)</p>
+    <progress max="{{ limit }}" value="{{ [used, limit]|min }}" aria-label="{{ label }} usage"></progress>
+    {% if used >= limit %}<p class="storage-state">{% if used > limit %}Over allowance{% else %}At allowance{% endif %}</p>{% elif used * 5 >= limit * 4 %}<p class="storage-state">Nearly full</p>{% endif %}
+  </div>
+{% endfor %}
+</div>
+<p class="muted">Saved data: {{ "%.1f"|format(storage.actual_bytes / 1048576) }} MiB. Reserved for trip processing: {{ "%.1f"|format(storage.reserved_bytes / 1048576) }} MiB. Tracking messages, routes, and addresses are included in the total.</p>
+{% if storage.account_blocked %}
+<p><strong>New data can't be saved.</strong> You can still view and export your history, sign in, recover your account, and remove data. Your tracking app can retry unsaved messages when there's room.</p>
+{% elif storage.raw_blocked %}
+<p><strong>New tracking messages can't be saved.</strong> Your tracking app can retry them when there's room. Existing trips and trip processing stay available; other data can still be saved within your total allowance.</p>
+{% endif %}
+{% if storage.enhancement_paused %}
+<p><strong>Road matching and address lookups are paused.</strong> Trips use their recorded route and distance, with coordinates when no saved address is available. Saved routes and addresses stay available; pending work resumes when there's room.</p>
+{% endif %}
+<p>Export a copy before removing unneeded data, or ask the operator for more space. Tracking-message retention can also free space. Trips aren't deleted automatically to make room.</p>
+<p class="muted">An exact tracking-message retry uses no extra space while its original message is kept. After the original is deleted, another retry needs space to save it again.</p>
+</section>
+{% endif %}
+
 {% if preferences is defined %}
 <section class="settings-section">
 <h2>Time zone and notifications</h2>
@@ -435,6 +463,20 @@ document.addEventListener('click', function (event) {
       <dd>{{ report.migrations.applied if report.migrations.applied is not none else "unknown" }}</dd></div>
     <div><dt>Expected</dt><dd>{{ report.migrations.expected }}</dd></div>
   </dl>
+
+  {% if report.storage %}
+  <h3>Instance logical grants</h3>
+  {% if report.storage.ok %}
+  <dl class="diagnostics-list">
+    {% for key, label in (("instance_budget_bytes", "Instance budget"), ("instance_reserve_bytes", "Unallocated reserve"), ("total_grants_bytes", "Funded account allowances")) %}
+    <div><dt>{{ label }}</dt><dd>{{ "%.2f"|format(report.storage.stats[key] / 1073741824) }} GiB</dd></div>
+    {% endfor %}
+    {% for key, label in (("account_count", "Accounts with allowances"), ("warning_count", "Accounts nearing an allowance"), ("blocked_count", "Accounts at an allowance")) %}
+    <div><dt>{{ label }}</dt><dd>{{ report.storage.stats[key] }}</dd></div>
+    {% endfor %}
+  </dl>
+  {% else %}<p>Grant status unavailable ({{ report.storage.error_type }}).</p>{% endif %}
+  {% endif %}
 
   <h3>Workers</h3>
   <p class="muted">State lives in this process's memory only and resets on every restart;

@@ -2983,3 +2983,9 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
   .review-state-actions { align-items: stretch; flex-direction: column; width: 100%; }
   .review-state-actions > * { width: 100%; }
 }
+.storage-allowance-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: 1rem; }
+.storage-allowance-item { border: 1px solid var(--border); border-radius: .5rem; padding: 1rem; }
+.storage-allowance-item p { margin: .5rem 0; }
+.storage-allowance-item progress { width: 100%; accent-color: var(--accent-primary); }
+.storage-state { font-weight: 600; }
+.storage-notice { margin-bottom: 1rem; }

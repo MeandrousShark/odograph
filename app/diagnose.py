@@ -31,7 +31,7 @@ from psycopg_pool import AsyncConnectionPool
 
 from app.config import Config
 from app.capacity import CapacityBusy, owned_thread
-from app.account_context import AccountPool
+from app.account_context import AccountPool, control_connection
 from app.db import MIGRATIONS_DIR, MIGRATION_FILENAME_RE
 from app.application_roles import application_role_pools
 from app.detector.runner import DETECTOR_VERSION
@@ -133,6 +133,7 @@ class DiagnosticsReport:
     migrations: MigrationReport
     workers: list[WorkerReport]
     config_presence: dict[str, bool]
+    storage: PoolReport | None = None
 
 
 def _expected_migration_versions() -> list[int]:
@@ -260,7 +261,7 @@ def worker_reports_from_config(cfg: Config) -> list[WorkerReport]:
 
 
 async def build_report(
-    cfg: Config, pool: AsyncConnectionPool | AccountPool, state=None,
+    cfg: Config, pool: AsyncConnectionPool | AccountPool, state=None, *, control_pool=None,
 ) -> DiagnosticsReport:
     """The one report builder both surfaces call. `state` is the running
     app's `app.state` (worker run history included) from the Settings page,
@@ -282,6 +283,9 @@ async def build_report(
         worker_reports_from_state(state) if state is not None
         else worker_reports_from_config(cfg)
     )
+    if control_pool is None:
+        control_pool = getattr(state, "control_pool", None)
+    storage = await _check_storage(control_pool) if control_pool is not None else None
     return DiagnosticsReport(
         app_version=cfg.app_version,
         git_revision=cfg.app_git_revision,
@@ -290,7 +294,22 @@ async def build_report(
         migrations=migrations,
         workers=workers,
         config_presence=config_presence(cfg),
+        storage=storage,
     )
+
+
+async def _check_storage(pool) -> PoolReport:
+    try:
+        async with control_connection(pool) as conn:
+            cur = await conn.execute("SELECT * FROM public.storage_instance_status()")
+            row = await cur.fetchone()
+        keys = ("instance_budget_bytes", "instance_reserve_bytes", "total_grants_bytes",
+                "account_count", "warning_count", "blocked_count")
+        if row is None or len(row) != len(keys):
+            return PoolReport(ok=False, error_type="StorageStatusUnavailable")
+        return PoolReport(ok=True, stats=dict(zip(keys, row)))
+    except Exception as exc:
+        return PoolReport(ok=False, error_type=type(exc).__name__)
 
 
 async def _check_osrm(cfg: Config, client: httpx.AsyncClient) -> ConnectivityResult:
@@ -467,6 +486,14 @@ def render_report_text(
     lines.append("config presence:")
     for key, value in sorted(report.config_presence.items()):
         lines.append(f"  {key}: {value}")
+    if report.storage is not None:
+        lines.append("")
+        lines.append("logical storage grants:")
+        if report.storage.ok:
+            for key, value in sorted(report.storage.stats.items()):
+                lines.append(f"  {key}: {value}")
+        else:
+            lines.append(f"  unavailable ({report.storage.error_type})")
     if connectivity is not None:
         lines.append("")
         lines.append("connectivity (checked now):")
@@ -483,7 +510,7 @@ async def _main() -> None:
     cfg = Config.from_env()
     try:
         async with application_role_pools(cfg.database_url) as pools:
-            report = await build_report(cfg, pools.runtime, state=None)
+            report = await build_report(cfg, pools.runtime, state=None, control_pool=pools.control)
     except Exception as exc:
         report = DiagnosticsReport(
             app_version=cfg.app_version, git_revision=cfg.app_git_revision,

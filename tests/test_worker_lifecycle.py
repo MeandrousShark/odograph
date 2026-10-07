@@ -225,7 +225,8 @@ def test_lifespan_and_diagnostics_agree_on_config_worker_predicates(
 
     monkeypatch.setattr(main_module, "run_migrations", _run_migrations)
     @asynccontextmanager
-    async def fake_role_pools(url):
+    async def fake_role_pools(url, *, storage_config=None):
+        assert storage_config is cfg
         yield SimpleNamespace(control=pool, runtime=pool)
     monkeypatch.setattr(main_module, "application_role_pools", fake_role_pools)
     monkeypatch.setattr(main_module, "AccountWorker", _FakeLifespanResource)
