@@ -386,10 +386,8 @@ def _smtp_probe(cfg: Config) -> None:
     answer "is the SMTP host reachable", not "are these credentials still
     valid"; repeatedly authenticating from a diagnostic click is exactly
     the kind of traffic that gets an operator's account rate-limited or
-    locked by a provider. Blocking (stdlib `smtplib`), run off the event
-    loop via `asyncio.to_thread` -- same shape as `app.mailer.smtp_transport`,
-    which this deliberately does not call, since that composes and would
-    attempt to send a real message.
+    locked by a provider. This blocking stdlib probe runs in an owned thread.
+    It is separate from the supervised helper used for admitted message sends.
     """
     context = (
         ssl._create_unverified_context() if cfg.smtp_tls_insecure

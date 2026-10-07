@@ -56,6 +56,16 @@ against a hostile operator.
   their responses as untrusted input, but does not otherwise sandbox them.
   Leaving any of them unconfigured removes that trust relationship entirely;
   the application runs fully without any of them.
+  Admitted SMTP sends run in isolated helper processes with a fixed
+  30-second whole transport deadline. Credentials and complete messages travel
+  through private anonymous pipes after the helper readiness handshake, rather
+  than command arguments, environment variables or temporary files. Helpers
+  receive no database credentials or unrelated descriptors. A separate
+  lifetime pipe and deadline watchdog end transport work if its parent dies;
+  Linux also installs a parent-death kill signal. Admission and lifecycle
+  ownership remain held until confirmed exit and reap. These controls bound
+  SMTP transport, while report preparation and the connectivity diagnostic
+  retain their separate behavior.
 
 ## Entry points
 

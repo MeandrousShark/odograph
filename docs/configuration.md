@@ -287,8 +287,9 @@ memory or total detector job duration. Large ledgers can still need substantial
 memory. Background types rotate after each completed device, snap trip, geocode
 coordinate, email kind or retention batch (at most 1,000 expired raw rows).
 Accounts rotate between those units, and ready backlogs continue without
-waiting for a periodic sweep. A whole detector device, complete report or SMTP
-transport can still take a long time; this is not a universal job deadline.
+waiting for a periodic sweep. A whole detector device or complete report can still take a long time;
+these controls do not establish a universal job deadline. SMTP sends have
+the separate whole transport deadline described below.
 Reverse-geocode retries persist per rounded endpoint coordinate. Transient
 failures defer that coordinate with exponential backoff from 60 seconds to a
 3,600-second maximum, allowing other due coordinates to proceed. Discovery
@@ -393,8 +394,8 @@ responses are limited to 8 MiB for OSRM, 256 KiB for geocoding/autocomplete
 and 64 KiB for notification responses. Oversize/timeout failures retain
 retryable work and graceful routing/address fallback; responses are never
 clipped, failed sends are not marked delivered and transient geocode failures
-are not cached as permanent missing addresses. SMTP keeps its existing
-15-second socket timeout, which does not bound the whole transport.
+are not cached as permanent missing addresses. SMTP sends retain their
+15-second socket timeout and have a fixed 30-second whole transport deadline.
 
 ### ntfy
 
@@ -424,6 +425,22 @@ within 10 minutes of a delivered link does not replace it. Delivery failures
 are logged without the address or link. Save digest recipients and delivery choices in
 Settings. The personal values below are legacy one-time upgrade inputs, not
 live overrides.
+
+Every admitted email send runs in a fresh helper process with a fixed
+30-second transport deadline, including DNS, connection, TLS, authentication,
+message transfer and SMTP session cleanup. The deadline starts before helper
+launch; slow progress does not extend it. Timeout or cancellation terminates
+the helper, and the send retains its admission and lifecycle lease until
+confirmed exit. Message serialization drains outside the event loop before
+launch; composing messages and preparing reports are outside this deadline.
+The separate SMTP connectivity diagnostic is unchanged.
+
+Success requires session cleanup, a valid result and confirmed helper exit
+within the deadline. A relay can accept a message before a timeout, crash or
+hung QUIT makes the result ambiguous. Such failures leave digest delivery
+unrecorded for the existing next-hour retry, which can duplicate mail.
+Security-mail failures retain their existing recovery behavior; a failed
+reset or challenge can revoke a link in a message the relay already accepted.
 
 | Variable | Default | Purpose |
 |---|---:|---|
