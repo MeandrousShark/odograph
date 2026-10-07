@@ -28,13 +28,15 @@ from app.auth import AuthRedirect
 from app.db import make_pool
 from app.detector.core import Params
 from app.detector.runner import DetectorRunner
+from app.ingest import FailedAuthLimiter, make_router as make_ingest_router
 from app.main import make_templates
 from app.portable import SEEDED_TAG_RULES, SEEDED_VEHICLE, _tag_rule_sort_key
 from app.portable import make_router as make_portable_router
 from app.rates import YearRate, deduction
 from app.ui import make_router as make_ui_router
+from app.tracking import create_device
 from app.vehicles import create_vehicle
-from conftest import reset_db, reset_account_db
+from conftest import add_test_account, reset_db, reset_account_db
 from personal_support import configure_personal_app, fixture_device
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -1206,6 +1208,98 @@ def test_import_and_dry_run_refuse_positive_net_growth_at_account_ceiling():
                         "SELECT actual_bytes, reserved_bytes FROM account_usage WHERE account_id = %s",
                         (pool.principal.account_id,),
                     )).fetchone()) == before_usage
+
+    _scenario(run)
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_over_capacity_import_keeps_other_account_ingest_available(monkeypatch, dry_run):
+    import app.portable.routes as routes
+
+    async def run(pool):
+        await _populate_source(pool)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=_bare_app(pool)), base_url="http://testserver",
+        ) as client:
+            bundle = await _export(client)
+
+        await reset_account_db(pool.admin_pool)
+        other = await add_test_account(pool.admin_pool, 42)
+        async with other.connection() as conn:
+            credential = await create_device(conn, "other-account")
+        async with pool.admin_pool.connection() as conn:
+            await conn.execute(
+                "UPDATE storage_grants g SET account_limit_bytes = u.actual_bytes + u.reserved_bytes, "
+                "raw_limit_bytes = LEAST(g.raw_limit_bytes, u.actual_bytes + u.reserved_bytes), "
+                "enhancement_limit_bytes = LEAST(g.enhancement_limit_bytes, "
+                "u.actual_bytes + u.reserved_bytes) "
+                "FROM account_usage u WHERE g.account_id = u.account_id AND g.account_id = %s",
+                (pool.principal.account_id,),
+            )
+
+        applied = asyncio.Event()
+        release = asyncio.Event()
+        original_apply = routes._apply_import
+
+        async def hold_applied_import(conn, normalized):
+            result = await original_apply(conn, normalized)
+            applied.set()
+            await release.wait()
+            return result
+
+        monkeypatch.setattr(routes, "_apply_import", hold_applied_import)
+        app = _bare_app(pool)
+        app.state.config.ingest_username = "unused"
+        app.state.config.ingest_password = "unused"
+        app.state.config.ingest_max_body_bytes = 1_000_000
+        app.state.ingest_limiter = FailedAuthLimiter(1000, 60.0)
+        app.include_router(make_ingest_router())
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver",
+        ) as client:
+            csrf = await _csrf(client)
+            app.state.detector_scheduler = SimpleNamespace(poke=lambda: None)
+            before = await _export(client)
+            async with pool.connection() as conn:
+                before_usage = await (await conn.execute(
+                    "SELECT actual_bytes, reserved_bytes, raw_bytes, enhancement_bytes "
+                    "FROM account_usage WHERE account_id = %s", (pool.principal.account_id,),
+                )).fetchone()
+
+            import_task = asyncio.create_task(_import(client, csrf, bundle, dry_run=dry_run))
+            try:
+                await asyncio.wait_for(applied.wait(), 10)
+                response = await asyncio.wait_for(client.post(
+                    "/ingest", auth=httpx.BasicAuth(credential.username, credential.secret),
+                    json={"_type": "location", "tid": "bb", "lat": 47.6, "lon": -122.3,
+                          "tst": 1775000000},
+                ), 5)
+                assert response.status_code == 200
+                assert not import_task.done()
+                async with other.connection() as conn:
+                    assert await (await conn.execute(
+                        "SELECT (SELECT count(*) FROM raw_messages), (SELECT count(*) FROM points)"
+                    )).fetchone() == (1, 1)
+            finally:
+                release.set()
+                response = await import_task
+
+            assert response.status_code == 409
+            assert response.json()["error"] == "storage_capacity_exceeded"
+            after = await _export(client)
+            assert {key: value for key, value in after.items() if key != "exported_at"} == {
+                key: value for key, value in before.items() if key != "exported_at"
+            }
+            async with pool.connection() as conn:
+                assert await (await conn.execute(
+                    "SELECT actual_bytes, reserved_bytes, raw_bytes, enhancement_bytes "
+                    "FROM account_usage WHERE account_id = %s", (pool.principal.account_id,),
+                )).fetchone() == before_usage
+            async with pool.admin_pool.connection() as conn:
+                assert (await (await conn.execute(
+                    "SELECT public.storage_usage_consistent()"
+                )).fetchone())[0]
 
     _scenario(run)
 
