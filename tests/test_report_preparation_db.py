@@ -1,9 +1,11 @@
 """Prepared report files match the legacy pure and database report oracles."""
 import asyncio
 import os
+import time
 from datetime import date, datetime
 from types import SimpleNamespace
 
+from psycopg import DataError
 from psycopg.pq import TransactionStatus
 import pytest
 
@@ -15,7 +17,9 @@ from app.expenses import build_expense_report
 from app.export import to_report_xlsx, to_range_report_xlsx
 from app.preparation import PreparationOperation
 from app.report import build_annual_report, build_range_report
-from app.report_preparation import prepare_report, Projection, _TRIP_SCALARS, _PURPOSE_NONBLANK, _purpose_projection
+from app.report_preparation import prepare_report, Projection
+from app.report_renderer import Renderer
+from app.preparation_resources import ResourceBudget, SpoolReservation
 from app.ui import reports
 from conftest import reset_account_db
 from test_report_projection_db import _seed, _full_rows, TZ
@@ -25,22 +29,32 @@ pytestmark = [pytest.mark.db, pytest.mark.skipif(not os.environ.get('TEST_DATABA
 
 
 @pytest.mark.parametrize('client_encoding',['UTF8','LATIN1'])
-@pytest.mark.parametrize('fallback',[False,True])
-def test_purpose_projection_preserves_python_strip_with_narrow_client(client_encoding,fallback,monkeypatch):
+@pytest.mark.parametrize('unicode_suffix',[False,True])
+def test_purpose_projection_preserves_python_strip_with_narrow_client(tmp_path,client_encoding,unicode_suffix):
     async def run():
         raw=make_pool(os.environ['TEST_DATABASE_URL']);await raw.open(wait=True)
+        reservation=SpoolReservation.acquire(tmp_path/'spool',time.monotonic()+60)
+        budget=ResourceBudget(reservation.directory,reservation.directory_fd)
+        renderer=object.__new__(Renderer)
+        renderer.budget,renderer.texts,renderer.refs=budget,budget.open('report-text'),{}
         try:
             pool=await reset_account_db(raw)
             async with pool.connection() as conn:
                 await _seed(conn)
                 server=conn.info.parameter_status('server_encoding')
-                purposes=[None,'',' \t\n\r\x1c\x1f\x85\xa0','\xa0Visit\x85','Plain visit']
-                if server=='UTF8':
-                    purposes += ['\u3000\u2003\u202f','\u3000Visit\u2003','\u3000'*40000]
-                ids=[row[0] for row in await (await conn.execute('SELECT id FROM trips WHERE account_id=%s ORDER BY id',(account_id(conn),))).fetchall()]
-                expected={identity:bool((purposes[i%len(purposes)] or '').strip()) for i,identity in enumerate(ids)}
+                if unicode_suffix and server!='UTF8':
+                    pytest.skip('Unicode conversion corpus requires UTF8 server')
+                purposes=[None,'',' \t\n\r\x1c\x1f\x85\xa0','\xa0Visit\x85','Plain visit',
+                    '\xa0'*40000,' '*40000+'Visit']
+                if unicode_suffix:
+                    purposes += [' '*40000+'\u3000']
+                    if client_encoding=='UTF8':
+                        purposes += ['\u3000\u2003\u202f','\u3000Visit\u2003']
+                ids=[row[0] for row in await (await conn.execute('SELECT id FROM trips WHERE account_id=%s ORDER BY id',
+                    (account_id(conn),))).fetchall()]
                 for i,identity in enumerate(ids):
-                    await conn.execute('UPDATE trips SET purpose=%s WHERE account_id=%s AND id=%s',(purposes[i%len(purposes)],account_id(conn),identity))
+                    await conn.execute('UPDATE trips SET purpose=%s WHERE account_id=%s AND id=%s',
+                        (purposes[i%len(purposes)],account_id(conn),identity))
             async with pool.connection() as conn:
                 await conn.execute("SELECT set_config('client_encoding',%s,true)",(client_encoding,))
                 assert conn.info.parameter_status('client_encoding')==client_encoding
@@ -48,24 +62,45 @@ def test_purpose_projection_preserves_python_strip_with_narrow_client(client_enc
                     def check(self): pass
                     def remaining_ms(self): return 15000
                 class Session:
-                    def __init__(self): self.commands=[]
-                    async def send_command(self,value): self.commands.append(value)
-                    async def send_text(self,value): assert len(value)<=65520
-                projection=Projection(Operation(),Session())
+                    def __init__(self): self.actual={};self.pending=None;self.chunks=[]
+                    async def send_command(self,value):
+                        if value['type']=='text':
+                            assert self.pending is None
+                            self.pending=value;self.chunks=[]
+                            if not value['size']: self.finish_text()
+                        elif value['type']=='vehicle_trip':
+                            row=renderer.trip(value['row'])
+                            self.actual[row['id']]=row['purpose_nonblank']
+                    def finish_text(self):
+                        chunks=iter(self.chunks)
+                        channel=SimpleNamespace(recv_text=lambda:next(chunks))
+                        renderer.text(self.pending['key'],self.pending['size'],channel,self.pending.get('encoding'))
+                        self.pending=None
+                    async def send_text(self,value):
+                        assert len(value)<=65520
+                        self.chunks.append(value)
+                        if sum(map(len,self.chunks))==self.pending['size']: self.finish_text()
+                session=Session();projection=Projection(Operation(),session)
                 bounds={'start':datetime(2026,1,1,tzinfo=TZ),'end':datetime(2027,1,1,tzinfo=TZ)}
-                if fallback:
-                    from psycopg.errors import NotSupportedError
-                    def unmapped(name): raise NotSupportedError('test unmapped server codec')
-                    monkeypatch.setattr('app.report_preparation.pg2pyenc',unmapped)
-                purpose_sql,purpose_param=_purpose_projection(conn)
-                scalars=_TRIP_SCALARS.replace(_PURPOSE_NONBLANK,purpose_sql)
-                query=f'SELECT {scalars} FROM trips WHERE account_id=%s ORDER BY id'
-                actual={row['id']:row['purpose_nonblank'] async for row in projection.rows(conn,query,(purpose_param,account_id(conn)))}
-                assert actual==expected
-                await projection.groups(conn,account_id(conn),bounds,2026,False)
-                grouped={command['row']['id']:command['row']['purpose_nonblank'] for command in projection.session.commands if command['type']=='vehicle_trip'}
-                assert grouped==expected
-        finally: await raw.close()
+                if unicode_suffix and client_encoding=='LATIN1':
+                    # Full legacy fetch fails even when the invalid suffix is beyond a UI prefix.
+                    with pytest.raises(DataError):
+                        async with conn.transaction():
+                            await (await conn.execute('SELECT purpose FROM trips WHERE account_id=%s ORDER BY id',
+                                (account_id(conn),))).fetchall()
+                    with pytest.raises(DataError):
+                        async with conn.transaction():
+                            await projection.groups(conn,account_id(conn),bounds,2026,False)
+                    assert not session.actual
+                else:
+                    rows=await (await conn.execute('SELECT id,purpose FROM trips WHERE account_id=%s ORDER BY id',
+                        (account_id(conn),))).fetchall()
+                    expected={identity:bool((purpose or '').strip()) for identity,purpose in rows}
+                    await projection.groups(conn,account_id(conn),bounds,2026,False)
+                    assert session.pending is None and session.actual==expected
+        finally:
+            renderer.texts.close();budget.close();reservation.release()
+            await raw.close()
     asyncio.run(run())
 
 

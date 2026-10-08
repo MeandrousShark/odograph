@@ -165,7 +165,8 @@ def test_sql_ascii_bytes_client_preserves_initial_settings_type_error():
 @pytest.mark.parametrize('kind',['literal','timezone_paths'])
 def test_metadata_length_pass_yields_before_finishing(kind,monkeypatch):
     value = '😀' * 100000
-    monkeypatch.setattr('app.notification_preparation.zoneinfo.TZPATH',('/'+value,))
+    # Patch only the consumer, preserving zoneinfo's dynamic TZPATH lookup.
+    monkeypatch.setattr('app.notification_preparation.zoneinfo',SimpleNamespace(TZPATH=('/'+value,)))
     async def run():
         projection = Projection(Operation(),Session())
         coroutine = projection.literal('email_from',value) if kind=='literal' else projection.timezone_paths()

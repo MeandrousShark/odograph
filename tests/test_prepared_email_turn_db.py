@@ -391,26 +391,54 @@ def test_no_selected_kind_still_validates_initial_settings(tmp_path,monkeypatch,
 
 def test_real_digest_history_deadline_rolls_back_and_sweep_continues(tmp_path,monkeypatch):
     import psycopg
-    original=psycopg.AsyncServerCursor.fetchmany
-    fail=True
+    original_fetch=psycopg.AsyncServerCursor.fetchmany
+    original_close=psycopg.AsyncServerCursor.close
+    original_cancel=psycopg.AsyncConnection._try_cancel
+    original_exit=psycopg.AsyncTransaction.__aexit__
+    target=None;cancelled=False;closed=False;rolled_back=False
     async def fetch(cursor,size=0):
-        nonlocal fail
-        if cursor.name.startswith('notification_') and fail:
-            fail=False
-            await cursor.connection.execute('SELECT pg_sleep(2)')
-        return await original(cursor,size)
+        nonlocal target
+        if cursor.name.startswith('notification_') and target is None:
+            target=cursor.connection.info.backend_pid
+            # Isolate the application history timer from PostgreSQL's backup timer.
+            await cursor.connection.execute('SET LOCAL statement_timeout=0')
+            await cursor.connection.execute('SELECT pg_sleep(10)')
+        return await original_fetch(cursor,size)
+    async def cancel(conn,**kwargs):
+        nonlocal cancelled
+        if conn.info.backend_pid==target: cancelled=True
+        return await original_cancel(conn,**kwargs)
+    async def close(cursor):
+        nonlocal closed
+        result=await original_close(cursor)
+        if cursor.name.startswith('notification_') and cursor.connection.info.backend_pid==target:
+            closed=True
+        return result
+    async def exit_transaction(transaction,exc_type,exc_value,traceback):
+        nonlocal rolled_back
+        matches=transaction.pgconn.backend_pid==target and exc_type is not None
+        result=await original_exit(transaction,exc_type,exc_value,traceback)
+        if matches: rolled_back=True
+        return result
     monkeypatch.setattr(psycopg.AsyncServerCursor,'fetchmany',fetch)
-    monkeypatch.setattr('app.digest_summary.PREPARATION_SECONDS',.05)
+    monkeypatch.setattr(psycopg.AsyncServerCursor,'close',close)
+    monkeypatch.setattr(psycopg.AsyncConnection,'_try_cancel',cancel)
+    monkeypatch.setattr(psycopg.AsyncTransaction,'__aexit__',exit_transaction)
+    monkeypatch.setattr('app.digest_summary.PREPARATION_SECONDS',1.0)
     async def run():
         state=await setup(tmp_path,monkeypatch)
         try:
             async with state.pool.connection() as conn:
                 await conn.execute('UPDATE account_settings SET email_monthly_summary=true WHERE account_id=%s',(account_id(conn),))
             await state.worker.run_once()
-            assert state.worker.status.last_failure_type in ('DigestPreparationTimeout','QueryCanceled')
+            assert target is not None and cancelled and closed and rolled_back
+            assert state.worker.status.last_failure_type=='DigestPreparationTimeout'
             assert state.worker.last_outcome.attempted == 2 and state.worker.last_outcome.retriable_failures == 1
             assert len(state.prepared) == 1 and str(state.prepared[0][1]['Subject']) == 'Odograph: log an odometer reading'
             assert [(kind,sent) for kind,sent,end in await deliveries(state)] == [('quarterly_odometer',True)]
+            async with state.raw.connection() as conn:
+                row=await (await conn.execute('SELECT state,xact_start FROM pg_stat_activity WHERE pid=%s',(target,))).fetchone()
+                assert row is None or row==('idle',None)
             assert_clean(state)
             monkeypatch.setattr('app.digest_summary.PREPARATION_SECONDS',15.0)
             await state.worker.run_once()
