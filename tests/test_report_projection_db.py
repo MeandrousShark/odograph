@@ -14,13 +14,13 @@ from psycopg.rows import dict_row
 
 from app.account_context import account_id
 from app.db import make_pool
-from app.export import to_range_report_xlsx, to_report_xlsx
+from app.export import to_csv, to_xlsx, to_range_report_xlsx, to_report_xlsx
 from app.report import build_annual_report, build_range_report
-from app.ui import make_router
 from app.ui._common import TRIP_COLUMNS
 import app.ui.reports as reports
 from conftest import reset_account_db, seed_tracking_device
-from personal_support import personal_request
+from prepared_report_support import report_response
+from test_streamed_exports import signature
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -189,16 +189,7 @@ def test_report_projection_preserves_rows_reports_expenses_odometer_and_workbook
 
 
 @pytest.mark.parametrize("format", ["csv", "xlsx"])
-def test_ordinary_export_retains_full_trip_projection(monkeypatch, format):
-    captured = []
-    serializer = getattr(reports, f"to_{format}")
-
-    def capture(trips, rates, tz):
-        captured.extend(trips)
-        return serializer(trips, rates, tz)
-
-    monkeypatch.setattr(reports, f"to_{format}", capture)
-
+def test_ordinary_export_retains_full_trip_projection(format):
     async def scenario():
         raw_pool = make_pool(TEST_DB)
         await raw_pool.open(wait=True)
@@ -206,24 +197,20 @@ def test_ordinary_export_retains_full_trip_projection(monkeypatch, format):
             pool = await reset_account_db(raw_pool)
             async with pool.connection() as conn:
                 await _seed(conn)
+                await conn.execute('UPDATE trips SET notes=%s,purpose=%s WHERE account_id=%s',
+                                   ('車😀,%"\r\n' * 6000, 'Client,%"\r\nvisit', account_id(conn)))
                 full = await _full_rows(conn, date(2026, 1, 1), date(2026, 12, 31))
                 _, rates = await reports._fetch_range_trips_in(conn, TZ, date(2026, 1, 1), date(2026, 12, 31))
-            request = personal_request(SimpleNamespace(
-                app=SimpleNamespace(state=SimpleNamespace(pool=pool, config=SimpleNamespace(display_tz=TZ))),
-            ))
-            export = next(route.endpoint for route in make_router().routes if route.path == "/export")
-            response = await export(
-                request, user={"sub": "test"}, format=format, category="", from_="2026-01-01",
-                to="2026-12-31", vehicle="", q="", exclusion="",
-            )
+            assert full and BADGE_FIELDS <= set(full[0])
+            assert all(len(trip['notes']) > 32767 for trip in full)
+            response = await report_response(pool,
+                f'/export?format={format}&from=2026-01-01&to=2026-12-31', SimpleNamespace(display_tz=TZ))
             assert response.status_code == 200
-            assert captured == list(reversed(full))
-            assert BADGE_FIELDS <= set(captured[0])
-            expected = serializer(list(reversed(full)), rates, TZ)
+            expected = (to_csv if format == 'csv' else to_xlsx)(list(reversed(full)), rates, TZ)
             if format == "csv":
                 assert response.body == expected
             else:
-                assert _workbook_cells(response.body) == _workbook_cells(expected)
+                assert signature(response.body) == signature(expected)
         finally:
             await raw_pool.close()
 
