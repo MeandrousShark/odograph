@@ -29,6 +29,11 @@ eval "$(scripts/test_db.sh start contributor)"
 scripts/test_db.sh cleanup contributor
 ```
 
+CI splits the suite into parallel jobs, each with its own database: one runs
+`-m "not db"`, and the others each run a share of `-m db` selected by
+`ODOGRAPH_DB_SHARD=K/N`. Without that variable every test is selected, so a
+bare `.venv/bin/pytest` still runs the full suite.
+
 Never point tests at real data. The database test suite resets its public
 schema. Install the Gitleaks version pinned in `.github/workflows/test.yml`,
 then run `python scripts/check_public_tree.py` before opening a pull request.
