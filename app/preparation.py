@@ -146,6 +146,26 @@ class PreparationSession:
         if result.get('error') == 'resource':
             raise PreparationResourceError('preparation helper resource stop')
         if 'error' in result:
+            category = result.get('category')
+            if category == 'ValueError':
+                raise ValueError('preparation input is invalid')
+            if category == 'TypeError':
+                raise TypeError('preparation input has an invalid type')
+            if category == 'DataError':
+                from psycopg import DataError
+                raise DataError('preparation input is invalid')
+            if category == 'OverflowError':
+                raise OverflowError('preparation input overflow')
+            if category == 'UnicodeEncodeError':
+                raise UnicodeEncodeError('utf8', '', 0, 0, 'preparation conversion failed')
+            if category == 'UnicodeDecodeError':
+                raise UnicodeDecodeError('utf8', b'', 0, 0, 'preparation conversion failed')
+            if category == 'ZoneInfoNotFoundError':
+                from zoneinfo import ZoneInfoNotFoundError
+                raise ZoneInfoNotFoundError('preparation timezone is invalid')
+            if category == 'HeaderParseError':
+                from email.errors import HeaderParseError
+                raise HeaderParseError('preparation header is invalid')
             raise PreparationError('preparation helper failed')
         return result
 
@@ -192,8 +212,8 @@ class PreparationOperation:
 
     async def __aenter__(self):
         owner = current_owner()
-        if owner is None or owner.lane not in ('foreground', 'background'):
-            raise CapacityContractError('preparation requires foreground or background ownership')
+        if owner is None or owner.lane not in ('foreground', 'background', 'mail'):
+            raise CapacityContractError('preparation requires foreground, background or mail ownership')
         self.deadline = time.monotonic() + self.timeout_s
         self._timer = asyncio.get_running_loop().call_later(self.timeout_s, self.stop, 'deadline')
         reserve = asyncio.create_task(owned_thread(SpoolReservation.acquire, self.spool_root, self.deadline))
@@ -294,7 +314,7 @@ class PreparationOperation:
         self.check()
         if self._spawn is not None:
             raise CapacityContractError('preparation helper already started')
-        if mode != 'report':
+        if mode not in ('report', 'notification', 'security', 'ntfy'):
             raise ValueError('unknown preparation mode')
         self._lifetime_read, self._lifetime_write = os.pipe()
         self.reservation.validate()

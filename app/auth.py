@@ -62,6 +62,7 @@ from app.ingest import _read_capped_body
 from app.invitations import InvitationUnavailable, redeem_invitation
 from app.local_auth import hash_password, verify_password
 from app.mailer import Mailer
+from app.security_mail_preparation import SecurityMailSpec
 from app.password_reset import consume_password_reset, password_reset_usable
 from app.page import render_page
 from app.uploads import UploadEnvelopeTooLarge, bounded_multipart_form, read_capped_upload
@@ -141,10 +142,10 @@ def check_form_csrf(request: Request, token: str) -> None:
         raise HTTPException(status_code=403, detail="CSRF token missing or invalid")
 
 
-def _email_challenge_delivery_available(config) -> bool:
+def _email_challenge_delivery_available(config, *, link_base=None) -> bool:
     return bool(
         config.smtp_host and config.email_from
-        and security_link_base(config.app_url) and not config.dev_no_auth
+        and (security_link_base(config.app_url) if link_base is None else link_base) and not config.dev_no_auth
     )
 
 
@@ -811,7 +812,7 @@ def make_router() -> APIRouter:
                 "signup_available": signup_available,
                 "legacy_oidc_available": legacy_oidc_available,
                 "oidc_login_available": oidc_login_available,
-                "password_reset_available": has_account and password_reset_available(cfg),
+                "password_reset_available": has_account and password_reset_available(cfg, link_base=request.app.state.security_link_base),
                 "notice": request.session.pop("login_notice", None),
                 "error": error,
             },
@@ -883,7 +884,7 @@ def make_router() -> APIRouter:
             "account_email_verified": account_email_verified,
             "email_challenge_available": bool(
                 getattr(cfg, "smtp_host", "") and getattr(cfg, "email_from", "")
-                and security_link_base(getattr(cfg, "app_url", ""))
+                and request.app.state.security_link_base
                 and (account["password_hash"] is not None or oidc_configured)
                 and not cfg.dev_no_auth
             ),
@@ -1558,7 +1559,7 @@ def make_router() -> APIRouter:
             or identity is None or action not in (PURPOSE_CURRENT, PURPOSE_CHANGE, "add_password", "purge_account")):
             raise HTTPException(status_code=403, detail=GENERIC_OIDC_ERROR)
         if (action in (PURPOSE_CURRENT, PURPOSE_CHANGE)
-            and not _email_challenge_delivery_available(request.app.state.config)):
+            and not _email_challenge_delivery_available(request.app.state.config, link_base=request.app.state.security_link_base)):
             return await _render_account_unavailable(request, user)
         if action == "purge_account":
             if (not account["is_admin"] or len(target) > 19 or not target.isascii()
@@ -1666,8 +1667,8 @@ def make_router() -> APIRouter:
         *, proof_nonce: str | None = None,
     ) -> bool | None:
         cfg = request.app.state.config
-        link_base = security_link_base(cfg.app_url)
-        if not _email_challenge_delivery_available(cfg):
+        link_base = request.app.state.security_link_base
+        if not _email_challenge_delivery_available(cfg, link_base=request.app.state.security_link_base):
             if proof_nonce is not None:
                 await _consume_email_action_proof(
                     request, account["id"], request.state.principal.auth_version,
@@ -1712,7 +1713,6 @@ def make_router() -> APIRouter:
             cfg.smtp_host, cfg.smtp_port, cfg.smtp_username, cfg.smtp_password,
             cfg.smtp_security, cfg.smtp_tls_insecure, cfg.email_from, target,
         )
-        link = f"{link_base}/settings/account/email/confirm#purpose={purpose}&token={token}"
 
         @asynccontextmanager
         async def admit():
@@ -1725,13 +1725,7 @@ def make_router() -> APIRouter:
 
         async def deliver():
             try:
-                message = mailer.compose(
-                    "Confirm your Odograph email address",
-                    "To confirm your email address, open this link while signed in:\n"
-                    f"{link}\n\nIf the link does not fill the form, choose {purpose} "
-                    f"and enter this code manually: {token}\n\n"
-                    "The code expires in 30 minutes. If you did not request this, ignore this email.",
-                )
+                message = SecurityMailSpec('challenge', link_base, token, purpose)
                 admitted = await request.app.state.security_mail.send(
                     mailer, message, admit=admit,
                     lease=lambda: external_account_work(
@@ -1760,7 +1754,7 @@ def make_router() -> APIRouter:
     ):
         check_form_csrf(request, values["csrf_token"])
         cfg = request.app.state.config
-        if not _email_challenge_delivery_available(cfg):
+        if not _email_challenge_delivery_available(cfg, link_base=request.app.state.security_link_base):
             return await _render_account_unavailable(request, user)
         limiter: FailedAuthLimiter = request.app.state.login_limiter
         async with control_connection(request.app.state.control_pool) as conn:
@@ -2132,7 +2126,7 @@ def make_router() -> APIRouter:
         return request.app.state.templates.TemplateResponse(
             request, name,
             {"user": None, "csrf": _ensure_csrf(request), "error": error, "notice": notice,
-             "password_reset_available": password_reset_available(request.app.state.config)},
+             "password_reset_available": password_reset_available(request.app.state.config, link_base=request.app.state.security_link_base)},
             status_code=status_code,
             headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
         )
@@ -2153,7 +2147,7 @@ def make_router() -> APIRouter:
         values = await _email_form(request, {"email", "csrf_token"})
         check_form_csrf(request, values["csrf_token"])
         queue = getattr(request.app.state, "password_reset_queue", None)
-        if queue is None or not password_reset_available(cfg):
+        if queue is None or not password_reset_available(cfg, link_base=request.app.state.security_link_base):
             return await _render_reset_page(request, "forgot_password.html")
         email = normalize_email(values["email"])
         client_allowed = request.app.state.reset_request_client_limiter.allow(client_ip(request))
@@ -2242,12 +2236,12 @@ def make_router() -> APIRouter:
     return router
 
 
-def password_reset_available(cfg) -> bool:
+def password_reset_available(cfg, *, link_base=None) -> bool:
     """Public reset needs SMTP delivery and a trusted link base. Notification
     EMAIL_TO is irrelevant: resets go only to the account's verified address."""
     return bool(
         not cfg.dev_no_auth and getattr(cfg, "smtp_host", "") and getattr(cfg, "email_from", "")
-        and security_link_base(getattr(cfg, "app_url", ""))
+        and (security_link_base(getattr(cfg, "app_url", "")) if link_base is None else link_base)
     )
 
 

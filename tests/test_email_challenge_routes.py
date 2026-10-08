@@ -13,6 +13,8 @@ from starlette.responses import PlainTextResponse
 
 import app.auth as auth
 from app.password_reset import SecurityMailAdmission
+from app.config import security_link_base
+from security_mail_support import PreparedFakeReceiver, configure_fake_mailer
 
 
 ACCOUNT = {
@@ -37,6 +39,7 @@ def _app(monkeypatch, *, smtp_host="smtp.example.com"):
         smtp_tls_insecure=False, email_from="odograph@example.com",
         app_url="https://odograph.example.com", account_avatar_max_bytes=1024,
     )
+    app.state.security_link_base = security_link_base(app.state.config.app_url)
     app.state.control_pool = object()
     app.state.oauth = None
     app.state.templates = _Templates()
@@ -109,8 +112,9 @@ def test_change_request_delivers_only_to_new_address_with_fragment_token(monkeyp
         calls.append((account_id, auth_version, purpose, target))
         return "secret-token"
 
-    class FakeMailer:
+    class FakeMailer(PreparedFakeReceiver):
         def __init__(self, *args):
+            configure_fake_mailer(self, args)
             calls.append(("to", args[-1]))
 
         def compose(self, subject, body):
@@ -233,8 +237,9 @@ def test_delivery_failure_revokes_challenge_without_exposing_token(monkeypatch):
     async def revoke(conn, account_id, purpose, token):
         revoked.append((account_id, purpose, token))
 
-    class FailingMailer:
+    class FailingMailer(PreparedFakeReceiver):
         def __init__(self, *args):
+            configure_fake_mailer(self, args)
             pass
 
         def compose(self, subject, body):
@@ -312,8 +317,9 @@ def test_cancelled_delivery_owns_exact_token_cleanup(monkeypatch, fails):
         live.discard(token)
         cleaned.set()
 
-    class DelayedMailer:
+    class DelayedMailer(PreparedFakeReceiver):
         def __init__(self, *args):
+            configure_fake_mailer(self, args)
             pass
 
         def compose(self, subject, body):
@@ -365,8 +371,9 @@ def test_busy_mail_slot_revokes_challenge_without_waiting_or_sending(monkeypatch
         assert token == "pending-token"
         revoked.set()
 
-    class FailingMailer:
+    class FailingMailer(PreparedFakeReceiver):
         def __init__(self, *args):
+            configure_fake_mailer(self, args)
             pass
 
         def compose(self, subject, body):

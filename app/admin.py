@@ -23,7 +23,6 @@ from app.account_work import external_account_work
 from app.auth import (
     check_form_csrf, require_admin, _verified_account, _AccountActionRejected, _AuthSaturated,
 )
-from app.config import security_link_base
 from app.capacity_routes import AdmissionRoute, capacity_policy, release_authentication
 from app.capacity import CapacityBusy
 from app.invitations import (
@@ -35,6 +34,7 @@ from app.invitations import (
     revoke_invitation,
 )
 from app.mailer import Mailer
+from app.security_mail_preparation import SecurityMailConstructionError, SecurityMailSpec
 
 log = logging.getLogger(__name__)
 MAX_ADMIN_FORM_BYTES = 4096
@@ -195,15 +195,14 @@ async def _send_invitation_email(
     token: str,
 ) -> str:
     cfg = request.app.state.config
-    link_base = security_link_base(getattr(cfg, "app_url", ""))
+    link_base = request.app.state.security_link_base
     if not (getattr(cfg, "smtp_host", "") and getattr(cfg, "email_from", "") and link_base):
         return "not_sent"
     mailer = Mailer(
         cfg.smtp_host, cfg.smtp_port, cfg.smtp_username, cfg.smtp_password,
         cfg.smtp_security, cfg.smtp_tls_insecure, cfg.email_from, email,
     )
-    link = f"{link_base}/invite#token={quote(token, safe='')}"
-    message = _invitation_message(mailer, link, token)
+    message = SecurityMailSpec('invitation', link_base, token)
     admission = request.app.state.security_mail
     @asynccontextmanager
     async def admit():
@@ -218,6 +217,8 @@ async def _send_invitation_email(
             lease=lambda: external_account_work(request.app.state.control_pool, actor["id"]),
         )
         return "sent" if admitted else "not_sent"
+    except SecurityMailConstructionError:
+        raise
     except Exception as exc:
         # SMTP exceptions can include transport details. Do not log the
         # token, message, recipient or exception text.
@@ -237,7 +238,7 @@ async def _checked_invitation_result(
     mail_status = await _send_invitation_email(
         request, _actor(user, request), invitation_id, email, token
     ) if send_email else "not_requested"
-    link_base = security_link_base(getattr(request.app.state.config, "app_url", ""))
+    link_base = request.app.state.security_link_base
     invite_result = {
         "email": email,
         "token": token,

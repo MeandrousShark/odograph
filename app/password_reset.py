@@ -24,6 +24,10 @@ from app.account_work import external_account_work
 from app.email_challenges import _digest
 from app.mailer import Mailer
 from app.capacity import AdmissionManager, CapacityBusy
+from app.preparation import PreparationOperation
+from app.security_mail_preparation import (
+    SecurityMailConstructionError, SecurityMailSpec, prepare_security_mail,
+)
 
 log = logging.getLogger(__name__)
 
@@ -155,10 +159,11 @@ class SecurityMailAdmission:
     when the waiting caller is cancelled.
     """
 
-    def __init__(self, limit: int = SECURITY_MAIL_SENDS, *, capacity=None):
+    def __init__(self, limit: int = SECURITY_MAIL_SENDS, *, capacity=None, spool_root=None):
         if type(limit) is not int or not 1 <= limit <= SECURITY_MAIL_SENDS:
             raise ValueError("security mail supports at most two sends")
         self.capacity = capacity if capacity is not None else AdmissionManager()
+        self.spool_root = spool_root
         self._slots = asyncio.Semaphore(limit)
         self._tasks: set[asyncio.Task] = set()
 
@@ -181,23 +186,44 @@ class SecurityMailAdmission:
                 await contexts.enter_async_context(self.capacity.operation("mail"))
             except CapacityBusy:
                 return False
+            if isinstance(message, SecurityMailSpec):
+                async with PreparationOperation(spool_root=self.spool_root) as operation:
+                    async def prepared_send():
+                        async with AsyncExitStack() as lifecycle:
+                            if lease is not None:
+                                await lifecycle.enter_async_context(lease())
+                            try:
+                                prepared = await prepare_security_mail(operation, mailer, message)
+                                return await self._authorized_send(
+                                    lambda: mailer.send_prepared(prepared,
+                                        before_transport=operation.finish_preparation), admit)
+                            except BaseException as exc:
+                                await operation.backend_failure(exc)
+                                raise
+                            finally:
+                                # Actual cleanup precedes release of the lifecycle lease.
+                                await operation.close()
+                    return await operation.perform(prepared_send)
             if lease is not None:
                 await contexts.enter_async_context(lease())
-            if admit is None:
-                await mailer.send(message)
-            else:
-                transport = None
-                try:
-                    async with admit() as allowed:
-                        if not allowed:
-                            return False
-                        transport = asyncio.create_task(mailer.send(message))
-                except BaseException:
-                    if transport is not None:
-                        await self._drain_transport(transport)
-                    raise
-                await transport
-            return True
+            return await self._authorized_send(lambda: mailer.send(message), admit)
+
+    async def _authorized_send(self, send, admit):
+        if admit is None:
+            await send()
+        else:
+            transport = None
+            try:
+                async with admit() as allowed:
+                    if not allowed:
+                        return False
+                    transport = asyncio.create_task(send())
+            except BaseException:
+                if transport is not None:
+                    await self._drain_transport(transport)
+                raise
+            await transport
+        return True
 
     @staticmethod
     async def _drain_transport(task: asyncio.Task) -> None:
@@ -321,7 +347,7 @@ class RecoveryQueue:
         if address is None or target_account is None:
             return
         mailer = self._mailer_for(address)
-        message = reset_message(mailer, self._link_base, token)
+        message = SecurityMailSpec('reset', self._link_base, token)
         @asynccontextmanager
         async def admit():
             async with control_connection(self._pool, lane="mail") as conn:
@@ -337,6 +363,8 @@ class RecoveryQueue:
             if not admitted:
                 async with control_connection(self._pool, lane="identity") as conn:
                     await revoke_password_reset(conn, token)
+        except SecurityMailConstructionError:
+            raise
         except Exception as exc:
             log.warning("password reset delivery failed (%s)", type(exc).__name__)
             async with control_connection(self._pool, lane="identity") as conn:

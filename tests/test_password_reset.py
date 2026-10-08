@@ -444,3 +444,10 @@ def test_cancelled_mail_send_preserves_cancellation_when_thread_later_fails():
             await task
 
     asyncio.run(run())
+
+
+@pytest.fixture(autouse=True)
+def _prepared_security_mail_receiver(monkeypatch):
+    from app.mailer import Mailer
+    from security_mail_support import fixture_send_prepared
+    monkeypatch.setattr(Mailer, 'send_prepared', fixture_send_prepared)

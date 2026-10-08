@@ -132,6 +132,140 @@ def latest_filing_reminder_at(now: datetime, mmdd: str, hour: int) -> datetime:
     return datetime(now.year - 1, month, day, hour, tzinfo=now.tzinfo)
 
 
+async def _prepared_email_delivery(pool, principal, job, operation):
+    from app.notification_preparation import prepare_email_message, email_preferences_current
+    from app.prepared_mail import PreparedMail
+
+    async with pool.connection() as conn:
+        async with conn.transaction():
+            await conn.execute('SELECT pg_advisory_xact_lock(%s)', (EMAIL_DIGEST_ADVISORY_LOCK_KEY,))
+            if not await email_preferences_current(conn, job):
+                return
+            query = await conn.execute(
+                'SELECT 1 FROM email_deliveries WHERE account_id=%s AND kind=%s AND period_end=%s',
+                (principal.account_id, job.kind, job.period_end))
+            if await query.fetchone() is not None:
+                return
+            prepared = await prepare_email_message(conn, job)
+            if prepared.should_send:
+                mailer = Mailer('', 0, '', '', 'none', False, '', '')
+                await mailer.send_prepared(
+                    PreparedMail(operation.reservation, prepared.artifacts),
+                    before_transport=operation.finish_preparation,
+                )
+            else:
+                await operation.finish_preparation()
+            await conn.execute(
+                'INSERT INTO email_deliveries (account_id,kind,period_end,sent) VALUES (%s,%s,%s,%s)',
+                (principal.account_id, job.kind, job.period_end, prepared.should_send))
+
+
+async def _prepared_email_sweep(worker, principal):
+    from app.account_context import AccountPool
+    from app.account_work import external_account_work
+    from app.notification_preparation import KINDS, capture_email_settings, replay_email_job
+    from app.preparation import PreparationOperation
+
+    batch = BatchOutcome()
+    skipped = True
+    async with PreparationOperation(spool_root=worker.config.preparation_spool_dir) as capture:
+        async def run():
+            nonlocal batch, skipped
+            async with external_account_work(worker.pools.control, principal.account_id):
+                try:
+                    pool = AccountPool(worker.pools.runtime, principal)
+                    async with pool.connection() as conn:
+                        async with conn.transaction():
+                            captured = await capture_email_settings(conn, capture, worker.config)
+                    await capture.finish_preparation()
+                    if (not captured.references['email_to'][1] or not worker.config.smtp_host
+                            or not worker.config.email_from):
+                        return
+                    skipped = False
+                    for index, kind in enumerate(KINDS):
+                        if not captured.enabled[index]:
+                            continue
+                        try:
+                            async with PreparationOperation(spool_root=worker.config.preparation_spool_dir) as operation:
+                                async def kind_turn():
+                                    try:
+                                        job = await replay_email_job(captured, operation, kind)
+                                        await _prepared_email_delivery(pool, principal, job, operation)
+                                    except BaseException as exc:
+                                        await operation.backend_failure(exc)
+                                        raise
+                                    finally:
+                                        await operation.close()
+                                await operation.perform(kind_turn)
+                        except Exception as exc:
+                            batch += BatchOutcome(1, 0, 1, type(exc).__name__)
+                            log.warning('email digest: %s failed (%s); will retry next hour', kind, type(exc).__name__)
+                        else:
+                            batch += BatchOutcome(1, 1)
+                except BaseException as exc:
+                    await capture.backend_failure(exc)
+                    raise
+                finally:
+                    await capture.close()
+        await capture.perform(run)
+    return TurnOutcome(batch=batch, skipped=skipped)
+
+
+async def run_prepared_email_turn(worker, principal, cursor, *, legacy=False):
+    """Reserve before settings and keep cleanup inside the account lifecycle lease."""
+    from app.account_context import AccountPool
+    from app.account_work import external_account_work
+    from app.notification_preparation import capture_email_job, capture_email_settings, select_email_turn
+    from app.preparation import PreparationOperation
+
+    if legacy:
+        return await _prepared_email_sweep(worker, principal)
+    selection = None
+    configuration_loaded = False
+    try:
+        async with PreparationOperation(spool_root=worker.config.preparation_spool_dir) as operation:
+            async def run():
+                nonlocal selection, configuration_loaded
+                async with external_account_work(worker.pools.control, principal.account_id):
+                    try:
+                        pool = AccountPool(worker.pools.runtime, principal)
+                        async with pool.connection() as conn:
+                            async with conn.transaction():
+                                selection = await select_email_turn(conn, cursor, operation=operation)
+                                if (selection.kind is not None and worker.config.smtp_host
+                                        and worker.config.email_from):
+                                    job = await capture_email_job(conn, operation, worker.config, selection.kind)
+                                    configuration_loaded = True
+                                else:
+                                    await capture_email_settings(conn, operation, worker.config)
+                                    configuration_loaded = True
+                                    selection = None
+                        if selection is not None:
+                            await _prepared_email_delivery(pool, principal, job, operation)
+                        else:
+                            await operation.finish_preparation()
+                    except BaseException as exc:
+                        await operation.backend_failure(exc)
+                        raise
+                    finally:
+                        await operation.close()
+            await operation.perform(run)
+    except Exception as exc:
+        if selection is None or selection.kind is None:
+            raise
+        from app.preparation_resources import PreparationResourceError
+        if (not configuration_loaded and getattr(exc, 'preparation_stage', None) != 'schedule'
+                and not isinstance(exc, PreparationResourceError)):
+            raise
+        log.warning('email digest: %s failed (%s); will retry next hour',
+                    selection.kind, type(exc).__name__)
+        return TurnOutcome(batch=BatchOutcome(1, 0, 1, type(exc).__name__),
+                           ready=selection.ready, cursor=selection.cursor)
+    if selection is None or selection.kind is None:
+        return TurnOutcome()
+    return TurnOutcome(batch=BatchOutcome(1, 1), ready=selection.ready, cursor=selection.cursor)
+
+
 class EmailDigestWorker:
     """Hourly eligibility checker for all four email digest kinds.
     AccountWorker calls run_turn() for one enabled kind, advancing its cursor

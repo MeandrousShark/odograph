@@ -84,6 +84,7 @@ def _request(pools, provider):
     return SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             config=config, control_pool=pools.control, runtime_pool=pools.runtime,
+            security_link_base=auth.security_link_base(config.app_url),
             oauth=SimpleNamespace(pocketid=provider), templates=make_templates(config),
             login_limiter=FailedAuthLimiter(20, 900),
             make_detector_runner=lambda pool: SimpleNamespace(pool=pool),
@@ -229,11 +230,15 @@ async def _run_route_scenario(monkeypatch):
                 email_from="odograph@example.invalid",
                 app_url="https://app.example.invalid",
             )
+            request.app.state.security_link_base = auth.security_link_base(request.app.state.config.app_url)
             request.app.state.security_mail = SecurityMailAdmission()
             sent_mail = []
 
-            class CapturingMailer:
+            from security_mail_support import PreparedFakeReceiver, configure_fake_mailer
+
+            class CapturingMailer(PreparedFakeReceiver):
                 def __init__(self, *args):
+                    configure_fake_mailer(self, args)
                     self.target = args[-1]
 
                 def compose(self, subject, body):

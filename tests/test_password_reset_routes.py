@@ -41,6 +41,8 @@ def _app(monkeypatch, *, smtp_host="smtp.example.com", app_url="https://odograph
         dev_no_auth=dev_no_auth, smtp_host=smtp_host, email_from="odograph@example.com",
         app_url=app_url,
     )
+    from app.config import security_link_base
+    app.state.security_link_base = security_link_base(app.state.config.app_url)
     app.state.control_pool = object()
     app.state.templates = _Templates()
     app.state.login_limiter = auth.FailedAuthLimiter(5, 60)

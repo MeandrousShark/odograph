@@ -70,6 +70,7 @@ def _invite_route_app(pools):
     cfg = auth_config(TEST_DB, initial_admin_signup=False, dev_no_auth=False)
     app = FastAPI()
     app.state.config = cfg
+    app.state.security_link_base = auth.security_link_base(cfg.app_url)
     app.state.control_pool = pools.control
     app.state.runtime_pool = pools.runtime
     app.state.templates = make_templates(cfg)

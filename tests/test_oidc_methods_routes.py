@@ -13,6 +13,8 @@ from starlette.responses import Response
 
 import app.auth as auth
 from app.ingest import FailedAuthLimiter
+from app.password_reset import SecurityMailAdmission
+from security_mail_support import PreparedFakeReceiver, configure_fake_mailer
 
 
 def _endpoint(path: str, method: str):
@@ -64,6 +66,7 @@ def _request(*, session=None, oauth=None, userinfo=None):
         control_pool=object(), login_limiter=FailedAuthLimiter(100, 900),
         templates=SimpleNamespace(TemplateResponse=response),
         security_mail=None,
+        security_link_base=auth.security_link_base(cfg.app_url),
     )
     request = SimpleNamespace(
         app=SimpleNamespace(state=state), session=session if session is not None else {},
@@ -84,14 +87,8 @@ def _protected_session(state="reauth.valid", *, proof_action=None, target=""):
     }
 
 
-class _SecurityMail:
-    async def send(self, mailer, message, *, admit, lease):
-        async with lease():
-            async with admit() as allowed:
-                if not allowed:
-                    return False
-                await mailer.send(message)
-        return True
+class _SecurityMail(SecurityMailAdmission):
+    pass
 
 
 @pytest.mark.parametrize(
@@ -140,8 +137,9 @@ def test_email_reauth_callback_consumes_bound_proof_sends_and_redirects(
     async def lease(*_args):
         yield
 
-    class Mailer:
+    class Mailer(PreparedFakeReceiver):
         def __init__(self, *args):
+            configure_fake_mailer(self, args)
             self.target = args[-1]
 
         def compose(self, subject, body):
@@ -369,9 +367,9 @@ def test_cancelled_email_callback_keeps_owning_issuance_and_delivery(monkeypatch
     async def lease(*_args):
         yield
 
-    class Mailer:
+    class Mailer(PreparedFakeReceiver):
         def __init__(self, *_args):
-            pass
+            configure_fake_mailer(self, _args)
 
         def compose(self, _subject, body):
             return body
@@ -445,9 +443,9 @@ def test_email_reauth_callback_never_issues_after_failed_proof_or_missing_smtp(
     async def lease(*_args):
         yield
 
-    class Mailer:
+    class Mailer(PreparedFakeReceiver):
         def __init__(self, *_args):
-            pass
+            configure_fake_mailer(self, _args)
 
         def compose(self, *_args):
             return "message"

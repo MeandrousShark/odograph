@@ -6,6 +6,7 @@ import pathlib
 import secrets
 from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import datetime
+from functools import partial
 
 import httpx
 from jinja2 import pass_context
@@ -35,7 +36,8 @@ from app.role_setup import RolePools
 from app.dashboard import format_week_range
 from app.db import make_pool, run_migrations
 from app.detector.runner import DetectorRunner
-from app.email_digest import EmailDigestWorker
+from app.email_digest import EmailDigestWorker, run_prepared_email_turn
+from app.ntfy_preparation import run_prepared_nudge_turn, run_prepared_odometer_turn
 from app.expenses import EXPENSE_CONFLICT_LABELS, comparison_caveat_lines, comparison_status
 from app.formatting import format_duration, format_miles, format_usd
 from app.geocode import GeocodeWorker
@@ -346,13 +348,13 @@ def create_app(config: Config | None = None) -> FastAPI:
             app.state.geocode_pacer = geocode_pacer
 
             async def start_worker(name, factory, debounce, sweep, *, enabled=True, after_run=None,
-                                   before_turn=None, refresh_deferred_on_wake=False):
+                                   before_turn=None, refresh_deferred_on_wake=False, admitted_turn=None):
                 worker = None
                 if enabled:
                     worker = AccountWorker(pools, cfg, factory, label=name.replace("_", "-"),
                         debounce_s=debounce, sweep_s=sweep, after_run=after_run,
                         capacity=capacity, scheduler=scheduler, before_turn=before_turn,
-                        refresh_deferred_on_wake=refresh_deferred_on_wake)
+                        refresh_deferred_on_wake=refresh_deferred_on_wake, admitted_turn=admitted_turn)
                     await worker.start()
                     stack.push_async_callback(worker.stop)
                 setattr(app.state, name, worker)
@@ -380,18 +382,21 @@ def create_app(config: Config | None = None) -> FastAPI:
             await start_worker("nudge_worker", lambda pool, c: NudgeWorker(
                 pool, notification_http, c.ntfy_url, c.ntfy_topic, c.ntfy_token,
                 c.ntfy_username, c.ntfy_password, c.app_url, c.display_tz, c.nudge_weekly_hour
-                ) if c.nudge_enabled else None, 1, 3600, enabled=bool(cfg.ntfy_url))
+                ) if c.nudge_enabled else None, 1, 3600, enabled=bool(cfg.ntfy_url),
+                admitted_turn=partial(run_prepared_nudge_turn, http_client=notification_http))
             await start_worker("odometer_reminder_worker", lambda pool, c: OdometerReminderWorker(
                 pool, notification_http, c.ntfy_url, c.ntfy_topic, c.ntfy_token,
                 c.ntfy_username, c.ntfy_password, c.app_url, c.display_tz, c.odometer_reminder_hour
-                ) if c.odometer_reminder_enabled else None, 1, 3600, enabled=bool(cfg.ntfy_url))
+                ) if c.odometer_reminder_enabled else None, 1, 3600, enabled=bool(cfg.ntfy_url),
+                admitted_turn=partial(run_prepared_odometer_turn, http_client=notification_http))
             await start_worker("email_digest_worker", lambda pool, c: EmailDigestWorker(
                 pool, Mailer(c.smtp_host, c.smtp_port, c.smtp_username, c.smtp_password,
                     c.smtp_security, c.smtp_tls_insecure, c.email_from, c.email_to),
                 c.app_url, c.display_tz, c.nudge_weekly_hour, c.odometer_reminder_hour,
                 c.email_digest_hour, c.email_filing_reminder_mmdd, c.email_weekly_nudge,
                 c.email_monthly_summary, c.email_filing_reminder, c.email_odometer_reminder
-                ) if c.email_enabled else None, 1, 3600, enabled=bool(cfg.smtp_host and cfg.email_from))
+                ) if c.email_enabled else None, 1, 3600, enabled=bool(cfg.smtp_host and cfg.email_from),
+                admitted_turn=run_prepared_email_turn)
 
             def after_detection():
                 for worker in (snap_worker, geocode_worker):
@@ -401,7 +406,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             app.state.password_reset_queue = None
             if auth.password_reset_available(cfg):
                 reset_queue = RecoveryQueue(
-                    pools.control, cfg.security_link_base,
+                    pools.control, app.state.security_link_base,
                     lambda address: Mailer(cfg.smtp_host, cfg.smtp_port, cfg.smtp_username,
                         cfg.smtp_password, cfg.smtp_security, cfg.smtp_tls_insecure,
                         cfg.email_from, address),
@@ -425,6 +430,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     app.state.capacity = capacity
     app.state.geocode_pacer = ProviderPacer(cfg.geocode_min_interval_s)
     app.state.config = cfg
+    app.state.security_link_base = cfg.security_link_base
     app.state.templates = make_templates(cfg)
     app.state.oauth = auth.build_oauth(cfg)
     app.state.ingest_limiter = FailedAuthLimiter(
@@ -450,7 +456,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         "password reset request identifier", cfg.login_auth_max_failures, cfg.login_auth_window_s)
     app.state.reset_validation_limiter = AttemptLimiter(
         "password reset validation", cfg.login_auth_max_failures, cfg.login_auth_window_s)
-    app.state.security_mail = SecurityMailAdmission(capacity=capacity)
+    app.state.security_mail = SecurityMailAdmission(capacity=capacity,
+        spool_root=cfg.preparation_spool_dir)
     app.state.password_reset_queue = None
 
     app.add_middleware(

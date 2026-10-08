@@ -10,6 +10,7 @@ import pytest
 from psycopg import errors
 
 from app.auth import make_router
+from app.config import security_link_base
 from app.db import make_pool
 from app.ingest import FailedAuthLimiter
 from app.local_auth import hash_password
@@ -47,6 +48,7 @@ def _request(pool, *, ip="203.0.113.9", limiter=None, session=None):
     return SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(
             control_pool=control_pool, config=cfg,
+            security_link_base=security_link_base(cfg.app_url),
             templates=make_templates(SimpleNamespace(display_tz=TZ, app_version="test")),
             oauth=None,
             login_limiter=limiter or FailedAuthLimiter(3, 900.0),

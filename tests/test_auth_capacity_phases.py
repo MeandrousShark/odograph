@@ -12,6 +12,7 @@ from app.capacity import AdmissionManager, CapacityBusy, current_owner, owned_th
 from app.password_reset import SecurityMailAdmission
 from tests.test_email_challenge_routes import ACCOUNT, _app
 from tests.test_oidc_methods_routes import _connection, _protected_session, _request
+from security_mail_support import PreparedFakeReceiver, configure_fake_mailer
 
 pytestmark = [pytest.mark.unit, pytest.mark.capacity_contract]
 
@@ -30,9 +31,9 @@ def test_held_smtp_does_not_block_unrelated_local_login(monkeypatch):
         started.set()
         release.wait(5)
 
-    class Mailer:
+    class Mailer(PreparedFakeReceiver):
         def __init__(self, *args):
-            pass
+            configure_fake_mailer(self, args)
 
         def compose(self, *args):
             return "message"
@@ -164,9 +165,9 @@ def test_cancelled_challenge_preparation_retains_auth_then_transfers_to_mail(mon
         await release_issue.wait()
         return "challenge-token"
 
-    class Mailer:
+    class Mailer(PreparedFakeReceiver):
         def __init__(self, *args):
-            pass
+            configure_fake_mailer(self, args)
 
         def compose(self, *args):
             return "message"

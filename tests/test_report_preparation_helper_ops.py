@@ -28,6 +28,7 @@ def test_actual_helper_preserves_custom_operator_timezone_paths(tmp_path):
     shutil.copyfile(utc,custom/'Custom'/'PreparationUnique')
     original=zoneinfo.TZPATH
     zoneinfo.reset_tzpath((str(custom),))
+    assert zoneinfo.TZPATH == (str(custom),)
     try:
         assert zoneinfo.ZoneInfo('Custom/PreparationUnique').utcoffset(None).total_seconds()==0
         async def run():

@@ -177,3 +177,10 @@ def test_reset_ends_only_the_target_accounts_sessions(monkeypatch, caplog):
     with caplog.at_level(logging.DEBUG):
         token = asyncio.run(run())
     assert token not in caplog.text
+
+
+@pytest.fixture(autouse=True)
+def _prepared_security_mail_receiver(monkeypatch):
+    from app.mailer import Mailer
+    from security_mail_support import fixture_send_prepared
+    monkeypatch.setattr(Mailer, 'send_prepared', fixture_send_prepared)
