@@ -39,7 +39,7 @@ def test_ci_runs_full_suite_on_push_and_pull_requests_with_postgis():
     assert steps["Install test dependencies"]["run"] == (
         "python -m pip install -r requirements-dev.lock"
     )
-    assert steps["Run full test suite"]["run"] == "python -m pytest"
+    assert steps["Run full test suite"]["run"] == "python -m pytest -vv --durations=25"
     assert "tests/" not in steps["Run full test suite"]["run"]
 
 
