@@ -1,4 +1,7 @@
+import os
 from pathlib import Path
+import shlex
+import subprocess
 
 import yaml
 
@@ -11,13 +14,15 @@ def load_workflow() -> dict:
     return yaml.load(WORKFLOW.read_text(), Loader=yaml.BaseLoader)
 
 
-def test_ci_runs_full_suite_on_push_and_pull_requests_with_postgis():
+def test_ci_runs_full_suite_on_push_and_pull_requests_with_postgis(tmp_path):
     workflow = load_workflow()
 
     assert set(workflow["on"]) == {"push", "pull_request"}
     assert workflow["permissions"] == {"contents": "read"}
 
     job = workflow["jobs"]["test"]
+    assert job["timeout-minutes"] == "35"
+    assert job.get("continue-on-error", "false") == "false"
     assert job["env"]["TEST_DATABASE_URL"] == (
         "postgresql://mileage:testpw@127.0.0.1:5432/mileage"
     )
@@ -39,8 +44,72 @@ def test_ci_runs_full_suite_on_push_and_pull_requests_with_postgis():
     assert steps["Install test dependencies"]["run"] == (
         "python -m pip install -r requirements-dev.lock"
     )
-    assert steps["Run full test suite"]["run"] == "python -m pytest -vv --durations=25"
-    assert "tests/" not in steps["Run full test suite"]["run"]
+    suite = steps["Run full test suite"]
+    assert suite.get("continue-on-error", "false") == "false"
+    script = suite["run"]
+    assert script.splitlines()[0] == "set -euo pipefail"
+    command = shlex.split(
+        script.split("\n", 1)[1].replace("\\\n", ""), comments=True,
+    )
+    assert command[:-1] == [
+        "timeout", "--signal=INT", "--kill-after=15s", "30m",
+        "bash", "-euo", "pipefail", "-c",
+    ]
+    pipeline = shlex.split(command[-1].split("; then", 1)[0])
+    assert pipeline == [
+        "if",
+        "python", "-m", "pytest", "-vv", "--durations=25",
+        "-o", "faulthandler_timeout=120", "2>&1", "|", "tee",
+        "$RUNNER_TEMP/pytest-full-suite.log",
+    ]
+
+    retained = steps["Retain full suite log"]
+    assert retained.get("continue-on-error", "false") == "false"
+    assert retained["if"] == "always()"
+    assert retained["timeout-minutes"] == "2"
+    assert retained["uses"] == "actions/upload-artifact@v4"
+    assert retained["with"] == {
+        "name": "pytest-log-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.event_name }}",
+        "path": "${{ runner.temp }}/pytest-full-suite.log",
+        "retention-days": "7",
+        "if-no-files-found": "warn",
+    }
+    assert job["steps"].index(retained) > job["steps"].index(suite)
+    assert [
+        step for step in job["steps"]
+        if step.get("uses", "").startswith("actions/upload-artifact@")
+    ] == [retained]
+
+    # Execute the whole Bash pipeline with a synthetic test process.
+    runner = tmp_path / "timeout"
+    runner.write_text('#!/bin/sh\nshift 3\nexec "$@"\n')
+    runner.chmod(0o755)
+    python = tmp_path / "python"
+    python.write_text(
+        '#!/bin/sh\nprintf "suite stdout\\n"\n'
+        'printf "suite stderr\\n" >&2\nexit "$CI_TEST_STATUS"\n'
+    )
+    python.chmod(0o755)
+    env = {**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+           "RUNNER_TEMP": str(tmp_path)}
+    for status in (0, 1, 124, 137):
+        result = subprocess.run(
+            ["bash", "-c", script],
+            env={**env, "CI_TEST_STATUS": str(status)},
+            capture_output=True, text=True, timeout=10,
+        )
+        assert result.returncode == status
+        assert result.stdout == "suite stdout\nsuite stderr\n"
+        assert (tmp_path / "pytest-full-suite.log").read_text() == result.stdout
+
+    for status in (0, 1, 124, 137):
+        result = subprocess.run(
+            ["bash", "-c", script],
+            env={**env, "CI_TEST_STATUS": str(status),
+                 "RUNNER_TEMP": str(tmp_path / "absent")},
+            capture_output=True, text=True, timeout=10,
+        )
+        assert result.returncode == (status or 1)
 
 
 def test_ci_checks_every_tracked_shell_script():

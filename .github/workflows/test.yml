@@ -90,7 +90,32 @@ jobs:
       - name: Check shell script syntax
         run: git ls-files -z -- '*.sh' | xargs -0 -n1 bash -n
       - name: Run full test suite
-        run: python -m pytest -vv --durations=25
+        run: |
+          set -euo pipefail
+          # Expand variables in the supervised shell.
+          # shellcheck disable=SC2016
+          timeout --signal=INT --kill-after=15s 30m \
+            bash -euo pipefail -c '
+              if python -m pytest -vv --durations=25 -o faulthandler_timeout=120 \
+                2>&1 | tee "$RUNNER_TEMP/pytest-full-suite.log"; then
+                exit 0
+              else
+                suite_status=("${PIPESTATUS[@]}")
+                if (( suite_status[0] != 0 )); then
+                  exit "${suite_status[0]}"
+                fi
+                exit "${suite_status[1]}"
+              fi
+            '
+      - name: Retain full suite log
+        if: always()
+        timeout-minutes: 2
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-log-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.event_name }}
+          path: ${{ runner.temp }}/pytest-full-suite.log
+          retention-days: 7
+          if-no-files-found: warn
 
   public-tree:
     runs-on: ubuntu-latest
