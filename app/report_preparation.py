@@ -238,7 +238,14 @@ class Projection:
                 batch = await cursor.fetchmany(FETCH_ROWS)
                 if not batch:
                     return
-                trips = [row for row in batch if row.get('event', 0) == 0]
+                trips = []
+                for row in batch:
+                    if row.get('event', 0) == 0:
+                        if row['purpose_size'] is None:
+                            row.pop('purpose_size')
+                            row['purpose'] = None
+                        else:
+                            trips.append(row)
                 if trips:
                     await self.text_batch(conn, owner, trips, {'purpose': 'purpose'})
                 for row in batch:
