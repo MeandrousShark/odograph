@@ -20,7 +20,7 @@ from app.portable import importer
 from app.ui import make_router as ui_router
 from app.ui.merge_split import _merge_trips_core
 from app.worker import BatchOutcome
-from tests.test_ownership_integration_db import _bundle, _fixture, _seed_track
+from tests.test_ownership_integration_db import _bundle, _fixture, _seed_track, _wait_blocked
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = [
@@ -98,24 +98,25 @@ def test_other_account_imports_while_account_holds_detector_lock():
 
 def test_same_account_detector_and_edits_still_exclude_each_other():
     async def run():
-        async with _fixture() as (_owner, _pools, _state, a, _b):
+        async with _fixture() as (owner, _pools, _state, a, _b):
             await _seed_track(a)
             detector = DetectorRunner(a, Params())
-            entered = asyncio.Event()
+            waiter_pid = asyncio.get_running_loop().create_future()
 
             async def contend():
                 async with a.connection() as conn:
+                    waiter_pid.set_result(
+                        (await (await conn.execute("SELECT pg_backend_pid()")).fetchone())[0])
                     await lock_detector(conn)
-                    entered.set()
 
             async with a.connection() as held:
                 await lock_detector(held)
                 # Reentrant within the holding transaction.
                 await lock_detector(held)
+                holder_pid = (await (await held.execute("SELECT pg_backend_pid()")).fetchone())[0]
                 assert (await detector.run_turn()).skipped
                 waiter = asyncio.create_task(contend())
-                await asyncio.sleep(0.5)
-                assert not entered.is_set()
+                await _wait_blocked(owner, await asyncio.wait_for(waiter_pid, 5), holder_pid, waiter)
             await asyncio.wait_for(waiter, 5)
             outcome = await detector.run_turn()
             assert outcome.batch == BatchOutcome(1, 1)

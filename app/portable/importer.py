@@ -345,7 +345,7 @@ async def _update_settings(conn, settings: dict) -> None:
 
 
 async def _apply_import(conn, bundle: dict) -> dict:
-    # Preserve the shared detector/mutation exclusion through the whole import.
+    # Hold this account's detector/mutation exclusion through the whole import.
     await lock_detector(conn)
 
     target_schema_version = await _fetch_schema_version(conn)

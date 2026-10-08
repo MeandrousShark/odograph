@@ -11,8 +11,10 @@ import asyncio
 import pytest
 
 from app.db import (
+    DETECTOR_ACCOUNT_LOCK_CLASS_ID,
     DETECTOR_ADVISORY_LOCK_KEY,
     EMAIL_DIGEST_ADVISORY_LOCK_KEY,
+    INVITATION_EMAIL_LOCK_CLASS_ID,
     NUDGE_ADVISORY_LOCK_KEY,
     ODOMETER_REMINDER_ADVISORY_LOCK_KEY,
     RUN_MIGRATIONS_ADVISORY_LOCK_KEY,
@@ -38,6 +40,12 @@ def test_advisory_lock_registry_preserves_every_deployed_key():
         EMAIL_DIGEST_ADVISORY_LOCK_KEY,
         RUN_MIGRATIONS_ADVISORY_LOCK_KEY,
     }) == 5
+
+
+def test_two_int_advisory_lock_classes_are_distinct():
+    # 901411 and 901412 are taken in scripts/sql (OIDC attempts, lifecycle).
+    assert INVITATION_EMAIL_LOCK_CLASS_ID == 901410
+    assert DETECTOR_ACCOUNT_LOCK_CLASS_ID == 901413
 
 
 def test_bad_migration_filename_rejected_before_applying_anything(tmp_path, monkeypatch):

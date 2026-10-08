@@ -3,8 +3,9 @@
 Concurrency model:
 - In-process, a single scheduler task owns execution; ingest only poke()s it.
 - Cross-process, each run try-locks its account's detector lock
-  (app/detector/lock.py) and skips if it loses. last_run_at only advances when a run commits, so skipped runs leave
-  the dirty window intact for the next debounce/sweep firing.
+  (app/detector/lock.py) and skips if it loses. last_run_at only advances
+  when a run commits, so skipped runs leave the dirty window intact for the
+  next debounce/sweep firing.
 """
 from __future__ import annotations
 
@@ -70,8 +71,9 @@ class DetectorRunner:
         """Process each owned stream in its own transaction.
 
         A failed stream leaves its checkpoint untouched; other streams still
-        commit. The same global transaction lock continues to exclude imports
-        and structural mutations across each stream's protected reads and writes.
+        commit. This account's detector lock (app/detector/lock.py) excludes its
+        imports and structural mutations across each stream's protected reads
+        and writes.
         """
         self.produced_work = False
         async with self.pool.connection() as conn:

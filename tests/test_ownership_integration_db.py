@@ -219,7 +219,8 @@ def test_import_holds_account_detector_lock_from_clean_check_through_writes_and_
                 assert not await _detector_lock_free(owner, a)
                 async with owner.connection() as conn:
                     assert (await (await conn.execute(
-                        "SELECT count(*) FROM trips WHERE account_id<>84")).fetchone())[0] == 0
+                        "SELECT count(*) FROM trips WHERE account_id<>%s",
+                        (b.principal.account_id,))).fetchone())[0] == 0
                 allow_exit.set()
                 await asyncio.wait_for(task, 5)
             finally:
