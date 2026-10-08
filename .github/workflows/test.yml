@@ -92,21 +92,16 @@ jobs:
       - name: Run full test suite
         run: |
           set -euo pipefail
-          # Expand variables in the supervised shell.
-          # shellcheck disable=SC2016
-          timeout --signal=INT --kill-after=15s 30m \
-            bash -euo pipefail -c '
-              if python -m pytest -vv --durations=25 -o faulthandler_timeout=120 \
-                2>&1 | tee "$RUNNER_TEMP/pytest-full-suite.log"; then
-                exit 0
-              else
-                suite_status=("${PIPESTATUS[@]}")
-                if (( suite_status[0] != 0 )); then
-                  exit "${suite_status[0]}"
-                fi
-                exit "${suite_status[1]}"
-              fi
-            '
+          if timeout --signal=INT --kill-after=15s 30m \
+            python -m pytest -vv --durations=25 -o faulthandler_timeout=120 \
+            > "$RUNNER_TEMP/pytest-full-suite.log" 2>&1; then
+            suite_status=0
+          else
+            suite_status=$?
+          fi
+          timeout --signal=TERM --kill-after=1s 5s \
+            tail -c 16384 "$RUNNER_TEMP/pytest-full-suite.log" || true
+          exit "$suite_status"
       - name: Retain full suite log
         if: always()
         timeout-minutes: 2

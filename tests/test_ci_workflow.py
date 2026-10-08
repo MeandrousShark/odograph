@@ -48,19 +48,19 @@ def test_ci_runs_full_suite_on_push_and_pull_requests_with_postgis(tmp_path):
     assert suite.get("continue-on-error", "false") == "false"
     script = suite["run"]
     assert script.splitlines()[0] == "set -euo pipefail"
-    command = shlex.split(
-        script.split("\n", 1)[1].replace("\\\n", ""), comments=True,
-    )
-    assert command[:-1] == [
+    supervised = shlex.split(script.replace("\\\n", "").split("; then", 1)[0])
+    assert supervised == [
+        "set", "-euo", "pipefail", "if",
         "timeout", "--signal=INT", "--kill-after=15s", "30m",
-        "bash", "-euo", "pipefail", "-c",
-    ]
-    pipeline = shlex.split(command[-1].split("; then", 1)[0])
-    assert pipeline == [
-        "if",
         "python", "-m", "pytest", "-vv", "--durations=25",
-        "-o", "faulthandler_timeout=120", "2>&1", "|", "tee",
-        "$RUNNER_TEMP/pytest-full-suite.log",
+        "-o", "faulthandler_timeout=120", ">", "$RUNNER_TEMP/pytest-full-suite.log", "2>&1",
+    ]
+    assert "tee" not in script and "PIPESTATUS" not in script
+    preview = script.split("\n  suite_status=$?\nfi\n", 1)[1]
+    assert shlex.split(preview.replace("\\\n", "")) == [
+        "timeout", "--signal=TERM", "--kill-after=1s", "5s",
+        "tail", "-c", "16384", "$RUNNER_TEMP/pytest-full-suite.log", "||", "true",
+        "exit", "$suite_status",
     ]
 
     retained = steps["Retain full suite log"]
@@ -80,19 +80,20 @@ def test_ci_runs_full_suite_on_push_and_pull_requests_with_postgis(tmp_path):
         if step.get("uses", "").startswith("actions/upload-artifact@")
     ] == [retained]
 
-    # Execute the whole Bash pipeline with a synthetic test process.
+    # Exercise the extracted shell with synthetic suite output and exit status.
     runner = tmp_path / "timeout"
     runner.write_text('#!/bin/sh\nshift 3\nexec "$@"\n')
     runner.chmod(0o755)
     python = tmp_path / "python"
     python.write_text(
-        '#!/bin/sh\nprintf "suite stdout\\n"\n'
+        '#!/bin/sh\nif [ "${CI_TEST_LARGE:-0}" = 1 ]; then printf "%20000s" x; fi\n'
+        'printf "suite stdout\\n"\n'
         'printf "suite stderr\\n" >&2\nexit "$CI_TEST_STATUS"\n'
     )
     python.chmod(0o755)
     env = {**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
            "RUNNER_TEMP": str(tmp_path)}
-    for status in (0, 1, 124, 137):
+    for status in (0, 7, 124, 137):
         result = subprocess.run(
             ["bash", "-c", script],
             env={**env, "CI_TEST_STATUS": str(status)},
@@ -102,14 +103,34 @@ def test_ci_runs_full_suite_on_push_and_pull_requests_with_postgis(tmp_path):
         assert result.stdout == "suite stdout\nsuite stderr\n"
         assert (tmp_path / "pytest-full-suite.log").read_text() == result.stdout
 
-    for status in (0, 1, 124, 137):
+    for status in (0, 7, 124, 137):
         result = subprocess.run(
             ["bash", "-c", script],
             env={**env, "CI_TEST_STATUS": str(status),
                  "RUNNER_TEMP": str(tmp_path / "absent")},
             capture_output=True, text=True, timeout=10,
         )
-        assert result.returncode == (status or 1)
+        assert result.returncode == 1
+
+    result = subprocess.run(
+        ["bash", "-c", script], env={**env, "CI_TEST_STATUS": "0", "CI_TEST_LARGE": "1"},
+        capture_output=True, text=True, timeout=10,
+    )
+    content = " " * 19999 + "xsuite stdout\nsuite stderr\n"
+    assert result.returncode == 0
+    assert (tmp_path / "pytest-full-suite.log").read_text() == content
+    assert result.stdout == content[-16384:]
+
+    preview_failure = tmp_path / "tail"
+    preview_failure.write_text('#!/bin/sh\nexit 9\n')
+    preview_failure.chmod(0o755)
+    for status in (0, 7):
+        result = subprocess.run(
+            ["bash", "-c", script], env={**env, "CI_TEST_STATUS": str(status)},
+            capture_output=True, text=True, timeout=10,
+        )
+        assert result.returncode == status
+        assert (tmp_path / "pytest-full-suite.log").read_text() == "suite stdout\nsuite stderr\n"
 
 
 def test_ci_checks_every_tracked_shell_script():
