@@ -166,6 +166,9 @@ class PreparationSession:
             if category == 'HeaderParseError':
                 from email.errors import HeaderParseError
                 raise HeaderParseError('preparation header is invalid')
+            if category == 'IllegalCharacterError':
+                from openpyxl.utils.exceptions import IllegalCharacterError
+                raise IllegalCharacterError('preparation cell is invalid')
             raise PreparationError('preparation helper failed')
         return result
 
@@ -314,7 +317,7 @@ class PreparationOperation:
         self.check()
         if self._spawn is not None:
             raise CapacityContractError('preparation helper already started')
-        if mode not in ('report', 'notification', 'security', 'ntfy'):
+        if mode not in ('report', 'notification', 'security', 'ntfy', 'export'):
             raise ValueError('unknown preparation mode')
         self._lifetime_read, self._lifetime_write = os.pipe()
         self.reservation.validate()

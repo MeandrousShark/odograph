@@ -12,7 +12,7 @@ from starlette.responses import RedirectResponse, Response
 from app.account_context import account_id
 from app.auth import require_report_user, require_user
 from app.page import render_page
-from app.export import to_csv, to_range_report_xlsx, to_report_xlsx, to_xlsx
+from app.export import to_range_report_xlsx, to_report_xlsx
 from app.expenses import ExpenseReport, build_expense_report
 from app.odometer import OdometerReading, VehicleCoverage, vehicle_coverage_for_report
 from app.rates import YearRate, load_rates
@@ -233,7 +233,7 @@ def register(router: APIRouter) -> None:
         @router.get("/export")
         async def export_trips(
             request: Request,
-            user: dict = Depends(require_user),
+            user: dict = Depends(require_report_user),
             format: str = Query("csv"),
             category: str = Query(""),
             from_: str = Query("", alias="from"),
@@ -245,34 +245,9 @@ def register(router: APIRouter) -> None:
             exclusion = exclusion if isinstance(exclusion, str) else ""
             if format not in EXPORT_MEDIA_TYPES:
                 raise HTTPException(status_code=400, detail="format must be csv or xlsx")
-            tz = request.state.config.display_tz
-            from_dt, to_dt = parse_date_range(from_, to, tz)
-            vehicle_id = _parse_vehicle_id(vehicle)
-            # Reuses the exact same filter SQL as index() so a filtered export
-            # can never drift from what's currently on screen.
-            where, params = _trip_filter_sql(
-                category, from_dt, to_dt, vehicle_id, q=q, exclusion=exclusion,
-                owner_id=request.state.principal.account_id,
-            )
-            async with request.state.account_pool.connection() as conn:
-                cur = conn.cursor(row_factory=dict_row)
-                await cur.execute(
-                    f"SELECT {TRIP_COLUMNS} FROM trips {where} ORDER BY started_at DESC", params
-                )
-                trips = await cur.fetchall()
-                rates = await load_rates(conn)
-
-            # CSV/XLSX serialization is CPU-bound; offload so it doesn't block
-            # the event loop for other requests while a large export builds.
-            if format == "csv":
-                content = await owned_thread(to_csv, trips, rates, tz)
-            else:
-                content = await owned_thread(to_xlsx, trips, rates, tz)
-            return Response(
-                content=content,
-                media_type=EXPORT_MEDIA_TYPES[format],
-                headers={"Content-Disposition": f'attachment; filename="trips.{format}"'},
-            )
+            from app.export_preparation import prepare_export
+            return await prepare_export(request, user, format, category, from_, to,
+                                        vehicle, q, exclusion)
 
         @router.get("/report")
         async def report_redirect(request: Request, user: dict = Depends(require_user)):

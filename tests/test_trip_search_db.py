@@ -2,9 +2,8 @@
 `_trip_filter_sql` and shared by the trip list, `/export`, and the month
 pager. `/review`'s own copy of this behavior (including undo across a
 search-filtered pass) is covered by tests/test_review_db.py, right next to
-its other filter tests. Route handlers are called directly (bypassing
-FastAPI's dependency injection), same pattern as
-tests/test_vehicle_filter_db.py.
+its other filter tests. List handlers are called directly; export requests use
+the real admitted ASGI fixture and supervised helper.
 """
 from __future__ import annotations
 
@@ -15,6 +14,7 @@ import json
 import os
 from datetime import datetime, timedelta
 from types import SimpleNamespace
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -27,6 +27,7 @@ from app.rates import deduction, load_rates
 from app.ui import make_router
 import app.ui.trips as trips_ui
 from conftest import reset_account_db
+from prepared_report_support import report_response
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -44,7 +45,6 @@ def _endpoint(path: str, method: str):
 
 TRIPS_ARCHIVE = _endpoint("/trips", "GET")
 TRIPS_ARCHIVE_LIST = _endpoint("/trips/list", "GET")
-EXPORT_TRIPS = _endpoint("/export", "GET")
 MONTH_PAGE = _endpoint("/trips/month/{year}/{month}", "GET")
 
 
@@ -155,10 +155,10 @@ async def _archive_list(
 
 
 async def _export(pool, q="", category="", from_="", to="", vehicle="", fmt="csv"):
-    return await EXPORT_TRIPS(
-        _request(pool), {"sub": "test"}, format=fmt, category=category,
-        from_=from_, to=to, vehicle=vehicle, q=q,
-    )
+    params = dict(format=fmt, category=category, **{'from': from_, 'to': to}, vehicle=vehicle, q=q)
+    response = await report_response(pool, '/export?' + urlencode(params), SimpleNamespace(display_tz=TZ))
+    assert response.status_code == 200
+    return response
 
 
 async def _month_page(pool, year, month, offset=0, q="", category="", from_="", to="", vehicle="", page_size=25):

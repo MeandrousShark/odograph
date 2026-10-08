@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from psycopg.pq import TransactionStatus
 from fastapi import APIRouter, Depends, FastAPI, Form, Request
 from starlette.requests import ClientDisconnect
 from starlette.responses import Response
@@ -148,6 +149,7 @@ def test_foreground_retains_owner_and_lease_through_response_send(monkeypatch, p
         app = FastAPI()
         manager = app.state.capacity = _manager()
         app.state.control_pool = object()
+        app.state.config = SimpleNamespace(preparation_spool_dir='')
         lease_live = False
         @asynccontextmanager
         async def lease(pool, *ids):
@@ -155,10 +157,11 @@ def test_foreground_retains_owner_and_lease_through_response_send(monkeypatch, p
             assert current_owner().lane == lane
             lease_live = True
             try:
-                yield
+                yield SimpleNamespace(info=SimpleNamespace(transaction_status=TransactionStatus.IDLE))
             finally:
                 lease_live = False
-        monkeypatch.setattr('app.capacity_routes.external_account_work', lease)
+        target = 'report_account_work' if path == '/export' else 'external_account_work'
+        monkeypatch.setattr('app.capacity_routes.' + target, lease)
         principal = AccountPrincipal(1, True, 1)
         async def identity(request: Request):
             request.state.principal = principal
@@ -171,7 +174,7 @@ def test_foreground_retains_owner_and_lease_through_response_send(monkeypatch, p
             return Response(b'export')
         app.include_router(router)
         async def receive():
-            return {'type': 'http.request', 'body': b''}
+            await asyncio.Future()
         async def send(message):
             assert lease_live
             assert len(manager._active[lane]) == 1
@@ -238,6 +241,7 @@ def test_cancelled_render_keeps_asgi_lease_until_actual_thread_finishes(monkeypa
         app = FastAPI()
         manager = app.state.capacity = _manager()
         app.state.control_pool = object()
+        app.state.config = SimpleNamespace(preparation_spool_dir='')
         started, release = threading.Event(), threading.Event()
         lease_live = False
         @asynccontextmanager
@@ -245,10 +249,11 @@ def test_cancelled_render_keeps_asgi_lease_until_actual_thread_finishes(monkeypa
             nonlocal lease_live
             lease_live = True
             try:
-                yield
+                yield SimpleNamespace(info=SimpleNamespace(transaction_status=TransactionStatus.IDLE))
             finally:
                 lease_live = False
-        monkeypatch.setattr('app.capacity_routes.external_account_work', lease)
+        target = 'report_account_work' if path == '/export' else 'external_account_work'
+        monkeypatch.setattr('app.capacity_routes.' + target, lease)
         async def identity(request: Request):
             request.state.principal = AccountPrincipal(1, True, 1)
             return {'id': 1}
@@ -263,7 +268,7 @@ def test_cancelled_render_keeps_asgi_lease_until_actual_thread_finishes(monkeypa
             return Response(await owned_thread(render))
         app.include_router(router)
         async def receive():
-            return {'type': 'http.request', 'body': b''}
+            await asyncio.Future()
         async def send(message):
             pass
         task = asyncio.create_task(app(_scope(path, 'GET'), receive, send))
@@ -289,16 +294,18 @@ def test_foreground_send_deadline_releases_owner_and_lease(monkeypatch, path, la
         app = FastAPI()
         manager = app.state.capacity = _manager(capacity_response_timeout_s=.02)
         app.state.control_pool = object()
+        app.state.config = SimpleNamespace(preparation_spool_dir='')
         lease_live = False
         @asynccontextmanager
         async def lease(pool, *ids):
             nonlocal lease_live
             lease_live = True
             try:
-                yield
+                yield SimpleNamespace(info=SimpleNamespace(transaction_status=TransactionStatus.IDLE))
             finally:
                 lease_live = False
-        monkeypatch.setattr('app.capacity_routes.external_account_work', lease)
+        target = 'report_account_work' if path == '/export' else 'external_account_work'
+        monkeypatch.setattr('app.capacity_routes.' + target, lease)
         async def identity(request: Request):
             request.state.principal = AccountPrincipal(1, True, 1)
             return {'id': 1}
@@ -309,7 +316,7 @@ def test_foreground_send_deadline_releases_owner_and_lease(monkeypatch, path, la
             return Response(b'data')
         app.include_router(router)
         async def receive():
-            return {'type': 'http.request', 'body': b''}
+            await asyncio.Future()
         async def send(message):
             await asyncio.sleep(.05)
         with pytest.raises(TimeoutError):
