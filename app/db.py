@@ -13,7 +13,8 @@ MIGRATIONS_DIR = pathlib.Path(__file__).resolve().parent.parent / "migrations"
 MIGRATION_FILENAME_RE = re.compile(r"^\d+_")
 
 # These use PostgreSQL's single-bigint namespace. Its two-int namespace is
-# separate: every detector/import/structural mutation must keep this same key.
+# separate. Detector/import/structural mutations hold this key shared with a
+# per-account key (app/detector/lock.py); exclusive holders still exclude all.
 DETECTOR_ADVISORY_LOCK_KEY = 0x6D696C6531  # "mile1"
 TRACKING_PROVISION_LOCK_KEY = 0x6D696C6537
 NUDGE_ADVISORY_LOCK_KEY = 901405
@@ -25,6 +26,8 @@ ROLE_SETUP_ADVISORY_LOCK_KEY = 901409
 
 # Two-int namespace. Hash collisions only serialize unrelated email targets.
 INVITATION_EMAIL_LOCK_CLASS_ID = 901410
+# Two-int namespace. Hash collisions only serialize two accounts' detectors.
+DETECTOR_ACCOUNT_LOCK_CLASS_ID = 901413
 
 
 def make_pool(database_url: str) -> AsyncConnectionPool:

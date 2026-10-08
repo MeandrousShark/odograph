@@ -19,7 +19,7 @@ from app.accounts import create_admin
 from app.application_roles import (
     OWNED_TABLES, application_role_pools, prepare_application_roles, validate_application_contract,
 )
-from app.db import make_pool
+from app.db import DETECTOR_ACCOUNT_LOCK_CLASS_ID, make_pool
 from app.detector.core import Params
 from app.detector.runner import DETECTOR_VERSION, DetectorRunner
 from app.portable import importer
@@ -125,6 +125,15 @@ async def _seed_track(bound, *, two_trips=False):
     return device
 
 
+async def _detector_lock_free(owner, bound):
+    # The import's account barrier blocks a second connection for its account.
+    async with owner.connection() as conn:
+        return (await (await conn.execute(
+            "SELECT pg_try_advisory_xact_lock(%s, hashtext(%s::text))",
+            (DETECTOR_ACCOUNT_LOCK_CLASS_ID, bound.principal.account_id),
+        )).fetchone())[0]
+
+
 async def _checkpoint(owner, device):
     async with owner.connection() as conn:
         return await (await conn.execute(
@@ -161,7 +170,7 @@ class _ObservedPool:
 
 
 @pytest.mark.parametrize("rollback", [False, True])
-def test_import_holds_shared_lock_from_clean_check_through_writes_and_releases(rollback, monkeypatch):
+def test_import_holds_account_detector_lock_from_clean_check_through_writes_and_releases(rollback, monkeypatch):
     async def run():
         async with _fixture() as (owner, _pools, _state, a, b):
             device = await _seed_track(b)
@@ -200,24 +209,25 @@ def test_import_holds_shared_lock_from_clean_check_through_writes_and_releases(r
             task = asyncio.create_task(importing())
             try:
                 await asyncio.wait_for(checked.wait(), 5)
-                assert await detector.run_once() is False
-                assert await _checkpoint(owner, device) == (None, 0)
+                assert not await _detector_lock_free(owner, a)
+                # Another account's detector no longer waits for this import.
+                assert await detector.run_once() is True
+                checkpoint = await _checkpoint(owner, device)
+                assert checkpoint[0] is not None and checkpoint[1] == DETECTOR_VERSION
                 allow_writes.set()
                 await asyncio.wait_for(written.wait(), 5)
-                assert await detector.run_once() is False
-                assert await _checkpoint(owner, device) == (None, 0)
+                assert not await _detector_lock_free(owner, a)
                 async with owner.connection() as conn:
-                    assert (await (await conn.execute("SELECT count(*) FROM trips")).fetchone())[0] == 0
+                    assert (await (await conn.execute(
+                        "SELECT count(*) FROM trips WHERE account_id<>%s",
+                        (b.principal.account_id,))).fetchone())[0] == 0
                 allow_exit.set()
                 await asyncio.wait_for(task, 5)
             finally:
                 allow_writes.set()
                 allow_exit.set()
                 await asyncio.gather(task, return_exceptions=True)
-            # A real detector transaction can now acquire the same bigint key.
-            assert await detector.run_once() is True
-            checkpoint = await _checkpoint(owner, device)
-            assert checkpoint[0] is not None and checkpoint[1] == DETECTOR_VERSION
+            assert await _detector_lock_free(owner, a)
             exported = await _export(a)
             assert len(exported["trips"]) == (0 if rollback else 1)
             assert exported["vehicles"][0]["name"] == ("My Car" if rollback else "Imported car")

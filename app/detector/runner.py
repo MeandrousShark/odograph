@@ -2,9 +2,10 @@
 
 Concurrency model:
 - In-process, a single scheduler task owns execution; ingest only poke()s it.
-- Cross-process, each run try-locks a Postgres advisory lock and skips if it
-  loses. last_run_at only advances when a run commits, so skipped runs leave
-  the dirty window intact for the next debounce/sweep firing.
+- Cross-process, each run try-locks its account's detector lock
+  (app/detector/lock.py) and skips if it loses. last_run_at only advances
+  when a run commits, so skipped runs leave the dirty window intact for the
+  next debounce/sweep firing.
 """
 from __future__ import annotations
 
@@ -20,8 +21,8 @@ from app.capacity import owned_thread
 from app.worker import BatchOutcome, TurnOutcome
 
 from app.autotag import AutotagTrip, Rule, plan_autotags
-from app.db import DETECTOR_ADVISORY_LOCK_KEY
 from app.detector.core import Override, Params, Point, Trip, detect
+from app.detector.lock import lock_detector, try_lock_detector
 from app.detector.reconcile import ExistingTrip, plan_reconcile
 
 log = logging.getLogger(__name__)
@@ -70,8 +71,9 @@ class DetectorRunner:
         """Process each owned stream in its own transaction.
 
         A failed stream leaves its checkpoint untouched; other streams still
-        commit. The same global transaction lock continues to exclude imports
-        and structural mutations across each stream's protected reads and writes.
+        commit. This account's detector lock (app/detector/lock.py) excludes its
+        imports and structural mutations across each stream's protected reads
+        and writes.
         """
         self.produced_work = False
         async with self.pool.connection() as conn:
@@ -101,10 +103,7 @@ class DetectorRunner:
         for device in devices:
             try:
                 async with self.pool.connection() as conn:
-                    cur = await conn.execute(
-                        "SELECT pg_try_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
-                    )
-                    if not (await cur.fetchone())[0]:
+                    if not await try_lock_detector(conn):
                         log.info("detector: advisory lock busy, skipping stream")
                         continue
                     if await self._admit_device(conn, device) is None:
@@ -147,10 +146,7 @@ class DetectorRunner:
         device = row[0]
         try:
             async with self.pool.connection() as conn:
-                lock = await conn.execute(
-                    "SELECT pg_try_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
-                )
-                if not (await lock.fetchone())[0]:
+                if not await try_lock_detector(conn):
                     return TurnOutcome(cursor=cursor, skipped=True)
                 if await self._admit_device(conn, device) is None:
                     return TurnOutcome(ready=True, cursor=device)
@@ -190,7 +186,7 @@ class DetectorRunner:
         edited, using the same "full reprocess" path a DETECTOR_VERSION bump
         takes, just scoped to one device instead of all of them.
 
-        Blocking `pg_advisory_xact_lock`, not `run_once`'s try-lock: a user
+        Blocking `lock_detector`, not `run_once`'s try-lock: a user
         click can afford to wait briefly for an in-flight background run to
         finish, whereas a skipped background run just retries later.
         Transaction-scoped, releasing automatically on commit or rollback,
@@ -199,9 +195,7 @@ class DetectorRunner:
         within one session/transaction), so a caller that must serialize
         earlier writes too can safely take it again before this call.
         """
-        await conn.execute(
-            "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
-        )
+        await lock_detector(conn)
         if await self._admit_device(conn, device) is None:
             raise ValueError("No such tracking device")
         await self._process_device(conn, device, EPOCH, full=True)
@@ -638,11 +632,11 @@ async def reprocess_places_in(conn) -> None:
     rather than leave it committed with trip tags now inconsistent with it.
     Same reasoning as `reprocess_device_in` vs. `reprocess_device_now`.
 
-    Serialized against the detector on the same advisory lock: both this and a
+    Serialized against the detector on the same account lock: both this and a
     detector run UPDATE trips.category, so they must not interleave on the same
-    rows. `pg_advisory_xact_lock` blocks until any in-flight detector run's
-    transaction (holding `pg_try_advisory_xact_lock`) commits or rolls back and
-    releases it, then holds the lock for this transaction (auto-released on
+    rows. `lock_detector` blocks until this account's in-flight detector run
+    (holding `try_lock_detector`) commits or rolls back and releases it, then
+    holds the lock for this transaction (auto-released on
     commit); a detector run starting meanwhile finds the lock busy and skips,
     re-running on its next debounce/sweep, the same safe skip path the
     detector already relies on. At single-instance scale the detector's runs
@@ -650,9 +644,7 @@ async def reprocess_places_in(conn) -> None:
     caller already holds it (advisory locks are reentrant within one
     session/transaction).
     """
-    await conn.execute(
-        "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
-    )
+    await lock_detector(conn)
     cur = await conn.execute(
         "SELECT id FROM trips WHERE account_id = %s AND source = 'detected' AND NOT imported",
         (account_id(conn),)
