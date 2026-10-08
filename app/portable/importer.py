@@ -12,7 +12,8 @@ from psycopg import errors
 from psycopg.rows import dict_row
 from app.account_context import account_id
 
-from app.db import DETECTOR_ADVISORY_LOCK_KEY, _fetch_schema_version
+from app.db import _fetch_schema_version
+from app.detector.lock import lock_detector
 from app.portable.format import SEEDED_TAG_RULES, SEEDED_VEHICLE
 
 log = logging.getLogger(__name__)
@@ -345,9 +346,7 @@ async def _update_settings(conn, settings: dict) -> None:
 
 async def _apply_import(conn, bundle: dict) -> dict:
     # Preserve the shared detector/mutation exclusion through the whole import.
-    await conn.execute(
-        "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
-    )
+    await lock_detector(conn)
 
     target_schema_version = await _fetch_schema_version(conn)
     source_schema_version = bundle["schema_version"]

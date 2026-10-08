@@ -11,7 +11,7 @@ from psycopg.rows import dict_row
 
 from app.account_context import account_id
 from app.auth import require_csrf, require_user
-from app.db import DETECTOR_ADVISORY_LOCK_KEY
+from app.detector.lock import lock_detector
 from app.detector.runner import reprocess_places_in
 from app.places_desc import PLACE_KINDS
 from app.validation import parse_finite_number
@@ -77,8 +77,8 @@ def register_boundary_override(router: APIRouter) -> None:
             runner = request.state.detector_runner
             reprocessed = False
             async with request.state.account_pool.connection() as conn:
-                # Global lock precedes writes and the reprocess they trigger.
-                await conn.execute("SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,))
+                # Detector lock precedes writes and the reprocess they trigger.
+                await lock_detector(conn)
                 cur = await conn.execute(
                     "DELETE FROM trip_boundary_overrides WHERE id = %s AND account_id = %s RETURNING tracking_device_id",
                     (override_id, account_id(conn)),
@@ -144,8 +144,8 @@ def register(router: APIRouter) -> None:
                 raise HTTPException(status_code=400, detail="Invalid coordinates")
             lat, lon = parsed_lat, parsed_lon
             async with request.state.account_pool.connection() as conn:
-                # Global lock precedes writes and the reprocess they trigger.
-                await conn.execute("SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,))
+                # Detector lock precedes writes and the reprocess they trigger.
+                await lock_detector(conn)
                 try:
                     await conn.execute(
                         "INSERT INTO places (account_id, name, kind, geom, radius_m) "
@@ -187,8 +187,8 @@ def register(router: APIRouter) -> None:
                 raise HTTPException(status_code=400, detail="Invalid coordinates")
             lat, lon = parsed_lat, parsed_lon
             async with request.state.account_pool.connection() as conn:
-                # Global lock precedes writes and the reprocess they trigger.
-                await conn.execute("SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,))
+                # Detector lock precedes writes and the reprocess they trigger.
+                await lock_detector(conn)
                 try:
                     await conn.execute(
                         "UPDATE places SET name = %s, kind = %s, "
@@ -205,8 +205,8 @@ def register(router: APIRouter) -> None:
         @router.post("/places/{place_id}/delete", dependencies=[Depends(require_csrf)])
         async def delete_place(request: Request, place_id: int, user: dict = Depends(require_user)):
             async with request.state.account_pool.connection() as conn:
-                # Global lock precedes writes and the reprocess they trigger.
-                await conn.execute("SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,))
+                # Detector lock precedes writes and the reprocess they trigger.
+                await lock_detector(conn)
                 await conn.execute("DELETE FROM places WHERE id = %s AND account_id = %s", (place_id, account_id(conn)))
                 await reprocess_places_in(conn)
             request.state._capacity_mutation_committed = True
@@ -249,8 +249,8 @@ def register(router: APIRouter) -> None:
                 )
 
             async with request.state.account_pool.connection() as conn:
-                # Global lock precedes writes and the reprocess they trigger.
-                await conn.execute("SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,))
+                # Detector lock precedes writes and the reprocess they trigger.
+                await lock_detector(conn)
                 try:
                     await conn.execute(
                         "INSERT INTO tag_rules (account_id, a_place, a_kind, b_place, b_kind, category) "
@@ -266,8 +266,8 @@ def register(router: APIRouter) -> None:
         @router.post("/rules/{rule_id}/delete", dependencies=[Depends(require_csrf)])
         async def delete_rule(request: Request, rule_id: int, user: dict = Depends(require_user)):
             async with request.state.account_pool.connection() as conn:
-                # Global lock precedes writes and the reprocess they trigger.
-                await conn.execute("SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,))
+                # Detector lock precedes writes and the reprocess they trigger.
+                await lock_detector(conn)
                 await conn.execute("DELETE FROM tag_rules WHERE id = %s AND account_id = %s", (rule_id, account_id(conn)))
                 await reprocess_places_in(conn)
             request.state._capacity_mutation_committed = True

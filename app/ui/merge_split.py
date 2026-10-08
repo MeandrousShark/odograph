@@ -6,7 +6,7 @@ from starlette.responses import JSONResponse, Response
 
 from app.account_context import account_id
 from app.auth import require_csrf, require_user
-from app.db import DETECTOR_ADVISORY_LOCK_KEY
+from app.detector.lock import lock_detector
 from app.detector.runner import load_trip_points
 from app.merge import TripSpan, plan_merge_selected
 
@@ -53,9 +53,7 @@ async def _merge_trips_core(
 
     runner = request.state.detector_runner
     async with request.state.account_pool.connection() as conn:
-        await conn.execute(
-            "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
-        )
+        await lock_detector(conn)
 
         # Checked before the trip-selection query below excludes imported
         # trips (AND NOT imported): that exclusion alone would just make
@@ -293,9 +291,7 @@ def register_split(router: APIRouter) -> None:
             """
             runner = request.state.detector_runner
             async with request.state.account_pool.connection() as conn:
-                await conn.execute(
-                    "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
-                )
+                await lock_detector(conn)
                 cur = await conn.execute(
                     "SELECT tracking_device_id, source::text, started_at, ended_at, device, imported "
                     "FROM trips WHERE account_id = %s AND id = %s FOR UPDATE",

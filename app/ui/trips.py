@@ -16,7 +16,7 @@ from app.capacity import owned_thread
 from app.auth import require_csrf, require_user
 from app.page import render_page, render_template
 from app.dashboard import parse_week_anchor
-from app.db import DETECTOR_ADVISORY_LOCK_KEY
+from app.detector.lock import lock_detector
 from app.detector.runner import load_trip_points
 from app.expenses import (
     CATEGORY_LABELS,
@@ -194,9 +194,7 @@ async def _delete_trip_in(conn, trip_id: int) -> tuple[datetime, int]:
     later detector passes honor the override without rewriting unrelated trips.
     Manual trips remain a direct row DELETE.
     """
-    await conn.execute(
-        "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
-    )
+    await lock_detector(conn)
     cur = await conn.execute(
         "SELECT device, tracking_device_id, source::text, imported, started_at, ended_at "
         "FROM trips WHERE id = %s AND account_id = %s FOR UPDATE",
@@ -1573,9 +1571,7 @@ def register_batch_and_points(router: APIRouter) -> None:
                 raise HTTPException(status_code=400, detail="Select at least one trip")
 
             async with request.state.account_pool.connection() as conn:
-                await conn.execute(
-                    "SELECT pg_advisory_xact_lock(%s)", (DETECTOR_ADVISORY_LOCK_KEY,)
-                )
+                await lock_detector(conn)
                 cur = await conn.execute(
                     "SELECT id FROM trips WHERE id = ANY(%s) AND account_id = %s FOR UPDATE", (trip_ids, account_id(conn))
                 )
