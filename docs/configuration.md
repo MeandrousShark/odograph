@@ -287,16 +287,17 @@ memory or total detector job duration. Large ledgers can still need substantial
 memory. Background types rotate after each completed device, snap trip, geocode
 coordinate, email kind or retention batch (at most 1,000 expired raw rows).
 Accounts rotate between those units, and ready backlogs continue without
-waiting for a periodic sweep. A whole detector device or generic export can still take a long time;
+waiting for a periodic sweep. A whole detector device can still take a long time;
 these controls do not establish a universal job deadline for every job. SMTP sends have
 the separate whole transport deadline described below.
-Annual and date-range HTML reports and their XLSX downloads prepare complete
-files before sending a response. Preparation has a 60-second stop deadline,
+Annual and date-range HTML reports, their XLSX downloads, and generic trip
+CSV/XLSX exports prepare complete files before sending a response.
+Preparation has a 60-second stop deadline,
 separate from the response transmission deadline. Each operation reserves up to
 512 MiB of spool space; one spool root admits at most four operations and
 2 GiB in total, including orphaned files. Intermediate sort, worksheet and ZIP
 files count toward the same reservation. Exhaustion returns busy before the
-response starts, without a truncated report. Digest and reminder notifications,
+response starts, without a truncated report or export. Digest and reminder notifications,
 plus security email, use the same preparation reservations for settings, message
 bodies, MIME and transport metadata. Notification preparation failure leaves
 delivery unrecorded for its existing retry behavior. Resources remain reserved until
@@ -311,8 +312,9 @@ The isolated renderer receives bounded text frames and no database connection
 or credential environment. On Linux, a 256 MiB virtual-address-space limit is
 installed before renderer imports. Native macOS uses a sampled 256 MiB resident
 memory stop with possible overshoot; that diagnostic is not a hard memory
-quota. Startup configuration parsing and already-held HTTP cookie state retain
-their existing authority; the preparation limits do not bound whole-app memory.
+quota. Startup configuration parsing, framework URL decoding and already-held
+request/cookie state are outside these preparation limits. The limits do not
+bound whole-application or PostgreSQL memory.
 
 Reverse-geocode retries persist per rounded endpoint coordinate. Transient
 failures defer that coordinate with exponential backoff from 60 seconds to a

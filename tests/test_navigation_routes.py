@@ -180,6 +180,15 @@ def test_real_tag_committed_mutation_survives_busy_dashboard_refresh(monkeypatch
 def test_distinct_account_navigation_serves_during_bulk_export(monkeypatch):
     async def run():
         app = _app(monkeypatch)
+        app.state.config = SimpleNamespace(preparation_spool_dir='')
+
+        @asynccontextmanager
+        async def report_lease(_pool, principal):
+            from psycopg.pq import TransactionStatus
+            assert current_owner().principal.account_id == principal.account_id
+            yield SimpleNamespace(info=SimpleNamespace(transaction_status=TransactionStatus.IDLE))
+
+        monkeypatch.setattr('app.capacity_routes.report_account_work', report_lease)
         router = APIRouter(route_class=AdmissionRoute)
         entered, release = asyncio.Event(), asyncio.Event()
 

@@ -42,7 +42,7 @@ FOREGROUND_ROUTES = frozenset({
     ('POST', '/rules/{rule_id}/delete'),
 })
 PREPARED_REPORT_ROUTES = frozenset({
-    '/report/range', '/report/range/export', '/report/{year}', '/report/{year}/export',
+    '/export', '/report/range', '/report/range/export', '/report/{year}', '/report/{year}/export',
 })
 INTERACTIVE_ROUTES = frozenset({
     ('POST', '/login/local'), ('POST', '/signup'), ('POST', '/invite'),

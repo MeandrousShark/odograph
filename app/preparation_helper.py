@@ -110,7 +110,7 @@ def main():
     channel = Channel()
     try:
         dispatch = channel.recv_command()
-        if dispatch is None or dispatch.get('mode') not in ('report', 'notification', 'security', 'ntfy'):
+        if dispatch is None or dispatch.get('mode') not in ('report', 'notification', 'security', 'ntfy', 'export'):
             raise ValueError('unknown preparation mode')
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
         from app.preparation_resources import ResourceBudget, PreparationResourceError
@@ -120,6 +120,8 @@ def main():
             from app.security_mail_renderer import render
         elif dispatch['mode'] == 'ntfy':
             from app.ntfy_renderer import render
+        elif dispatch['mode'] == 'export':
+            from app.export_renderer import render
         else:
             from app.report_renderer import render
         render(channel, ResourceBudget('.', directory_fd, relative_paths=True))
@@ -132,7 +134,8 @@ def main():
             isinstance(exc, OSError) and exc.errno in (28, 122))
         category = type(exc).__name__
         if category not in ('ValueError', 'TypeError', 'DataError', 'OverflowError', 'UnicodeEncodeError',
-                            'UnicodeDecodeError', 'ZoneInfoNotFoundError', 'HeaderParseError'):
+                            'UnicodeDecodeError', 'ZoneInfoNotFoundError', 'HeaderParseError',
+                            'IllegalCharacterError'):
             category = None
         channel.send_response({'error': 'resource' if resource_failure else 'preparation',
                                'category': category})
