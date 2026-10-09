@@ -189,11 +189,17 @@ def test_oidc_invitation_rolls_back_all_provisioning_after_failure():
                 "CREATE TRIGGER fail_oidc_vehicle_for_test BEFORE INSERT ON public.vehicles "
                 "FOR EACH ROW EXECUTE FUNCTION public.fail_oidc_vehicle_for_test()"
             )
-        async with pools.control.connection() as conn:
-            with pytest.raises(InvitationUnavailable):
-                await redeem_oidc_invitation_by_digest(
-                    conn, digest, "https://id.example", "rollback-subject",
-                )
+        try:
+            async with pools.control.connection() as conn:
+                with pytest.raises(InvitationUnavailable):
+                    await redeem_oidc_invitation_by_digest(
+                        conn, digest, "https://id.example", "rollback-subject",
+                    )
+        finally:
+            # reset_db() refuses a leaked trigger or function.
+            async with owner.connection() as conn:
+                await conn.execute("DROP TRIGGER fail_oidc_vehicle_for_test ON public.vehicles")
+                await conn.execute("DROP FUNCTION public.fail_oidc_vehicle_for_test()")
         async with owner.connection() as conn:
             for table, where, params in (
                 ("accounts", "email=%s", ("rollback@example.invalid",)),
@@ -213,8 +219,6 @@ def test_oidc_invitation_rolls_back_all_provisioning_after_failure():
             assert await (await conn.execute(
                 "SELECT consumed_at FROM invitations WHERE token_digest=%s", (digest,),
             )).fetchone() == (None,)
-            await conn.execute("DROP TRIGGER fail_oidc_vehicle_for_test ON public.vehicles")
-            await conn.execute("DROP FUNCTION public.fail_oidc_vehicle_for_test()")
         async with pools.control.connection() as conn:
             member_id = await redeem_oidc_invitation_by_digest(
                 conn, digest, "https://id.example", "rollback-subject",
