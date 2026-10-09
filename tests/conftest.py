@@ -363,6 +363,18 @@ def restores_test_schema(monkeypatch):
         run_with_test_pool(restore_test_schema)
 
 
+@pytest.fixture(scope="module")
+def restores_test_schema_after_module():
+    """Like restores_test_schema, once after the whole module.
+
+    Only for a module whose every case starts by dropping the schema, so no
+    case depends on the state the one before it left behind.
+    """
+    yield
+    if TEST_DB:
+        run_with_test_pool(restore_test_schema)
+
+
 @pytest.fixture
 def restores_test_roles(monkeypatch):
     """Teardown provisions roles after a test that dropped only role state."""

@@ -36,7 +36,7 @@ from conftest import drop_and_recreate_schema
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = [pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS"),
-              pytest.mark.usefixtures("restores_test_schema")]
+              pytest.mark.usefixtures("restores_test_schema_after_module")]
 
 PREPARED_SCHEMA = 26
 ACTIVATED_SCHEMA = 28

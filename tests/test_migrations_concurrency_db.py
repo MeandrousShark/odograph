@@ -17,7 +17,7 @@ from conftest import drop_and_recreate_schema
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = [
     pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests"),
-    pytest.mark.usefixtures("restores_test_schema"),
+    pytest.mark.usefixtures("restores_test_schema_after_module"),
 ]
 
 

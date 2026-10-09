@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-_REPLAY = re.compile(r"\b(full_schema_reset|drop_and_recreate_schema|restores?_test_schema)\b")
+_REPLAY = re.compile(r"\b(full_schema_reset|drop_and_recreate_schema|restores?_test_schema)")
 
 _SCHEMA_REPLAY_MODULE_STEMS = {
     "test_account_avatar_db",  # migration 024 over a partial schema

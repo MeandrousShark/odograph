@@ -21,7 +21,7 @@ from conftest import drop_and_recreate_schema
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = [pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL for disposable DB tests"),
-              pytest.mark.usefixtures("restores_test_schema")]
+              pytest.mark.usefixtures("restores_test_schema_after_module")]
 BOOTSTRAP_SQL = Path(__file__).resolve().parents[1] / "scripts/sql/account_bootstrap.sql"
 
 
