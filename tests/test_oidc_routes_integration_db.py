@@ -16,7 +16,6 @@ from starlette.responses import RedirectResponse
 
 import app.auth as auth
 from app.accounts import create_admin, get_account
-from app.application_roles import application_role_pools, prepare_application_roles
 from app.db import make_pool
 from app.ingest import FailedAuthLimiter
 from app.invitations import issue_invitation
@@ -26,7 +25,7 @@ from app.oidc_identities import create_identity_link
 from app.oidc_attempts import consume_oidc_attempt
 from app.password_reset import SecurityMailAdmission
 from tests.auth_db_fixtures import auth_config
-from conftest import full_schema_reset
+from conftest import provisioned_role_pools, reset_db
 from tests.oidc_test_helpers import oidc_authorization_url
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -99,14 +98,11 @@ async def _run_route_scenario(monkeypatch):
     owner = make_pool(TEST_DB)
     await owner.open(wait=True)
     try:
-        async with owner.connection() as conn:
-            await conn.execute("DROP SCHEMA IF EXISTS odograph_service CASCADE")
-        await full_schema_reset(owner)
-        await prepare_application_roles(TEST_DB)
+        await reset_db(owner)
         async with owner.connection() as conn:
             await conn.execute("DROP INDEX accounts_singleton_idx")
             await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
-        async with application_role_pools(TEST_DB) as pools:
+        async with provisioned_role_pools(owner) as pools:
             async with pools.control.connection() as conn:
                 admin = await create_admin(conn, "admin@example.invalid", "existing-hash")
                 await create_identity_link(conn, admin["id"], "https://idp.example", "claimed-subject")
@@ -332,10 +328,7 @@ async def _run_route_scenario(monkeypatch):
                     "SELECT count(*) FROM oidc_action_proofs WHERE account_id=%s", (member_id,)
                 )).fetchone() == (0,)
     finally:
-        try:
-            await full_schema_reset(owner)
-        finally:
-            await owner.close()
+        await owner.close()
 
 
 def test_restricted_oidc_invite_cancel_collision_and_fresh_add_password(monkeypatch):

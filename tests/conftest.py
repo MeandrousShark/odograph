@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -284,8 +285,8 @@ async def reset_db(pool) -> None:
     async with pool.connection() as conn:
         functions = await _schema_object_names(conn)
         provisioned = await _is_provisioned(conn)
-    # Migration-machinery tests deliberately replay SQL without role setup.
-    # Restore the complete test schema before ordinary application fixtures.
+    # A safety net only: tests that replay SQL without role setup restore
+    # the schema when they finish, so ordinary tests rarely pay for this.
     required = {"function:bootstrap_first_account", "function:assert_account_active",
                 "function:assert_tracking_credential"}
     if not required <= functions or not provisioned:
@@ -301,12 +302,10 @@ async def reset_db(pool) -> None:
 async def drop_and_recreate_schema(pool) -> None:
     """Bare DROP SCHEMA/CREATE SCHEMA, with no migration replay.
 
-    Used only by the migration-machinery tests (tests/test_migration_013_db.py,
-    tests/test_migration_014_db.py, tests/test_migrations_concurrency_db.py,
-    and tests/test_accounts_db.py's partial-replay scenario), which are
-    testing the migration runner itself or a specific migration's
-    data-preserving behavior and genuinely need a real drop, not the
-    truncate-and-restore reset above.
+    Only for tests of the migration runner, a specific migration's
+    data-preserving behavior, or committed schema drift, which genuinely need
+    a real drop rather than the truncate-and-restore reset above.
+    tests/test_schema_replay_allowlist.py pins the modules that may call it.
     """
     _check_allowed_database(pool)
     # Dropping the role state lets the next provisioning rotate passwords.
@@ -318,13 +317,59 @@ async def drop_and_recreate_schema(pool) -> None:
 async def full_schema_reset(pool) -> None:
     """Drop, recreate, and replay every migration from scratch.
 
-    Same migration-machinery-only callers as drop_and_recreate_schema above.
+    Same allowlisted callers as drop_and_recreate_schema above.
     """
     await drop_and_recreate_schema(pool)
     await run_migrations(pool)
     async with pool.connection() as conn:
         for filename in ("account_bootstrap.sql", "account_admission.sql", "tracking_admission.sql"):
             await conn.execute((Path(__file__).resolve().parents[1] / "scripts" / "sql" / filename).read_text())
+
+
+async def restore_test_schema(pool) -> None:
+    """Replay every migration and provision the roles, as the session does.
+
+    The exit step for a test that drops, partly replays or alters the schema,
+    so the next test's reset_db() never pays for that replay itself.
+    """
+    await full_schema_reset(pool)
+    await provision_test_roles(pool)
+
+
+def run_with_test_pool(action) -> None:
+    """Run `action(pool)` on a privileged test pool in its own event loop."""
+
+    async def run() -> None:
+        pool = make_pool(TEST_DB)
+        await pool.open(wait=True)
+        try:
+            await action(pool)
+        finally:
+            await pool.close()
+
+    asyncio.run(run())
+
+
+@pytest.fixture
+def restores_test_schema(monkeypatch):
+    """Teardown replays and reprovisions after a schema-altering test.
+
+    Runs even when the test fails. The test's monkeypatches are undone first
+    so the restore runs unpatched migration and provisioning code.
+    """
+    yield
+    monkeypatch.undo()
+    if TEST_DB:
+        run_with_test_pool(restore_test_schema)
+
+
+@pytest.fixture
+def restores_test_roles(monkeypatch):
+    """Teardown provisions roles after a test that dropped only role state."""
+    yield
+    monkeypatch.undo()
+    if TEST_DB:
+        run_with_test_pool(provision_test_roles)
 
 
 @dataclass(frozen=True, slots=True)
@@ -389,6 +434,21 @@ async def restricted_role_pools(pool) -> RolePools:
 
         pool.close = close
     return pools
+
+
+@asynccontextmanager
+async def provisioned_role_pools(pool):
+    """Real control and runtime pools for one block, then closed.
+
+    A stand-in for app.application_roles.application_role_pools() in tests
+    that are not about it: that validates the role contract on every new
+    connection, which costs most of a second per test.
+    tests/test_application_roles_db.py covers the real pools.
+    """
+    try:
+        yield await restricted_role_pools(pool)
+    finally:
+        await close_restricted_role_pools(pool)
 
 
 async def bootstrap_test_account(pool, *, owner_id: int = 41, email="development@localhost.invalid") -> FixtureAccountPool:

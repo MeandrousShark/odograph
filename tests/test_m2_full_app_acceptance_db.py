@@ -27,7 +27,7 @@ from app.account_context import AccountPool, AccountPrincipal, control_connectio
 from app.config import Config
 from app.db import make_pool
 from app.mailer import Mailer
-from conftest import full_schema_reset
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = [pytest.mark.capacity_contract,
@@ -460,9 +460,7 @@ def test_full_app_bootstrap_onboarding_and_admin_recovery_keep_proofs_private(
         owner = make_pool(TEST_DB)
         await owner.open(wait=True)
         try:
-            async with owner.connection() as conn:
-                await conn.execute("DROP SCHEMA IF EXISTS odograph_service CASCADE")
-            await full_schema_reset(owner)
+            await reset_db(owner)
             unverified_processed = asyncio.Event()
             from app import password_reset
 
@@ -477,7 +475,6 @@ def test_full_app_bootstrap_onboarding_and_admin_recovery_keep_proofs_private(
             monkeypatch.setattr(password_reset, "issue_password_reset", observe_unverified_request)
             await _scenario(owner, secrets_seen, unverified_processed)
         finally:
-            await full_schema_reset(owner)
             await owner.close()
 
     with caplog.at_level(logging.DEBUG):

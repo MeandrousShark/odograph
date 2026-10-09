@@ -11,7 +11,7 @@ from psycopg import errors
 
 from app.accounts import create_admin, get_account, replace_password
 from app.application_roles import (
-    application_role_pools, finalize_application_restore, prepare_application_roles,
+    application_role_pools, finalize_application_restore,
 )
 from app.db import make_pool
 from app.email_challenges import (
@@ -23,7 +23,7 @@ from app.password_reset import (
     issue_password_reset, password_reset_send_usable, password_reset_usable,
     revoke_password_reset,
 )
-from conftest import full_schema_reset
+from conftest import provisioned_role_pools, reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS")
@@ -44,14 +44,11 @@ async def _scenario(callback):
     owner = make_pool(TEST_DB)
     await owner.open(wait=True)
     try:
-        async with owner.connection() as conn:
-            await conn.execute("DROP SCHEMA IF EXISTS odograph_service CASCADE")
-        await full_schema_reset(owner)
-        await prepare_application_roles(TEST_DB)
-        async with application_role_pools(TEST_DB) as pools:
+        await reset_db(owner)
+        async with provisioned_role_pools(owner) as pools:
             async with pools.control.connection() as conn:
                 a = await create_admin(conn, A_EMAIL, "hash-a")
-            # Test-only second account; full_schema_reset restores the guards.
+            # Test-only second account; reset_db restores the guards.
             async with owner.connection() as conn:
                 await conn.execute("DROP INDEX accounts_singleton_idx")
                 await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
@@ -62,7 +59,6 @@ async def _scenario(callback):
                 await conn.execute("UPDATE accounts SET email_verified_at=now() WHERE id=%s", (a["id"],))
             await callback(owner, pools, a["id"], b_id)
     finally:
-        await full_schema_reset(owner)
         await owner.close()
 
 
