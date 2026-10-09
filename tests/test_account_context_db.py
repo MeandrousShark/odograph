@@ -37,29 +37,12 @@ from app.account_context import (
     runtime_privilege_problems,
 )
 from app.role_setup import ALL_ROLES, SQL_DIR, _prepare
-from conftest import full_schema_reset, provision_test_roles, run_with_test_pool
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
-pytestmark = pytest.mark.skipif(
-    not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests"
-)
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _unprovisioned_public_schema():
-    """Replay schema public once, without role state, for the whole module.
-
-    Live ownership tests use these same cluster-wide role names. With no
-    application object depending on them, every scenario's DROP OWNED cannot
-    leave a partially destroyed application schema. No scenario touches
-    public, so the module provisions the application roles once at the end.
-    """
-    if TEST_DB:
-        run_with_test_pool(full_schema_reset)
-    yield
-    if TEST_DB:
-        run_with_test_pool(provision_test_roles)
-
+pytestmark = [
+    pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests"),
+    pytest.mark.usefixtures("unprovisioned_public_schema"),
+]
 
 SCHEMA = "account_context_p0"
 OWNER_ROLE = "odograph_migrate"

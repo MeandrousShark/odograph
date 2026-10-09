@@ -375,6 +375,23 @@ def restores_test_schema_after_module():
         run_with_test_pool(restore_test_schema)
 
 
+@pytest.fixture(scope="module")
+def unprovisioned_public_schema():
+    """Replay schema public once, without role state, for a whole module.
+
+    For modules whose scenarios build the P0 fixture and DROP OWNED BY and
+    DROP ROLE the cluster-wide roles (tests/test_account_context_db.py and
+    its importers). With no application object depending on those roles,
+    DROP OWNED cannot destroy part of the application schema. No scenario
+    touches public, so the module provisions the roles once at the end.
+    """
+    if TEST_DB:
+        run_with_test_pool(full_schema_reset)
+    yield
+    if TEST_DB:
+        run_with_test_pool(provision_test_roles)
+
+
 @pytest.fixture
 def restores_test_roles(monkeypatch):
     """Teardown provisions roles after a test that dropped only role state."""
