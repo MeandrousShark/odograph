@@ -145,6 +145,8 @@ def test_durable_worker_schema_drift_refuses_startup(statement, cause):
      "LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp "
      "AS $body$ BEGIN RETURN; END $body$", "function definition"),
 ])
+# The drift is committed, so the schema is replayed after.
+@pytest.mark.usefixtures("restores_test_schema")
 def test_worker_contract_drift_is_not_repaired_by_startup_or_restore(statement, cause):
     async def check(owner, pools, state):
         async with owner.connection() as conn:

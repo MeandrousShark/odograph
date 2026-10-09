@@ -24,11 +24,12 @@ from app.email_challenges import (
 )
 from app.oidc_identities import resolve_identity_account
 from app.tracking import authenticate_ingest, create_device
-from conftest import LATEST_SCHEMA_VERSION, close_restricted_role_pools, drop_and_recreate_schema, full_schema_reset, restricted_role_pools
+from conftest import LATEST_SCHEMA_VERSION, close_restricted_role_pools, drop_and_recreate_schema, restricted_role_pools
 from tests.auth_db_fixtures import auth_config
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
-pytestmark = pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS")
+pytestmark = [pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS"),
+              pytest.mark.usefixtures("restores_test_schema")]
 
 ADMIN_ID = 41
 OLD_EMAIL = "admin-before@example.invalid"
@@ -229,7 +230,6 @@ async def _schema_29_upgrade_and_email_change(tmp_path):
                 )).fetchone() == ("notification@example.invalid",)
     finally:
         db_module.MIGRATIONS_DIR = original_migrations_dir
-        await full_schema_reset(owner)
         await owner.close()
 
 
@@ -369,7 +369,6 @@ async def _schema_29_populated_upgrade(tmp_path):
 
     finally:
         db_module.MIGRATIONS_DIR = original_migrations_dir
-        await full_schema_reset(owner)
         await owner.close()
 
 

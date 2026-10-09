@@ -37,12 +37,29 @@ from app.account_context import (
     runtime_privilege_problems,
 )
 from app.role_setup import ALL_ROLES, SQL_DIR, _prepare
-from conftest import full_schema_reset
+from conftest import full_schema_reset, provision_test_roles, run_with_test_pool
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
     not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests"
 )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _unprovisioned_public_schema():
+    """Replay schema public once, without role state, for the whole module.
+
+    Live ownership tests use these same cluster-wide role names. With no
+    application object depending on them, every scenario's DROP OWNED cannot
+    leave a partially destroyed application schema. No scenario touches
+    public, so the module provisions the application roles once at the end.
+    """
+    if TEST_DB:
+        run_with_test_pool(full_schema_reset)
+    yield
+    if TEST_DB:
+        run_with_test_pool(provision_test_roles)
+
 
 SCHEMA = "account_context_p0"
 OWNER_ROLE = "odograph_migrate"
@@ -181,10 +198,6 @@ async def run_scenario(scenario, *, seed=True) -> None:
     await admin_pool.open(wait=True)
     public_create = None
     try:
-        # Live ownership tests use these same cluster-wide role names. Remove
-        # their disposable application objects before P0's role teardown, so
-        # DROP OWNED cannot leave a partially destroyed application schema.
-        await full_schema_reset(admin_pool)
         async with admin_pool.connection() as conn:
             public_create = await _public_may_create_database(conn)
         await build_fixture(admin_pool)

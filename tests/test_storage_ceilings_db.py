@@ -13,7 +13,7 @@ from app.application_roles import _load_state, prepare_application_roles, valida
 from app.db import MIGRATIONS_DIR, make_pool, run_migrations
 from app.role_setup import RoleSetupError
 from app.storage import is_storage_capacity_error, storage_status
-from conftest import (drop_and_recreate_schema, full_schema_reset, reset_account_db,
+from conftest import (drop_and_recreate_schema, reset_account_db, restore_test_schema,
                       seed_tracking_device)
 
 
@@ -337,7 +337,7 @@ def test_pre_s2_role_contract_restores_without_new_schema(monkeypatch, tmp_path,
                 await validate_application_contract(conn, await _load_state(conn))
         finally:
             monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
-            await full_schema_reset(raw)
+            await restore_test_schema(raw)
             await raw.close()
     asyncio.run(scenario())
 

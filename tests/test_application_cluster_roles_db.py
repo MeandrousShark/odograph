@@ -15,14 +15,17 @@ from app.account_context import AccountPool, AccountPrincipal
 from app.accounts import create_admin
 from app.db import make_pool, run_migrations
 from app.role_setup import ALL_ROLES, RoleSetupError
-from conftest import full_schema_reset
+from conftest import full_schema_reset, reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
-pytestmark = pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS")
+# Cases leave the first database's roles unprovisioned or refused; the
+# fixture provisions them again once each case's monkeypatches are undone.
+pytestmark = [pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS"),
+              pytest.mark.usefixtures("restores_test_roles")]
 
 
 @asynccontextmanager
-async def _two_databases(*, prepare_first=False):
+async def _two_databases(*, prepare_first=False, role_free_public=False):
     name = "odograph_role_guard_" + uuid4().hex
     first = make_pool(TEST_DB)
     second_url = make_conninfo(TEST_DB, dbname=name)
@@ -30,7 +33,15 @@ async def _two_databases(*, prepare_first=False):
     await first.open(wait=True)
     created = False
     try:
-        await full_schema_reset(first)
+        if role_free_public:
+            # No public object may depend on the roles yet, or the second
+            # database's setup refuses before it reaches the identity update.
+            await full_schema_reset(first)
+        else:
+            # Unprovisioned role state needs no replay of schema public.
+            await reset_db(first)
+            async with first.connection() as conn:
+                await conn.execute("DROP SCHEMA IF EXISTS odograph_service CASCADE")
         if prepare_first:
             await application_roles.prepare_application_roles(TEST_DB)
         async with await AsyncConnection.connect(TEST_DB, autocommit=True) as admin:
@@ -46,7 +57,6 @@ async def _two_databases(*, prepare_first=False):
         if created:
             async with await AsyncConnection.connect(TEST_DB, autocommit=True) as admin:
                 await admin.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
-        await full_schema_reset(first)
         await first.close()
 
 
@@ -176,7 +186,7 @@ def test_setup_and_quarantine_refuse_foreign_role_references_before_identity_cha
 
 def test_concurrent_installs_recheck_after_shared_role_updates_serialize(monkeypatch):
     async def run():
-        async with _two_databases() as (first, second, second_url, name):
+        async with _two_databases(role_free_public=True) as (first, second, second_url, name):
             await _unused_roles(first)
             original = application_roles._identities
             locked, second_started, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
