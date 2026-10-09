@@ -15,7 +15,6 @@ from starlette.responses import JSONResponse
 
 from app import auth
 from app.accounts import create_admin
-from app.application_roles import application_role_pools, prepare_application_roles
 from app.auth import _account_user
 from app.db import make_pool
 from app.invitations import (
@@ -28,7 +27,7 @@ from app.local_auth import hash_password
 from app.ingest import FailedAuthLimiter
 from app.main import SecurityHeadersMiddleware, make_templates
 from tests.auth_db_fixtures import auth_config
-from conftest import full_schema_reset
+from conftest import provisioned_role_pools, reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS")
@@ -38,20 +37,14 @@ async def _scenario(callback):
     owner = make_pool(TEST_DB)
     await owner.open(wait=True)
     try:
-        async with owner.connection() as conn:
-            await conn.execute("DROP SCHEMA IF EXISTS odograph_service CASCADE")
-        await full_schema_reset(owner)
-        await prepare_application_roles(TEST_DB)
-        async with application_role_pools(TEST_DB) as pools:
+        await reset_db(owner)
+        async with provisioned_role_pools(owner) as pools:
             async with pools.control.connection() as conn:
                 admin = await create_admin(conn, "admin@example.invalid", "existing-hash")
             admin_user = {**_account_user(admin), "auth_version": admin["auth_version"]}
             await callback(owner, pools, admin_user)
     finally:
-        try:
-            await full_schema_reset(owner)
-        finally:
-            await owner.close()
+        await owner.close()
 
 
 async def _wait_for_lock(owner, pid, task):

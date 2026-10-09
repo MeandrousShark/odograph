@@ -198,7 +198,7 @@ def test_forward_backfill_keeps_legacy_copied_labels_without_truncation(monkeypa
     import shutil
     import app.db as db_module
     from app.db import MIGRATIONS_DIR, run_migrations
-    from conftest import drop_and_recreate_schema, full_schema_reset
+    from conftest import drop_and_recreate_schema, restore_test_schema
 
     old=tmp_path/'old'
     old.mkdir()
@@ -238,7 +238,7 @@ def test_forward_backfill_keeps_legacy_copied_labels_without_truncation(monkeypa
                 assert (await (await conn.execute('SELECT public.storage_usage_consistent()')).fetchone())[0]
         finally:
             monkeypatch.setattr(db_module,'MIGRATIONS_DIR',MIGRATIONS_DIR)
-            await full_schema_reset(raw)
+            await restore_test_schema(raw)
             await raw.close()
     asyncio.run(scenario())
 

@@ -8,9 +8,8 @@ import time
 import pytest
 
 from app.accounts import create_admin
-from app.application_roles import application_role_pools, prepare_application_roles
 from app.db import make_pool
-from conftest import full_schema_reset
+from conftest import provisioned_role_pools, reset_db
 from tests.test_admin_routes_db import _app, _client
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -21,19 +20,13 @@ async def _scenario(callback):
     owner = make_pool(TEST_DB)
     await owner.open(wait=True)
     try:
-        async with owner.connection() as conn:
-            await conn.execute("DROP SCHEMA IF EXISTS odograph_service CASCADE")
-        await full_schema_reset(owner)
-        await prepare_application_roles(TEST_DB)
-        async with application_role_pools(TEST_DB) as pools:
+        await reset_db(owner)
+        async with provisioned_role_pools(owner) as pools:
             async with pools.control.connection() as conn:
                 admin = await create_admin(conn, "admin@example.invalid", "admin-hash")
             await callback(owner, pools, admin)
     finally:
-        try:
-            await full_schema_reset(owner)
-        finally:
-            await owner.close()
+        await owner.close()
 
 
 def test_lifecycle_routes_require_live_admin_csrf_and_activated_accounts():

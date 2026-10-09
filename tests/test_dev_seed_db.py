@@ -7,7 +7,7 @@ import pytest
 
 from app.accounts import create_admin
 from app.db import make_pool
-from conftest import full_schema_reset
+from conftest import reset_db
 from scripts.dev_seed import main_async
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -19,7 +19,7 @@ def test_seed_and_reseed_use_the_same_explicit_account_and_tracker():
         owner = make_pool(TEST_DB)
         await owner.open(wait=True)
         try:
-            await full_schema_reset(owner)
+            await reset_db(owner)
             snapshots = []
             for _ in range(2):
                 await main_async(TEST_DB)
@@ -55,7 +55,7 @@ def test_seed_refuses_an_existing_nonsynthetic_owner_before_wiping_data():
         owner = make_pool(TEST_DB)
         await owner.open(wait=True)
         try:
-            await full_schema_reset(owner)
+            await reset_db(owner)
             async with owner.connection() as conn:
                 account = await create_admin(conn, "other@example.invalid", "test-only-hash")
                 await conn.execute(

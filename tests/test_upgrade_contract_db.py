@@ -32,10 +32,11 @@ from app.db import MIGRATIONS_DIR, make_pool, run_migrations
 from app.role_setup import RoleSetupError
 from app.account_context import CONTROL_ROLE, RUNTIME_ROLE
 from app.role_setup import BOOTSTRAP_ROLE
-from conftest import drop_and_recreate_schema, full_schema_reset
+from conftest import drop_and_recreate_schema
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
-pytestmark = pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS")
+pytestmark = [pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS"),
+              pytest.mark.usefixtures("restores_test_schema_after_module")]
 
 PREPARED_SCHEMA = 26
 ACTIVATED_SCHEMA = 28
@@ -180,7 +181,6 @@ async def _upgrade_after_provisioning(monkeypatch, schema, provisioned_dir, upgr
         await after_upgrade(pool)
     finally:
         monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
-        await full_schema_reset(pool)
         await pool.close()
 
 
@@ -245,7 +245,6 @@ def test_snap_attempt_upgrade_preserves_existing_trip_results(monkeypatch, tmp_p
             assert all(row[4] is None for row in after)
         finally:
             monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
-            await full_schema_reset(pool)
             await pool.close()
     asyncio.run(scenario())
 
@@ -340,7 +339,6 @@ def test_failed_029_rolls_back_objects_and_grants(monkeypatch, tmp_path):
                 assert after_roles == before_roles
         finally:
             monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
-            await full_schema_reset(pool)
             await pool.close()
     asyncio.run(run())
 
@@ -372,7 +370,6 @@ def test_032_converts_only_empty_passwords_and_rejects_new_empty_hashes(monkeypa
                         "VALUES('new@example.invalid','',false)")
         finally:
             monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
-            await full_schema_reset(pool)
             await pool.close()
     asyncio.run(run())
 
@@ -419,7 +416,6 @@ def test_storage_upgrade_keeps_contract_without_reprovisioning(monkeypatch, tmp_
                                   128 + len('{"kind": "legacy"}'), 0)
         finally:
             monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
-            await full_schema_reset(pool)
             await pool.close()
     asyncio.run(scenario())
 
@@ -473,6 +469,5 @@ def test_geocode_upgrade_keeps_contract_without_reprovisioning(monkeypatch, tmp_
                 assert await (await conn.execute("SELECT public.storage_usage_consistent()")).fetchone() == (True,)
         finally:
             monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
-            await full_schema_reset(pool)
             await pool.close()
     asyncio.run(scenario())

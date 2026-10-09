@@ -17,10 +17,11 @@ from app.accounts import create_admin
 from app.db import MIGRATIONS_DIR, make_pool, run_migrations
 from app.local_auth import verify_password
 from app.ownership import OwnershipMigrationError, import_legacy_configuration
-from conftest import drop_and_recreate_schema, full_schema_reset
+from conftest import drop_and_recreate_schema
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
-pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL for disposable DB tests")
+pytestmark = [pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL for disposable DB tests"),
+              pytest.mark.usefixtures("restores_test_schema_after_module")]
 BOOTSTRAP_SQL = Path(__file__).resolve().parents[1] / "scripts/sql/account_bootstrap.sql"
 
 
@@ -48,7 +49,6 @@ async def _legacy_database():
                 await conn.execute("INSERT INTO schema_migrations(version) VALUES(%s)", (version,))
         yield pool
     finally:
-        await full_schema_reset(pool)
         await pool.close()
 
 

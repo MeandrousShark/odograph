@@ -26,7 +26,7 @@ from app.preparation_resources import ResourceBudget
 from app.rates import load_rates
 from app.ui._common import TRIP_COLUMNS, _trip_filter_sql
 from auth_db_fixtures import auth_config
-from conftest import add_test_account, full_schema_reset
+from conftest import add_test_account, reset_db
 from test_capacity_routes import _scope
 from test_report_projection_db import TZ
 from test_streamed_exports import signature
@@ -41,7 +41,7 @@ async def application(tmp_path):
     raw = make_pool(TEST_DB)
     await raw.open(wait=True)
     try:
-        await full_schema_reset(raw)
+        await reset_db(raw)
         config = auth_config(TEST_DB, dev_no_auth=False, initial_admin_signup=True,
             preparation_spool_dir=str(tmp_path / 'spool'), raw_message_retention_days=0)
         app = create_app(config)

@@ -16,7 +16,7 @@ from app.db import make_pool
 from app.mailer import Mailer
 from app.oidc_identities import create_identity_link
 from app.tracking import create_device
-from conftest import full_schema_reset
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS")
@@ -71,9 +71,7 @@ def test_reset_ends_only_the_target_accounts_sessions(monkeypatch, caplog):
         owner = make_pool(TEST_DB)
         await owner.open(wait=True)
         try:
-            async with owner.connection() as conn:
-                await conn.execute("DROP SCHEMA IF EXISTS odograph_service CASCADE")
-            await full_schema_reset(owner)
+            await reset_db(owner)
             app = main_module.create_app(Config.from_env())
             async with app.router.lifespan_context(app):
                 def client():
@@ -171,7 +169,6 @@ def test_reset_ends_only_the_target_accounts_sessions(monkeypatch, caplog):
                 assert await cur.fetchall() == [(2, True, 1, 1), (1, True, 0, 0)]
             return token
         finally:
-            await full_schema_reset(owner)
             await owner.close()
 
     with caplog.at_level(logging.DEBUG):

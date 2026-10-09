@@ -20,12 +20,11 @@ from starlette.responses import RedirectResponse
 from app import auth, portable
 from app.account_context import AccountPool, AccountPrincipal
 from app.accounts import create_admin
-from app.application_roles import application_role_pools, prepare_application_roles
 from app.db import make_pool
 from app.email_challenges import PURPOSE_CURRENT, issue_email_challenge
 from app.local_auth import hash_password
 from app.tracking import create_device
-from conftest import full_schema_reset
+from conftest import provisioned_role_pools, reset_db
 from tests.auth_db_fixtures import auth_config
 from tests.test_admin_routes_db import _app, _client
 from tests.oidc_test_helpers import oidc_authorization_url
@@ -212,16 +211,13 @@ async def _run_matrix(method_shape: str):
     owner = make_pool(TEST_DB)
     await owner.open(wait=True)
     try:
-        async with owner.connection() as conn:
-            await conn.execute("DROP SCHEMA IF EXISTS odograph_service CASCADE")
-        await full_schema_reset(owner)
-        await prepare_application_roles(TEST_DB)
+        await reset_db(owner)
 
         async with owner.connection() as conn:
             await conn.execute("DROP INDEX accounts_singleton_idx")
             await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
 
-        async with application_role_pools(TEST_DB) as pools:
+        async with provisioned_role_pools(owner) as pools:
             async with pools.control.connection() as conn:
                 admin_password = "matrix administrator password"
                 admin_hash = await asyncio.to_thread(hash_password, admin_password)
@@ -471,10 +467,7 @@ async def _run_matrix(method_shape: str):
                 assert "unrelated-private-marker" in json.dumps(other_export.json())
                 assert "target-private-marker" not in json.dumps(other_export.json())
     finally:
-        try:
-            await full_schema_reset(owner)
-        finally:
-            await owner.close()
+        await owner.close()
 
 @pytest.mark.parametrize("method_shape", ["password-only", "oidc-only", "dual"])
 def test_restricted_lifecycle_matrix_preserves_login_shape_and_account_boundaries(method_shape):

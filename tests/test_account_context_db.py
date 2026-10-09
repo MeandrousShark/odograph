@@ -37,12 +37,12 @@ from app.account_context import (
     runtime_privilege_problems,
 )
 from app.role_setup import ALL_ROLES, SQL_DIR, _prepare
-from conftest import full_schema_reset
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
-pytestmark = pytest.mark.skipif(
-    not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests"
-)
+pytestmark = [
+    pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests"),
+    pytest.mark.usefixtures("unprovisioned_public_schema"),
+]
 
 SCHEMA = "account_context_p0"
 OWNER_ROLE = "odograph_migrate"
@@ -181,10 +181,6 @@ async def run_scenario(scenario, *, seed=True) -> None:
     await admin_pool.open(wait=True)
     public_create = None
     try:
-        # Live ownership tests use these same cluster-wide role names. Remove
-        # their disposable application objects before P0's role teardown, so
-        # DROP OWNED cannot leave a partially destroyed application schema.
-        await full_schema_reset(admin_pool)
         async with admin_pool.connection() as conn:
             public_create = await _public_may_create_database(conn)
         await build_fixture(admin_pool)

@@ -9,7 +9,6 @@ import pytest
 from psycopg import errors
 
 from app.accounts import create_admin
-from app.application_roles import application_role_pools, prepare_application_roles
 from app.db import make_pool
 from app.invitations import InvitationUnavailable, issue_invitation, redeem_oidc_invitation_by_digest
 from app.oidc_attempts import (
@@ -18,7 +17,7 @@ from app.oidc_attempts import (
 from app.oidc_identities import create_identity_link
 from app.local_auth import hash_password, verify_password
 from app.password_reset import host_reset_password
-from conftest import full_schema_reset
+from conftest import provisioned_role_pools, reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS")
@@ -28,19 +27,13 @@ async def _scenario(callback):
     owner = make_pool(TEST_DB)
     await owner.open(wait=True)
     try:
-        async with owner.connection() as conn:
-            await conn.execute("DROP SCHEMA IF EXISTS odograph_service CASCADE")
-        await full_schema_reset(owner)
-        await prepare_application_roles(TEST_DB)
-        async with application_role_pools(TEST_DB) as pools:
+        await reset_db(owner)
+        async with provisioned_role_pools(owner) as pools:
             async with pools.control.connection() as conn:
                 admin = await create_admin(conn, "admin@example.invalid", "valid-hash")
             await callback(owner, pools, admin)
     finally:
-        try:
-            await full_schema_reset(owner)
-        finally:
-            await owner.close()
+        await owner.close()
 
 
 async def _allow_member_accounts(owner):
@@ -196,11 +189,17 @@ def test_oidc_invitation_rolls_back_all_provisioning_after_failure():
                 "CREATE TRIGGER fail_oidc_vehicle_for_test BEFORE INSERT ON public.vehicles "
                 "FOR EACH ROW EXECUTE FUNCTION public.fail_oidc_vehicle_for_test()"
             )
-        async with pools.control.connection() as conn:
-            with pytest.raises(InvitationUnavailable):
-                await redeem_oidc_invitation_by_digest(
-                    conn, digest, "https://id.example", "rollback-subject",
-                )
+        try:
+            async with pools.control.connection() as conn:
+                with pytest.raises(InvitationUnavailable):
+                    await redeem_oidc_invitation_by_digest(
+                        conn, digest, "https://id.example", "rollback-subject",
+                    )
+        finally:
+            # reset_db() refuses a leaked trigger or function.
+            async with owner.connection() as conn:
+                await conn.execute("DROP TRIGGER fail_oidc_vehicle_for_test ON public.vehicles")
+                await conn.execute("DROP FUNCTION public.fail_oidc_vehicle_for_test()")
         async with owner.connection() as conn:
             for table, where, params in (
                 ("accounts", "email=%s", ("rollback@example.invalid",)),
@@ -220,8 +219,6 @@ def test_oidc_invitation_rolls_back_all_provisioning_after_failure():
             assert await (await conn.execute(
                 "SELECT consumed_at FROM invitations WHERE token_digest=%s", (digest,),
             )).fetchone() == (None,)
-            await conn.execute("DROP TRIGGER fail_oidc_vehicle_for_test ON public.vehicles")
-            await conn.execute("DROP FUNCTION public.fail_oidc_vehicle_for_test()")
         async with pools.control.connection() as conn:
             member_id = await redeem_oidc_invitation_by_digest(
                 conn, digest, "https://id.example", "rollback-subject",
