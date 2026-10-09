@@ -8,11 +8,32 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  # Each shard has its own PostGIS service: the restricted roles are
+  # cluster-global, so shards cannot share one server.
+  suite:
+    name: suite (${{ matrix.shard }})
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: unit-ops
+            marker: not db
+            db_shard: ""
+          - shard: db-1
+            marker: db
+            db_shard: 1/3
+          - shard: db-2
+            marker: db
+            db_shard: 2/3
+          - shard: db-3
+            marker: db
+            db_shard: 3/3
     env:
       TEST_DATABASE_URL: postgresql://mileage:testpw@127.0.0.1:5432/mileage
+      PYTEST_MARKER: ${{ matrix.marker }}
+      ODOGRAPH_DB_SHARD: ${{ matrix.db_shard }}
     services:
       postgres:
         image: ghcr.io/meandrousshark/odograph-postgis@sha256:b352024dd6f9ca2ba0f1e7125dcfdcf78b824f2cbe86edf89559e1ddf4d80241
@@ -72,6 +93,7 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install -r requirements-dev.lock
       - name: Install Gitleaks
+        if: matrix.marker == 'not db'
         env:
           GITLEAKS_VERSION: "8.30.1"
           GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
@@ -88,29 +110,42 @@ jobs:
           echo "$install_dir" >> "$GITHUB_PATH"
           "$install_dir/gitleaks" version
       - name: Check shell script syntax
+        if: matrix.marker == 'not db'
         run: git ls-files -z -- '*.sh' | xargs -0 -n1 bash -n
-      - name: Run full test suite
+      - name: Run test shard
         run: |
           set -euo pipefail
-          if timeout --signal=INT --kill-after=15s 30m \
-            python -m pytest -vv --durations=25 -o faulthandler_timeout=120 \
-            > "$RUNNER_TEMP/pytest-full-suite.log" 2>&1; then
+          if timeout --signal=INT --kill-after=15s 15m \
+            python -m pytest -m "$PYTEST_MARKER" -vv --durations=25 -o faulthandler_timeout=120 \
+            > "$RUNNER_TEMP/pytest-shard.log" 2>&1; then
             suite_status=0
           else
             suite_status=$?
           fi
           timeout --signal=TERM --kill-after=1s 5s \
-            tail -c 16384 "$RUNNER_TEMP/pytest-full-suite.log" || true
+            tail -c 16384 "$RUNNER_TEMP/pytest-shard.log" || true
           exit "$suite_status"
-      - name: Retain full suite log
+      - name: Retain test shard log
         if: always()
         timeout-minutes: 2
         uses: actions/upload-artifact@v4
         with:
-          name: pytest-log-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.event_name }}
-          path: ${{ runner.temp }}/pytest-full-suite.log
+          name: pytest-log-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.event_name }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/pytest-shard.log
           retention-days: 7
           if-no-files-found: warn
+
+  # The required status check: passes only when every shard passed.
+  test:
+    if: always()
+    needs: suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require every shard to pass
+        env:
+          SUITE_RESULT: ${{ needs.suite.result }}
+        run: test "$SUITE_RESULT" = success
 
   public-tree:
     runs-on: ubuntu-latest

@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 
 import yaml
 
@@ -14,18 +15,26 @@ def load_workflow() -> dict:
     return yaml.load(WORKFLOW.read_text(), Loader=yaml.BaseLoader)
 
 
+def shard_matrix() -> list[dict]:
+    return load_workflow()["jobs"]["suite"]["strategy"]["matrix"]["include"]
+
+
 def test_ci_runs_full_suite_on_push_and_pull_requests_with_postgis(tmp_path):
     workflow = load_workflow()
 
     assert set(workflow["on"]) == {"push", "pull_request"}
     assert workflow["permissions"] == {"contents": "read"}
 
-    job = workflow["jobs"]["test"]
-    assert job["timeout-minutes"] == "35"
+    job = workflow["jobs"]["suite"]
+    assert job["name"] == "suite (${{ matrix.shard }})"
+    assert job["timeout-minutes"] == "20"
     assert job.get("continue-on-error", "false") == "false"
-    assert job["env"]["TEST_DATABASE_URL"] == (
-        "postgresql://mileage:testpw@127.0.0.1:5432/mileage"
-    )
+    assert job["strategy"]["fail-fast"] == "false"
+    assert job["env"] == {
+        "TEST_DATABASE_URL": "postgresql://mileage:testpw@127.0.0.1:5432/mileage",
+        "PYTEST_MARKER": "${{ matrix.marker }}",
+        "ODOGRAPH_DB_SHARD": "${{ matrix.db_shard }}",
+    }
     postgres = job["services"]["postgres"]
     compose = yaml.safe_load((ROOT / "compose.yaml").read_text())
     assert postgres["image"] == compose["services"]["db"]["image"]
@@ -44,33 +53,33 @@ def test_ci_runs_full_suite_on_push_and_pull_requests_with_postgis(tmp_path):
     assert steps["Install test dependencies"]["run"] == (
         "python -m pip install -r requirements-dev.lock"
     )
-    suite = steps["Run full test suite"]
+    suite = steps["Run test shard"]
     assert suite.get("continue-on-error", "false") == "false"
     script = suite["run"]
     assert script.splitlines()[0] == "set -euo pipefail"
     supervised = shlex.split(script.replace("\\\n", "").split("; then", 1)[0])
     assert supervised == [
         "set", "-euo", "pipefail", "if",
-        "timeout", "--signal=INT", "--kill-after=15s", "30m",
-        "python", "-m", "pytest", "-vv", "--durations=25",
-        "-o", "faulthandler_timeout=120", ">", "$RUNNER_TEMP/pytest-full-suite.log", "2>&1",
+        "timeout", "--signal=INT", "--kill-after=15s", "15m",
+        "python", "-m", "pytest", "-m", "$PYTEST_MARKER", "-vv", "--durations=25",
+        "-o", "faulthandler_timeout=120", ">", "$RUNNER_TEMP/pytest-shard.log", "2>&1",
     ]
     assert "tee" not in script and "PIPESTATUS" not in script
     preview = script.split("\n  suite_status=$?\nfi\n", 1)[1]
     assert shlex.split(preview.replace("\\\n", "")) == [
         "timeout", "--signal=TERM", "--kill-after=1s", "5s",
-        "tail", "-c", "16384", "$RUNNER_TEMP/pytest-full-suite.log", "||", "true",
+        "tail", "-c", "16384", "$RUNNER_TEMP/pytest-shard.log", "||", "true",
         "exit", "$suite_status",
     ]
 
-    retained = steps["Retain full suite log"]
+    retained = steps["Retain test shard log"]
     assert retained.get("continue-on-error", "false") == "false"
     assert retained["if"] == "always()"
     assert retained["timeout-minutes"] == "2"
     assert retained["uses"] == "actions/upload-artifact@v4"
     assert retained["with"] == {
-        "name": "pytest-log-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.event_name }}",
-        "path": "${{ runner.temp }}/pytest-full-suite.log",
+        "name": "pytest-log-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.event_name }}-${{ matrix.shard }}",
+        "path": "${{ runner.temp }}/pytest-shard.log",
         "retention-days": "7",
         "if-no-files-found": "warn",
     }
@@ -92,7 +101,7 @@ def test_ci_runs_full_suite_on_push_and_pull_requests_with_postgis(tmp_path):
     )
     python.chmod(0o755)
     env = {**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
-           "RUNNER_TEMP": str(tmp_path)}
+           "RUNNER_TEMP": str(tmp_path), "PYTEST_MARKER": "db"}
     for status in (0, 7, 124, 137):
         result = subprocess.run(
             ["bash", "-c", script],
@@ -101,7 +110,7 @@ def test_ci_runs_full_suite_on_push_and_pull_requests_with_postgis(tmp_path):
         )
         assert result.returncode == status
         assert result.stdout == "suite stdout\nsuite stderr\n"
-        assert (tmp_path / "pytest-full-suite.log").read_text() == result.stdout
+        assert (tmp_path / "pytest-shard.log").read_text() == result.stdout
 
     for status in (0, 7, 124, 137):
         result = subprocess.run(
@@ -118,7 +127,7 @@ def test_ci_runs_full_suite_on_push_and_pull_requests_with_postgis(tmp_path):
     )
     content = " " * 19999 + "xsuite stdout\nsuite stderr\n"
     assert result.returncode == 0
-    assert (tmp_path / "pytest-full-suite.log").read_text() == content
+    assert (tmp_path / "pytest-shard.log").read_text() == content
     assert result.stdout == content[-16384:]
 
     preview_failure = tmp_path / "tail"
@@ -130,21 +139,68 @@ def test_ci_runs_full_suite_on_push_and_pull_requests_with_postgis(tmp_path):
             capture_output=True, text=True, timeout=10,
         )
         assert result.returncode == status
-        assert (tmp_path / "pytest-full-suite.log").read_text() == "suite stdout\nsuite stderr\n"
+        assert (tmp_path / "pytest-shard.log").read_text() == "suite stdout\nsuite stderr\n"
 
 
 def test_ci_checks_every_tracked_shell_script():
     workflow = load_workflow()
-    steps = {step.get("name"): step for step in workflow["jobs"]["test"]["steps"]}
+    steps = {step.get("name"): step for step in workflow["jobs"]["suite"]["steps"]}
 
     assert steps["Check shell script syntax"]["run"] == (
         "git ls-files -z -- '*.sh' | xargs -0 -n1 bash -n"
     )
+    assert steps["Check shell script syntax"]["if"] == "matrix.marker == 'not db'"
+
+
+def test_ci_shards_split_the_suite_into_not_db_and_every_db_shard():
+    matrix = shard_matrix()
+    assert matrix[0] == {"shard": "unit-ops", "marker": "not db", "db_shard": ""}
+    db_rows = matrix[1:]
+    assert db_rows, "at least one db shard"
+    assert db_rows == [
+        {"shard": f"db-{index}", "marker": "db", "db_shard": f"{index}/{len(db_rows)}"}
+        for index in range(1, len(db_rows) + 1)
+    ]
+
+
+def _collect(marker: str | None, db_shard: str) -> list[str]:
+    selection = ["-m", marker] if marker else []
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider", *selection],
+        cwd=ROOT, env={**os.environ, "ODOGRAPH_DB_SHARD": db_shard},
+        capture_output=True, text=True, timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return [line for line in result.stdout.splitlines() if "::" in line]
+
+
+def test_ci_shards_partition_the_real_collection():
+    everything = _collect(None, "")
+    shards = [_collect(row["marker"], row["db_shard"]) for row in shard_matrix()]
+
+    assert all(shards), "every shard selects some cases"
+    assert sorted(case for shard in shards for case in shard) == sorted(everything)
+
+
+def test_ci_aggregate_check_passes_only_when_every_shard_passed():
+    job = load_workflow()["jobs"]["test"]
+
+    assert job["if"] == "always()"
+    assert job["needs"] == "suite"
+    assert job["timeout-minutes"] == "2"
+    [step] = job["steps"]
+    assert step["env"] == {"SUITE_RESULT": "${{ needs.suite.result }}"}
+    for result, status in (("success", 0), ("failure", 1), ("cancelled", 1), ("skipped", 1), ("", 1)):
+        completed = subprocess.run(
+            ["bash", "-c", step["run"]], env={**os.environ, "SUITE_RESULT": result},
+            capture_output=True, text=True, timeout=10,
+        )
+        assert completed.returncode == status, result
 
 
 def test_ci_installs_pinned_gitleaks_before_pytest():
     workflow = load_workflow()
-    job_steps = workflow["jobs"]["test"]["steps"]
+    job_steps = workflow["jobs"]["suite"]["steps"]
     steps = {step.get("name"): step for step in job_steps}
 
     install = steps["Install Gitleaks"]
@@ -155,19 +211,20 @@ def test_ci_installs_pinned_gitleaks_before_pytest():
     assert "gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}" in install["run"]
     assert "sha256sum --check -" in install["run"]
     assert 'echo "$install_dir" >> "$GITHUB_PATH"' in install["run"]
-    assert job_steps.index(install) < job_steps.index(steps["Run full test suite"])
+    assert install["if"] == "matrix.marker == 'not db'"
+    assert job_steps.index(install) < job_steps.index(steps["Run test shard"])
 
 
 def test_ci_public_tree_is_an_explicit_unprivileged_gate():
     workflow = load_workflow()
-    assert set(workflow["jobs"]) == {"test", "public-tree"}
+    assert set(workflow["jobs"]) == {"suite", "test", "public-tree"}
     job = workflow["jobs"]["public-tree"]
     assert job["runs-on"] == "ubuntu-latest"
     steps = {step.get("name"): step for step in job["steps"]}
     assert steps["Check public tree"]["run"] == "python scripts/check_public_tree.py"
     install = steps["Install Gitleaks"]
-    test_steps = {step.get("name"): step for step in workflow["jobs"]["test"]["steps"]}
-    assert install == test_steps["Install Gitleaks"]
+    suite_steps = {step.get("name"): step for step in workflow["jobs"]["suite"]["steps"]}
+    assert install == {key: value for key, value in suite_steps["Install Gitleaks"].items() if key != "if"}
     assert job["steps"].index(install) < job["steps"].index(steps["Check public tree"])
     for candidate in workflow["jobs"].values():
         assert candidate["runs-on"] == "ubuntu-latest"

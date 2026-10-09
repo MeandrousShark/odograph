@@ -492,7 +492,55 @@ _OPS_MODULE_STEMS = {
 }
 
 
-def pytest_collection_modifyitems(items: list) -> None:
+def db_shard_files(weights: dict[str, int], count: int) -> list[set[str]]:
+    """Split test files into `count` disjoint shards by db case count.
+
+    Heaviest file first onto the lightest shard, ties broken by path, so
+    every CI shard job computes the same partition from its own collection.
+    """
+    loads = [0] * count
+    shards: list[set[str]] = [set() for _ in range(count)]
+    for path in sorted(weights, key=lambda path: (-weights[path], path)):
+        index = loads.index(min(loads))
+        loads[index] += weights[path]
+        shards[index].add(path)
+    return shards
+
+
+def db_shard_from_env() -> tuple[int, int] | None:
+    """Parse ODOGRAPH_DB_SHARD=K/N; unset or empty means no sharding."""
+    value = os.environ.get("ODOGRAPH_DB_SHARD", "")
+    if not value:
+        return None
+    index, _, count = value.partition("/")
+    if not (index.isdecimal() and count.isdecimal() and 1 <= int(index) <= int(count)):
+        pytest.exit(f"ODOGRAPH_DB_SHARD must be K/N with 1 <= K <= N, got {value!r}",
+                    returncode=pytest.ExitCode.USAGE_ERROR)
+    return int(index), int(count)
+
+
+def _select_db_shard(config, items: list) -> None:
+    """Keep only this shard's db cases; unit and ops cases are untouched.
+
+    Whole files stay together so file-local ordering and cleanup hold.
+    """
+    shard = db_shard_from_env()
+    if shard is None:
+        return
+    index, count = shard
+    db_items = [item for item in items if item.get_closest_marker("db")]
+    weights: dict[str, int] = {}
+    for item in db_items:
+        path = item.nodeid.split("::", 1)[0]
+        weights[path] = weights.get(path, 0) + 1
+    keep = db_shard_files(weights, count)[index - 1]
+    deselected = {item for item in db_items if item.nodeid.split("::", 1)[0] not in keep}
+    if deselected:
+        config.hook.pytest_deselected(items=list(deselected))
+        items[:] = [item for item in items if item not in deselected]
+
+
+def pytest_collection_modifyitems(config, items: list) -> None:
     """Give every collected case exactly one tier marker: unit, ops, or db.
 
     The "_db" filename suffix is a reliable signal for most DB-backed cases,
@@ -510,9 +558,17 @@ def pytest_collection_modifyitems(items: list) -> None:
     run ahead of pytest's builtin ones by default, but this is exercised
     directly (pytest -m unit/-m ops/-m db each selecting the right count)
     rather than relied on implicitly.
+
+    CI runs `-m "not db"` and `-m db` in separate shard jobs, so no single
+    job sees the whole suite; a case with two explicit tiers is refused here
+    rather than only in tests/test_tier_markers.py.
     """
     for item in items:
-        if _TIER_MARKER_NAMES & {mark.name for mark in item.iter_markers()}:
+        tiers = _TIER_MARKER_NAMES & {mark.name for mark in item.iter_markers()}
+        if len(tiers) > 1:
+            pytest.exit(f"{item.nodeid} has more than one tier marker: {sorted(tiers)}",
+                        returncode=pytest.ExitCode.USAGE_ERROR)
+        if tiers:
             continue
         stem = item.path.stem
         if stem.endswith("_db"):
@@ -521,6 +577,7 @@ def pytest_collection_modifyitems(items: list) -> None:
             item.add_marker(pytest.mark.ops)
         else:
             item.add_marker(pytest.mark.unit)
+    _select_db_shard(config, items)
 
 
 @pytest.fixture(scope="session", autouse=True)
