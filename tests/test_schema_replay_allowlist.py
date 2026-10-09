@@ -6,14 +6,19 @@ dominated the db tier. Ordinary tests use reset_db() and the provisioned role
 pools. A module that tests migrations, role provisioning or committed schema
 drift is added here deliberately, and must leave the schema migrated and
 provisioned when it finishes, for example through the `restores_test_schema`
-fixture.
+fixture. Dropping only the role state, or the cluster-wide roles through the
+account context scenarios, is pinned the same way.
 """
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
-_REPLAY = re.compile(r"\b(full_schema_reset|drop_and_recreate_schema|restores?_test_schema)")
+_REPLAY = re.compile(
+    r"\b(full_schema_reset|drop_and_recreate_schema|restores?_test_schema|unprovisioned_public_schema)"
+    r"|DROP SCHEMA (IF EXISTS )?odograph_service"
+    r"|from (tests\.)?test_account_context_db import (\([^)]*|[^\n]*)\b(run_scenario|drop_fixture)\b"
+)
 
 _SCHEMA_REPLAY_MODULE_STEMS = {
     "test_account_avatar_db",  # migration 024 over a partial schema
@@ -24,9 +29,11 @@ _SCHEMA_REPLAY_MODULE_STEMS = {
     "test_conftest_db",  # the reset machinery itself
     "test_email_change_integration_db",  # schema 29 upgrades
     "test_geocode_roles_db",  # committed worker contract drift
+    "test_m2_full_app_acceptance_db",  # first-install role provisioning at startup
     "test_migration_027_db",
     "test_migrations_concurrency_db",
     "test_ownership_db",  # legacy schema 25 upgrades
+    "test_role_setup_db",  # account context scenarios drop the roles
     "test_storage_accounting_db",  # schema 39 forward backfill
     "test_storage_ceilings_db",  # schema 40 and 41 role contracts
     "test_storage_roles_db",  # committed accounting trigger drift
