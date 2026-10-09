@@ -426,6 +426,9 @@ async def _scenario(owner, secrets_seen: list[str], unverified_processed: asynci
         secrets_seen += [ADMIN_PASSWORD, VERIFIED_PASSWORD, UNVERIFIED_PASSWORD, RESET_PASSWORD]
 
 
+# Startup takes the first-install role provisioning branch; the fixture
+# provisions again if the test fails before that.
+@pytest.mark.usefixtures("restores_test_roles")
 def test_full_app_bootstrap_onboarding_and_admin_recovery_keep_proofs_private(
     m2_stall_probe, monkeypatch, caplog,
 ):
@@ -461,6 +464,9 @@ def test_full_app_bootstrap_onboarding_and_admin_recovery_keep_proofs_private(
         await owner.open(wait=True)
         try:
             await reset_db(owner)
+            # No restricted pool is open on `owner` yet to outlive this.
+            async with owner.connection() as conn:
+                await conn.execute("DROP SCHEMA IF EXISTS odograph_service CASCADE")
             unverified_processed = asyncio.Event()
             from app import password_reset
 
