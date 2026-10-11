@@ -18,6 +18,7 @@ from psycopg import errors
 from app.account_context import AccountPool, AccountPrincipal, control_connection
 from app.account_work import external_account_work
 from app.application_roles import application_role_pools
+from app.capacity import AdmissionManager
 from app.config import Config
 from app.detector.runner import DetectorRunner, DeviceNotAdmitted
 from app.storage import is_storage_capacity_error
@@ -83,6 +84,11 @@ async def _reprocess(cfg: Config, owner: int, device: int | None) -> bool:
         if not row[1]:
             raise ValueError("That account is disabled; its detector work was not run.")
         principal = AccountPrincipal(*row)
+        # The detector's CPU step requires an operation owner. This process
+        # has its own admission manager, so the owner is honest here without
+        # taking any slot from the server's lanes; the database lock and
+        # storage checks still apply across processes.
+        capacity = AdmissionManager(cfg)
         async with external_account_work(pools.control, owner):
             pool = AccountPool(pools.runtime, principal)
             runner = DetectorRunner(pool, cfg.detector_params, cfg.full_reprocess_warn_points)
@@ -97,7 +103,9 @@ async def _reprocess(cfg: Config, owner: int, device: int | None) -> bool:
             ok = True
             for selected in devices:
                 try:
-                    print(await _reprocess_device(runner, selected, explicit=device is not None))
+                    async with capacity.operation("background", principal=principal):
+                        message = await _reprocess_device(runner, selected, explicit=device is not None)
+                    print(message)
                 except DeviceNotAdmitted as exc:
                     print(f"error: device {selected}: {exc}", file=sys.stderr)
                     ok = False

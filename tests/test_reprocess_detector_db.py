@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 import threading
+from pathlib import Path
 
 import psycopg
 import pytest
@@ -10,7 +13,7 @@ import pytest
 import app.reprocess_detector as reprocess_detector
 from app.db import DETECTOR_ACCOUNT_LOCK_CLASS_ID
 from app.detector.core import Params
-from app.detector.runner import DetectorDeferrals, DetectorRunner
+from app.detector.runner import DETECTOR_VERSION, DetectorDeferrals, DetectorRunner
 from conftest import account_pool, add_test_account, reset_account_db, seed_tracking_device
 from tests.synth import Drive, Stationary, build_track
 from tests.test_detector_turn_limit_db import (
@@ -19,6 +22,7 @@ from tests.test_detector_turn_limit_db import (
 )
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
+REPO_ROOT = Path(__file__).resolve().parents[1]
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL for disposable DB tests")
 
 DETECTOR_ENV = ("MAX_ACCURACY_M", "MAX_SPEED_MS", "STAY_RADIUS_M", "STAY_MIN_DURATION_S",
@@ -287,3 +291,37 @@ def test_command_reports_a_processing_value_error_as_a_failure(command_env, caps
     captured = capsys.readouterr()
     assert f"device {device}: reprocess failed (ValueError)" in captured.err
     assert "skipped" not in captured.out and "private fix" not in captured.err
+
+
+def test_command_runs_as_a_real_process_with_its_own_operation_owner():
+    """The autouse owned_thread fixture never reaches a child process, so this
+    proves the command satisfies the capacity contract on its own."""
+    async def body(raw):
+        pool = await reset_account_db(raw)
+        async with pool.connection() as conn:
+            device = await seed_tracking_device(conn, "phone")
+            await _insert_track(conn, device, build_track(TRACK))
+        return device
+
+    device = _run(body)
+    env = {**os.environ, "DATABASE_URL": TEST_DB, "SESSION_SECRET": "test-session-secret"}
+    for name in DETECTOR_ENV:
+        env.pop(name, None)
+    result = subprocess.run(
+        [sys.executable, "-m", "app.reprocess_detector", "--account", str(OWNER), "--device", str(device)],
+        cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert f"device {device}: " in result.stdout and "points processed" in result.stdout
+
+    async def state(raw):
+        async with raw.connection() as conn:
+            checkpoint = await (await conn.execute(
+                "SELECT last_run_at IS NOT NULL, detector_version FROM detector_state")).fetchone()
+            stays = (await (await conn.execute("SELECT count(*) FROM stays")).fetchone())[0]
+            trips = (await (await conn.execute("SELECT count(*) FROM trips")).fetchone())[0]
+            return tuple(checkpoint), stays, trips
+
+    checkpoint, stays, trips = _run(state)
+    assert checkpoint == (True, DETECTOR_VERSION)
+    assert stays > 0 and trips > 0
