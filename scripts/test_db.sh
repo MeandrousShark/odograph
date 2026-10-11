@@ -46,11 +46,14 @@ if [ "$ACTION" = cleanup ]; then
     exit 0
 fi
 
+# Disposable data is never worth durability: skip fsync and full-page writes.
+# The image entrypoint passes leading "-c" arguments through to postgres.
 container_name="odograph-testdb-${TASK_ID}-${RANDOM}${RANDOM}"
 container_id="$(podman run -d --name "$container_name" \
     --label "$OWNER_LABEL=1" --label "$TASK_LABEL=$TASK_ID" \
     -e POSTGRES_DB=mileage -e POSTGRES_USER=mileage -e POSTGRES_PASSWORD=testpw \
-    -p 127.0.0.1::5432 "$IMAGE")"
+    -p 127.0.0.1::5432 "$IMAGE" \
+    -c fsync=off -c synchronous_commit=off -c full_page_writes=off)"
 
 # shellcheck disable=SC2329 # Invoked by the EXIT trap until startup succeeds.
 cleanup_failed_start() {
