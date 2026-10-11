@@ -537,7 +537,7 @@ async def _purpose_notes_scenario():
             await fill("S", [("First", "n1"), ("Survivor", "ns"), ("Third", "n3")])
             # E: a blank survivor falls back to the earliest nonblank value,
             # independently for purpose and notes; whitespace counts as blank.
-            await fill("E", [("First", None), ("  ", "ns"), ("Third", "n3")])
+            await fill("E", [("First", None), ("  ", " "), ("Third", "n3")])
             # N: nothing nonblank anywhere stays NULL.
             await fill("N", [(None, None), ("  ", ""), (None, None)])
             # R: nonblank form values replace the survivor's.
@@ -559,7 +559,7 @@ async def _purpose_notes_scenario():
             )
             by_id = {r[0]: (r[1], r[2]) for r in await rows.fetchall()}
         assert by_id[merged["S"]] == ("Survivor", "ns")
-        assert by_id[merged["E"]] == ("First", "ns")
+        assert by_id[merged["E"]] == ("First", "n3")
         assert by_id[merged["N"]] == (None, None)
         assert by_id[merged["R"]] == ("New purpose", "new notes")
     finally:
