@@ -226,3 +226,42 @@ def test_command_waits_for_the_account_detector_lock_without_a_lock_timeout(comm
     finally:
         holder.close()
     assert f"device {device}: " in capsys.readouterr().out
+
+
+def test_command_reports_a_storage_refusal_and_continues_with_other_devices(command_env, capsys):
+    """Detector output normally fits the envelope reserved at ingest, so the
+    refusal is injected; the command must report it, not bypass it."""
+    async def body(raw):
+        pool = await reset_account_db(raw)
+        async with pool.connection() as conn:
+            refused = await seed_tracking_device(conn, "refused")
+            other = await seed_tracking_device(conn, "other")
+            await _insert_track(conn, refused, build_track(TRACK))
+            await _insert_track(conn, other, build_track(TRACK))
+        return refused, other
+
+    refused, other = _run(body)
+    process = DetectorRunner._process_device
+
+    async def over_budget(self, conn, device, dirty_from, full):
+        await process(self, conn, device, dirty_from, full)
+        if device == refused:
+            raise psycopg.errors.RaiseException("storage capacity exceeded: account allowance")
+
+    command_env.setattr(DetectorRunner, "_process_device", over_budget)
+    assert reprocess_detector.main(["--account", str(OWNER)]) == 1
+    captured = capsys.readouterr()
+    assert f"device {refused}: storage is full for this account" in captured.err
+    assert f"device {other}: " in captured.out
+
+    async def state(raw):
+        async with raw.connection() as conn:
+            done = dict(await (await conn.execute(
+                "SELECT tracking_device_id,last_run_at IS NOT NULL FROM detector_state")).fetchall())
+            trips = dict(await (await conn.execute(
+                "SELECT tracking_device_id,count(*) FROM trips GROUP BY 1")).fetchall())
+            return done, trips
+
+    done, trips = _run(state)
+    assert done == {refused: False, other: True}
+    assert refused not in trips and trips[other] == 2

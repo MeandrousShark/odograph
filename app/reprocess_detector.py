@@ -102,10 +102,12 @@ async def _reprocess(cfg: Config, owner: int, device: int | None) -> bool:
                     print(f"error: device {selected}: {exc}", file=sys.stderr)
                     ok = False
                 except errors.RaiseException as exc:
-                    if not is_storage_capacity_error(exc):
-                        raise
-                    print(f"error: device {selected}: storage is full for this account; "
-                          "nothing was saved for this device", file=sys.stderr)
+                    if is_storage_capacity_error(exc):
+                        print(f"error: device {selected}: storage is full for this account; "
+                              "nothing was saved for this device", file=sys.stderr)
+                    else:
+                        print(f"error: device {selected}: reprocess failed ({type(exc).__name__})",
+                              file=sys.stderr)
                     ok = False
                 except Exception as exc:
                     # Database exceptions can carry connection details or data.
