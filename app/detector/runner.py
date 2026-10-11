@@ -76,6 +76,10 @@ WINDOW_COUNT_SQL = (
 )
 
 
+class DeviceNotAdmitted(ValueError):
+    """The device is missing, disabled or revoked for this account."""
+
+
 class WindowDeferred(Exception):
     """A background run found a rewind window above the turn limit."""
 
@@ -239,7 +243,7 @@ class DetectorRunner:
         """
         await lock_detector(conn)
         if await self._admit_device(conn, device) is None:
-            raise ValueError("No enabled tracking device has that ID in this account.")
+            raise DeviceNotAdmitted("No enabled tracking device has that ID in this account.")
         cur = await conn.execute(
             _PENDING_DEVICES_SQL + "AND d.id = %s", (account_id(conn), DETECTOR_VERSION, device),
         )

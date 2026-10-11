@@ -265,3 +265,25 @@ def test_command_reports_a_storage_refusal_and_continues_with_other_devices(comm
     done, trips = _run(state)
     assert done == {refused: False, other: True}
     assert refused not in trips and trips[other] == 2
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_command_reports_a_processing_value_error_as_a_failure(command_env, capsys, explicit):
+    async def body(raw):
+        pool = await reset_account_db(raw)
+        async with pool.connection() as conn:
+            device = await seed_tracking_device(conn, "phone")
+            await _insert_track(conn, device, build_track(TRACK))
+        return device
+
+    device = _run(body)
+
+    async def domain_error(self, conn, device, dirty_from, full):
+        raise ValueError("math domain error near a private fix")
+
+    command_env.setattr(DetectorRunner, "_process_device", domain_error)
+    args = ["--account", str(OWNER)] + (["--device", str(device)] if explicit else [])
+    assert reprocess_detector.main(args) == 1
+    captured = capsys.readouterr()
+    assert f"device {device}: reprocess failed (ValueError)" in captured.err
+    assert "skipped" not in captured.out and "private fix" not in captured.err

@@ -19,7 +19,7 @@ from app.account_context import AccountPool, AccountPrincipal, control_connectio
 from app.account_work import external_account_work
 from app.application_roles import application_role_pools
 from app.config import Config
-from app.detector.runner import DetectorRunner
+from app.detector.runner import DetectorRunner, DeviceNotAdmitted
 from app.storage import is_storage_capacity_error
 
 
@@ -57,7 +57,7 @@ async def _reprocess_device(runner: DetectorRunner, device: int, *, explicit: bo
         await conn.execute("SELECT set_config('statement_timeout', '0', true)")
         try:
             processed = await runner.run_pending_in(conn, device)
-        except ValueError:
+        except DeviceNotAdmitted:
             if explicit:
                 raise
             return f"device {device}: no longer enabled, skipped"
@@ -98,7 +98,7 @@ async def _reprocess(cfg: Config, owner: int, device: int | None) -> bool:
             for selected in devices:
                 try:
                     print(await _reprocess_device(runner, selected, explicit=device is not None))
-                except ValueError as exc:
+                except DeviceNotAdmitted as exc:
                     print(f"error: device {selected}: {exc}", file=sys.stderr)
                     ok = False
                 except errors.RaiseException as exc:
