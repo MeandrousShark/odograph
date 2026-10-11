@@ -189,6 +189,7 @@ def test_over_limit_device_defers_without_writes_or_recounting(caplog):
         assert len(warnings) == 1
         message = warnings[0].getMessage()
         assert f"account={OWNER} device={device}" in message and ">50 points" in message
+        assert "app.reprocess_detector" in message
     _run(body)
 
 

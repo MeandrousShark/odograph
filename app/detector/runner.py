@@ -8,7 +8,7 @@ Concurrency model:
   next debounce/sweep firing.
 - With DETECTOR_TURN_MAX_POINTS set, a background run first counts the
   device's rewind window and defers a device over the limit without writing
-  anything.
+  anything. `python -m app.reprocess_detector` runs it without the limit.
 """
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ RUN_OVERLAP_MARGIN = timedelta(seconds=60)
 # short enough that a window shrinking below the limit resumes promptly.
 DEFERRAL_RECHECK_S = 300.0
 
-# Shared device eligibility for background runs.
+# Shared device eligibility for background runs and the operator command.
 # Registering an unused device must not manufacture checkpoint history.
 # Existing output/overrides still require reconciliation.
 _PENDING_DEVICES_SQL = (
@@ -204,14 +204,40 @@ class DetectorRunner:
         if self.deferrals.defer(owner, device, deferred):
             log.warning(
                 "detector: deferring account=%s device=%s: rewind window exceeds "
-                "DETECTOR_TURN_MAX_POINTS (>%d points)",
-                owner, device, deferred.limit,
+                "DETECTOR_TURN_MAX_POINTS (>%d points); run python -m app.reprocess_detector "
+                "--account %s --device %s",
+                owner, device, deferred.limit, owner, device,
             )
         else:
             log.info(
                 "detector: account=%s device=%s still exceeds DETECTOR_TURN_MAX_POINTS (>%d points)",
                 owner, device, deferred.limit,
             )
+
+    async def pending_devices(self, conn) -> list[int]:
+        """Devices with detector work, oldest checkpoint first."""
+        cur = await conn.execute(
+            _PENDING_DEVICES_SQL + "ORDER BY s.last_run_at NULLS FIRST, d.id",
+            (account_id(conn), DETECTOR_VERSION),
+        )
+        return [row[0] for row in await cur.fetchall()]
+
+    async def run_pending_in(self, conn, device: int) -> bool | None:
+        """Run one device's pending work in `conn`'s transaction.
+
+        For the operator command: blocking `lock_detector` and this runner's
+        turn limit (normally none). Returns None when the device has no
+        pending work, otherwise whether a window was processed.
+        """
+        await lock_detector(conn)
+        if await self._admit_device(conn, device) is None:
+            raise ValueError("No enabled tracking device has that ID in this account.")
+        cur = await conn.execute(
+            _PENDING_DEVICES_SQL + "AND d.id = %s", (account_id(conn), DETECTOR_VERSION, device),
+        )
+        if await cur.fetchone() is None:
+            return None
+        return await self._run(conn, device)
 
     async def run_once(self) -> bool:
         """Process each owned stream in its own transaction.
