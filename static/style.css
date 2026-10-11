@@ -1399,9 +1399,13 @@ input.notes:hover, input.notes:focus { border-color: var(--border-strong); }
   border-left: 3px solid var(--warn); color: var(--fg-muted);
 }
 details.add-manual { margin: 1rem 0; }
-details.add-manual form { display: flex; gap: .5rem; flex-wrap: wrap; align-items: end;
-                          padding: .75rem; border: 1px solid var(--border); border-radius: 6px; }
-details.add-manual label { display: flex; flex-direction: column; font-size: .75rem; gap: .15rem; }
+details.add-manual form, .trip-tool-panel form {
+  display: flex; gap: .5rem; flex-wrap: wrap; align-items: end;
+  padding: .75rem; border: 1px solid var(--border); border-radius: 6px;
+}
+details.add-manual label, .trip-tool-panel label {
+  display: flex; flex-direction: column; font-size: .75rem; gap: .15rem;
+}
 details.add-manual fieldset { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
                               border: 1px solid var(--border); border-radius: 6px; padding: .5rem; }
 details.add-manual legend { font-size: .75rem; opacity: .7; padding: 0 .3rem; }
@@ -1894,6 +1898,15 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 .section-disclosure > summary > h2 { display: inline; margin: 0; }
 .place-naming { margin: .75rem 0; font-size: .9rem; }
 .place-naming p { margin: .35rem 0; }
+/* Advanced trip tools: one row of tool buttons above one shared panel area.
+   The Split tool's panel lives under the map instead (.split-panel). */
+.trip-tools-bar { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.trip-tool[aria-expanded="true"] {
+  color: var(--accent-primary); border-color: var(--accent-primary); background: var(--accent-soft);
+}
+.trip-tool-panel { margin-top: var(--space-3); }
+.merge-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.merge-status { font-size: .9rem; color: var(--fg-muted); }
 /* auto-fit computes its repetition count from the track's definite MAX,
    not the min -- so a fixed max on the track (previously 14rem) undercounts
    columns at narrow widths: a ~495px phone needs two 224px maxes to fit
@@ -2546,11 +2559,12 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
   .mobile-account-icon, .mobile-more-icon { width: 1rem; height: 1rem; }
   .mobile-account-logout { display: block; margin: 0; }
   .mobile-account-logout-button { cursor: pointer; text-align: left; }
-  .filter-bar, .filter-bar .date-range, details.add-manual form, .manual-trip-form {
+  .filter-bar, .filter-bar .date-range, details.add-manual form, .trip-tool-panel form,
+  .manual-trip-form {
     align-items: stretch; flex-direction: column;
   }
   .filter-bar .field, .filter-bar .date-range, .filter-bar .date-range label,
-  details.add-manual label, .manual-trip-form label { width: 100%; }
+  details.add-manual label, .trip-tool-panel label, .manual-trip-form label { width: 100%; }
   /* 1.75rem is a 28px target, well under the 44px this app uses for every
      other control. A pointer can hit it; a fingertip cannot. Widen the
      control, push the input's text clear of it, and recentre the chevron
@@ -2559,6 +2573,9 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
   .trip-edit-grid .purpose-recent { width: 2.75rem; }
   .purpose-field input { padding-right: 3.25rem; }
   .purpose-field::after { right: 1.175rem; }
+  /* The stacked trip tool label stretches the purpose wrapper; stretch the
+     input with it so the recent picker stays attached to the field. */
+  .trip-tool-panel .purpose-field input { width: 100%; }
   .trip-filter-bar { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
   .trip-filter-surface.is-js-enhanced .trip-filter-toggle {
     display: flex; width: 100%; align-items: center; justify-content: space-between;
