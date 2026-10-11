@@ -146,7 +146,10 @@ def test_ci_cancels_superseded_branch_runs_but_never_main():
     workflow = load_workflow()
 
     assert workflow["concurrency"] == {
-        "group": "${{ github.workflow }}-${{ github.ref }}",
+        "group": (
+            "${{ github.workflow }}-"
+            "${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}"
+        ),
         "cancel-in-progress": "${{ github.ref != 'refs/heads/main' }}",
     }
 

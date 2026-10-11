@@ -9,8 +9,11 @@ on:
 permissions:
   contents: read
 
+# Pull request runs share a group per ref so a new push cancels the stale run.
+# Each main run gets its own group: a shared group would still drop a pending
+# main run when a newer one queues, even without cancel-in-progress.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
