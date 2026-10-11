@@ -49,6 +49,16 @@ reproduced here.
   restore reconstructs permissions before startup. Rolling back after the
   migration requires restoring the verified pre-upgrade archive with the
   previous exact image.
+- A Dashboard trip row opens the trip when clicked anywhere outside its
+  category, edit, and More controls, as archive rows already did.
+- The Dashboard's Needs attention link opens the whole Review queue, and its
+  count covers every unclassified trip, not only the displayed week.
+- Hovering or pressing Business or Personal previews that category's color
+  instead of the accent color.
+- In Review, entering or choosing a business purpose selects Business when no
+  category is chosen yet. An existing choice is left alone.
+- The archive's merge dialog shows and announces Processing... while a merge
+  runs.
 
 ### Fixed
 
@@ -57,6 +67,8 @@ reproduced here.
   transaction.
 - Refuse to attach a newly created QA database container to an orphaned
   persistent volume; recover it with its original image or a verified backup.
+- The inline edit card's recent-purpose picker no longer covers the purpose
+  field, so the field accepts typing and shows the chosen purpose.
 
 ### Security
 
