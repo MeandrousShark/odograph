@@ -6,6 +6,9 @@ Concurrency model:
   (app/detector/lock.py) and skips if it loses. last_run_at only advances
   when a run commits, so skipped runs leave the dirty window intact for the
   next debounce/sweep firing.
+- With DETECTOR_TURN_MAX_POINTS set, a background run first counts the
+  device's rewind window and defers a device over the limit without writing
+  anything. `python -m app.reprocess_detector` runs it without the limit.
 """
 from __future__ import annotations
 
@@ -14,7 +17,9 @@ import os
 import resource
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Callable
 
 from app.account_context import AccountPool, account_id
 from app.capacity import owned_thread
@@ -34,6 +39,134 @@ EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 # transaction started just before our snapshot but committed after it is
 # still picked up by the next run. Overlap only causes harmless re-detection.
 RUN_OVERLAP_MARGIN = timedelta(seconds=60)
+
+# How long a device deferred by DETECTOR_TURN_MAX_POINTS is skipped before its
+# window is counted again. Matches the geocoder's capacity recheck: several
+# debounce periods, so ingest pokes for a large device never recount it, but
+# short enough that a window shrinking below the limit resumes promptly.
+DEFERRAL_RECHECK_S = 300.0
+
+# Shared device eligibility for background runs and the operator command.
+# Registering an unused device must not manufacture checkpoint history.
+# Existing output/overrides still require reconciliation.
+_PENDING_DEVICES_SQL = (
+    "SELECT d.id, s.last_run_at, s.detector_version FROM tracking_devices d JOIN detector_state s "
+    "ON s.account_id = d.account_id AND s.tracking_device_id = d.id "
+    "WHERE d.account_id = %s AND d.enabled AND d.revoked_at IS NULL "
+    "AND (s.detector_version <> %s OR EXISTS (SELECT 1 FROM points p "
+    "WHERE p.account_id = d.account_id AND p.tracking_device_id = d.id "
+    "AND p.received_at > COALESCE(s.last_run_at, '-infinity'::timestamptz))) "
+    "AND (s.last_run_at IS NOT NULL OR s.detector_version <> 0 "
+    "OR EXISTS (SELECT 1 FROM points p WHERE p.account_id=d.account_id "
+    "AND p.tracking_device_id=d.id) "
+    "OR EXISTS (SELECT 1 FROM trips t WHERE t.account_id=d.account_id "
+    "AND t.tracking_device_id=d.id AND t.source='detected' AND NOT t.imported) "
+    "OR EXISTS (SELECT 1 FROM trip_boundary_overrides o WHERE o.account_id=d.account_id "
+    "AND o.tracking_device_id=d.id)) "
+)
+
+# Counts at most limit+1 rows without selecting any point columns; an
+# index-only scan of points_account_device_recorded_at_idx once the visibility
+# map is current. Same predicate as the window load in _process_device.
+# ORDER BY matches the index so the planner never prefers a sequential scan
+# when one device holds most of the table.
+WINDOW_COUNT_SQL = (
+    "SELECT count(*) FROM (SELECT 1 FROM points WHERE account_id = %s "
+    "AND tracking_device_id = %s AND recorded_at >= %s ORDER BY recorded_at LIMIT %s) AS w"
+)
+
+
+class DeviceNotAdmitted(ValueError):
+    """The device is missing, disabled or revoked for this account."""
+
+
+class WindowDeferred(Exception):
+    """A background run found a rewind window above the turn limit."""
+
+    def __init__(self, limit: int, last_run_at, detector_version: int):
+        super().__init__("detector window exceeds the turn limit")
+        self.limit = limit
+        self.last_run_at = last_run_at
+        self.detector_version = detector_version
+
+
+@dataclass
+class _Deferral:
+    recheck_at: float
+    limit: int
+    last_run_at: datetime | None
+    detector_version: int
+
+
+class DetectorDeferrals:
+    """In-memory deferral state shared by every background runner.
+
+    A scheduling hint only: it resets on restart, which at worst recounts each
+    large device once. An entry is skipped until its recheck time, and clears
+    early when the device's checkpoint changes (the operator command ran) or
+    the turn limit changes.
+    """
+
+    def __init__(self, recheck_s: float = DEFERRAL_RECHECK_S,
+                 clock: Callable[[], float] = time.monotonic):
+        self.recheck_s = recheck_s
+        self.clock = clock
+        self._entries: dict[tuple[int, int], _Deferral] = {}
+        self.status = None
+
+    def bind(self, status) -> None:
+        """Publish the deferred devices on a WorkerStatus for diagnostics."""
+        self.status = status
+        self._publish()
+
+    def _publish(self) -> None:
+        if self.status is not None:
+            self.status.deferred_devices = self.devices()
+
+    def devices(self) -> tuple[tuple[int, int], ...]:
+        return tuple(sorted(self._entries))
+
+    def should_skip(self, owner: int, device: int, last_run_at, detector_version, limit: int) -> bool:
+        entry = self._entries.get((owner, device))
+        if entry is None:
+            return False
+        if (limit != entry.limit or last_run_at != entry.last_run_at
+                or detector_version != entry.detector_version):
+            self.clear(owner, device)
+            return False
+        return self.clock() < entry.recheck_at
+
+    def defer(self, owner: int, device: int, deferred: WindowDeferred) -> bool:
+        """Record a deferral; True when the device was not already deferred."""
+        key = (owner, device)
+        new = key not in self._entries
+        self._entries[key] = _Deferral(
+            self.clock() + self.recheck_s, deferred.limit,
+            deferred.last_run_at, deferred.detector_version,
+        )
+        self._publish()
+        return new
+
+    def clear(self, owner: int, device: int) -> None:
+        if self._entries.pop((owner, device), None) is not None:
+            self._publish()
+
+    def retain_accounts(self, enabled) -> None:
+        """Drop entries for accounts that are no longer enabled."""
+        stale = [key for key in self._entries if key[0] not in enabled]
+        for key in stale:
+            del self._entries[key]
+        if stale:
+            self._publish()
+
+    def prune(self, owner: int, after: int, seen: set[int]) -> None:
+        """Drop an account's entries above `after` that were no longer eligible."""
+        stale = [key for key in self._entries
+                 if key[0] == owner and key[1] > after and key[1] not in seen]
+        for key in stale:
+            del self._entries[key]
+        if stale:
+            self._publish()
 
 
 def current_rss_bytes() -> int | None:
@@ -61,11 +194,62 @@ class DetectorRunner:
         pool: AccountPool,
         params: Params,
         full_reprocess_warn_points: int = 500_000,
+        turn_max_points: int = 0,
+        deferrals: DetectorDeferrals | None = None,
     ):
         self.pool = pool
         self.params = params
         self.full_reprocess_warn_points = full_reprocess_warn_points
+        self.turn_max_points = turn_max_points
+        self.deferrals = deferrals if deferrals is not None else DetectorDeferrals()
         self.produced_work = False
+        self.last_stats: dict[str, int] | None = None
+
+    def _skip_deferred(self, owner: int, row) -> bool:
+        device, last_run_at, version = row
+        if not self.turn_max_points:
+            self.deferrals.clear(owner, device)
+            return False
+        return self.deferrals.should_skip(owner, device, last_run_at, version, self.turn_max_points)
+
+    def _record_deferral(self, owner: int, device: int, deferred: WindowDeferred) -> None:
+        if self.deferrals.defer(owner, device, deferred):
+            log.warning(
+                "detector: deferring account=%s device=%s: rewind window exceeds "
+                "DETECTOR_TURN_MAX_POINTS (>%d points); run python -m app.reprocess_detector "
+                "--account %s --device %s",
+                owner, device, deferred.limit, owner, device,
+            )
+        else:
+            log.info(
+                "detector: account=%s device=%s still exceeds DETECTOR_TURN_MAX_POINTS (>%d points)",
+                owner, device, deferred.limit,
+            )
+
+    async def pending_devices(self, conn) -> list[int]:
+        """Devices with detector work, oldest checkpoint first."""
+        cur = await conn.execute(
+            _PENDING_DEVICES_SQL + "ORDER BY s.last_run_at NULLS FIRST, d.id",
+            (account_id(conn), DETECTOR_VERSION),
+        )
+        return [row[0] for row in await cur.fetchall()]
+
+    async def run_pending_in(self, conn, device: int) -> bool | None:
+        """Run one device's pending work in `conn`'s transaction.
+
+        For the operator command: blocking `lock_detector` and this runner's
+        turn limit (normally none). Returns None when the device has no
+        pending work, otherwise whether a window was processed.
+        """
+        await lock_detector(conn)
+        if await self._admit_device(conn, device) is None:
+            raise DeviceNotAdmitted("No enabled tracking device has that ID in this account.")
+        cur = await conn.execute(
+            _PENDING_DEVICES_SQL + "AND d.id = %s", (account_id(conn), DETECTOR_VERSION, device),
+        )
+        if await cur.fetchone() is None:
+            return None
+        return await self._run(conn, device)
 
     async def run_once(self) -> bool:
         """Process each owned stream in its own transaction.
@@ -78,29 +262,18 @@ class DetectorRunner:
         self.produced_work = False
         async with self.pool.connection() as conn:
             owner = account_id(conn)
-            # Registering an unused device must not manufacture checkpoint
-            # history. Existing output/overrides still require reconciliation.
             cur = await conn.execute(
-                "SELECT d.id FROM tracking_devices d JOIN detector_state s "
-                "ON s.account_id = d.account_id AND s.tracking_device_id = d.id "
-                "WHERE d.account_id = %s AND d.enabled AND d.revoked_at IS NULL "
-                "AND (s.detector_version <> %s OR EXISTS (SELECT 1 FROM points p "
-                "WHERE p.account_id = d.account_id AND p.tracking_device_id = d.id "
-                "AND p.received_at > COALESCE(s.last_run_at, '-infinity'::timestamptz))) "
-                "AND (s.last_run_at IS NOT NULL OR s.detector_version <> 0 "
-                "OR EXISTS (SELECT 1 FROM points p WHERE p.account_id=d.account_id "
-                "AND p.tracking_device_id=d.id) "
-                "OR EXISTS (SELECT 1 FROM trips t WHERE t.account_id=d.account_id "
-                "AND t.tracking_device_id=d.id AND t.source='detected' AND NOT t.imported) "
-                "OR EXISTS (SELECT 1 FROM trip_boundary_overrides o WHERE o.account_id=d.account_id "
-                "AND o.tracking_device_id=d.id)) "
-                "ORDER BY s.last_run_at NULLS FIRST, d.id",
+                _PENDING_DEVICES_SQL + "ORDER BY s.last_run_at NULLS FIRST, d.id",
                 (owner, DETECTOR_VERSION),
             )
-            devices = [row[0] for row in await cur.fetchall()]
-        ran = not devices
+            rows = await cur.fetchall()
+        ran = not rows
         failure = None
-        for device in devices:
+        for row in rows:
+            device = row[0]
+            if self._skip_deferred(owner, row):
+                ran = True
+                continue
             try:
                 async with self.pool.connection() as conn:
                     if not await try_lock_detector(conn):
@@ -110,8 +283,13 @@ class DetectorRunner:
                         continue
                     processed = await self._run(conn, device)
                 ran = True
+                self.deferrals.clear(owner, device)
                 self.produced_work |= bool(processed)
+            except WindowDeferred as deferred:
+                ran = True
+                self._record_deferral(owner, device, deferred)
             except Exception as exc:
+                self.deferrals.clear(owner, device)
                 log.warning("detector: stream failed: %s", type(exc).__name__)
                 failure = failure or exc
         if failure is not None:
@@ -119,30 +297,32 @@ class DetectorRunner:
         return ran
 
     async def run_turn(self, cursor=None) -> TurnOutcome:
-        """Commit one device; continuation visits each device once per wake cycle."""
+        """Commit one device; continuation visits each device once per wake cycle.
+
+        Devices deferred by the turn limit are skipped in the same lookup
+        until their recheck, so a round whose remaining devices are all
+        deferred returns idle instead of spending a turn on each. A lock-busy
+        outcome's cursor may point past skipped deferred devices; that is
+        intended, since they are not due anyway.
+        """
         self.produced_work = False
+        start = cursor or 0
+        seen: set[int] = set()
         async with self.pool.connection() as conn:
             owner = account_id(conn)
-            cur = await conn.execute(
-                "SELECT d.id FROM tracking_devices d JOIN detector_state s "
-                "ON s.account_id = d.account_id AND s.tracking_device_id = d.id "
-                "WHERE d.account_id = %s AND d.enabled AND d.revoked_at IS NULL "
-                "AND (s.detector_version <> %s OR EXISTS (SELECT 1 FROM points p "
-                "WHERE p.account_id = d.account_id AND p.tracking_device_id = d.id "
-                "AND p.received_at > COALESCE(s.last_run_at, '-infinity'::timestamptz))) "
-                "AND (s.last_run_at IS NOT NULL OR s.detector_version <> 0 "
-                "OR EXISTS (SELECT 1 FROM points p WHERE p.account_id=d.account_id "
-                "AND p.tracking_device_id=d.id) "
-                "OR EXISTS (SELECT 1 FROM trips t WHERE t.account_id=d.account_id "
-                "AND t.tracking_device_id=d.id AND t.source='detected' AND NOT t.imported) "
-                "OR EXISTS (SELECT 1 FROM trip_boundary_overrides o WHERE o.account_id=d.account_id "
-                "AND o.tracking_device_id=d.id)) "
-                "AND d.id > %s ORDER BY d.id LIMIT 1",
-                (owner, DETECTOR_VERSION, cursor or 0),
-            )
-            row = await cur.fetchone()
-        if row is None:
-            return TurnOutcome()
+            while True:
+                cur = await conn.execute(
+                    _PENDING_DEVICES_SQL + "AND d.id > %s ORDER BY d.id LIMIT 1",
+                    (owner, DETECTOR_VERSION, cursor or 0),
+                )
+                row = await cur.fetchone()
+                if row is None:
+                    self.deferrals.prune(owner, start, seen)
+                    return TurnOutcome()
+                seen.add(row[0])
+                if not self._skip_deferred(owner, row):
+                    break
+                cursor = row[0]
         device = row[0]
         try:
             async with self.pool.connection() as conn:
@@ -152,10 +332,15 @@ class DetectorRunner:
                     return TurnOutcome(ready=True, cursor=device)
                 processed = await self._run(conn, device)
             self.produced_work = bool(processed)
+        except WindowDeferred as deferred:
+            self._record_deferral(owner, device, deferred)
+            return TurnOutcome(ready=True, cursor=device)
         except Exception as exc:
+            self.deferrals.clear(owner, device)
             log.warning("detector: stream failed: %s", type(exc).__name__)
             return TurnOutcome(batch=BatchOutcome(1, 0, 1, type(exc).__name__),
                                ready=True, cursor=device)
+        self.deferrals.clear(owner, device)
         return TurnOutcome(batch=BatchOutcome(1, 1), ready=True, cursor=device)
 
     async def _admit_device(self, conn, device: int) -> str | None:
@@ -209,6 +394,7 @@ class DetectorRunner:
 
     async def _run(self, conn, device: int) -> bool:
         owner = account_id(conn)
+        self.last_stats = None
         cur = await conn.execute(
             "SELECT last_run_at, detector_version FROM detector_state "
             "WHERE account_id = %s AND tracking_device_id = %s FOR UPDATE", (owner, device),
@@ -230,6 +416,10 @@ class DetectorRunner:
                 (owner, device, last_run_at),
             )
             dirty_from = (await cur.fetchone())[0]
+        if dirty_from is not None and self.turn_max_points > 0:
+            t0 = await self._rewind_start(conn, device, dirty_from, full)
+            if await self._count_window(conn, device, t0, self.turn_max_points) > self.turn_max_points:
+                raise WindowDeferred(self.turn_max_points, last_run_at, stored_version)
         if dirty_from is not None:
             await self._process_device(conn, device, dirty_from, full)
         await conn.execute(
@@ -238,6 +428,26 @@ class DetectorRunner:
             (run_started - RUN_OVERLAP_MARGIN, DETECTOR_VERSION, owner, device),
         )
         return dirty_from is not None
+
+    async def _rewind_start(self, conn, device: int, dirty_from: datetime, full: bool) -> datetime:
+        """Rewind to the start of the newest stay settled before the dirty
+        point, so the window opens mid-stay and every trip in it is
+        bracketed. The turn-limit count and the window load both use this.
+        """
+        if full:
+            return EPOCH
+        cur = await conn.execute(
+            "SELECT started_at FROM stays "
+            "WHERE account_id = %s AND tracking_device_id = %s AND ended_at < %s ORDER BY ended_at DESC LIMIT 1",
+            (account_id(conn), device, dirty_from),
+        )
+        row = await cur.fetchone()
+        return row[0] if row else EPOCH
+
+    async def _count_window(self, conn, device: int, t0: datetime, limit: int) -> int:
+        """Window size capped at limit + 1."""
+        cur = await conn.execute(WINDOW_COUNT_SQL, (account_id(conn), device, t0, limit + 1))
+        return (await cur.fetchone())[0]
 
     async def _process_device(self, conn, device: int, dirty_from: datetime, full: bool) -> None:
         owner = account_id(conn)
@@ -265,19 +475,7 @@ class DetectorRunner:
                 "high_water_rss_bytes=%s warning_threshold_points=%d",
                 device, full_point_count, rss, peak, self.full_reprocess_warn_points,
             )
-        # Rewind to the start of the newest stay settled before the dirty
-        # point, so the window opens mid-stay and every trip in it is
-        # bracketed.
-        t0 = EPOCH
-        if not full:
-            cur = await conn.execute(
-                "SELECT started_at FROM stays "
-                "WHERE account_id = %s AND tracking_device_id = %s AND ended_at < %s ORDER BY ended_at DESC LIMIT 1",
-                (owner, device, dirty_from),
-            )
-            row = await cur.fetchone()
-            if row:
-                t0 = row[0]
+        t0 = await self._rewind_start(conn, device, dirty_from, full)
 
         cur = await conn.execute(
             "SELECT id, recorded_at, ST_Y(geom::geometry), ST_X(geom::geometry), "
@@ -375,6 +573,10 @@ class DetectorRunner:
 
         await resolve_and_autotag(conn, touched_ids)
 
+        self.last_stats = {
+            "points": len(points), "stays": len(stays), "trips": len(trips),
+            "updated": len(plan.matches), "new": len(plan.inserts), "deleted": len(plan.deletes),
+        }
         log.info(
             "detector: %s from %s: %d pts -> %d stays, %d trips "
             "(%d updated, %d new, %d deleted)",
