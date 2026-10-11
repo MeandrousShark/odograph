@@ -507,3 +507,24 @@ def test_check_now_route_requires_csrf():
         r for r in make_router().routes if r.path == "/settings/diagnostics/check"
     )
     assert any(dep.dependency is require_csrf for dep in route.dependencies)
+
+
+def test_detector_deferred_devices_reach_the_report_without_location_data():
+    from app.detector.runner import DetectorDeferrals, WindowDeferred
+
+    status = WorkerStatus(label="detector-scheduler")
+    deferrals = DetectorDeferrals()
+    deferrals.bind(status)
+    deferrals.defer(41, 7, WindowDeferred(1000, None, 2))
+    state = SimpleNamespace(detector_scheduler=SimpleNamespace(status=status))
+
+    detector = next(w for w in worker_reports_from_state(state) if w.name == "detector")
+    assert detector.deferred_devices == ((41, 7),)
+    pool = _Pool(connection=_Connection(rows=[(v,) for v in _expected_migration_versions()]))
+    rendered = render_report_text(asyncio.run(build_report(_config(), pool, state)))
+    assert "deferred_devices: 1 (account 41 device 7)" in rendered
+
+    deferrals.clear(41, 7)
+    assert status.deferred_devices == ()
+    rendered = render_report_text(asyncio.run(build_report(_config(), pool, state)))
+    assert "deferred_devices" not in rendered

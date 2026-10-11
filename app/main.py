@@ -35,7 +35,7 @@ from app.capacity_routes import busy_response
 from app.role_setup import RolePools
 from app.dashboard import format_week_range
 from app.db import make_pool, run_migrations
-from app.detector.runner import DetectorRunner
+from app.detector.runner import DetectorDeferrals, DetectorRunner
 from app.email_digest import EmailDigestWorker, run_prepared_email_turn
 from app.ntfy_preparation import run_prepared_nudge_turn, run_prepared_odometer_turn
 from app.expenses import EXPENSE_CONFLICT_LABELS, comparison_caveat_lines, comparison_status
@@ -416,9 +416,13 @@ def create_app(config: Config | None = None) -> FastAPI:
                 stack.push_async_callback(reset_queue.stop)
                 app.state.password_reset_queue = reset_queue
 
-            await start_worker("detector_scheduler", lambda pool, c: DetectorRunner(
-                pool, c.detector_params, c.full_reprocess_warn_points),
+            detector_deferrals = DetectorDeferrals()
+            detector_worker = await start_worker("detector_scheduler", lambda pool, c: DetectorRunner(
+                pool, c.detector_params, c.full_reprocess_warn_points,
+                turn_max_points=c.detector_turn_max_points, deferrals=detector_deferrals),
                 cfg.detect_debounce_s, cfg.detect_sweep_s, after_run=after_detection)
+            if getattr(detector_worker, "status", None) is not None:
+                detector_deferrals.bind(detector_worker.status)
             yield
 
     # FastAPI's /docs and openapi.json disabled: they'd be reachable without OIDC

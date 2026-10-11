@@ -76,6 +76,8 @@ class WorkerStatus:
     last_failure_at: datetime | None = None
     last_failure_type: str | None = None
     next_run_at: datetime | None = None
+    # (account id, device id) pairs the detector deferred for its turn limit.
+    deferred_devices: tuple[tuple[int, int], ...] = ()
 
     def record_run(self) -> None:
         self.last_run_at = _utcnow()

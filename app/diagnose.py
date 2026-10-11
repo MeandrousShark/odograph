@@ -92,6 +92,9 @@ class WorkerReport:
     # app.diagnose` invocation can report *whether* a worker would be
     # enabled from config alone, but never its run history.
     state_available: bool = True
+    # (account id, device id) pairs the detector deferred for
+    # DETECTOR_TURN_MAX_POINTS; identifiers only, never location data.
+    deferred_devices: tuple[tuple[int, int], ...] = ()
 
 
 @dataclass
@@ -245,6 +248,7 @@ def worker_reports_from_state(state) -> list[WorkerReport]:
             last_failure_at=status.last_failure_at,
             last_failure_type=status.last_failure_type,
             next_run_at=status.next_run_at,
+            deferred_devices=tuple(getattr(status, "deferred_devices", ())),
         ))
     return reports
 
@@ -480,6 +484,9 @@ def render_report_text(
             f" last_failure={worker.last_failure_at} ({worker.last_failure_type})"
             f" next_run={worker.next_run_at}"
         )
+        if worker.deferred_devices:
+            devices = ", ".join(f"account {a} device {d}" for a, d in worker.deferred_devices)
+            lines.append(f"    deferred_devices: {len(worker.deferred_devices)} ({devices})")
     lines.append("")
     lines.append("config presence:")
     for key, value in sorted(report.config_presence.items()):
