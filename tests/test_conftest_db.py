@@ -22,6 +22,7 @@ from conftest import (
     drop_and_recreate_schema,
     full_schema_reset,
     reset_db,
+    restore_test_schema,
 )
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -133,7 +134,11 @@ async def _equivalence_scenario() -> None:
         )
         assert restored_dump["sequences"] == replay_dump["sequences"]
     finally:
-        await pool.close()
+        try:
+            # The replay above leaves roles unprovisioned.
+            await restore_test_schema(pool)
+        finally:
+            await pool.close()
 
 
 def test_truncate_and_restore_matches_a_real_drop_and_replay():
@@ -174,7 +179,12 @@ async def _recovers_from_a_dirty_container_scenario() -> None:
             cur = await conn.execute("SELECT name FROM vehicles")
             assert await cur.fetchall() == []  # defaults are created atomically at account setup
     finally:
-        await pool.close()
+        try:
+            # Heals a dirty or unprovisioned schema if the scenario failed
+            # early; only truncates after the reset_db() above.
+            await reset_db(pool)
+        finally:
+            await pool.close()
 
 
 def test_reset_recovers_a_canonical_database_from_a_dirty_container():

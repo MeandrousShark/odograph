@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from app.db import make_pool, run_migrations
-from conftest import full_schema_reset, bootstrap_test_account
+from conftest import bootstrap_test_account, reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -20,7 +20,9 @@ async def _scenario() -> None:
     pool = make_pool(TEST_DB)
     await pool.open(wait=True)
     try:
-        await full_schema_reset(pool)
+        # The runner reapplies only the deleted version, on the latest
+        # schema either way, so this needs no replay.
+        await reset_db(pool)
         await bootstrap_test_account(pool)
 
         async with pool.connection() as conn:
@@ -60,7 +62,15 @@ async def _scenario() -> None:
                 (None,),
             ]
     finally:
-        await pool.close()
+        try:
+            # reset_db() keeps schema_migrations, so a failed run must not
+            # leave this version unrecorded for later tests.
+            async with pool.connection() as conn:
+                await conn.execute(
+                    "INSERT INTO schema_migrations (version) VALUES (13) ON CONFLICT DO NOTHING"
+                )
+        finally:
+            await pool.close()
 
 
 def test_migration_013_trims_only_exact_trailing_us_country_suffix():

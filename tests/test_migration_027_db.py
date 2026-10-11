@@ -16,10 +16,11 @@ from psycopg.types.json import Jsonb
 import app.db as db_module
 from app.accounts import create_admin
 from app.db import MIGRATIONS_DIR, make_pool, run_migrations
-from conftest import LATEST_SCHEMA_VERSION, drop_and_recreate_schema, full_schema_reset
+from conftest import LATEST_SCHEMA_VERSION, drop_and_recreate_schema
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
-pytestmark = pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS")
+pytestmark = [pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS"),
+              pytest.mark.usefixtures("restores_test_schema_after_module")]
 SQL_DIR = MIGRATIONS_DIR.parent / "scripts" / "sql"
 
 KEPT = [
@@ -71,7 +72,6 @@ def test_027_deletes_only_dump_and_configuration_rows(tmp_path, monkeypatch):
                 cur = await conn.execute("SELECT max(version) FROM schema_migrations")
                 assert (await cur.fetchone())[0] == LATEST_SCHEMA_VERSION
         finally:
-            await full_schema_reset(pool)
             await pool.close()
         assert after == [row for row in before if row[1] in KEPT]
         assert [row[1] for row in after] == KEPT

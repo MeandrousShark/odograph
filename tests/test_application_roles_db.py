@@ -20,22 +20,26 @@ from app.application_roles import (
 from app.capacity import AdmissionManager
 from app.db import make_pool
 from app.role_setup import RoleSetupError
-from conftest import full_schema_reset
+from conftest import provisioned_role_pools, reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS")
 RLS_TABLES = OWNED_TABLES + PROTECTED_TABLES
 
 
-async def _scenario(callback):
+async def _scenario(callback, *, live_pools=False):
     owner = make_pool(TEST_DB)
     await owner.open(wait=True)
     try:
+        await reset_db(owner)
+        # Fresh role state needs no replay of schema public.
         async with owner.connection() as conn:
             await conn.execute("DROP SCHEMA IF EXISTS odograph_service CASCADE")
-        await full_schema_reset(owner)
         state = await prepare_application_roles(TEST_DB)
-        async with application_role_pools(TEST_DB) as pools:
+        # The live pools validate the contract on every new connection, about
+        # a second per case; only the case about them pays for that.
+        role_pools = application_role_pools(TEST_DB) if live_pools else provisioned_role_pools(owner)
+        async with role_pools as pools:
             await callback(owner, pools, state)
     finally:
         await owner.close()
@@ -81,7 +85,7 @@ def test_live_pools_bootstrap_scoping_and_prepared_privileges():
             cur = await conn.execute("SELECT bool_and(relrowsecurity AND relforcerowsecurity) FROM pg_class "
                                      "WHERE relnamespace='public'::regnamespace AND relname=ANY(%s)", (list(RLS_TABLES),))
             assert await cur.fetchone() == (True,)
-    asyncio.run(_scenario(check))
+    asyncio.run(_scenario(check, live_pools=True))
 
 
 def test_activated_validator_rejects_policy_or_activation_drift():
@@ -163,6 +167,8 @@ def test_function_and_sequence_acl_drift_refuses_start_and_restricted_validation
     asyncio.run(_scenario(check))
 
 
+# Dropping a contract function is committed, so the schema is replayed after.
+@pytest.mark.usefixtures("restores_test_schema")
 def test_outsider_acl_and_missing_function_refuse_restore():
     async def check(owner, pools, state):
         async with owner.connection() as conn:
@@ -188,6 +194,7 @@ def test_outsider_acl_and_missing_function_refuse_restore():
     asyncio.run(_scenario(check))
 
 
+@pytest.mark.usefixtures("restores_test_roles")
 def test_provisioning_failure_stays_generic_without_leaking_the_cause(monkeypatch):
     async def broken_provision(conn):
         raise RuntimeError("scram-secret-should-never-leak")
@@ -198,9 +205,9 @@ def test_provisioning_failure_stays_generic_without_leaking_the_cause(monkeypatc
         owner = make_pool(TEST_DB)
         await owner.open(wait=True)
         try:
+            await reset_db(owner)
             async with owner.connection() as conn:
                 await conn.execute("DROP SCHEMA IF EXISTS odograph_service CASCADE")
-            await full_schema_reset(owner)
             with pytest.raises(RoleSetupError) as exc_info:
                 await prepare_application_roles(TEST_DB)
             error = exc_info.value

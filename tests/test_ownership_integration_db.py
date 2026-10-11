@@ -17,7 +17,7 @@ from psycopg import errors, sql
 from app.account_context import AccountPool, AccountPrincipal, CONTROL_ROLE, RUNTIME_ROLE
 from app.accounts import create_admin
 from app.application_roles import (
-    OWNED_TABLES, application_role_pools, prepare_application_roles, validate_application_contract,
+    OWNED_TABLES, prepare_application_roles, validate_application_contract,
 )
 from app.db import DETECTOR_ACCOUNT_LOCK_CLASS_ID, make_pool
 from app.detector.core import Params
@@ -29,7 +29,7 @@ from app.role_setup import RoleSetupError, role_conninfo
 from app.tracking import create_device
 from app.ui import make_router as ui_router
 from app.ui.merge_split import _merge_trips_core
-from conftest import full_schema_reset
+from conftest import provisioned_role_pools, reset_db
 from tests.synth import Drive, Stationary, build_track
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -41,9 +41,9 @@ async def _fixture():
     owner = make_pool(TEST_DB)
     await owner.open(wait=True)
     try:
-        await full_schema_reset(owner)
+        await reset_db(owner)
         state = await prepare_application_roles(TEST_DB)
-        async with application_role_pools(TEST_DB) as pools:
+        async with provisioned_role_pools(owner) as pools:
             async with pools.control.connection() as conn:
                 first = await create_admin(conn, "a@example.invalid", "unused-test-hash")
             # Synthetic second account is test-only. Production keeps both
@@ -67,7 +67,6 @@ async def _fixture():
             b = AccountPool(pools.runtime, AccountPrincipal(84, True, 1))
             yield owner, pools, state, a, b
     finally:
-        await full_schema_reset(owner)
         await owner.close()
 
 
@@ -383,6 +382,9 @@ def test_validator_rejects_unexpected_executable_definer(caller):
                 await conn.execute(sql.SQL("REVOKE EXECUTE ON FUNCTION public.unexpected_ledger_reader() FROM {}").format(sql.Identifier(caller)))
                 # An unreachable function grants no new application path.
                 await validate_application_contract(conn, state)
+                # A failure above rolls this transaction back; on success the
+                # probe must not outlive the test.
+                await conn.execute("DROP FUNCTION public.unexpected_ledger_reader()")
     asyncio.run(run())
 
 

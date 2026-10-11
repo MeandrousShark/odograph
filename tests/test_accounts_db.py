@@ -13,7 +13,7 @@ import app.auth as auth_module
 from app.auth import AuthRedirect, make_router, require_admin, require_user, require_legacy_establishment
 from tests.auth_db_fixtures import auth_config, bind_auth_test_roles, seed_auth_account
 from app.db import MIGRATIONS_DIR, make_pool
-from conftest import drop_and_recreate_schema, full_schema_reset, reset_db
+from conftest import drop_and_recreate_schema, reset_db, restore_test_schema
 from app.ingest import FailedAuthLimiter
 from app.local_auth import hash_password, verify_password
 from app.main import make_templates
@@ -164,7 +164,7 @@ async def _migration_preserves_local_admin_scenario():
             # depend on collection order, so restore canonical state before any
             # other test can see this one, regardless of whether the
             # assertions above passed.
-            await full_schema_reset(pool)
+            await restore_test_schema(pool)
     finally:
         await pool.close()
 

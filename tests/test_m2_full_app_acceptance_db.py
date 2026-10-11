@@ -27,7 +27,7 @@ from app.account_context import AccountPool, AccountPrincipal, control_connectio
 from app.config import Config
 from app.db import make_pool
 from app.mailer import Mailer
-from conftest import full_schema_reset
+from conftest import reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = [pytest.mark.capacity_contract,
@@ -426,6 +426,9 @@ async def _scenario(owner, secrets_seen: list[str], unverified_processed: asynci
         secrets_seen += [ADMIN_PASSWORD, VERIFIED_PASSWORD, UNVERIFIED_PASSWORD, RESET_PASSWORD]
 
 
+# Startup takes the first-install role provisioning branch; the fixture
+# provisions again if the test fails before that.
+@pytest.mark.usefixtures("restores_test_roles")
 def test_full_app_bootstrap_onboarding_and_admin_recovery_keep_proofs_private(
     m2_stall_probe, monkeypatch, caplog,
 ):
@@ -460,9 +463,10 @@ def test_full_app_bootstrap_onboarding_and_admin_recovery_keep_proofs_private(
         owner = make_pool(TEST_DB)
         await owner.open(wait=True)
         try:
+            await reset_db(owner)
+            # No restricted pool is open on `owner` yet to outlive this.
             async with owner.connection() as conn:
                 await conn.execute("DROP SCHEMA IF EXISTS odograph_service CASCADE")
-            await full_schema_reset(owner)
             unverified_processed = asyncio.Event()
             from app import password_reset
 
@@ -477,7 +481,6 @@ def test_full_app_bootstrap_onboarding_and_admin_recovery_keep_proofs_private(
             monkeypatch.setattr(password_reset, "issue_password_reset", observe_unverified_request)
             await _scenario(owner, secrets_seen, unverified_processed)
         finally:
-            await full_schema_reset(owner)
             await owner.close()
 
     with caplog.at_level(logging.DEBUG):

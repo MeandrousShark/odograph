@@ -17,7 +17,9 @@ from tests.test_account_context_db import (
     make_admin_pool, run_scenario,
 )
 
-pytestmark = pytest.mark.skipif(not TEST_DB, reason='set TEST_DATABASE_URL')
+# The scenarios drop the cluster-wide roles, as in test_account_context_db.py.
+pytestmark = [pytest.mark.skipif(not TEST_DB, reason='set TEST_DATABASE_URL'),
+              pytest.mark.usefixtures('unprovisioned_public_schema')]
 
 
 async def state_and_verifiers(admin):

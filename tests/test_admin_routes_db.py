@@ -16,14 +16,13 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from app import admin
 from app.invitations import issue_invitation_record
 from app.accounts import create_admin
-from app.application_roles import application_role_pools, prepare_application_roles
 from app.auth import AuthRedirect
 from app.db import make_pool
 from app.ingest import FailedAuthLimiter
 from app.main import SecurityHeadersMiddleware, make_templates
 from app.password_reset import SecurityMailAdmission
 from tests.auth_db_fixtures import auth_config
-from conftest import full_schema_reset
+from conftest import provisioned_role_pools, reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS")
@@ -33,19 +32,13 @@ async def _scenario(callback):
     owner = make_pool(TEST_DB)
     await owner.open(wait=True)
     try:
-        async with owner.connection() as conn:
-            await conn.execute("DROP SCHEMA IF EXISTS odograph_service CASCADE")
-        await full_schema_reset(owner)
-        await prepare_application_roles(TEST_DB)
-        async with application_role_pools(TEST_DB) as pools:
+        await reset_db(owner)
+        async with provisioned_role_pools(owner) as pools:
             async with pools.control.connection() as conn:
                 account = await create_admin(conn, "admin@example.invalid", "test-hash")
             await callback(owner, pools, account)
     finally:
-        try:
-            await full_schema_reset(owner)
-        finally:
-            await owner.close()
+        await owner.close()
 
 
 def _app(pools, *, config=None):

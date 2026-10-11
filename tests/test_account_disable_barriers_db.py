@@ -14,7 +14,6 @@ from psycopg import errors
 from app.account_context import AccountPool, AccountPrincipal
 from app.account_workers import enabled_principals
 from app.accounts import create_admin
-from app.application_roles import application_role_pools, prepare_application_roles
 from app.db import make_pool
 from app.email_challenges import (
     PURPOSE_CURRENT, consume_email_challenge, email_challenge_send_usable,
@@ -31,7 +30,7 @@ from app.password_reset import (
     password_reset_send_usable,
 )
 from app.tracking import authenticate_ingest, create_device
-from conftest import full_schema_reset
+from conftest import provisioned_role_pools, reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS")
@@ -41,11 +40,8 @@ async def _scenario(callback):
     owner = make_pool(TEST_DB)
     await owner.open(wait=True)
     try:
-        async with owner.connection() as conn:
-            await conn.execute("DROP SCHEMA IF EXISTS odograph_service CASCADE")
-        await full_schema_reset(owner)
-        await prepare_application_roles(TEST_DB)
-        async with application_role_pools(TEST_DB) as pools:
+        await reset_db(owner)
+        async with provisioned_role_pools(owner) as pools:
             async with pools.control.connection() as conn:
                 actor = await create_admin(conn, "actor@example.invalid", "actor-hash")
             async with owner.connection() as conn:

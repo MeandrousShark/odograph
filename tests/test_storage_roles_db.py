@@ -157,6 +157,8 @@ def test_counter_drift_refuses_startup_and_explicit_restore_reconciles():
      "CREATE TRIGGER storage_charge_delete AFTER DELETE ON public.points "
      "FOR EACH STATEMENT EXECUTE FUNCTION public.storage_apply_statement()", "storage trigger definition"),
 ])
+# The tampering is committed, so the schema is replayed after.
+@pytest.mark.usefixtures("restores_test_schema")
 def test_accounting_trigger_or_charge_definition_tampering_refuses_startup(statement, cause):
     async def check(owner, pools, state):
         async with owner.connection() as conn:

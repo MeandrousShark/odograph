@@ -32,7 +32,7 @@ from app.accounts import get_account, get_account_avatar
 from app.auth import AuthRedirect, _avatar_version, make_router
 from app.db import MIGRATIONS_DIR, make_pool
 from app.main import make_templates
-from conftest import drop_and_recreate_schema, full_schema_reset, reset_db
+from conftest import drop_and_recreate_schema, reset_db, restore_test_schema
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
@@ -126,10 +126,10 @@ async def _migration_applies_cleanly_scenario():
             }
         finally:
             # The loop above bypasses the migration runner (schema_migrations
-            # is never populated), so restore canonical, fully-migrated state
-            # before any other test can see this one -- same reasoning as
-            # test_accounts_db.py's partial-replay scenario.
-            await full_schema_reset(pool)
+            # is never populated), so restore canonical, fully-migrated and
+            # provisioned state before any other test can see this one --
+            # same reasoning as test_accounts_db.py's partial-replay scenario.
+            await restore_test_schema(pool)
     finally:
         await pool.close()
 
