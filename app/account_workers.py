@@ -86,7 +86,7 @@ class AccountWorker(PokeSweepWorker):
 
     def __init__(self, pools, config, factory, *, label, debounce_s, sweep_s, after_run=None,
                  capacity=None, scheduler=None, before_turn=None, refresh_deferred_on_wake=False,
-                 admitted_turn=None):
+                 admitted_turn=None, on_round=None):
         super().__init__(task_name=label, log=log,
             failure_message=f"{label}: account enumeration failed",
             debounce_s=debounce_s, sweep_s=sweep_s)
@@ -102,6 +102,8 @@ class AccountWorker(PokeSweepWorker):
         self._produced_work = False
         self.before_turn = before_turn
         self.admitted_turn = admitted_turn
+        # Called with the enabled account ids at each round boundary.
+        self.on_round = on_round
         self.refresh_deferred_on_wake = refresh_deferred_on_wake
         self._round: deque[AccountPrincipal] = deque()
         self._last_round_started: int | None = None
@@ -164,6 +166,8 @@ class AccountWorker(PokeSweepWorker):
             enabled = {p.account_id for p in principals}
             self._continuations = {owner: outcome for owner, outcome in self._continuations.items()
                                    if owner in enabled}
+            if self.on_round is not None:
+                self.on_round(enabled)
             if self._last_round_started is not None:
                 principals = ([p for p in principals if p.account_id > self._last_round_started]
                               + [p for p in principals if p.account_id <= self._last_round_started])

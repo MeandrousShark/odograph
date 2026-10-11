@@ -52,3 +52,13 @@ def test_prune_drops_only_unseen_devices_after_the_cursor():
     assert status.deferred_devices == ((1, 2), (1, 5), (1, 8), (3, 9))
     deferrals.prune(1, 2, {5})
     assert status.deferred_devices == ((1, 2), (1, 5), (3, 9))
+
+
+def test_disabled_accounts_drop_out_at_the_round_boundary():
+    deferrals, _clock = _deferrals()
+    status = WorkerStatus(label="detector")
+    deferrals.bind(status)
+    for owner, device in [(1, 2), (3, 9)]:
+        deferrals.defer(owner, device, WindowDeferred(100, None, 2))
+    deferrals.retain_accounts({3, 4})
+    assert status.deferred_devices == ((3, 9),)

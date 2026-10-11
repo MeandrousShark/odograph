@@ -147,6 +147,14 @@ class DetectorDeferrals:
         if self._entries.pop((owner, device), None) is not None:
             self._publish()
 
+    def retain_accounts(self, enabled) -> None:
+        """Drop entries for accounts that are no longer enabled."""
+        stale = [key for key in self._entries if key[0] not in enabled]
+        for key in stale:
+            del self._entries[key]
+        if stale:
+            self._publish()
+
     def prune(self, owner: int, after: int, seen: set[int]) -> None:
         """Drop an account's entries above `after` that were no longer eligible."""
         stale = [key for key in self._entries
