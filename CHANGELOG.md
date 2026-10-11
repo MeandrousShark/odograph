@@ -59,6 +59,10 @@ reproduced here.
   category is chosen yet. An existing choice is left alone.
 - The archive's merge dialog shows and announces Processing... while a merge
   runs.
+- Trip Detail's Advanced trip tools are one row of tools (Merge, Split, Name
+  start, Name end) that opens one at a time. Merge uses one form with Merge
+  with previous and Merge with next, and shows and announces Processing...
+  while it runs.
 
 ### Fixed
 
@@ -69,6 +73,8 @@ reproduced here.
   persistent volume; recover it with its original image or a verified backup.
 - The inline edit card's recent-purpose picker no longer covers the purpose
   field, so the field accepts typing and shows the chosen purpose.
+- A successful split no longer briefly reports that it did not complete
+  before the trip list loads.
 
 ### Security
 
