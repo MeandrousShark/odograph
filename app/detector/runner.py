@@ -301,7 +301,9 @@ class DetectorRunner:
 
         Devices deferred by the turn limit are skipped in the same lookup
         until their recheck, so a round whose remaining devices are all
-        deferred returns idle instead of spending a turn on each.
+        deferred returns idle instead of spending a turn on each. A lock-busy
+        outcome's cursor may point past skipped deferred devices; that is
+        intended, since they are not due anyway.
         """
         self.produced_work = False
         start = cursor or 0
