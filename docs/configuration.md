@@ -365,10 +365,15 @@ latest stay before its new data. After a `DETECTOR_VERSION` change, it reloads
 the whole device. With `DETECTOR_TURN_MAX_POINTS` set, the background worker
 first counts that window. A device over the limit is deferred: the worker
 writes nothing for it, logs one warning naming the account and device IDs, and
-moves on to other devices and accounts. Ingest continues normally, and the
-worker counts the device again about every five minutes, so a window that
-falls under the limit, or a raised limit after restart, resumes on its own.
-Trip edits such as merge and split are not limited.
+moves on to other devices and accounts. Ingest continues normally. Trip edits
+such as merge and split are not limited.
+
+A deferred device is counted again at most every five minutes, on the next
+ingest or periodic sweep (`DETECT_SWEEP_S`). Its checkpoint does not advance
+while it is deferred, so its window normally only grows. It stays deferred
+until you run the command below or raise the limit and restart. The admin
+Settings page lists deferred devices under Workers. After the command runs,
+that list can lag until the account's next detector wake.
 
 Run the deferred work as a separate process with no limit:
 
@@ -382,6 +387,9 @@ The command waits for the account's detector lock, processes one device per
 transaction, and prints each device's point, stay and trip counts. It exits
 non-zero if the account is unknown or disabled, or if any device fails,
 including a device whose output does not fit the account's storage limit.
+Interrupting the command (Ctrl-C) rolls back only the device in progress.
+While a device runs, that account's lifecycle operations, such as disabling or
+purging it, wait until the device commits.
 
 ## UI, reports, and imports
 
