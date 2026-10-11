@@ -388,8 +388,9 @@ transaction, and prints each device's point, stay and trip counts. It exits
 non-zero if the account is unknown or disabled, or if any device fails,
 including a device whose output does not fit the account's storage limit.
 Interrupting the command (Ctrl-C) rolls back only the device in progress.
-While a device runs, that account's lifecycle operations, such as disabling or
-purging it, wait until the device commits.
+While the command runs, disabling that account fails after a short lock
+timeout until the current device commits, and purging it fails until the whole
+command finishes; retry afterwards.
 
 ## UI, reports, and imports
 
