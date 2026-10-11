@@ -348,3 +348,69 @@ def test_window_count_is_index_only_and_reads_no_point_payloads():
             assert await DetectorRunner(pool, Params())._count_window(
                 conn, target, runner_module.EPOCH, 1000) == 1001
     _run(body)
+
+
+async def _deferred_device(raw):
+    pool = await reset_account_db(raw)
+    async with pool.connection() as conn:
+        device = await seed_tracking_device(conn, "big")
+        await _insert_track(conn, device, build_track(TRACK))
+    return pool, device
+
+
+def test_legacy_run_once_defers_without_writes_and_warns_once(caplog):
+    caplog.set_level(logging.INFO, logger="app.detector.runner")
+
+    async def body(raw):
+        pool, device = await _deferred_device(raw)
+        async with pool.connection() as conn:
+            before = await _snapshot(conn)
+        deferrals = DetectorDeferrals(clock=_Clock())
+        Runner = _counting()
+        for _ in range(2):
+            runner = Runner(pool, Params(), turn_max_points=50, deferrals=deferrals)
+            assert await runner.run_once() is True
+            assert not runner.produced_work
+        assert Runner.counts == 1
+        assert deferrals.devices() == ((OWNER, device),)
+        async with pool.connection() as conn:
+            assert await _snapshot(conn) == before
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "deferring" in r.message]
+        assert len(warnings) == 1
+    _run(body)
+
+
+def test_failed_recheck_clears_the_deferral():
+    async def body(raw):
+        pool, device = await _deferred_device(raw)
+        clock = _Clock()
+        deferrals = DetectorDeferrals(clock=clock)
+        await DetectorRunner(pool, Params(), turn_max_points=50, deferrals=deferrals).run_turn()
+        assert deferrals.devices() == ((OWNER, device),)
+
+        class Failing(DetectorRunner):
+            async def _run(self, conn, device):
+                raise RuntimeError("synthetic failure")
+
+        clock.now += runner_module.DEFERRAL_RECHECK_S
+        failed = await Failing(pool, Params(), turn_max_points=50, deferrals=deferrals).run_turn()
+        assert failed.batch.retriable_failures == 1 and failed.cursor == device
+        assert deferrals.devices() == ()
+    _run(body)
+
+
+def test_idle_turn_prunes_a_deferral_once_the_command_cleared_the_work():
+    async def body(raw):
+        pool, device = await _deferred_device(raw)
+        deferrals = DetectorDeferrals(clock=_Clock())
+        Runner = _counting()
+        await Runner(pool, Params(), turn_max_points=50, deferrals=deferrals).run_turn()
+        assert deferrals.devices() == ((OWNER, device),)
+        # The command's per-device step, with no new data afterwards.
+        async with pool.connection() as conn:
+            assert await DetectorRunner(pool, Params()).run_pending_in(conn, device) is True
+        idle = await Runner(pool, Params(), turn_max_points=50, deferrals=deferrals).run_turn()
+        assert not idle.ready and idle.batch.attempted == 0
+        assert deferrals.devices() == ()
+        assert Runner.counts == 1
+    _run(body)
