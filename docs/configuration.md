@@ -356,6 +356,41 @@ points.
 | `MIN_TRIP_DISTANCE_M` | `300` | Rejects shorter movement between stays as jitter rather than a trip. |
 | `GAP_FLAG_THRESHOLD_S` | `600` | Marks a trip when consecutive kept points are farther apart than this many seconds. |
 | `FULL_REPROCESS_WARN_POINTS` | `500000` | Logs a warning before a full-device reprocess at or above this point count. `0` disables the warning. |
+| `DETECTOR_TURN_MAX_POINTS` | `0` | Largest rewind window, in points, that one background detector turn loads for a device. `0` means unlimited. See [Large detector windows](#large-detector-windows). |
+
+### Large detector windows
+
+Each background detector turn reloads a device's points from the start of the
+latest stay before its new data. After a `DETECTOR_VERSION` change, it reloads
+the whole device. With `DETECTOR_TURN_MAX_POINTS` set, the background worker
+first counts that window. A device over the limit is deferred: the worker
+writes nothing for it, logs one warning naming the account and device IDs, and
+moves on to other devices and accounts. Ingest continues normally. Trip edits
+such as merge and split are not limited.
+
+A deferred device is counted again at most every five minutes, on the next
+ingest or periodic sweep (`DETECT_SWEEP_S`). Its checkpoint does not advance
+while it is deferred, so its window normally only grows. It stays deferred
+until you run the command below or raise the limit and restart. The admin
+Settings page lists deferred devices under Workers. After the command runs,
+that list can lag until the account's next detector wake.
+
+Run the deferred work as a separate process with no limit:
+
+```sh
+docker compose exec app python -m app.reprocess_detector --account ACCOUNT_ID --device DEVICE_ID
+# or every device of the account with pending work:
+docker compose exec app python -m app.reprocess_detector --account ACCOUNT_ID
+```
+
+The command waits for the account's detector lock, processes one device per
+transaction, and prints each device's point, stay and trip counts. It exits
+non-zero if the account is unknown or disabled, or if any device fails,
+including a device whose output does not fit the account's storage limit.
+Interrupting the command (Ctrl-C) rolls back only the device in progress.
+While the command runs, disabling that account fails after a short lock
+timeout until the current device commits, and purging it fails until the whole
+command finishes; retry afterwards.
 
 ## UI, reports, and imports
 

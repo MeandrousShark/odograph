@@ -54,6 +54,19 @@ def _f(name: str, default: float) -> float:
     return float(os.environ.get(name, default))
 
 
+def _non_negative_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "")
+    if raw == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise RuntimeError(f"{name} must be a non-negative integer") from None
+    if value < 0 or value > 2 ** 63 - 2:
+        raise RuntimeError(f"{name} must be a non-negative bigint-sized integer")
+    return value
+
+
 def _storage_bytes(name: str, default: int) -> int:
     try:
         value = int(os.environ.get(name, default))
@@ -111,6 +124,7 @@ class Config:
     odometer_reminder_hour: int
     trips_page_size: int
     full_reprocess_warn_points: int
+    detector_turn_max_points: int
     missing_trip_gap_m: float
     smtp_host: str
     smtp_port: int
@@ -438,6 +452,8 @@ class Config:
             full_reprocess_warn_points=max(
                 0, int(os.environ.get("FULL_REPROCESS_WARN_POINTS", 500000))
             ),
+            # 0 keeps background detector turns unlimited.
+            detector_turn_max_points=_non_negative_int("DETECTOR_TURN_MAX_POINTS", 0),
             # Distance-only, no time criterion: a long time gap is usually
             # just "parked overnight", while a large spatial gap is
             # suspicious at any duration. `0` disables the feature entirely

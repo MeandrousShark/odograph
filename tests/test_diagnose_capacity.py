@@ -215,3 +215,61 @@ def test_settings_metadata_refusal_after_data_read_uses_real_app_busy_response(m
         assert 'SELECT version FROM schema_migrations ORDER BY version' not in raw.conn.queries
         assert not any(manager._active.values())
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('is_admin,deferred', [(True, ((7, 3), (7, 5))), (True, ()), (False, ((7, 3),))])
+def test_settings_workers_note_lists_deferred_detector_devices_for_admins_only(monkeypatch, is_admin, deferred):
+    import app.ui.settings as settings
+    from app.main import make_templates
+    from app.worker import WorkerStatus
+    async def rows(*args, **kwargs):
+        return []
+    for name in ('_fetch_rates_rows', 'list_vehicles', '_fetch_odometer_context',
+                 '_fetch_places_rows', '_fetch_rules_rows', '_fetch_boundary_overrides_rows',
+                 '_fetch_device_fixes'):
+        monkeypatch.setattr(settings, name, rows)
+    async def auto_assign(*args):
+        return False
+    async def schema_version(*args):
+        return max(_expected_migration_versions())
+    monkeypatch.setattr(settings, 'get_auto_assign_default_vehicle', auto_assign)
+    monkeypatch.setattr(settings, '_fetch_schema_version', schema_version)
+    templates = make_templates(SimpleNamespace(display_tz=ZoneInfo('UTC'), app_version='test'))
+    async def render(request, template, context, **kwargs):
+        if not is_admin:
+            assert context['diagnostics_report'] is None
+        body = templates.env.get_template(template).render(**context)
+        return JSONResponse({'body': body})
+    monkeypatch.setattr(settings, 'render_page', render)
+    async def run():
+        _raw, manager, account = _account_pool()
+        app = FastAPI()
+        app.add_middleware(SessionMiddleware, secret_key='test-only-diagnostics')
+        cfg = _config(display_tz=ZoneInfo('UTC'))
+        status = WorkerStatus(label='detector-scheduler')
+        status.deferred_devices = deferred
+        app.state.config, app.state.capacity = cfg, manager
+        app.state.detector_scheduler = SimpleNamespace(status=status)
+        async def user(request: Request):
+            request.state.principal = account.principal
+            request.state.account_pool = account
+            request.state.config = cfg
+            request.state.account_settings = SimpleNamespace()
+            return {'id': 7, 'name': 'Test', 'is_admin': is_admin}
+        app.dependency_overrides[require_user] = user
+        app.include_router(make_router())
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            response = await client.get('/settings')
+        assert response.status_code == 200
+        return response.json()['body']
+    body = asyncio.run(run())
+    if is_admin and deferred:
+        assert '<h3>Workers</h3>' in body
+        assert 'Detector: 2 devices' in body
+        assert 'exceeds <code>DETECTOR_TURN_MAX_POINTS</code>' in body
+        assert '<code>python -m app.reprocess_detector --account ID</code>' in body
+        assert '<li>Account 7, device 3</li>' in body and '<li>Account 7, device 5</li>' in body
+    else:
+        assert 'reprocess_detector' not in body and 'deferred because' not in body
+    if not is_admin:
+        assert '<h3>Workers</h3>' not in body

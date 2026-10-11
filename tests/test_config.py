@@ -487,3 +487,23 @@ def test_osrm_coordinate_limit_accepts_bounded_values(clean_env, value):
 def test_osrm_coordinate_limit_preserves_default(clean_env):
     clean_env.delenv("OSRM_MAX_COORDS", raising=False)
     assert Config.from_env().osrm_max_coords == 250
+
+
+def test_detector_turn_limit_defaults_to_unlimited(clean_env):
+    clean_env.delenv("DETECTOR_TURN_MAX_POINTS", raising=False)
+    assert Config.from_env().detector_turn_max_points == 0
+    clean_env.setenv("DETECTOR_TURN_MAX_POINTS", "")
+    assert Config.from_env().detector_turn_max_points == 0
+
+
+@pytest.mark.parametrize("value", ["0", "1", "250000"])
+def test_detector_turn_limit_accepts_non_negative_integers(clean_env, value):
+    clean_env.setenv("DETECTOR_TURN_MAX_POINTS", value)
+    assert Config.from_env().detector_turn_max_points == int(value)
+
+
+@pytest.mark.parametrize("value", ["-1", "2.5", "invalid", "1e6", str(2 ** 63)])
+def test_detector_turn_limit_rejects_invalid_values(clean_env, value):
+    clean_env.setenv("DETECTOR_TURN_MAX_POINTS", value)
+    with pytest.raises(RuntimeError, match="DETECTOR_TURN_MAX_POINTS must be a non-negative"):
+        Config.from_env()

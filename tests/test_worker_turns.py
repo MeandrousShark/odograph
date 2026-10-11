@@ -333,3 +333,24 @@ def test_durable_retry_wakes_recheck_new_work_without_waiting_for_old_backoff(mo
         assert worker.capacity.snapshot()["background"]["active"] == 0
         assert worker._continuation_at is None
     asyncio.run(scenario())
+
+
+def test_round_boundary_reports_enabled_accounts_to_the_round_hook(monkeypatch):
+    async def scenario():
+        accounts, rounds = [1, 2], []
+        class Job:
+            def __init__(self, pool):
+                pass
+
+            async def run_turn(self, cursor):
+                return TurnOutcome()
+
+        worker = _workers(monkeypatch, accounts, lambda pool, config: Job(pool))
+        worker.on_round = lambda enabled: rounds.append(set(enabled))
+        await worker.run_turn()
+        await worker.run_turn()
+        accounts.remove(1)
+        worker.wake_cycle()
+        await worker.run_turn()
+        assert rounds == [{1, 2}, {2}]
+    asyncio.run(scenario())

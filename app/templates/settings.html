@@ -507,6 +507,16 @@ document.addEventListener('click', function (event) {
     </tbody>
   </table>
   </div>
+  {% for worker in report.workers if worker.deferred_devices %}
+  <p>Detector: {{ worker.deferred_devices | length }} device{{ "" if worker.deferred_devices | length == 1 else "s" }}
+    deferred because the pending window exceeds <code>DETECTOR_TURN_MAX_POINTS</code>.
+    Run <code>python -m app.reprocess_detector --account ID</code> for each account listed.</p>
+  <ul>
+    {% for deferred_account, deferred_device in worker.deferred_devices %}
+    <li>Account {{ deferred_account }}, device {{ deferred_device }}</li>
+    {% endfor %}
+  </ul>
+  {% endfor %}
 
   <h3>Configuration presence</h3>
   <p class="muted">Whether a setting is present, never its value.</p>

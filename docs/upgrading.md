@@ -242,6 +242,16 @@ needed after migration commits, restore the verified pre-upgrade archive into
 a fresh database using the previous exact image. Starting that old image
 against the migrated database is unsupported.
 
+## Detector version changes
+
+When a release changes `DETECTOR_VERSION`, the background detector reprocesses
+every device from its first point after the upgrade. With
+`DETECTOR_TURN_MAX_POINTS` set, a device with more points than the limit is
+deferred and logged instead. Run
+`python -m app.reprocess_detector --account ACCOUNT_ID` inside the app
+container for each account named in those warnings. See
+[Large detector windows](configuration.md#large-detector-windows).
+
 ## Failure guidance
 
 **A failed migration** (startup logs an error and the app doesn't come up

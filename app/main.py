@@ -35,7 +35,7 @@ from app.capacity_routes import busy_response
 from app.role_setup import RolePools
 from app.dashboard import format_week_range
 from app.db import make_pool, run_migrations
-from app.detector.runner import DetectorRunner
+from app.detector.runner import DetectorDeferrals, DetectorRunner
 from app.email_digest import EmailDigestWorker, run_prepared_email_turn
 from app.ntfy_preparation import run_prepared_nudge_turn, run_prepared_odometer_turn
 from app.expenses import EXPENSE_CONFLICT_LABELS, comparison_caveat_lines, comparison_status
@@ -348,13 +348,15 @@ def create_app(config: Config | None = None) -> FastAPI:
             app.state.geocode_pacer = geocode_pacer
 
             async def start_worker(name, factory, debounce, sweep, *, enabled=True, after_run=None,
-                                   before_turn=None, refresh_deferred_on_wake=False, admitted_turn=None):
+                                   before_turn=None, refresh_deferred_on_wake=False, admitted_turn=None,
+                                   on_round=None):
                 worker = None
                 if enabled:
                     worker = AccountWorker(pools, cfg, factory, label=name.replace("_", "-"),
                         debounce_s=debounce, sweep_s=sweep, after_run=after_run,
                         capacity=capacity, scheduler=scheduler, before_turn=before_turn,
-                        refresh_deferred_on_wake=refresh_deferred_on_wake, admitted_turn=admitted_turn)
+                        refresh_deferred_on_wake=refresh_deferred_on_wake, admitted_turn=admitted_turn,
+                        on_round=on_round)
                     await worker.start()
                     stack.push_async_callback(worker.stop)
                 setattr(app.state, name, worker)
@@ -416,9 +418,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                 stack.push_async_callback(reset_queue.stop)
                 app.state.password_reset_queue = reset_queue
 
-            await start_worker("detector_scheduler", lambda pool, c: DetectorRunner(
-                pool, c.detector_params, c.full_reprocess_warn_points),
-                cfg.detect_debounce_s, cfg.detect_sweep_s, after_run=after_detection)
+            detector_deferrals = DetectorDeferrals()
+            detector_worker = await start_worker("detector_scheduler", lambda pool, c: DetectorRunner(
+                pool, c.detector_params, c.full_reprocess_warn_points,
+                turn_max_points=c.detector_turn_max_points, deferrals=detector_deferrals),
+                cfg.detect_debounce_s, cfg.detect_sweep_s, after_run=after_detection,
+                on_round=detector_deferrals.retain_accounts)
+            if getattr(detector_worker, "status", None) is not None:
+                detector_deferrals.bind(detector_worker.status)
             yield
 
     # FastAPI's /docs and openapi.json disabled: they'd be reachable without OIDC
