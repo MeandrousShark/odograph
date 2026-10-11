@@ -1202,8 +1202,9 @@
         <option value="personal">Personal</option>
       </select>
     </label>
-    <label>Purpose {{ purpose_field(recent_purposes | default([], true), input_id='merge-dialog-purpose') }}</label>
-    <label>Notes <input type="text" id="merge-dialog-notes"></label>
+    <label>Purpose {{ purpose_field(recent_purposes | default([], true), input_id='merge-dialog-purpose', describedby='merge-dialog-blank-hint') }}</label>
+    <label>Notes <input type="text" id="merge-dialog-notes" aria-describedby="merge-dialog-blank-hint"></label>
+    <p id="merge-dialog-blank-hint" class="selection-dialog-explain">Leave purpose or notes blank to keep the merged trip's current values.</p>
     <label>Vehicle
       <select id="merge-dialog-vehicle">
         <option value="keep" selected>Keep</option>

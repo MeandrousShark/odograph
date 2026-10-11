@@ -156,3 +156,52 @@ def test_merge_next_with_no_category_field_preserves_pre_merge_category():
     untouched merge form posted whatever CATEGORIES' first entry was (a
     real category, "business") and silently human-locked the merged trip."""
     asyncio.run(_scenario())
+
+
+async def _blank_fields_scenario():
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
+    try:
+        pool = await reset_account_db(raw_pool)
+        track = build_track([
+            Stationary(900), Drive(km=3), Stationary(1200), Drive(km=2), Stationary(900),
+        ])
+        async with pool.connection() as conn:
+            await _insert_points(conn, track, "A")
+
+        runner = DetectorRunner(pool, Params())
+        assert await runner.run_once() is True
+
+        async with pool.connection() as conn:
+            before = await _trips(conn, "A")
+            assert len(before) == 2
+            # The first trip is the longer one, so it is the survivor.
+            await conn.execute(
+                "UPDATE trips SET purpose = 'Client visit', notes = 'gate code' WHERE id = %s",
+                (before[0][0],),
+            )
+
+        app = _bare_app(pool)
+        app.state.detector_runner = runner
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            csrf = await _csrf(client)
+            # A browser posts the blank text fields as empty strings.
+            response = await client.post(
+                f"/trips/{before[1][0]}/merge_prev",
+                data={"purpose": "", "notes": ""},
+                headers={"X-CSRF-Token": csrf},
+            )
+        assert response.status_code == 204
+
+        async with pool.connection() as conn:
+            row = await conn.execute("SELECT purpose, notes FROM trips WHERE source = 'detected'")
+            assert await row.fetchall() == [("Client visit", "gate code")]
+    finally:
+        await raw_pool.close()
+
+
+def test_merge_prev_with_blank_purpose_and_notes_keeps_existing_values():
+    """The trip-page merge form posts blank purpose and notes by default;
+    that must keep the merged trip's current values, not erase them."""
+    asyncio.run(_blank_fields_scenario())
