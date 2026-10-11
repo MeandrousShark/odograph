@@ -228,6 +228,22 @@
       // click handler below may have just unchecked it.
       syncReviewCategorySelection();
       updateReviewNextButton();
+      return;
+    }
+    // Typed edits and the recent-purpose picker (which dispatches a bubbling
+    // change) both land here. The category still only commits on Next.
+    if (e.target && e.target.matches('#review-form [data-purpose-input]')) {
+      var form = document.getElementById('review-form');
+      if (!form) return;
+      var checked = form.querySelector('input[name="category"]:checked');
+      var choice = reviewState.categoryAfterPurposeChange(
+        e.target.value, checked ? checked.value : null
+      );
+      var radio = choice && form.querySelector('input[name="category"][value="' + choice + '"]');
+      if (!radio) return;
+      radio.checked = true;
+      syncReviewCategorySelection();
+      updateReviewNextButton();
     }
   });
 

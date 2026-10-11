@@ -84,8 +84,10 @@ class DayGroup:
 
 @dataclass(frozen=True)
 class AttentionStrip:
-    unclassified_count: int
-    review_url: str
+    """Week-scoped attention items. The unclassified queue is account-wide,
+    not part of this week model: the template shows it from the page's
+    `review_count`, so it links to the whole Review queue.
+    """
     missing_trip_count: int
     missing_trip_url: str | None
 
@@ -107,7 +109,7 @@ class WeekDashboard:
     expense_total: Decimal | float
     deduction: DeductionEstimate
     day_groups: list[DayGroup]
-    attention: AttentionStrip | None
+    attention: AttentionStrip | None  # None when the week has no missing-trip badges
     nav: WeekNav
 
 
@@ -171,9 +173,14 @@ def build_week_dashboard(
     `TRIP_COLUMNS` rows and one already-summed expense total.
 
     Every summary figure below (trip count, distance breakdown, deduction
-    buckets, attention counts) and `day_groups` is derived from the same
+    buckets, missing-trip badges) and `day_groups` is derived from the same
     exclusion-aware pass over `trips` -- never a second aggregate query -- so
     the summary cards and the trip cards underneath them cannot drift apart.
+
+    The unclassified-trip count shown in the attention strip is deliberately
+    not derived here: it covers the account's whole Review queue, not just
+    this week, so the template reads the page's `review_count` instead. The
+    week's own unclassified distance stays in `distance.unclassified_m`.
 
     `week_start` is re-normalized through `week_bounds` rather than trusted
     as an already-correct Monday, so a caller passing an arbitrary date (or
@@ -193,15 +200,12 @@ def build_week_dashboard(
     business_buckets: dict[tuple[int, int], float] = {}
     day_buckets: dict[date, list[dict]] = {}
     daily_buckets: dict[date, list[float]] = {}
-    unclassified_count = 0
     badges: list[MissingTripBadge] = []
 
     for trip in trips:
         distance_m = float(trip.get("display_distance_m") or 0.0)
         exclusion = trip.get("exclusion")
         category = trip.get("category")
-        if category == "unclassified":
-            unclassified_count += 1
 
         started_at: datetime = trip["started_at"]
         local_started = started_at.astimezone(tz)
@@ -281,12 +285,9 @@ def build_week_dashboard(
             nondeductible_m=meters[3],
         ))
 
-    review_url = f"/review?from={monday.isoformat()}&to={sunday.isoformat()}"
     attention = None
-    if unclassified_count or badges:
+    if badges:
         attention = AttentionStrip(
-            unclassified_count=unclassified_count,
-            review_url=review_url,
             missing_trip_count=len(badges),
             missing_trip_url=badges[0].prefill_url if badges else None,
         )

@@ -16,6 +16,13 @@
 {% set has_statuses = trip.exclusion or trip.source == 'manual' or trip.expense_count or trip.has_gap or missing %}
 {% set edit_url = '/trips/' ~ trip.id ~ '/edit' ~ ('?dashboard_week=' ~ row_dashboard_week if row_dashboard_week else '') %}
 <article id="trip-{{ trip.id }}" class="dashboard-trip-row{% if trip.exclusion == 'not_my_vehicle' %} dashboard-trip-row-not-my-vehicle{% endif %}{% if trip.exclusion == 'not_deductible' %} dashboard-trip-row-not-deductible{% endif %}">
+  {# Stretched overlay link: a click on the row outside the category pair and
+     the action cluster opens the trip. Those controls sit above it in the
+     stylesheet; the More menu keeps its own "View details" item. The name is
+     an aria-label rather than hidden text because existing row tests assert
+     that no visually-hidden element is added to a default-vehicle row. #}
+  <a class="dashboard-row-link" href="/trips/{{ trip.id }}" aria-label="View trip details"></a>
+
   <div class="dashboard-row-time" aria-label="Trip time: {{ trip.started_at | local_dt }} to {{ trip.ended_at | local_dt }}">
     <time datetime="{{ trip.started_at.isoformat() }}">{{ trip.started_at | local_time }}</time>
   </div>

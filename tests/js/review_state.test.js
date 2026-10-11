@@ -25,6 +25,25 @@ test("activating the other option switches instead of clearing", () => {
   assert.strictEqual(ReviewState.categoryAfterActivation("personal", "business"), "business");
 });
 
+test("a nonblank purpose picks Business only when nothing is selected", () => {
+  assert.strictEqual(ReviewState.categoryAfterPurposeChange("Client visit", null), "business");
+  assert.strictEqual(ReviewState.categoryAfterPurposeChange("  x  ", undefined), "business");
+  assert.strictEqual(ReviewState.categoryAfterPurposeChange("Client visit", ""), "business");
+});
+
+test("a blank purpose never selects a category", () => {
+  assert.strictEqual(ReviewState.categoryAfterPurposeChange("", null), null);
+  assert.strictEqual(ReviewState.categoryAfterPurposeChange("   \t", null), null);
+  assert.strictEqual(ReviewState.categoryAfterPurposeChange(null, null), null);
+  assert.strictEqual(ReviewState.categoryAfterPurposeChange(undefined, null), null);
+});
+
+test("a purpose edit leaves an existing selection alone", () => {
+  assert.strictEqual(ReviewState.categoryAfterPurposeChange("Client visit", "business"), null);
+  assert.strictEqual(ReviewState.categoryAfterPurposeChange("Client visit", "personal"), null);
+  assert.strictEqual(ReviewState.categoryAfterPurposeChange("", "personal"), null);
+});
+
 test("advancing stays blocked while nothing is committed", () => {
   assert.strictEqual(ReviewState.canAdvance(null), false);
   assert.strictEqual(ReviewState.canAdvance(undefined), false);

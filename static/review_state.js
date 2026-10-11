@@ -1,8 +1,8 @@
 // Category selection decisions for the review page.
 //
 // This is deliberately separate from the page's inline script: it isolates
-// the two rules that decide what a click on the category pair means and when
-// the advancing action is allowed, so they can be exercised without a
+// the rules that decide what a click on the category pair means, when a
+// purpose edit picks a category, and when the advancing action is allowed, so they can be exercised without a
 // browser. Nothing here touches the DOM, htmx, or the clock. It loads as a
 // classic browser script and as a CommonJS module, so the same file runs in
 // both places with no build step.
@@ -21,6 +21,18 @@
   // enable it.
   const ADVANCING_CATEGORIES = ["business", "personal"];
   const canAdvance = (committed) => ADVANCING_CATEGORIES.indexOf(committed) !== -1;
+
+  // A nonblank purpose implies a business trip, so entering one picks
+  // Business for the user, but only when nothing is chosen yet: an existing
+  // Business or Personal choice is never overridden, and clearing the purpose
+  // never unchecks anything. Returns the category to check, or null to leave
+  // the selection alone. The caller passes the live checked value.
+  const categoryAfterPurposeChange = (purpose, selected) => {
+    if (selected !== null && selected !== undefined && selected !== "") return null;
+    return String(purpose === null || purpose === undefined ? "" : purpose).trim() === ""
+      ? null
+      : "business";
+  };
 
   // Review writes share one form, so every request can carry the other
   // visible fields. Keep them in one lane instead of letting an older
@@ -67,6 +79,7 @@
 
   const ReviewState = {
     categoryAfterActivation,
+    categoryAfterPurposeChange,
     canAdvance,
     createWriteCoordinator,
   };

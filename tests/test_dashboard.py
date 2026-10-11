@@ -206,7 +206,7 @@ def test_exclusions_win_before_category_in_week_dashboard():
     )
 
 
-def test_attention_counts_excluded_unclassified_without_changing_mileage_math():
+def test_excluded_unclassified_trips_keep_mileage_math_without_week_attention():
     trips = [
         _trip(
             1, datetime(2026, 7, 13, 9, tzinfo=UTC), "unclassified", 2000.0,
@@ -224,10 +224,7 @@ def test_attention_counts_excluded_unclassified_without_changing_mileage_math():
         datetime(2026, 7, 15, 12, tzinfo=UTC), 1000.0,
     )
 
-    assert dashboard.attention is not None
-    assert dashboard.attention.unclassified_count == 2
-    assert dashboard.attention.missing_trip_count == 0
-    assert dashboard.attention.missing_trip_url is None
+    assert dashboard.attention is None
     assert dashboard.trip_count == 1
     assert dashboard.distance.total_m == 3000.0
     assert dashboard.distance.unclassified_m == 0.0
@@ -410,7 +407,10 @@ def test_attention_strip_absent_when_nothing_to_act_on():
     assert dashboard.attention is None
 
 
-def test_attention_strip_counts_unclassified_trips():
+def test_attention_strip_does_not_count_unclassified_trips():
+    # The unclassified count covers the account-wide Review queue and comes
+    # from the page's review_count, so unclassified trips alone leave the
+    # week model's attention empty while their miles stay in the breakdown.
     trips = [
         _trip(1, datetime(2026, 7, 13, 15, tzinfo=UTC), "unclassified", 1000.0),
         _trip(2, datetime(2026, 7, 14, 15, tzinfo=UTC), "unclassified", 1000.0),
@@ -419,13 +419,8 @@ def test_attention_strip_counts_unclassified_trips():
         trips, Decimal("0"), {}, date(2026, 7, 13), LA,
         datetime(2026, 7, 20, tzinfo=UTC), 1000.0,
     )
-    assert dashboard.attention is not None
-    assert dashboard.attention.unclassified_count == 2
-    assert dashboard.attention.missing_trip_count == 0
-    assert dashboard.attention.missing_trip_url is None
-    assert "/review" in dashboard.attention.review_url
-    assert "from=2026-07-13" in dashboard.attention.review_url
-    assert "to=2026-07-19" in dashboard.attention.review_url
+    assert dashboard.attention is None
+    assert dashboard.distance.unclassified_m == 2000.0
 
 
 def test_attention_strip_counts_missing_trip_badges():
@@ -441,7 +436,6 @@ def test_attention_strip_counts_missing_trip_badges():
     )
     assert dashboard.attention is not None
     assert dashboard.attention.missing_trip_count == 1
-    assert dashboard.attention.unclassified_count == 0
     assert dashboard.attention.missing_trip_url is not None
     assert "bridge_trip=5" in dashboard.attention.missing_trip_url
 
