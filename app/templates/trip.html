@@ -271,8 +271,9 @@ document.addEventListener('change', function (event) {
                   {% for c in categories %}<option value="{{ c }}">{{ c | capitalize }}</option>{% endfor %}
                 </select>
               </label>
-              <label>Purpose {{ purpose_field(recent_purposes | default([], true)) }}</label>
-              <label>Notes <input type="text" name="notes"></label>
+              <label>Purpose {{ purpose_field(recent_purposes | default([], true), describedby='merge-blank-hint') }}</label>
+              <label>Notes <input type="text" name="notes" aria-describedby="merge-blank-hint"></label>
+              <p id="merge-blank-hint" class="muted">Leave purpose or notes blank to keep the merged trip's current values.</p>
               <label>Vehicle
                 <select name="vehicle_id">
                   <option value="keep" selected>Keep</option>

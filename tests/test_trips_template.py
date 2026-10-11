@@ -99,6 +99,19 @@ def test_select_all_matching_is_discoverable_before_any_row_is_selected():
     assert "fetch(query ? `/trips/selection?${query}` : '/trips/selection'" in handler
 
 
+def test_merge_dialog_explains_blank_purpose_and_notes_keep_values():
+    body = _render_index([])
+    dialog = body.split('id="merge-dialog"')[1].split("</dialog>")[0]
+
+    hint = 'id="merge-dialog-blank-hint"'
+    assert dialog.count(hint) == 1
+    assert "Leave purpose or notes blank to keep the merged trip's current values." in dialog
+    purpose = dialog.split('id="merge-dialog-purpose"')[1].split(">")[0]
+    notes = dialog.split('id="merge-dialog-notes"')[1].split(">")[0]
+    assert 'aria-describedby="merge-dialog-blank-hint"' in purpose
+    assert 'aria-describedby="merge-dialog-blank-hint"' in notes
+
+
 def test_merge_dialog_vehicle_picker_defaults_to_keep():
     body = _render_index([
             {"id": 1, "name": "Car A", "active": True, "is_default": False},

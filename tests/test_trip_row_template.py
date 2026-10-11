@@ -604,6 +604,17 @@ def test_merge_tool_is_one_form_with_one_field_set_and_two_direction_buttons():
     assert "hx-post" not in body.split('<form id="merge-form"', 1)[1].split(">", 1)[0]
 
 
+def test_merge_form_explains_blank_purpose_and_notes_keep_values():
+    form = _merge_form(_render_detail(_trip(source="detected")))
+
+    assert form.count('id="merge-blank-hint"') == 1
+    assert "Leave purpose or notes blank to keep the merged trip's current values." in form
+    purpose = form.split('name="purpose"', 1)[1].split(">", 1)[0]
+    notes = form.split('name="notes"', 1)[1].split(">", 1)[0]
+    assert 'aria-describedby="merge-blank-hint"' in purpose
+    assert 'aria-describedby="merge-blank-hint"' in notes
+
+
 def test_merge_buttons_render_only_for_an_existing_neighbor():
     prev_only = _merge_form(_render_detail(_trip(), has_prev_trip=True, has_next_trip=False))
     next_only = _merge_form(_render_detail(_trip(), has_prev_trip=False, has_next_trip=True))

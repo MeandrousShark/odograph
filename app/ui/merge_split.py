@@ -12,6 +12,20 @@ from app.merge import TripSpan, plan_merge_selected
 
 from app.ui._common import CATEGORIES, _fetch_trip, _parse_vehicle_form, _path_distance_m, _poke_snap_worker
 
+
+def _blank_fallback(form_value: str, survivor, by_start, index: int) -> str | None:
+    """A nonblank form value wins; otherwise the survivor's pre-merge value,
+    then the earliest nonblank value among the selected trips, else None."""
+    value = form_value.strip()
+    if value:
+        return value
+    candidates = ([survivor] if survivor is not None else []) + by_start
+    for row in candidates:
+        if row[index] and row[index].strip():
+            return row[index]
+    return None
+
+
 async def _merge_trips_core(
     request: Request, trip_ids: list[int], category: str = "keep", purpose: str = "",
     notes: str = "", vehicle: str = "keep",
@@ -19,20 +33,31 @@ async def _merge_trips_core(
     """Shared by merge_next/merge_prev and merge_selected: validates the
     selection is a contiguous run of detected trips for one device,
     suppresses the real stay between each consecutive pair, reprocesses
-    the device once, then overwrites the resulting trip's
-    tag/purpose/notes with what the user submitted. Reconcile keeps the
-    *longest* original trip's fields, an implementation detail the user
-    shouldn't have to think about. Returns the merged trip's id.
+    the device once, then applies the submitted tag/purpose/notes to the
+    resulting trip. Reconcile keeps the *longest* original trip's row (the
+    survivor), an implementation detail the user shouldn't have to think
+    about. Returns the merged trip's id.
 
     `category` and `vehicle` are both tri-state: "keep" (default)
-    preserves whatever reconcile's longest-trip inheritance left,
-    including the existing `tag_source`, without human-locking it; a
-    real category, or "" / a digit string for vehicle, assigns and (for
-    category) also claims human ownership. A concrete category default
-    would silently human-lock every merge from callers that don't
-    supply one (e.g. a cached old form post, or an untouched select
-    whose first option the browser auto-submits); "keep" makes silence
-    safe and mirrors `vehicle`.
+    preserves the survivor's category without human-locking a tag the user
+    didn't set; a real category, or "" / a digit string for vehicle,
+    assigns and (for category) also claims human ownership. A concrete
+    category default would silently human-lock every merge from callers
+    that don't supply one (e.g. a cached old form post, or an untouched
+    select whose first option the browser auto-submits); "keep" makes
+    silence safe and mirrors `vehicle`.
+
+    Keep is durable for a rule-tagged survivor: the reprocess re-applies
+    rules to the merged trip's new endpoints, which can revert the tag to
+    unclassified or pick a different category. If the merged trip's
+    (category, tag_source) is not the survivor's pre-merge
+    (category, 'rule'), the survivor's category is restored as 'human' so
+    later place/rule reprocessing leaves it alone. A human-tagged survivor
+    already survives, and a NULL tag_source is left as reconcile set it.
+
+    Purpose and notes each follow the same fallback when the form value is
+    blank: the survivor's pre-merge value, else the earliest nonblank value
+    among the selected trips, else NULL. A nonblank form value replaces.
 
     Runs on one connection/transaction: the
     override writes, reprocess, and final UPDATE used to span three
@@ -94,6 +119,15 @@ async def _merge_trips_core(
         label = rows[0][5]
         selected = [TripSpan(id=r[0], started_at=r[3], ended_at=r[4]) for r in rows]
 
+        # Read before the overrides and reprocess change anything; the
+        # survivor's values are needed for Keep and for blank purpose/notes.
+        cur = await conn.execute(
+            "SELECT id, category::text, tag_source::text, purpose, notes, started_at "
+            "FROM trips WHERE account_id = %s AND id = ANY(%s)",
+            (account_id(conn), trip_ids),
+        )
+        pre = {r[0]: r for r in await cur.fetchall()}
+
         first_start = min(t.started_at for t in selected)
         last_start = max(t.started_at for t in selected)
         cur = await conn.execute(
@@ -137,11 +171,24 @@ async def _merge_trips_core(
         if not row:
             raise HTTPException(status_code=500, detail="Merge did not produce the expected trip")
         merged_id = row[0]
+        survivor = pre.get(merged_id)
+        by_start = sorted(pre.values(), key=lambda r: r[5])
         set_clause = "purpose = %s, notes = %s"
-        update_params = [purpose.strip() or None, notes.strip() or None]
+        update_params = [
+            _blank_fallback(purpose, survivor, by_start, 3),
+            _blank_fallback(notes, survivor, by_start, 4),
+        ]
         if not keep_category:
             set_clause += ", category = %s, tag_source = 'human'"
             update_params.append(category)
+        elif survivor is not None and survivor[2] == "rule":
+            cur = await conn.execute(
+                "SELECT category::text, tag_source::text FROM trips WHERE account_id = %s AND id = %s",
+                (account_id(conn), merged_id),
+            )
+            if await cur.fetchone() != (survivor[1], "rule"):
+                set_clause += ", category = %s, tag_source = 'human'"
+                update_params.append(survivor[1])
         if not keep_vehicle:
             set_clause += ", vehicle_id = %s"
             update_params.append(parsed_vehicle_id)

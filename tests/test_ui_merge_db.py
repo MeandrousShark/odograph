@@ -10,11 +10,11 @@ from fastapi import HTTPException
 
 from app.db import make_pool
 from app.detector.core import Params
-from app.detector.runner import DetectorRunner
+from app.detector.runner import DetectorRunner, reprocess_places_in
 from app.ui import make_router
 from conftest import reset_account_db, seed_tracking_device
 from app.account_context import account_id
-from tests.synth import Drive, Stationary, build_track
+from tests.synth import START, Drive, Stationary, _offset, build_track
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -349,13 +349,11 @@ async def _category_tristate_scenario():
             for d in devices:
                 assert len(trips_by_device[d]) == 2
 
-        # "keep" must reproduce reconcile's own longest-trip inheritance
-        # untouched -- neither category nor tag_source is written. The merge
-        # path's own reprocess_device_in also re-runs auto-tagging, which
-        # would revert a tag_source='rule' trip with no matching rule back
-        # to unclassified regardless of this fix; tag_source=NULL here
-        # isolates what's actually under test, that the merge's final
-        # UPDATE alone doesn't human-lock a trip the user didn't reclassify.
+        # "keep" with a NULL tag_source leaves reconcile's own longest-trip
+        # inheritance untouched -- neither category nor tag_source is
+        # written, so the merge's final UPDATE alone doesn't human-lock a
+        # trip the user didn't reclassify. A rule-tagged survivor is
+        # restored by the merge itself (see the rule-tagged cases below).
         k_ids = [r[0] for r in trips_by_device["K"]]
         async with pool.connection() as conn:
             for trip_id in k_ids:
@@ -407,9 +405,168 @@ async def _category_tristate_scenario():
 
 def test_merge_category_tristate():
     """A real category value sets it and claims human ownership; "keep"
-    (the endpoints' own Form default) leaves whatever reconcile's
-    longest-trip inheritance already put there -- category AND tag_source
-    both untouched, so a merge alone can never human-lock a trip the user
-    didn't actually reclassify. An unrecognized category still 400s
-    without applying any part of the merge."""
+    (the endpoints' own Form default) leaves a NULL-source survivor's
+    category and tag_source both untouched, so a merge alone can never
+    human-lock a trip the user didn't actually reclassify. Rule-tagged
+    survivors are covered by test_merge_keep_rule_tagged_survivor. An
+    unrecognized category still 400s without applying any part of the
+    merge."""
     asyncio.run(_category_tristate_scenario())
+
+
+# --- B29: durable Keep and blank purpose/notes ------------------------
+
+def _request(pool, runner):
+    return SimpleNamespace(state=SimpleNamespace(account_pool=pool, detector_runner=runner), app=SimpleNamespace(state=SimpleNamespace(
+        pool=pool, detector_runner=runner
+    )))
+
+
+async def _tag(conn, trip_id):
+    cur = await conn.execute("SELECT category::text, tag_source::text FROM trips WHERE id = %s", (trip_id,))
+    return await cur.fetchone()
+
+
+async def _rule_keep_scenario(a_to_c_rule, pre_human, category="keep"):
+    """Two trips A->B and B->C, each matched by a rule to 'personal'. The
+    merged trip runs A->C; `a_to_c_rule` controls what (if anything) matches
+    it. Returns (pre-merge survivor tag, merged tag before and after a
+    places reprocess)."""
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
+    try:
+        pool = await reset_account_db(raw_pool)
+        lat, lon = START
+        spots = [_offset(lat, lon, east, 0) for east in (0, 3000, 5000)]
+        async with pool.connection() as conn:
+            ids = []
+            for name, (plat, plon) in zip("ABC", spots):
+                cur = await conn.execute(
+                    "INSERT INTO places (account_id, name, geom) VALUES (%s, %s, "
+                    "ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography) RETURNING id",
+                    (account_id(conn), name, plon, plat),
+                )
+                ids.append((await cur.fetchone())[0])
+            a, b, c = ids
+            rules = [(a, b, "personal"), (b, c, "personal")]
+            if a_to_c_rule:
+                rules.append((a, c, a_to_c_rule))
+            for a_place, b_place, rule_category in rules:
+                await conn.execute(
+                    "INSERT INTO tag_rules (account_id, a_place, b_place, category) VALUES (%s, %s, %s, %s)",
+                    (account_id(conn), a_place, b_place, rule_category),
+                )
+            await _insert_points(conn, build_track([
+                Stationary(900), Drive(km=3), Stationary(1200), Drive(km=2), Stationary(900),
+            ]), "R")
+
+        runner = DetectorRunner(pool, Params())
+        assert await runner.run_once() is True
+        async with pool.connection() as conn:
+            trips = await _trips(conn, "R")
+            assert len(trips) == 2
+            trip_ids = [t[0] for t in trips]
+            if pre_human:
+                for trip_id in trip_ids:
+                    await _set_category(conn, trip_id, "personal", "human")
+            for trip_id in trip_ids:
+                assert await _tag(conn, trip_id) == ("personal", "human" if pre_human else "rule")
+
+        response = await _endpoint()(
+            _request(pool, runner), trip_ids, category, "", "", "keep", {"sub": "test"},
+        )
+        merged_id = json.loads(response.body)["trip_id"]
+        assert merged_id == trip_ids[0], "reconcile keeps the longest trip's row"
+        async with pool.connection() as conn:
+            merged = await _tag(conn, merged_id)
+            await reprocess_places_in(conn)
+        async with pool.connection() as conn:
+            return merged, await _tag(conn, merged_id)
+    finally:
+        await raw_pool.close()
+
+
+@pytest.mark.parametrize("a_to_c_rule, pre_human, category, expected", [
+    # No rule matches the merged endpoints: Keep restores and human-locks,
+    # and a later places reprocess leaves it.
+    (None, False, "keep", ("personal", "human")),
+    # A same-category rule still matches: the rule tag is left alone.
+    ("personal", False, "keep", ("personal", "rule")),
+    # A different-category rule matches: Keep restores the pre-merge category.
+    ("business", False, "keep", ("personal", "human")),
+    # A human-tagged survivor is unchanged.
+    (None, True, "keep", ("personal", "human")),
+    ("business", True, "keep", ("personal", "human")),
+    # An explicit category still sets it with human ownership.
+    (None, False, "business", ("business", "human")),
+])
+def test_merge_keep_rule_tagged_survivor(a_to_c_rule, pre_human, category, expected):
+    merged, after_reprocess = asyncio.run(_rule_keep_scenario(a_to_c_rule, pre_human, category))
+    assert merged == expected
+    assert after_reprocess == expected
+
+
+async def _purpose_notes_scenario():
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
+    try:
+        pool = await reset_account_db(raw_pool)
+        devices = ["S", "E", "N", "R"]
+        async with pool.connection() as conn:
+            for device in devices:
+                # The middle trip is the longest, so it is the survivor.
+                await _insert_points(conn, build_track([
+                    Stationary(900), Drive(km=2), Stationary(1200), Drive(km=4),
+                    Stationary(1200), Drive(km=2), Stationary(900),
+                ]), device)
+        runner = DetectorRunner(pool, Params())
+        assert await runner.run_once() is True
+
+        async with pool.connection() as conn:
+            trips = {d: [t[0] for t in await _trips(conn, d)] for d in devices}
+            for d in devices:
+                assert len(trips[d]) == 3
+
+            async def fill(device, values):
+                for trip_id, (purpose, notes) in zip(trips[device], values):
+                    await conn.execute(
+                        "UPDATE trips SET purpose = %s, notes = %s WHERE id = %s", (purpose, notes, trip_id),
+                    )
+
+            # S: the survivor's own values win over the others.
+            await fill("S", [("First", "n1"), ("Survivor", "ns"), ("Third", "n3")])
+            # E: a blank survivor falls back to the earliest nonblank value,
+            # independently for purpose and notes; whitespace counts as blank.
+            await fill("E", [("First", None), ("  ", "ns"), ("Third", "n3")])
+            # N: nothing nonblank anywhere stays NULL.
+            await fill("N", [(None, None), ("  ", ""), (None, None)])
+            # R: nonblank form values replace the survivor's.
+            await fill("R", [("First", "n1"), ("Survivor", "ns"), ("Third", "n3")])
+
+        request = _request(pool, runner)
+        handler = _endpoint()
+        merged = {}
+        for device, purpose, notes in [
+            ("S", "", "  "), ("E", "", ""), ("N", " ", ""), ("R", "  New purpose ", "new notes"),
+        ]:
+            response = await handler(request, trips[device], "keep", purpose, notes, "keep", {"sub": "test"})
+            merged[device] = json.loads(response.body)["trip_id"]
+            assert merged[device] == trips[device][1], "reconcile keeps the longest trip's row"
+
+        async with pool.connection() as conn:
+            rows = await conn.execute(
+                "SELECT id, purpose, notes FROM trips WHERE id = ANY(%s)", (list(merged.values()),),
+            )
+            by_id = {r[0]: (r[1], r[2]) for r in await rows.fetchall()}
+        assert by_id[merged["S"]] == ("Survivor", "ns")
+        assert by_id[merged["E"]] == ("First", "ns")
+        assert by_id[merged["N"]] == (None, None)
+        assert by_id[merged["R"]] == ("New purpose", "new notes")
+    finally:
+        await raw_pool.close()
+
+
+def test_merge_blank_purpose_and_notes_keep_existing_values():
+    """A blank purpose or notes field keeps the survivor's value, else the
+    earliest nonblank selected value, else NULL; a nonblank value replaces."""
+    asyncio.run(_purpose_notes_scenario())
