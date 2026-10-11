@@ -207,6 +207,22 @@ def test_up_creates_a_distinctly_labelled_container_with_a_fixed_port_and_named_
     assert oct(env_file.stat().st_mode)[-3:] == "600"
 
 
+def test_devsite_database_keeps_default_durability(tmp_path):
+    """The persistent QA database holds hand-built data, so unlike the
+    disposable test databases it must never run with fsync or full page
+    writes off."""
+    bin_dir, log = _fake_podman(tmp_path)
+    env = _base_env(tmp_path, bin_dir, log, DEVSITE_UVICORN=str(tmp_path / "no-such-uvicorn"))
+
+    _run_devsite(tmp_path, "up", env=env)
+
+    settings = ("fsync", "synchronous_commit", "full_page_writes")
+    run_lines = [line for line in log.read_text().splitlines() if line.startswith("run ")]
+    assert run_lines
+    for text in (SCRIPT.read_text(), *run_lines):
+        assert not any(setting in text for setting in settings)
+
+
 def test_up_never_overwrites_an_existing_env_file(tmp_path):
     bin_dir, log = _fake_podman(tmp_path)
     env = _base_env(tmp_path, bin_dir, log, DEVSITE_UVICORN=str(tmp_path / "no-such-uvicorn"))

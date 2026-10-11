@@ -227,6 +227,55 @@ def test_ci_installs_pinned_gitleaks_before_pytest():
     assert job_steps.index(install) < job_steps.index(steps["Run test shard"])
 
 
+def test_ci_disables_durability_on_its_own_service_container_before_pytest(tmp_path):
+    job_steps = load_workflow()["jobs"]["suite"]["steps"]
+    steps = {step.get("name"): step for step in job_steps}
+    step = steps["Disable durability on the test database"]
+
+    assert step["env"] == {"POSTGRES_CONTAINER": "${{ job.services.postgres.id }}"}
+    assert "if" not in step
+    assert job_steps.index(step) < job_steps.index(steps["Run test shard"])
+
+    # Run the extracted shell against a fake docker that records each call.
+    fake_docker = tmp_path / "docker"
+    fake_docker.write_text(
+        "#!/bin/sh\n"
+        'echo "$*" >> "$CI_TEST_LOG"\n'
+        'case "$*" in *"SHOW "*) printf "%s\\n" "${CI_TEST_SHOW:-off}" ;; esac\n'
+    )
+    fake_docker.chmod(0o755)
+    fake_sleep = tmp_path / "sleep"
+    fake_sleep.write_text("#!/bin/sh\nexit 0\n")
+    fake_sleep.chmod(0o755)
+    log = tmp_path / "docker.log"
+    env = {**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+           "POSTGRES_CONTAINER": "service-123", "CI_TEST_LOG": str(log)}
+
+    result = subprocess.run(
+        ["bash", "-c", step["run"]], env=env, capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    prefix = "exec service-123 psql -v ON_ERROR_STOP=1 -U mileage -d mileage "
+    assert log.read_text().splitlines() == [
+        prefix + "-c ALTER SYSTEM SET fsync = off",
+        prefix + "-c ALTER SYSTEM SET synchronous_commit = off",
+        prefix + "-c ALTER SYSTEM SET full_page_writes = off",
+        prefix + "-c SELECT pg_reload_conf()",
+        prefix + "-Atc SHOW fsync",
+        prefix + "-Atc SHOW synchronous_commit",
+        prefix + "-Atc SHOW full_page_writes",
+    ]
+
+    # A setting that never reads back as off fails the step.
+    log.unlink()
+    result = subprocess.run(
+        ["bash", "-c", step["run"]], env={**env, "CI_TEST_SHOW": "on"},
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 1
+    assert "fsync did not take effect" in result.stderr
+
+
 def test_ci_public_tree_is_an_explicit_unprivileged_gate():
     workflow = load_workflow()
     assert set(workflow["jobs"]) == {"suite", "test", "public-tree"}

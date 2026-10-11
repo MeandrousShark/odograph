@@ -121,6 +121,29 @@ jobs:
       - name: Check shell script syntax
         if: matrix.marker == 'not db'
         run: git ls-files -z -- '*.sh' | xargs -0 -n1 bash -n
+      - name: Disable durability on the test database
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          pg() {
+            docker exec "$POSTGRES_CONTAINER" psql -v ON_ERROR_STOP=1 -U mileage -d mileage "$@"
+          }
+          settings="fsync synchronous_commit full_page_writes"
+          for setting in $settings; do
+            pg -c "ALTER SYSTEM SET $setting = off"
+          done
+          pg -c "SELECT pg_reload_conf()"
+          for setting in $settings; do
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+              if [ "$(pg -Atc "SHOW $setting")" = off ]; then
+                continue 2
+              fi
+              sleep 1
+            done
+            echo "error: $setting did not take effect" >&2
+            exit 1
+          done
       - name: Run test shard
         run: |
           set -euo pipefail

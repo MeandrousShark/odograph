@@ -71,6 +71,21 @@ def test_start_creates_labelled_container_with_an_automatic_loopback_port(tmp_pa
     assert not any(line.startswith("rm ") for line in log.splitlines())
 
 
+def test_start_runs_postgres_without_durability_after_the_image(tmp_path):
+    result = _run(tmp_path, "start", "task-42", TEST_DB_IMAGE="example.invalid/postgis:test")
+
+    assert result.returncode == 0, result.stderr
+    [run_line] = [
+        line for line in (tmp_path / "podman.log").read_text().splitlines()
+        if line.startswith("run ")
+    ]
+    # Server arguments follow the image, so the entrypoint forwards them.
+    assert run_line.endswith(
+        " example.invalid/postgis:test"
+        " -c fsync=off -c synchronous_commit=off -c full_page_writes=off"
+    )
+
+
 def test_cleanup_removes_only_containers_with_both_ownership_labels(tmp_path):
     result = _run(tmp_path, "cleanup", "task-42")
 
