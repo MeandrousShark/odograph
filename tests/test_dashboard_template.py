@@ -88,22 +88,26 @@ def _dashboard(**overrides) -> WeekDashboard:
     return WeekDashboard(**defaults)
 
 
-def _render(dashboard: WeekDashboard, vehicles=None) -> str:
+def _render(dashboard: WeekDashboard, vehicles=None, **context) -> str:
     templates = make_templates(SimpleNamespace(
         display_tz=TZ, missing_trip_gap_m=1000.0, app_version="test",
     ))
     return templates.env.get_template("dashboard.html").render(
         dashboard=dashboard, vehicles=vehicles or [], user={"sub": "test"}, csrf="token",
+        **context,
     )
 
 
-def _render_dashboard_tag_response(dashboard: WeekDashboard, trip: dict, vehicles=None) -> str:
+def _render_dashboard_tag_response(
+    dashboard: WeekDashboard, trip: dict, vehicles=None, **context,
+) -> str:
     templates = make_templates(SimpleNamespace(
         display_tz=TZ, missing_trip_gap_m=1000.0, app_version="test",
     ))
     return templates.env.get_template("_dashboard_tag_response.html").render(
         dashboard=dashboard, dashboard_oob=True, trip=trip,
         vehicles=vehicles or [], recent_purposes=[], user={"sub": "test"}, csrf="token",
+        **context,
     )
 
 
@@ -213,6 +217,16 @@ def test_dashboard_tag_response_has_one_card_and_one_whole_hero_oob():
     assert body.count('hx-swap-oob="outerHTML"') == 1
     assert body.index('id="trip-42"') < body.index('id="dashboard-hero"')
     assert 'id="dashboard-hero"' in body and 'class="dashboard-hero"' in body
+
+
+def test_dashboard_tag_response_hero_shows_queue_wide_unclassified_count():
+    trip = _trip(42, datetime(2026, 7, 13, 9, tzinfo=TZ), datetime(2026, 7, 13, 10, tzinfo=TZ))
+    body = _render_dashboard_tag_response(_dashboard(trip_count=1), trip, review_count=5)
+    hero = body.split('id="dashboard-hero"', 1)[1]
+    assert '<a href="/review">5 unclassified trips to review</a>' in hero
+    assert "attention-strip" not in _render_dashboard_tag_response(
+        _dashboard(trip_count=1), trip, review_count=0,
+    )
 
 
 def test_next_week_disabled_on_current_week():
@@ -343,17 +357,44 @@ def test_dashboard_day_heading_margin_rule_is_not_duplicated():
 def test_attention_strip_absent_when_none():
     body = _render(_dashboard(attention=None))
     assert "attention-strip" not in body
+    assert "attention-strip" not in _render(_dashboard(attention=None), review_count=0)
+
+
+def test_attention_strip_shows_queue_unclassified_count_linking_to_whole_queue():
+    # A week with no unclassified trips of its own still flags the queue.
+    body = _render(_dashboard(attention=None), review_count=7)
+    assert 'class="attention-strip" role="status"' in body
+    assert 'href="/review"' in body.split('class="attention-strip"', 1)[1]
+    assert "from=" not in body.split('class="attention-strip"', 1)[1].split("</div>", 1)[0]
+    assert "7 unclassified trips to review" in body
+    assert "possible missing trip" not in body.split('class="attention-strip"', 1)[1].split("</div>", 1)[0]
+
+
+def test_attention_strip_singular_queue_count():
+    body = _render(_dashboard(attention=None), review_count=1)
+    assert "1 unclassified trip to review" in body
+    assert "1 unclassified trips" not in body
+
+
+def test_attention_strip_missing_trips_only_when_queue_is_empty():
+    dashboard = _dashboard(attention=AttentionStrip(
+        missing_trip_count=2, missing_trip_url="/trips/manual?manual_date=2026-07-14",
+    ))
+    body = _render(dashboard, review_count=0)
+    strip = body.split('class="attention-strip"', 1)[1].split("</div>", 1)[0]
+    assert "2 possible missing trips" in strip
+    assert "unclassified" not in strip
+    assert 'href="/review"' not in strip
 
 
 def test_attention_strip_present_with_review_and_missing_trip_links():
     dashboard = _dashboard(attention=AttentionStrip(
-        unclassified_count=2, review_url="/review?from=2026-07-13&to=2026-07-19",
         missing_trip_count=1, missing_trip_url="/trips/manual?manual_date=2026-07-14",
     ))
-    body = _render(dashboard)
+    body = _render(dashboard, review_count=2)
     assert "attention-strip" in body
     assert 'class="attention-strip" role="status"' in body
-    assert 'href="/review?from=2026-07-13&amp;to=2026-07-19"' in body
+    assert 'href="/review"' in body
     assert "2 unclassified" in body
     assert 'href="/trips/manual?manual_date=2026-07-14"' in body
     assert "1 possible missing trip" in body
@@ -662,6 +703,75 @@ def test_dashboard_row_uses_start_time_route_icon_and_more_panel_access():
     assert 'class="icon icon-arrow-right' in row
     assert '> to <' not in row
     assert 'View details' in row and 'Edit' in row and 'Delete trip' in row
+
+
+def test_dashboard_row_has_stretched_overlay_link_ahead_of_every_control():
+    trip = _trip(42, datetime(2026, 7, 13, 9, tzinfo=TZ),
+                 datetime(2026, 7, 13, 10, tzinfo=TZ), category="unclassified")
+    body = _render(_dashboard(
+        trip_count=1,
+        day_groups=[DayGroup(day=date(2026, 7, 13), is_today=False, is_yesterday=False, trips=[trip])],
+    ))
+    row = body.split('<article id="trip-42"', 1)[1].split('</article>', 1)[0]
+    assert '<a class="dashboard-row-link" href="/trips/42" aria-label="View trip details"></a>' in row
+    assert row.index("dashboard-row-link") < row.index("dashboard-row-category")
+    assert row.index("dashboard-row-link") < row.index("dashboard-row-actions")
+    # The More menu keeps its own View details item.
+    panel = row.split('class="dashboard-row-more-panel"', 1)[1]
+    assert '<a class="dashboard-row-action" href="/trips/42">' in panel
+    assert "View details" in panel
+
+
+def test_dashboard_row_overlay_link_css_lifts_controls_above_it():
+    css = (ROOT / "static/style.css").read_text()
+    assert ".trip-archive-row-link, .dashboard-row-link {\n  position: absolute; inset: 0; z-index: 0;\n}" in css
+    category_rule = css.split(".dashboard-row-category {", 1)[1].split("}", 1)[0]
+    assert "position: relative; z-index: 1;" in category_rule
+    assert ".dashboard-row-category .trip-quick-actions { pointer-events: auto; }" in css
+    # The action cluster is its own stacking context (opacity), so it needs an
+    # explicit z-index, and an open menu must outrank following rows' clusters.
+    actions_rule = css.split(".dashboard-row-actions {", 1)[1].split("}", 1)[0]
+    assert "position: relative; z-index: 1;" in actions_rule
+    assert "opacity: .35" in actions_rule
+    assert ".dashboard-row-actions:has(.dashboard-row-more[open]) { z-index: 2; }" in css
+    panel_rule = css.split(".dashboard-row-more-panel {", 1)[1].split("}", 1)[0]
+    assert "z-index: 20" in panel_rule
+    assert ".dashboard-row-link:focus-visible { outline-offset: -3px;" in css
+
+
+def test_quick_pair_hover_and_active_use_category_tokens_not_accent():
+    css = (ROOT / "static/style.css").read_text()
+    for category in ("business", "personal"):
+        for state, pct in (("hover", "14%"), ("active", "24%")):
+            selector = f".trip-quick-button.category-{category}:{state} {{"
+            assert css.count(selector) == 1
+            rule = css.split(selector, 1)[1].split("}", 1)[0]
+            assert f"color-mix(in srgb, var(--cat-{category}) {pct}, var(--control-bg))" in rule
+            assert "accent" not in rule
+            assert "color: var(--fg);" in rule
+    # No generic hover/active rule is left to paint either half with the accent.
+    assert ".trip-quick-button:hover" not in css
+    assert ".trip-quick-button:active" not in css
+    # Tints stay lighter than the committed 34% fill, and the selected rules
+    # come later at equal specificity so a hovered selected half stays selected.
+    assert css.index(".trip-quick-button.category-personal:active {") < css.index(
+        ".trip-quick-button.trip-quick-button-selected.category-business {"
+    )
+    # The mobile resting fill (0,1,0) does not override the (0,3,0) tints.
+    mobile_css = css.split("@media (max-width: 760px)", 1)[1].split("@media (max-width: 420px)", 1)[0]
+    assert ".trip-quick-button:hover" not in mobile_css
+
+
+def test_trip_edit_grid_keeps_the_recent_purpose_picker_compact():
+    css = (ROOT / "static/style.css").read_text()
+    # `.trip-edit-grid select { width: 100% }` would otherwise stretch the
+    # absolutely positioned picker over the purpose input.
+    assert ".trip-edit-grid .purpose-recent { width: 1.75rem; }" in css
+    mobile_css = css.split("@media (max-width: 760px)", 1)[1].split("@media (max-width: 420px)", 1)[0]
+    assert ".trip-edit-grid .purpose-recent { width: 2.75rem; }" in mobile_css
+    assert css.index(".trip-edit-grid input, .trip-edit-grid select, .trip-edit-grid textarea { width: 100%") < css.index(
+        ".trip-edit-grid .purpose-recent { width: 1.75rem; }"
+    )
 
 
 def test_dashboard_row_action_cluster_has_edit_shortcut_and_full_more_menu():

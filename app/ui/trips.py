@@ -14,7 +14,7 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from app.account_context import account_id
 from app.capacity import owned_thread
 from app.auth import require_csrf, require_user
-from app.page import render_page, render_template
+from app.page import _fetch_review_count, render_page, render_template
 from app.dashboard import parse_week_anchor
 from app.detector.lock import lock_detector
 from app.detector.runner import load_trip_points
@@ -1340,10 +1340,16 @@ def register(router: APIRouter) -> None:
                     vehicles=dashboard_context["vehicles"],
                     recent_purposes=dashboard_context["recent_purposes"],
                 )
+                # The hero's attention strip counts the whole Review queue,
+                # which render_page supplies on full loads but this fragment
+                # bypasses.
+                async with pool.connection() as conn:
+                    review_count = await _fetch_review_count(conn)
                 return await render_template(
                     request,
                     "_dashboard_tag_response.html",
-                    {**ctx, **dashboard_context, "dashboard_oob": True},
+                    {**ctx, **dashboard_context, "review_count": review_count,
+                     "dashboard_oob": True},
                 )
 
             ctx = await _fetch_trip_card_context(pool, trip_id)

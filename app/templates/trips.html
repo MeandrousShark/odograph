@@ -1213,7 +1213,7 @@
         {% endfor %}
       </select>
     </label>
-    {{ selection_dialog_footer('merge-dialog-confirm', 'Merge <span data-selection-count>0 trips</span>', confirm_disabled=false) }}
+    {{ selection_dialog_footer('merge-dialog-confirm', 'Merge <span data-selection-count>0 trips</span>', confirm_disabled=false, progress_status=true) }}
   </form>
 </dialog>
 
@@ -1599,9 +1599,24 @@
     err.textContent = '';
   }
 
+  // Dialogs whose footer has a progress slot announce it while busy; the
+  // rest have no slot and are unaffected. Cleared with the busy state, so a
+  // failure leaves only the error line, and a success keeps it until the page
+  // navigates away.
+  function setDialogProgress(dialog, message) {
+    const status = dialog.querySelector('[data-selection-dialog-status]');
+    if (status) status.textContent = message;
+    return !!status;
+  }
+
   function setDialogBusy(dialog, busy) {
     dialog.dataset.archiveBusy = busy ? 'true' : 'false';
-    dialog.setAttribute('aria-busy', busy ? 'true' : 'false');
+    // A dialog with a progress slot is not marked aria-busy: assistive
+    // technology may hold back a live region inside a busy subtree, and a
+    // successful merge never clears the busy state before navigating.
+    if (!setDialogProgress(dialog, busy ? 'Processing...' : '')) {
+      dialog.setAttribute('aria-busy', busy ? 'true' : 'false');
+    }
     dialog.querySelectorAll('button, input, select, textarea').forEach((control) => {
       if (busy) {
         control.dataset.archiveWasDisabled = control.disabled ? 'true' : 'false';

@@ -866,10 +866,12 @@ input.notes:hover, input.notes:focus { border-color: var(--border-strong); }
    a click anywhere on the row that isn't one of the controls below opens the
    trip; every interactive control is lifted above it with its own stacking
    context so the overlay never swallows a click meant for the checkbox, the
-   category pair, the edit button, or the overflow menu. */
-.trip-archive-row-link {
+   category pair, the edit button, or the overflow menu. The dashboard row
+   (.dashboard-row-link) uses the same overlay. */
+.trip-archive-row-link, .dashboard-row-link {
   position: absolute; inset: 0; z-index: 0;
 }
+.dashboard-row-link:focus-visible { outline-offset: -3px; border-radius: var(--radius-sm); }
 /* Positioned as its own zone rather than an in-flow grid child, anchored to
    the row's own padding box the same way .trip-archive-row-link is (the row
    is the nearest position: relative ancestor), so left: 0 reaches the row's
@@ -1047,9 +1049,13 @@ input.notes:hover, input.notes:focus { border-color: var(--border-strong); }
 .dashboard-row-statuses { margin-top: var(--space-1); }
 .dashboard-row-exclusion { max-width: 100%; }
 .dashboard-row-category {
-  display: flex; grid-area: category; min-width: 0; gap: var(--space-2);
-  align-items: center; justify-content: flex-start;
+  position: relative; z-index: 1; display: flex; grid-area: category; min-width: 0;
+  gap: var(--space-2); align-items: center; justify-content: flex-start;
+  pointer-events: none;
 }
+/* Only the pair itself is a control; the label and the gap around it let the
+   click fall through to the row's detail link. */
+.dashboard-row-category .trip-quick-actions { pointer-events: auto; }
 .dashboard-row-classify-label { color: var(--fg-muted); font-size: .72rem; font-weight: 650; white-space: nowrap; }
 /* One joined pair, not two separate buttons: a single shared ring
    (box-shadow on the wrapper) plus one internal divider (box-shadow on the
@@ -1070,12 +1076,25 @@ input.notes:hover, input.notes:focus { border-color: var(--border-strong); }
   white-space: nowrap; transition: background-color .18s ease, color .18s ease;
 }
 .trip-quick-button .icon { width: .8125rem; height: .8125rem; }
-.trip-quick-button:hover {
-  background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
-  color: var(--accent-hover);
+/* Each half previews its own category color, lighter than the 34% committed
+   fill below so a hovered half never reads as already selected. Same base as
+   the committed fill; the selected rules come later at equal specificity so
+   they keep winning while hovered. */
+.trip-quick-button.category-business:hover {
+  background: color-mix(in srgb, var(--cat-business) 14%, var(--control-bg));
+  color: var(--fg);
 }
-.trip-quick-button:active {
-  background: color-mix(in srgb, var(--accent-primary) 30%, transparent);
+.trip-quick-button.category-business:active {
+  background: color-mix(in srgb, var(--cat-business) 24%, var(--control-bg));
+  color: var(--fg);
+}
+.trip-quick-button.category-personal:hover {
+  background: color-mix(in srgb, var(--cat-personal) 14%, var(--control-bg));
+  color: var(--fg);
+}
+.trip-quick-button.category-personal:active {
+  background: color-mix(in srgb, var(--cat-personal) 24%, var(--control-bg));
+  color: var(--fg);
 }
 /* A committed row uses this same pair with one half selected, rather than
    the earlier separate committed-pill popup: one fewer control to learn,
@@ -1101,9 +1120,15 @@ input.notes:hover, input.notes:focus { border-color: var(--border-strong); }
    either icon button holds keyboard focus, so it doesn't compete with the
    route and distance for attention on a row nobody is interacting with. */
 .dashboard-row-actions {
-  display: flex; grid-area: actions; align-items: center; gap: var(--space-1); opacity: .35;
+  position: relative; z-index: 1; display: flex; grid-area: actions;
+  align-items: center; gap: var(--space-1); opacity: .35;
   transition: opacity .18s ease;
 }
+/* The cluster is its own stacking context (opacity plus z-index), so the
+   open menu panel is only as high as the cluster. Lift an open cluster above
+   the following rows' clusters so the panel is not painted over by them. */
+.dashboard-row-actions:focus-within,
+.dashboard-row-actions:has(.dashboard-row-more[open]) { z-index: 2; }
 .dashboard-trip-row:hover .dashboard-row-actions,
 .dashboard-row-actions:focus-within { opacity: 1; }
 .dashboard-row-icon-button, .dashboard-row-more-trigger {
@@ -1179,6 +1204,10 @@ input.notes:hover, input.notes:focus { border-color: var(--border-strong); }
   display: flex; min-width: 0; flex-direction: column; gap: var(--space-1); font-size: .8rem;
 }
 .trip-edit-grid input, .trip-edit-grid select, .trip-edit-grid textarea { width: 100%; min-width: 0; }
+/* The recent-purpose picker is an overlay on the purpose input, not a field of
+   its own, so the full-width rule above must not stretch it. Repeated in the
+   mobile block below for the touch-sized width. */
+.trip-edit-grid .purpose-recent { width: 1.75rem; }
 .trip-edit-notes { grid-column: 1 / -1; }
 .trip-edit-actions { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
 .form-error-summary, .field-error { color: var(--danger); }
@@ -1536,6 +1565,7 @@ details.add-manual .route-mode-option { flex-direction: row; align-items: center
 .selection-dialog-radio > input[type="radio"] { margin-top: .3rem; }
 .selection-dialog-radio > span { padding-top: .1rem; }
 .selection-dialog-error { margin: 0; }
+.selection-dialog-status { margin-right: auto; align-self: center; color: var(--fg-muted); font-size: .85rem; }
 .settings-table { width: 100%; }
 .settings-table-scroll { max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
 .settings-table-scroll-device-fixes .settings-table { min-width: 34rem; }
@@ -2526,6 +2556,7 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
      control, push the input's text clear of it, and recentre the chevron
      inside its new width. */
   .purpose-recent { width: 2.75rem; }
+  .trip-edit-grid .purpose-recent { width: 2.75rem; }
   .purpose-field input { padding-right: 3.25rem; }
   .purpose-field::after { right: 1.175rem; }
   .trip-filter-bar { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }

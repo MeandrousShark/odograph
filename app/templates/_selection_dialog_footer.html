@@ -3,9 +3,13 @@
    caller passes a template literal; confirm_label must stay
    template-controlled markup and must never carry user input, since | safe
    skips autoescaping entirely. #}
-{% macro selection_dialog_footer(confirm_id, confirm_label, confirm_disabled=true, confirm_class='') -%}
+{# progress_status adds a polite live region beside the buttons. The page
+   script fills it while the dialog is busy; it is separate from the error
+   line so a failure message is never mixed with progress text. #}
+{% macro selection_dialog_footer(confirm_id, confirm_label, confirm_disabled=true, confirm_class='', progress_status=false) -%}
 <p class="selection-dialog-error" role="alert" hidden></p>
 <div class="app-dialog-actions selection-dialog-actions">
+  {% if progress_status %}<span class="selection-dialog-status" role="status" aria-live="polite" data-selection-dialog-status></span>{% endif %}
   <button type="button" data-selection-dialog-cancel autofocus>Cancel</button>
   <button type="button" id="{{ confirm_id }}"{% if confirm_class %} class="{{ confirm_class }}"{% endif %}{% if confirm_disabled %} disabled{% endif %}>{{ confirm_label | safe }}</button>
 </div>

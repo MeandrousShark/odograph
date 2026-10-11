@@ -177,8 +177,9 @@ def test_weekly_dashboard_keeps_not_my_vehicle_visible_while_excluding_it_from_m
         assert dashboard.distance.total_m == 4000.0
         assert dashboard.distance.business_m == 1000.0
         assert dashboard.distance.nondeductible_m == 3000.0
-        assert dashboard.attention is not None
-        assert dashboard.attention.unclassified_count == 1
+        # The unclassified not_my_vehicle trip is a queue item, not a week
+        # attention item: the strip count comes from the page's review_count.
+        assert dashboard.attention is None
 
     _scenario(run)
 
@@ -237,8 +238,12 @@ def test_dashboard_tag_rebuilds_past_week_card_and_hero_consistently():
         assert refreshed.deduction.available
         assert refreshed.deduction.amount is not None
         assert refreshed.deduction.amount > 0.0
-        assert refreshed.attention is not None
-        assert refreshed.attention.unclassified_count == 1
+        assert refreshed.attention is None
+        # The fragment's hero shows the queue-wide count (the excluded
+        # unclassified trip still waits in Review) and links to all of it.
+        assert response.context["review_count"] == 1
+        hero = body[body.index('id="dashboard-hero"'):]
+        assert '<a href="/review">1 unclassified trip to review</a>' in hero
 
         response = await TAG(
             request, target_id, "unclassified", {"sub": "test"},
@@ -248,8 +253,11 @@ def test_dashboard_tag_rebuilds_past_week_card_and_hero_consistently():
         assert reset_dashboard.trip_count == 2
         assert reset_dashboard.distance.business_m == 0.0
         assert reset_dashboard.deduction.amount == 0.0
-        assert reset_dashboard.attention is not None
-        assert reset_dashboard.attention.unclassified_count == 2
+        assert reset_dashboard.attention is None
+        assert response.context["review_count"] == 2
+        reset_hero = response.body.decode()
+        reset_hero = reset_hero[reset_hero.index('id="dashboard-hero"'):]
+        assert '<a href="/review">2 unclassified trips to review</a>' in reset_hero
         assert not_my_vehicle_id in [
             trip["id"] for group in reset_dashboard.day_groups for trip in group.trips
         ]
@@ -284,10 +292,8 @@ def test_dashboard_tag_rebuilds_past_week_card_and_hero_consistently():
         assert nmv_dashboard.daily_series[1].unclassified_m == 0.0
         assert nmv_dashboard.daily_series[2].nondeductible_m == 3000.0
         assert nmv_dashboard.deduction.amount == 0.0
-        assert nmv_dashboard.attention is not None
-        assert nmv_dashboard.attention.unclassified_count == 1
-        assert nmv_dashboard.attention.missing_trip_count == 0
-        assert nmv_dashboard.attention.missing_trip_url is None
+        assert nmv_dashboard.attention is None
+        assert response.context["review_count"] == 1
         assert not_my_vehicle_id in [
             trip["id"] for group in nmv_dashboard.day_groups for trip in group.trips
         ]
@@ -415,7 +421,7 @@ def test_dashboard_passes_vehicles_and_recent_purposes_for_the_trip_card():
     _scenario(run)
 
 
-def test_global_review_count_is_independent_from_weekly_attention():
+def test_attention_strip_counts_whole_review_queue_outside_the_viewed_week():
     async def run(pool):
         bounds = week_bounds(date(2026, 7, 13), UTC)
         async with pool.connection() as conn:
@@ -427,9 +433,11 @@ def test_global_review_count_is_independent_from_weekly_attention():
             )
 
         response = await DASHBOARD(_request(pool), {"sub": "test"}, "2026-07-13")
-        attention = response.context["dashboard"].attention
-        assert attention is None or attention.unclassified_count == 0
+        assert response.context["dashboard"].attention is None
         assert response.context["review_count"] == 1
+        body = response.body.decode()
+        strip = body[body.index('class="attention-strip"'):]
+        assert '<a href="/review">1 unclassified trip to review</a>' in strip
 
     _scenario(run)
 

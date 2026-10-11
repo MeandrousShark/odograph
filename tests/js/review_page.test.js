@@ -79,6 +79,7 @@ function makeBrowser() {
         return attrs.getAttribute(name);
       },
       matches(selector) {
+        if (selector === "#review-form [data-purpose-input]") return name === "purpose";
         return selector === "#review-form input[name=\"category\"]" && name === "category";
       },
     };
@@ -98,6 +99,7 @@ function makeBrowser() {
     q: control("review-q", "q", "client"),
   };
   fields.category.checked = true;
+  fields.personal = control("review-personal", "category", "personal");
   const controls = [
     fields.purpose,
     fields.notes,
@@ -121,8 +123,11 @@ function makeBrowser() {
     },
     querySelector(selector) {
       if (selector === 'input[name="category"]:checked') {
-        return fields.category.checked ? fields.category : null;
+        if (fields.category.checked) return fields.category;
+        return fields.personal.checked ? fields.personal : null;
       }
+      if (selector === 'input[name="category"][value="business"]') return fields.category;
+      if (selector === 'input[name="category"][value="personal"]') return fields.personal;
       return null;
     },
     querySelectorAll(selector) {
@@ -173,6 +178,12 @@ function makeBrowser() {
         this.defaultPrevented = true;
       },
     };
+    for (const callback of listeners.get(type) || []) callback(event);
+    return event;
+  };
+
+  const dispatch = (type, target) => {
+    const event = { target, defaultPrevented: false, preventDefault() {} };
     for (const callback of listeners.get(type) || []) callback(event);
     return event;
   };
@@ -277,6 +288,7 @@ function makeBrowser() {
 
   return {
     context,
+    dispatch,
     body,
     form,
     fields,
@@ -433,4 +445,64 @@ test("successful Undo swaps away locked sources and drops their queued writes", 
   await browser.complete(browser.requests[1], true, { detachForm: true });
   assert.strictEqual(browser.requests.length, 2);
   assert.strictEqual(browser.context.lastReviewAction, null);
+});
+
+function changePurpose(browser, value) {
+  browser.fields.purpose.value = value;
+  browser.dispatch("change", browser.fields.purpose);
+}
+
+test("a nonblank purpose checks Business when no category is chosen", () => {
+  const browser = makeBrowser();
+  browser.fields.category.checked = false;
+  browser.next.disabled = true;
+
+  changePurpose(browser, "Client visit");
+
+  assert.strictEqual(browser.fields.category.checked, true);
+  assert.strictEqual(browser.fields.personal.checked, false);
+  assert.strictEqual(browser.next.disabled, false);
+  // Nothing was submitted: the category still only commits on Next.
+  assert.strictEqual(browser.requests.length, 0);
+});
+
+test("a whitespace-only or cleared purpose leaves the category alone", () => {
+  const browser = makeBrowser();
+  browser.fields.category.checked = false;
+  browser.next.disabled = true;
+
+  changePurpose(browser, "   ");
+  changePurpose(browser, "");
+
+  assert.strictEqual(browser.fields.category.checked, false);
+  assert.strictEqual(browser.next.disabled, true);
+});
+
+test("a purpose edit never overrides a chosen category or unchecks one", () => {
+  const browser = makeBrowser();
+  browser.fields.category.checked = false;
+  browser.fields.personal.checked = true;
+  browser.context.syncReviewCategorySelection();
+
+  changePurpose(browser, "Client visit");
+  assert.strictEqual(browser.fields.personal.checked, true);
+  assert.strictEqual(browser.fields.category.checked, false);
+
+  browser.fields.personal.checked = false;
+  browser.fields.category.checked = true;
+  changePurpose(browser, "");
+  assert.strictEqual(browser.fields.category.checked, true);
+});
+
+test("an auto-selected Business is committed so re-activating it clears it", () => {
+  const browser = makeBrowser();
+  browser.fields.category.checked = false;
+
+  changePurpose(browser, "Client visit");
+  assert.strictEqual(browser.context.committedReviewCategory, "business");
+
+  // Activation precedes the click event: the radio is already checked.
+  browser.dispatch("click", browser.fields.category);
+  assert.strictEqual(browser.fields.category.checked, false);
+  assert.strictEqual(browser.context.committedReviewCategory, null);
 });

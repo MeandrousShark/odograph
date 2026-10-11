@@ -276,6 +276,67 @@ def test_dialog_error_paths_write_into_their_own_dialog_and_keep_selection():
     )[1].split("const categoryDialog")[0]
 
 
+def test_merge_dialog_has_a_polite_progress_status_separate_from_the_error_line():
+    body = _render_index()
+
+    status = (
+        '<span class="selection-dialog-status" role="status" aria-live="polite" '
+        'data-selection-dialog-status></span>'
+    )
+    merge_dialog = body.split('id="merge-dialog"')[1].split("</dialog>")[0]
+    assert merge_dialog.count(status) == 1
+    error_line = '<p class="selection-dialog-error" role="alert" hidden></p>'
+    assert merge_dialog.count(error_line) == 1
+    # The status lives with the buttons, after the error line, not inside it.
+    assert merge_dialog.index(error_line) < merge_dialog.index(status)
+    assert merge_dialog.index(status) < merge_dialog.index('id="merge-dialog-confirm"')
+
+    # Every other selection dialog keeps its footer exactly as before.
+    for dialog_id in (
+        "exclusion-dialog", "purpose-dialog", "vehicle-dialog", "delete-selected-dialog",
+    ):
+        dialog = body.split(f'id="{dialog_id}"')[1].split("</dialog>")[0]
+        assert "data-selection-dialog-status" not in dialog
+    assert body.count("data-selection-dialog-status></span>") == 1
+
+
+def test_merge_progress_status_follows_the_busy_state_and_stays_through_navigation():
+    body = _render_index()
+
+    busy = body.split("function setDialogBusy(dialog, busy) {", 1)[1].split(
+        "const dialogIsBusy", 1
+    )[0]
+    # aria-busy is set only when the dialog has no progress slot, so the
+    # merge dialog's live region is never inside a busy subtree.
+    assert (
+        "if (!setDialogProgress(dialog, busy ? 'Processing...' : '')) {\n"
+        "      dialog.setAttribute('aria-busy', busy ? 'true' : 'false');\n"
+        "    }"
+    ) in busy
+    assert busy.count("setAttribute('aria-busy'") == 1
+    progress = body.split("function setDialogProgress(dialog, message) {", 1)[1].split(
+        "function setDialogBusy", 1
+    )[0]
+    assert "dialog.querySelector('[data-selection-dialog-status]')" in progress
+    assert "if (status) status.textContent = message" in progress
+    assert "return !!status" in progress
+
+    merge_handler = body.split("mergeConfirm.addEventListener('click'")[1]
+    assert merge_handler.index("setDialogBusy(mergeDialog, true)") < merge_handler.index(
+        "fetch('/trips/merge_selected'"
+    )
+    # Each failure path clears the busy state (and with it the status) before
+    # showing its error; the success path does not, so the text stays until
+    # the redirect.
+    success = merge_handler.split("window.location.href = '/trips/' + data.trip_id", 1)[0].rsplit(
+        "if (resp.ok) {", 1
+    )[1]
+    assert success.count("setDialogBusy(mergeDialog, false)") == 1
+    assert "showDialogError" in success  # only on the malformed-response branch
+    after_redirect = merge_handler.split("window.location.href = '/trips/' + data.trip_id", 1)[1]
+    assert after_redirect.index("setDialogBusy(mergeDialog, false)") > after_redirect.index("} else {")
+
+
 def test_dialog_forms_guard_against_implicit_enter_submission():
     body = _render_index()
 

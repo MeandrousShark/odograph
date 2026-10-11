@@ -95,14 +95,17 @@
     </li>
   </ul>
 
-  {% if dashboard.attention %}
+  {# The unclassified count is the account-wide Review queue (the same
+     review_count the nav badge shows), not just this week's trips. #}
+  {% set queue_unclassified = review_count | default(0, true) %}
+  {% if queue_unclassified or dashboard.attention %}
   <div class="attention-strip" role="status" aria-label="Dashboard attention">
     {{ icon('lightning') }}
     <strong class="attention-heading">Needs attention</strong>
-    {% if dashboard.attention.unclassified_count %}
-    <span class="attention-item"><a href="{{ dashboard.attention.review_url }}">{{ dashboard.attention.unclassified_count }} unclassified trip{{ 's' if dashboard.attention.unclassified_count != 1 }} to review</a></span>
+    {% if queue_unclassified %}
+    <span class="attention-item"><a href="/review">{{ queue_unclassified }} unclassified trip{{ 's' if queue_unclassified != 1 }} to review</a></span>
     {% endif %}
-    {% if dashboard.attention.missing_trip_count %}
+    {% if dashboard.attention %}
     <span class="attention-item"><a href="{{ dashboard.attention.missing_trip_url }}">{{ dashboard.attention.missing_trip_count }} possible missing trip{{ 's' if dashboard.attention.missing_trip_count != 1 }}</a></span>
     {% endif %}
   </div>
