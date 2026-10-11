@@ -370,6 +370,19 @@ worker counts the device again about every five minutes, so a window that
 falls under the limit, or a raised limit after restart, resumes on its own.
 Trip edits such as merge and split are not limited.
 
+Run the deferred work as a separate process with no limit:
+
+```sh
+docker compose exec app python -m app.reprocess_detector --account ACCOUNT_ID --device DEVICE_ID
+# or every device of the account with pending work:
+docker compose exec app python -m app.reprocess_detector --account ACCOUNT_ID
+```
+
+The command waits for the account's detector lock, processes one device per
+transaction, and prints each device's point, stay and trip counts. It exits
+non-zero if the account is unknown or disabled, or if any device fails,
+including a device whose output does not fit the account's storage limit.
+
 ## UI, reports, and imports
 
 | Variable | Default | Purpose |
