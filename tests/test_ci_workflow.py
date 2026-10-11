@@ -19,10 +19,10 @@ def shard_matrix() -> list[dict]:
     return load_workflow()["jobs"]["suite"]["strategy"]["matrix"]["include"]
 
 
-def test_ci_runs_full_suite_on_push_and_pull_requests_with_postgis(tmp_path):
+def test_ci_runs_full_suite_on_main_pushes_and_pull_requests_with_postgis(tmp_path):
     workflow = load_workflow()
 
-    assert set(workflow["on"]) == {"push", "pull_request"}
+    assert workflow["on"] == {"push": {"branches": ["main"]}, "pull_request": ""}
     assert workflow["permissions"] == {"contents": "read"}
 
     job = workflow["jobs"]["suite"]
@@ -140,6 +140,18 @@ def test_ci_runs_full_suite_on_push_and_pull_requests_with_postgis(tmp_path):
         )
         assert result.returncode == status
         assert (tmp_path / "pytest-shard.log").read_text() == "suite stdout\nsuite stderr\n"
+
+
+def test_ci_cancels_superseded_branch_runs_but_never_main():
+    workflow = load_workflow()
+
+    assert workflow["concurrency"] == {
+        "group": (
+            "${{ github.workflow }}-"
+            "${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}"
+        ),
+        "cancel-in-progress": "${{ github.ref != 'refs/heads/main' }}",
+    }
 
 
 def test_ci_checks_every_tracked_shell_script():
