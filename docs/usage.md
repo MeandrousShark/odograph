@@ -179,16 +179,20 @@ it is showing raw GPS distance.
 
 Change **Category**, **Vehicle**, **Exclusion**, **Purpose**, or **Notes** on
 the detail page; these controls save when changed. Detected trips with stored
-GPS points also have **Advanced trip tools**:
+GPS points also have **Advanced trip tools**, a row of tools that opens one at
+a time. Only the tools that apply to the trip are shown:
 
-- **Merge with previous trip** or **Merge with next trip** combines adjacent
-  detected trips from the same device. The form can keep or replace category,
-  purpose, notes, and vehicle.
-- **Split trip** opens a split panel under the map. Tap or click the route
-  where the first trip ended: Odograph marks the nearest recorded GPS point
-  and shows the distance on each side. **Confirm split** saves it and returns
-  to the trip list. Very short halves are refused, and any refusal is shown
-  with its reason.
+- **Merge** combines this trip with an adjacent detected trip from the same
+  device. One form can keep or replace category, purpose, notes, and vehicle;
+  then choose **Merge with previous** or **Merge with next**. The page shows
+  Processing... while the merge runs.
+- **Split** opens a split panel under the map. Tap or click the route where
+  the first trip ended: Odograph marks the nearest recorded GPS point and
+  shows the distance on each side. **Confirm split** saves it and returns to
+  the trip list. Very short halves are refused, and any refusal is shown with
+  its reason.
+- **Name start** and **Name end** save an unnamed endpoint as a Place. While
+  one is open, tapping or clicking the map moves its location to that point.
 
 A manual trip with **No route** can include **Name start location** and **Name
 end location**. These are per-trip labels, not saved Places.

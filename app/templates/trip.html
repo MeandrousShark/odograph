@@ -9,6 +9,7 @@
 {% block head %}
   <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
   <script src="/static/vendor/leaflet/leaflet.js"></script>
+  <script src="/static/trip_tools.js"></script>
 {% endblock %}
 {% block content %}
 
@@ -78,10 +79,11 @@
   </section>
 
   {% if trip.source == 'detected' and not trip.imported and show_map and has_route_endpoints %}
-  {# Kept directly under the map rather than inside Advanced trip tools, so
-     picking a point and confirming it happen in one place. The point travels
-     as a plain form field: an `hx-vals='js:...'` expression needs eval, which
-     the page's script-src CSP blocks, and htmx then sends nothing at all. #}
+  {# The Split tool's panel. Kept directly under the map rather than inside
+     Advanced trip tools, so picking a point and confirming it happen in one
+     place. The point travels as a plain form field: an `hx-vals='js:...'`
+     expression needs eval, which the page's script-src CSP blocks, and htmx
+     then sends nothing at all. #}
   <section id="split-panel" class="notice split-panel" aria-labelledby="split-panel-heading" hidden>
     <h3 id="split-panel-heading">Split this trip</h3>
     <p id="split-instructions">Tap or click the route on the map where the first trip ended. Each part must be at least {{ min_trip_distance_m | round | int }} m long.</p>
@@ -215,94 +217,107 @@ document.addEventListener('change', function (event) {
 });
 </script>
 
+{% set can_merge = has_prev_trip or has_next_trip %}
+{% set can_split = show_map and has_route_endpoints %}
+{% set can_name_start = not trip.start_place_name %}
+{% set can_name_end = not trip.end_place_name %}
+{% set has_trip_tools = can_merge or can_split or can_name_start or can_name_end %}
+{# The route header already shows named endpoints, so a trip with no
+   available tool gets no disclosure at all. #}
+{% set show_trip_tools = trip.source == 'detected' and not trip.imported and has_trip_tools %}
 <div class="trip-detail-actions">
-  {% if trip.source == 'detected' and not trip.imported %}
+  {% if show_trip_tools %}
     <!-- Occasional correction tools (merge/split/place-naming) are gated behind
-         one disclosure so they never compete with the map for attention. The
-         map-click handlers below still find these controls by ID at event
-         time regardless of whether this <details> is open. An imported trip
-         has no backing points in this instance, so merge and split (which
-         both need real points to reprocess) would only ever be refused --
-         not trip.imported keeps this whole disclosure, not just those two
-         controls, off an imported trip's page. -->
+         one disclosure so they never compete with the map for attention. One
+         toolbar inside it opens at most one tool; static/trip_tools.js keeps
+         that choice in data-active-tool, which the map-click handler reads at
+         event time. An imported trip has no backing points in this instance,
+         so merge and split (which both need real points to reprocess) would
+         only ever be refused -- not trip.imported keeps this whole disclosure,
+         not just those two controls, off an imported trip's page. -->
     <details class="advanced-tools">
       <summary>Advanced trip tools</summary>
 
-      <div class="boundary-edit">
-    {% if has_prev_trip %}
-    <details class="add-manual" id="merge-prev">
-      <summary>Merge with previous trip</summary>
-      <form hx-post="/trips/{{ trip.id }}/merge_prev">
-        <label>Category
-          <select name="category">
-            <option value="keep" selected>Keep</option>
-            {% for c in categories %}<option value="{{ c }}">{{ c | capitalize }}</option>{% endfor %}
-          </select>
-        </label>
-        <label>Purpose {{ purpose_field(recent_purposes | default([], true)) }}</label>
-        <label>Notes <input type="text" name="notes"></label>
-        <label>Vehicle
-          <select name="vehicle_id">
-            <option value="keep" selected>Keep</option>
-            <option value="">--</option>
-            {% for v in vehicles %}
-            <option value="{{ v.id }}">{{ v.name }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <button type="submit">Merge</button>
-      </form>
-    </details>
-    {% endif %}
-    {% if has_next_trip %}
-    <details class="add-manual" id="merge-next">
-      <summary>Merge with next trip</summary>
-      <form hx-post="/trips/{{ trip.id }}/merge_next">
-        <label>Category
-          <select name="category">
-            <option value="keep" selected>Keep</option>
-            {% for c in categories %}<option value="{{ c }}">{{ c | capitalize }}</option>{% endfor %}
-          </select>
-        </label>
-        <label>Purpose {{ purpose_field(recent_purposes | default([], true)) }}</label>
-        <label>Notes <input type="text" name="notes"></label>
-        <label>Vehicle
-          <select name="vehicle_id">
-            <option value="keep" selected>Keep</option>
-            <option value="">--</option>
-            {% for v in vehicles %}
-            <option value="{{ v.id }}">{{ v.name }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <button type="submit">Merge</button>
-      </form>
-    </details>
-    {% endif %}
-    {% if has_route_endpoints %}
-    <button type="button" id="split-toggle" aria-controls="split-panel" aria-expanded="false">Split trip</button>
-    {% endif %}
-  </div>
+      <div class="trip-detail-tools" id="trip-tools" data-active-tool="">
+        <div class="trip-tools-bar" role="group" aria-label="Trip tools">
+          {% if can_merge %}
+          <button type="button" id="merge-toggle" class="control control-secondary trip-tool"
+                  data-tool="merge" aria-controls="merge-panel" aria-expanded="false">Merge</button>
+          {% endif %}
+          {% if can_split %}
+          <button type="button" id="split-toggle" class="control control-secondary trip-tool"
+                  data-tool="split" aria-controls="split-panel" aria-expanded="false">Split</button>
+          {% endif %}
+          {% if can_name_start %}
+          <button type="button" id="name-start-toggle" class="control control-secondary trip-tool"
+                  data-tool="name-start" aria-controls="name-start" aria-expanded="false">Name start</button>
+          {% endif %}
+          {% if can_name_end %}
+          <button type="button" id="name-end-toggle" class="control control-secondary trip-tool"
+                  data-tool="name-end" aria-controls="name-end" aria-expanded="false">Name end</button>
+          {% endif %}
+        </div>
 
-  <div class="place-naming">
-    {% if trip.start_place_name %}
-      <p>Start: <strong>{{ trip.start_place_name }}</strong></p>
-    {% else %}
-      <details class="add-manual" id="name-start">
-        <summary>Name start location</summary>
-        {{ add_place_form(lat_id='start-lat', lon_id='start-lon', lat_value=trip.start_lat, lon_value=trip.start_lon, lat_lon_required=false) }}
-      </details>
-    {% endif %}
-    {% if trip.end_place_name %}
-      <p>End: <strong>{{ trip.end_place_name }}</strong></p>
-    {% else %}
-      <details class="add-manual" id="name-end">
-        <summary>Name end location</summary>
-        {{ add_place_form(lat_id='end-lat', lon_id='end-lon', lat_value=trip.end_lat, lon_value=trip.end_lon, lat_lon_required=false) }}
-      </details>
-    {% endif %}
-  </div>
-</details>
+        <div class="trip-tool-panels">
+          {% if can_merge %}
+          <div id="merge-panel" class="trip-tool-panel" hidden>
+            {# htmx sends the enclosing form's fields with a non-GET request
+               from a button inside it, so each direction button posts this
+               one field set to its own route. #}
+            <form id="merge-form" hx-swap="none">
+              <label>Category
+                <select name="category">
+                  <option value="keep" selected>Keep</option>
+                  {% for c in categories %}<option value="{{ c }}">{{ c | capitalize }}</option>{% endfor %}
+                </select>
+              </label>
+              <label>Purpose {{ purpose_field(recent_purposes | default([], true)) }}</label>
+              <label>Notes <input type="text" name="notes"></label>
+              <label>Vehicle
+                <select name="vehicle_id">
+                  <option value="keep" selected>Keep</option>
+                  <option value="">--</option>
+                  {% for v in vehicles %}
+                  <option value="{{ v.id }}">{{ v.name }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <div class="merge-actions">
+                {% if has_prev_trip %}
+                <button type="button" id="merge-prev" class="control control-secondary"
+                        hx-post="/trips/{{ trip.id }}/merge_prev"
+                        hx-disabled-elt="#merge-form input, #merge-form select, #merge-form button">Merge with previous</button>
+                {% endif %}
+                {% if has_next_trip %}
+                <button type="button" id="merge-next" class="control control-secondary"
+                        hx-post="/trips/{{ trip.id }}/merge_next"
+                        hx-disabled-elt="#merge-form input, #merge-form select, #merge-form button">Merge with next</button>
+                {% endif %}
+                <span id="merge-status" class="merge-status" role="status" aria-live="polite"></span>
+              </div>
+            </form>
+          </div>
+          {% endif %}
+          {% if can_name_start %}
+          <div id="name-start" class="trip-tool-panel" hidden>
+            {{ add_place_form(lat_id='start-lat', lon_id='start-lon', lat_value=trip.start_lat, lon_value=trip.start_lon, lat_lon_required=false) }}
+          </div>
+          {% endif %}
+          {% if can_name_end %}
+          <div id="name-end" class="trip-tool-panel" hidden>
+            {{ add_place_form(lat_id='end-lat', lon_id='end-lon', lat_value=trip.end_lat, lon_value=trip.end_lon, lat_lon_required=false) }}
+          </div>
+          {% endif %}
+        </div>
+
+        {% if trip.start_place_name or trip.end_place_name %}
+        <div class="place-naming">
+          {% if trip.start_place_name %}<p>Start: <strong>{{ trip.start_place_name }}</strong></p>{% endif %}
+          {% if trip.end_place_name %}<p>End: <strong>{{ trip.end_place_name }}</strong></p>{% endif %}
+        </div>
+        {% endif %}
+      </div>
+    </details>
   {% endif %}
   <div class="trip-detail-delete">
     {{ trip_delete_dialog(
@@ -310,6 +325,11 @@ document.addEventListener('change', function (event) {
     ) }}
   </div>
 </div>
+{% if show_trip_tools %}
+<script nonce="{{ csp_nonce }}">
+  window.tripTools = TripTools.init(document.getElementById('trip-tools'), document);
+</script>
+{% endif %}
 </div>
 
 {% if show_map and has_route_endpoints %}
@@ -392,10 +412,10 @@ document.addEventListener('change', function (event) {
   // stay covered by the same CSP nonce.
   const minTripDistanceM = {{ min_trip_distance_m }};
 
-  // Split mode: a third, exclusive click-mode alongside the place-naming
-  // one below. While armed, clicking the map picks the nearest *real* GPS
-  // point (never the raw click coordinate, since the split anchor must be an
-  // actual points.id), marks it, and enables the panel's Confirm button.
+  // Split mode follows the Split tool in the trip tools toolbar. While
+  // armed, clicking the map picks the nearest *real* GPS point (never the raw
+  // click coordinate, since the split anchor must be an actual points.id),
+  // marks it, and enables the panel's Confirm button.
   let splitMode = false;
   let tripPoints = null;
   let tripCumDist = null;
@@ -434,9 +454,7 @@ document.addEventListener('change', function (event) {
 
   async function setSplitMode(on) {
     splitMode = on;
-    if (!splitToggle || !splitPanel) return;
-    splitToggle.textContent = on ? 'Cancel split' : 'Split trip';
-    splitToggle.setAttribute('aria-expanded', on ? 'true' : 'false');
+    if (!splitPanel) return;
     splitPanel.hidden = !on;
     clearSplitChoice('');
     if (!on) return;
@@ -457,9 +475,11 @@ document.addEventListener('change', function (event) {
     }
   }
 
-  splitToggle?.addEventListener('click', () => setSplitMode(!splitMode));
+  window.tripTools?.onChange((tool) => {
+    if ((tool === 'split') !== splitMode) setSplitMode(tool === 'split');
+  });
   document.getElementById('split-cancel')?.addEventListener('click', () => {
-    setSplitMode(false);
+    window.tripTools?.setActive('');
     splitToggle?.focus();
   });
   splitForm?.addEventListener('htmx:beforeRequest', () => {
@@ -468,15 +488,14 @@ document.addEventListener('change', function (event) {
   splitForm?.addEventListener('htmx:afterRequest', (event) => {
     // Success leaves via HX-Redirect; the shared error banner reports why a
     // failure happened, so this only restores the chosen-point prompt.
-    if (!event.detail.successful) {
+    if (!TripTools.requestSucceeded(event.detail.xhr)) {
       splitStatus.textContent = 'The split did not complete. Pick a point and try again.';
     }
   });
 
   // Lets a "name this place" form be corrected to the actual building entrance
-  // rather than the raw GPS fix. Clicking the map fills whichever naming
-  // form is currently open (if exactly one is; ambiguous otherwise, so a
-  // click does nothing rather than guessing).
+  // rather than the raw GPS fix. Clicking the map fills the naming form of
+  // the active Name start or Name end tool, and does nothing otherwise.
   map.on('click', function (e) {
     if (splitMode) {
       if (!tripPoints) return;
@@ -512,14 +531,12 @@ document.addEventListener('change', function (event) {
       splitPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       return;
     }
-    const startOpen = document.getElementById('name-start')?.open;
-    const endOpen = document.getElementById('name-end')?.open;
-    let latEl = null, lonEl = null;
-    if (startOpen && !endOpen) {
-      latEl = document.getElementById('start-lat'); lonEl = document.getElementById('start-lon');
-    } else if (endOpen && !startOpen) {
-      latEl = document.getElementById('end-lat'); lonEl = document.getElementById('end-lon');
-    }
+    const ids = TripTools.namingFieldIds(
+      document.getElementById('trip-tools')?.getAttribute('data-active-tool')
+    );
+    if (!ids) return;
+    const latEl = document.getElementById(ids.lat);
+    const lonEl = document.getElementById(ids.lon);
     if (latEl && lonEl) {
       latEl.value = e.latlng.lat.toFixed(6);
       lonEl.value = e.latlng.lng.toFixed(6);

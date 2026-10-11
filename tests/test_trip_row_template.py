@@ -548,6 +548,15 @@ def test_missing_trip_badge_absent_when_covered():
     assert "missing-trip-badge" not in body
 
 
+def _merge_form(body: str) -> str:
+    return body.split('<form id="merge-form"', 1)[1].split("</form>", 1)[0]
+
+
+def _tool_buttons(body: str) -> list[str]:
+    bar = body.split('<div class="trip-tools-bar"', 1)[1].split("</div>", 1)[0]
+    return [chunk.split('"', 1)[0] for chunk in bar.split('data-tool="')[1:]]
+
+
 def test_merge_forms_include_vehicle_picker_defaulted_to_keep():
     templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
     body = templates.env.get_template("trip.html").render(
@@ -562,14 +571,195 @@ def test_merge_forms_include_vehicle_picker_defaulted_to_keep():
         min_trip_distance_m=100, user={"name": "Tester"}, csrf_token="test",
     )
 
-    merge_prev_form = body.split('id="merge-prev"')[1].split("</details>")[0]
-    merge_next_form = body.split('id="merge-next"')[1].split("</details>")[0]
-    for form in (merge_prev_form, merge_next_form):
-        picker = form.split('name="vehicle_id"')[1].split("</select>")[0]
-        assert '<option value="keep" selected>Keep</option>' in picker
-        assert '<option value="">--</option>' in picker
-        assert '<option value="1">Car A</option>' in picker
-        assert '<option value="2">Car B</option>' in picker
+    form = _merge_form(body)
+    assert form.count('name="vehicle_id"') == 1
+    picker = form.split('name="vehicle_id"')[1].split("</select>")[0]
+    assert '<option value="keep" selected>Keep</option>' in picker
+    assert '<option value="">--</option>' in picker
+    assert '<option value="1">Car A</option>' in picker
+    assert '<option value="2">Car B</option>' in picker
+
+
+def test_merge_tool_is_one_form_with_one_field_set_and_two_direction_buttons():
+    body = _render_detail(_trip(source="detected"))
+
+    assert body.count('id="merge-form"') == 1
+    form = _merge_form(body)
+    for field in ('name="category"', 'name="purpose"', 'name="notes"', 'name="vehicle_id"'):
+        assert form.count(field) == 1, field
+    category = form.split('name="category"', 1)[1].split("</select>", 1)[0]
+    assert '<option value="keep" selected>Keep</option>' in category
+    assert '<option value="business">Business</option>' in category
+    assert 'class="purpose-field' in form and 'class="purpose-recent"' in form
+
+    prev = form.split('id="merge-prev"', 1)[1].split("</button>", 1)[0]
+    following = form.split('id="merge-next"', 1)[1].split("</button>", 1)[0]
+    assert 'hx-post="/trips/42/merge_prev"' in prev and prev.endswith(">Merge with previous")
+    assert 'hx-post="/trips/42/merge_next"' in following and following.endswith(">Merge with next")
+    assert form.index('id="merge-prev"') < form.index('id="merge-next"')
+    # Enter in a field must not pick a direction, and htmx sends the
+    # enclosing form's fields with a button's own non-GET request.
+    assert 'type="submit"' not in form
+    assert form.count('type="button"') == 2
+    assert "hx-post" not in body.split('<form id="merge-form"', 1)[1].split(">", 1)[0]
+
+
+def test_merge_buttons_render_only_for_an_existing_neighbor():
+    prev_only = _merge_form(_render_detail(_trip(), has_prev_trip=True, has_next_trip=False))
+    next_only = _merge_form(_render_detail(_trip(), has_prev_trip=False, has_next_trip=True))
+    neither = _render_detail(_trip(), has_prev_trip=False, has_next_trip=False)
+
+    assert 'id="merge-prev"' in prev_only and 'id="merge-next"' not in prev_only
+    assert 'id="merge-next"' in next_only and 'id="merge-prev"' not in next_only
+    assert 'id="merge-form"' not in neither
+    assert 'data-tool="merge"' not in neither
+    assert 'id="merge-panel"' not in neither
+
+
+def test_merge_request_disables_the_form_and_reports_progress_politely():
+    body = _render_detail(_trip(source="detected"))
+    form = _merge_form(body)
+    disabled = 'hx-disabled-elt="#merge-form input, #merge-form select, #merge-form button"'
+
+    for button_id in ("merge-prev", "merge-next"):
+        button = form.split(f'id="{button_id}"', 1)[1].split("</button>", 1)[0]
+        assert disabled in button
+    actions = form.split('<div class="merge-actions">', 1)[1].split("</div>", 1)[0]
+    assert '<span id="merge-status" class="merge-status" role="status" aria-live="polite"></span>' in actions
+    assert "aria-busy" not in body
+
+
+def test_advanced_tools_disclosure_contains_merge_split_and_place_naming_controls():
+    body = _render_detail(_trip(source="detected", start_place_name=None, end_place_name=None))
+
+    tools = body.split('<details class="advanced-tools">')[1].split(
+        '<div class="trip-detail-delete">'
+    )[0]
+
+    assert 'id="trip-tools" data-active-tool=""' in tools
+    assert _tool_buttons(tools) == ["merge", "split", "name-start", "name-end"]
+    expected = {
+        "merge-toggle": ("merge-panel", "Merge"),
+        "split-toggle": ("split-panel", "Split"),
+        "name-start-toggle": ("name-start", "Name start"),
+        "name-end-toggle": ("name-end", "Name end"),
+    }
+    for button_id, (panel_id, label) in expected.items():
+        button = tools.split(f'id="{button_id}"', 1)[1].split("</button>", 1)[0]
+        assert 'class="control control-secondary trip-tool"' in button
+        assert f'aria-controls="{panel_id}"' in button
+        assert 'aria-expanded="false"' in button
+        assert button.endswith(f">{label}")
+        assert f'<button type="button" id="{button_id}"' in tools
+        assert f'id="{panel_id}"' in body
+
+    panels = tools.split('<div class="trip-tool-panels">', 1)[1]
+    for panel_id in ("merge-panel", "name-start", "name-end"):
+        assert f'<div id="{panel_id}" class="trip-tool-panel" hidden>' in panels
+    assert 'id="start-lat"' in panels and 'id="end-lon"' in panels
+    # Split's panel stays under the map rather than in the shared area.
+    assert 'id="split-panel"' not in tools
+    assert "<details" not in tools
+
+
+def test_trip_tools_omit_unavailable_tools():
+    no_split = _render_detail(_trip(source="detected", end_lat=None, end_lon=None))
+    assert _tool_buttons(no_split) == ["merge", "name-start"]
+
+    merge_only = _render_detail(_trip(source="detected", start_place_name="Office"))
+    assert _tool_buttons(merge_only) == ["merge", "split"]
+
+    split_only = _render_detail(
+        _trip(source="detected", start_place_name="Office"),
+        has_prev_trip=False, has_next_trip=False,
+    )
+    assert _tool_buttons(split_only) == ["split"]
+
+    name_end_only = _render_detail(
+        _trip(source="detected", start_place_name="Office", end_place_name=None,
+              start_lat=None, start_lon=None),
+        has_prev_trip=False, has_next_trip=False,
+    )
+    assert _tool_buttons(name_end_only) == ["name-end"]
+    assert 'id="name-start"' not in name_end_only
+
+
+def test_named_places_stay_visible_read_only_in_the_disclosure():
+    body = _render_detail(_trip(source="detected", start_place_name="Office", end_place_name="Home"))
+    tools = body.split('<details class="advanced-tools">')[1].split(
+        '<div class="trip-detail-delete">'
+    )[0]
+
+    assert "<p>Start: <strong>Office</strong></p>" in tools
+    assert "<p>End: <strong>Home</strong></p>" in tools
+    assert 'data-tool="name-start"' not in tools
+    assert 'data-tool="name-end"' not in tools
+
+
+def test_trip_tools_disclosure_is_omitted_when_nothing_is_available():
+    body = _render_detail(
+        _trip(source="detected", start_place_name=None, end_place_name=None,
+              start_lat=None, start_lon=None, end_lat=None, end_lon=None),
+        has_prev_trip=False, has_next_trip=False,
+    )
+    # Unnamed places still offer naming, so the disclosure stays.
+    assert _tool_buttons(body) == ["name-start", "name-end"]
+
+    names_only = _render_detail(
+        _trip(source="detected", start_place_name="Office", end_place_name="Home",
+              end_lat=None, end_lon=None),
+        has_prev_trip=False, has_next_trip=False,
+    )
+    # Both places named and no merge or split: no tool, so no disclosure. The
+    # route header still shows the names.
+    assert '<details class="advanced-tools">' not in names_only
+    assert 'id="trip-tools"' not in names_only
+    assert "TripTools.init" not in names_only
+
+
+def test_trip_tools_controller_loads_and_binds_with_the_page_nonce():
+    body = _render_detail(_trip(source="detected"), csp_nonce="n0nce")
+
+    assert '<script src="/static/trip_tools.js"></script>' in body
+    init = body.split('<div class="trip-detail-actions">', 1)[1].split("</script>", 1)[0]
+    assert '<script nonce="n0nce">' in init
+    assert "TripTools.init(document.getElementById('trip-tools'), document)" in init
+    # The controller exists before the map script asks it about tool changes.
+    assert body.index("window.tripTools = TripTools.init") < body.index("window.tripTools?.onChange")
+    cancel = body.split("getElementById('split-cancel')", 1)[1].split("});", 1)[0]
+    assert "window.tripTools?.setActive('')" in cancel
+
+
+def test_map_click_reads_the_active_tool_at_event_time():
+    body = _render_detail(_trip(source="detected"))
+    script = body.split("map.on('click'", 1)[1].split("// Mobile browsers", 1)[0]
+
+    assert "document.getElementById('trip-tools')?.getAttribute('data-active-tool')" in script
+    assert "TripTools.namingFieldIds(" in script
+    assert ".open" not in script
+
+
+def test_split_and_merge_status_use_the_shared_success_check():
+    body = _render_detail(_trip(source="detected"))
+
+    split_after = body.split("splitForm?.addEventListener('htmx:afterRequest'", 1)[1].split("});", 1)[0]
+    assert "TripTools.requestSucceeded(event.detail.xhr)" in split_after
+    assert "event.detail.successful" not in body
+
+
+def test_trip_tools_bar_wraps_with_touch_sized_controls():
+    stylesheet = (Path(__file__).parents[1] / "static/style.css").read_text()
+
+    bar = stylesheet.split(".trip-tools-bar {", 1)[1].split("}", 1)[0]
+    assert "flex-wrap: wrap" in bar
+    assert '.trip-tool[aria-expanded="true"]' in stylesheet
+    control = stylesheet.split(".control {", 1)[1].split("}", 1)[0]
+    assert "min-height: var(--control-height)" in control
+    assert "--control-height: 2.75rem;" in stylesheet
+    # The recent-purpose picker keeps its compact width inside the merge panel:
+    # no full-width rule reaches the picker itself.
+    assert ".trip-tool-panel select" not in stylesheet
+    assert ".trip-tool-panel .purpose-recent" not in stylesheet
 
 
 def test_detected_trip_detail_shows_map_before_advanced_tools_disclosure():
@@ -712,24 +902,6 @@ def test_trip_detail_actions_stack_at_narrow_width():
     assert ".trip-detail-delete { width: 100%; margin-left: 0; }" in narrow
     assert ".trip-detail-delete .trip-delete-trigger { width: 100%; }" in narrow
     assert ".trip-detail-actions > .advanced-tools > summary { width: 100%; }" in narrow
-
-
-def test_advanced_tools_disclosure_contains_merge_split_and_place_naming_controls():
-    body = _render_detail(_trip(source="detected", start_place_name=None, end_place_name=None))
-
-    tools = body.split('<details class="advanced-tools">')[1].split(
-        '<div class="trip-detail-delete">'
-    )[0]
-
-    assert 'id="merge-prev"' in tools
-    assert 'id="merge-next"' in tools
-    assert 'id="split-toggle"' in tools
-    assert 'aria-controls="split-panel"' in tools
-    assert 'id="name-start"' in tools
-    assert 'id="name-end"' in tools
-    assert tools.index('id="merge-prev"') < tools.index('id="merge-next"') < tools.index(
-        'id="split-toggle"'
-    ) < tools.index('id="name-start"')
 
 
 def test_split_panel_sits_under_the_map_and_posts_a_plain_point_field():
@@ -907,3 +1079,11 @@ def test_trip_detail_keeps_the_raw_track_leading_when_the_snap_is_incomplete():
 
     assert "const snappedDistanceUsed = false;" in body
     assert "const snappedIsPrimary = hasSnapped && snappedDistanceUsed;" in body
+
+
+def test_trip_tool_purpose_input_fills_its_stacked_label_on_phones():
+    stylesheet = (Path(__file__).parents[1] / "static/style.css").read_text()
+    mobile = stylesheet.split("@media (max-width: 760px)", 1)[1]
+    # Without this the picker sits detached at the far right of the stretched
+    # wrapper while the input keeps its intrinsic width.
+    assert ".trip-tool-panel .purpose-field input { width: 100%; }" in mobile
