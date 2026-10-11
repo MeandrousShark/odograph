@@ -71,6 +71,7 @@ from app.db import make_pool, run_migrations
 from app.account_context import AccountPool, AccountPrincipal, account_id, control_connection
 from app.accounts import create_admin, account_exists, get_account_by_email
 from app.application_roles import application_role_pools
+from app.capacity import AdmissionManager
 from app.local_auth import hash_password
 from app.detector.core import Params, Point, haversine_m
 from app.detector.runner import DetectorRunner
@@ -622,8 +623,8 @@ async def main_async(database_url: str) -> None:
                     raise RuntimeError("seeding requires the synthetic development account")
                 account = await create_admin(conn, "development@localhost.invalid",
                     hash_password(secrets.token_urlsafe(32)), display_timezone=str(PACIFIC))
-        pool = AccountPool(pools.runtime, AccountPrincipal(
-            account["id"], account["is_enabled"], account["auth_version"]))
+        principal = AccountPrincipal(account["id"], account["is_enabled"], account["auth_version"])
+        pool = AccountPool(pools.runtime, principal)
         async with pool.connection() as conn:
             await _wipe(conn)
             v1, v2 = await _seed_reference_data(conn)
@@ -647,8 +648,12 @@ async def main_async(database_url: str) -> None:
             await _insert_points(conn, points, device_id)
 
         runner = DetectorRunner(pool, Params())
-        await _detect_all(runner)
-        await _discard_missing_trip_bridge(pool, runner, device_id)
+        # The detector's CPU step requires an operation owner. This process
+        # has its own admission manager, so it takes no slot from a server's
+        # lanes.
+        async with AdmissionManager().operation("background", principal=principal):
+            await _detect_all(runner)
+            await _discard_missing_trip_bridge(pool, runner, device_id)
 
         async with pool.connection() as conn:
             trips = await _fetch_device_trips(conn, device_id)
