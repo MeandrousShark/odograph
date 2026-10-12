@@ -63,6 +63,16 @@ of a hosted service, and this project has no hosted service.
     the intended deployment is a Nominatim you operate yourself, and
     respecting that policy is your responsibility if you deviate from that.
 
+  Address autocomplete is used in two places: the address search when you add
+  a Place in Settings, and the **Search** route mode on the manual trip form.
+  In both, each pause while you type sends the text typed so far to the
+  geocoder, before any trip or Place exists. A destination you search for on
+  the manual trip form may never be saved, and the text still reaches the
+  provider. The text you pick is not stored with the trip; only the
+  coordinates are, and the reverse geocoder later looks the endpoints up like
+  any other map-picked point. **Search** is hidden when no geocoder is
+  configured.
+
   Results are cached per account in the database (`geocode_cache`), so
   repeated lookups within that account reuse the cached address. Repeat views of the same trip do
   not re-send its coordinates. That cache is provider-agnostic: it stores

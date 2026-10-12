@@ -165,6 +165,7 @@ def _parse_manual_route_coord(value: str, *, minimum: float, maximum: float) -> 
 async def _resolve_manual_route_endpoints(
     conn, route_mode: str, start_place: str, end_place: str,
     start_lat: str, start_lon: str, end_lat: str, end_lon: str,
+    *, geocoding_available: bool = False,
 ) -> _ManualRouteEndpoints | None:
     """Turn a manual-trip route selection into validated endpoint
     coordinates. Returns None for `route_mode == "none"` (no routing at
@@ -178,9 +179,15 @@ async def _resolve_manual_route_endpoints(
     Never touches OSRM itself: the caller must release this connection
     before routing, so a slow or hung outbound OSRM call never holds a
     pooled database connection.
+
+    `route_mode == "search"` carries coordinates exactly like "map" (the
+    browser filled them from an address search result), but is refused
+    unless the caller says a geocoding provider is configured.
     """
     if route_mode == "none":
         return None
+    if route_mode == "search" and not geocoding_available:
+        raise HTTPException(status_code=400, detail="Address search is not available")
     if route_mode == "places":
         try:
             start_id = int(start_place)
@@ -201,7 +208,7 @@ async def _resolve_manual_route_endpoints(
             to_lat=rows[end_id]["lat"], to_lon=rows[end_id]["lon"],
             start_place_id=start_id, end_place_id=end_id,
         )
-    if route_mode == "map":
+    if route_mode in ("map", "search"):
         return _ManualRouteEndpoints(
             from_lat=_parse_manual_route_coord(start_lat, minimum=-90, maximum=90),
             from_lon=_parse_manual_route_coord(start_lon, minimum=-180, maximum=180),
@@ -210,6 +217,12 @@ async def _resolve_manual_route_endpoints(
             start_place_id=None, end_place_id=None,
         )
     raise HTTPException(status_code=400, detail="Unknown route mode")
+
+
+def _geocoding_available(request: Request, route_mode: str) -> bool:
+    """Only "search" mode depends on a geocoder, so the config is not read
+    for any other mode."""
+    return route_mode == "search" and request.state.config.geocode_provider is not None
 
 
 async def _resolve_missing_trip_osrm_hint(request: Request, bridge_trip: str) -> str | None:
@@ -286,6 +299,7 @@ def register(router: APIRouter) -> None:
                     "recent_purposes": recent_purposes,
                     "places": places,
                     "manual_prefill": manual_prefill,
+                    "geocode_enabled": getattr(request.state.config, "geocode_provider", None) is not None,
                 },
             )
 
@@ -316,6 +330,7 @@ def register(router: APIRouter) -> None:
                 endpoints = await _resolve_manual_route_endpoints(
                     conn, route_mode, start_place, end_place,
                     start_lat, start_lon, end_lat, end_lon,
+                    geocoding_available=_geocoding_available(request, route_mode),
                 )
             if endpoints is None:
                 raise HTTPException(status_code=400, detail="Select a route to preview")
@@ -448,6 +463,7 @@ def register(router: APIRouter) -> None:
                     endpoints = await _resolve_manual_route_endpoints(
                         conn, route_mode, start_place, end_place,
                         start_lat, start_lon, end_lat, end_lon,
+                        geocoding_available=_geocoding_available(request, route_mode),
                     )
                 if endpoints is None:
                     raise HTTPException(status_code=400, detail="Invalid route selection")

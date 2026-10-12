@@ -1444,6 +1444,16 @@ details.add-manual .route-mode-option { flex-direction: row; align-items: center
 .route-map-hint { margin: 0; font-size: .8rem; color: var(--fg-muted); flex: 1 1 100%; }
 .route-picker-map { width: 100%; height: 260px; border-radius: var(--radius-sm); border: 1px solid var(--border); }
 .route-picker-status { margin: 0; min-height: 1rem; font-size: .8rem; color: var(--fg-muted); }
+.route-search-field { display: flex; flex-direction: column; gap: .25rem; flex: 1 1 16rem; min-width: 0; }
+.route-search-field label { font-size: .8rem; }
+.route-search-field input[type="text"] { width: 100%; min-width: 0; box-sizing: border-box; min-height: 44px; }
+.route-search-field .address-results { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .25rem; }
+.route-search-field .address-results li { min-width: 0; }
+.route-search-field .address-results button {
+  display: block; width: 100%; min-height: 44px; box-sizing: border-box;
+  text-align: left; overflow-wrap: anywhere; white-space: normal;
+}
+.route-search-chosen { margin: 0; font-size: .8rem; color: var(--fg-muted); overflow-wrap: anywhere; }
 .route-distance-hint { font-size: .75rem; opacity: .7; }
 .theme-picker { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;
                 width: fit-content; max-width: 100%;
