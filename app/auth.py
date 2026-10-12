@@ -743,10 +743,15 @@ async def _verified_account(
     *,
     generic_error: str,
     precheck_error: str | None = None,
+    account: dict | None = None,
 ) -> dict:
     """Shared re-authentication preamble for account-mutating routes
     (link/unlink OIDC, change password): load the caller's account, apply
     the failed-auth limiter, and verify the submitted current password.
+
+    A caller that has just loaded the account passes it as `account` rather
+    than reading it again. The same enabled and auth_version checks apply,
+    and every write after this rechecks both under its own row lock.
 
     `precheck_error`, when set, is reported after the limiter check but
     before password verification, so a route-specific validation failure
@@ -756,8 +761,9 @@ async def _verified_account(
     """
     limiter: FailedAuthLimiter = request.app.state.login_limiter
     ip = client_ip(request)
-    async with control_connection(request.app.state.control_pool) as conn:
-        account = await get_account(conn, user["id"])
+    if account is None:
+        async with control_connection(request.app.state.control_pool) as conn:
+            account = await get_account(conn, user["id"])
     if (
         account is None
         or not account["is_enabled"]
@@ -854,18 +860,20 @@ def make_router() -> APIRouter:
             and not request.app.state.config.dev_no_auth
         )
         linked_identity = None
-        if oidc_configured:
-            async with control_connection(request.app.state.control_pool) as conn:
+        identity = None
+        async with control_connection(request.app.state.control_pool) as conn:
+            if oidc_configured:
                 identity = await get_identity_for_account(
                     conn,
                     account["id"],
                     request.app.state.config.oidc_issuer,
                 )
-            if identity is not None:
-                linked_identity = {
-                    "email": identity["provider_email"],
-                    "display_name": identity["provider_display_name"],
-                }
+            account_email_verified = await is_current_email_verified(conn, account["id"])
+        if identity is not None:
+            linked_identity = {
+                "email": identity["provider_email"],
+                "display_name": identity["provider_display_name"],
+            }
         flashed_error = request.session.pop("account_error", None)
         if error is None:
             error = flashed_error
@@ -882,8 +890,6 @@ def make_router() -> APIRouter:
             DEFAULT_ACCOUNT_AVATAR_MAX_BYTES,
         )
         cfg = request.app.state.config
-        async with control_connection(request.app.state.control_pool) as conn:
-            account_email_verified = await is_current_email_verified(conn, account["id"])
         context = {
             "user": user,
             "csrf": _ensure_csrf(request),
@@ -1783,8 +1789,10 @@ def make_router() -> APIRouter:
             return await _render_account(request, account, user, error=GENERIC_EMAIL_ERROR, status_code=409)
         if account["password_hash"] is not None:
             try:
+                loaded = account
                 account = await limiter.run_bounded(lambda: _verified_account(
-                    request, user, values["current_password"], generic_error=GENERIC_EMAIL_ERROR
+                    request, user, values["current_password"], generic_error=GENERIC_EMAIL_ERROR,
+                    account=loaded,
                 ))
             except _AuthSaturated:
                 return await _render_account_unavailable(request, user, status_code=503)
@@ -2116,8 +2124,10 @@ def make_router() -> APIRouter:
             )
         if account["password_hash"] is not None:
             try:
+                loaded = account
                 account = await limiter.run_bounded(lambda: _verified_account(
-                    request, user, current_password, generic_error=GENERIC_PASSWORD_ERROR
+                    request, user, current_password, generic_error=GENERIC_PASSWORD_ERROR,
+                    account=loaded,
                 ))
             except _AuthSaturated:
                 return await _render_account(request, account, user, error=GENERIC_PASSWORD_ERROR, status_code=503)
@@ -2140,6 +2150,13 @@ def make_router() -> APIRouter:
                 )
 
         async def save_password():
+            # With a verified current password, hash before borrowing:
+            # replace_password rechecks enabled and auth_version under its
+            # row lock. Adding a password still consumes its one-time proof
+            # before hashing, in the same transaction as the write.
+            password_hash = None
+            if proof_nonce is None:
+                password_hash = await owned_thread(hash_password, password)
             async with control_connection(request.app.state.control_pool, lane="lifecycle") as conn:
                 async with conn.transaction():
                     if proof_nonce is not None:
@@ -2151,7 +2168,7 @@ def make_router() -> APIRouter:
                         if not proven:
                             limiter.record_failure(ip)
                             return None, False
-                    password_hash = await owned_thread(hash_password, password)
+                        password_hash = await owned_thread(hash_password, password)
                     updated = await replace_password(
                         conn, account["id"], password_hash,
                         expected_auth_version=request.state.principal.auth_version,

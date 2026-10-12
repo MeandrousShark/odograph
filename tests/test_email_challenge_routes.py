@@ -61,7 +61,8 @@ def _app(monkeypatch, *, smtp_host="smtp.example.com"):
     async def fake_get_account(conn, account_id):
         return ACCOUNT.copy()
 
-    async def fake_verified(request, user, current_password, *, generic_error, precheck_error=None):
+    async def fake_verified(request, user, current_password, *, generic_error, precheck_error=None,
+                            account=None):
         if current_password != "correct":
             raise auth._AccountActionRejected(ACCOUNT.copy(), generic_error, 401)
         return ACCOUNT.copy()
