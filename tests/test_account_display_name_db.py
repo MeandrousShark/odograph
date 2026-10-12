@@ -260,13 +260,13 @@ def test_csrf_is_required_without_mutation():
             wrong = await _post_name(client, "wrong-token", "Mallory")
             assert wrong.status_code == 403
             missing = await client.post("/settings/account/display-name", data={"display_name": "Mallory"})
-            assert missing.status_code in (403, 422)
+            assert missing.status_code == 422
             assert (await _account(pool))["display_name"] is None
 
         async with _client(app) as anonymous:
             response = await anonymous.post(
                 "/settings/account/display-name", data={"csrf_token": "x", "display_name": "Mallory"})
-            assert response.status_code in (303, 403)
+            assert response.status_code == 303
             assert (await _account(pool))["display_name"] is None
 
     _scenario(run)
