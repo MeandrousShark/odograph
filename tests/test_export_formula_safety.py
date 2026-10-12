@@ -104,6 +104,14 @@ def test_annual_report_workbook_stores_formula_like_text_as_text():
 
     _assert_no_formulas(wb)
     _assert_summary_text(wb["Summary"])
+    coverage_cells = [
+        c for row in wb["Summary"].iter_rows() for c in row
+        if isinstance(c.value, str) and "GPS captured" in c.value
+    ]
+    assert len(coverage_cells) == len(PAYLOADS)
+    for cell, payload in zip(coverage_cells, PAYLOADS):
+        assert cell.value.startswith(payload + ": GPS captured")
+        assert cell.data_type == "s"
     _assert_trips_sheet(wb["Trips"])
     ws = wb["Expenses"]
     for row_index, payload in enumerate(PAYLOADS, 2):

@@ -146,7 +146,21 @@ function makeBrowser() {
       addListener(bodyListeners, type, callback);
     },
   };
-  const announcer = { id: "review-announcer", textContent: "" };
+  const announcer = {
+    id: "review-announcer",
+    writes: 0,
+    text: "",
+    get textContent() { return this.text; },
+    set textContent(value) { this.writes += 1; this.text = value; },
+  };
+  const makeCard = (parts) => ({
+    id: "review-card",
+    parts,
+    querySelector(selector) {
+      return selector in this.parts ? { textContent: this.parts[selector] } : null;
+    },
+  });
+  let pageCard = makeCard({ ".review-remaining": "5 remaining" });
 
   const document = {
     body,
@@ -164,6 +178,7 @@ function makeBrowser() {
       if (id === "review-skip") return skip;
       if (id === "review-undo") return undo;
       if (id === "review-announcer") return announcer;
+      if (id === "review-card") return pageCard;
       return null;
     },
     querySelector(selector) {
@@ -288,15 +303,13 @@ function makeBrowser() {
     await flush();
   };
 
-  // A settled card as htmx hands it to afterSettle: only the pieces the
-  // announcer reads. `parts` maps selector to the text it holds.
-  const settle = (parts, { elt } = {}) => {
-    const card = {
-      id: "review-card",
-      querySelector(selector) {
-        return selector in parts ? { textContent: parts[selector] } : null;
-      },
-    };
+  // htmx:afterSettle for a card replacement passes the new card; an autosave
+  // passes the existing one (`same: true`). Only the pieces the announcer
+  // reads are modeled.
+  const settle = (parts, { same = false, elt } = {}) => {
+    let card;
+    if (same) card = pageCard;
+    else card = pageCard = makeCard(parts);
     const event = { target: body, detail: { elt: elt || card } };
     for (const callback of bodyListeners.get("htmx:afterSettle") || []) callback(event);
   };
@@ -527,6 +540,7 @@ test("an auto-selected Business is committed so re-activating it clears it", () 
 test("announcer is empty on initial load", () => {
   const browser = makeBrowser();
   assert.strictEqual(browser.announcer.textContent, "");
+  assert.strictEqual(browser.announcer.writes, 0);
 });
 
 test("a swapped-in card announces its remaining count once per settle", () => {
@@ -535,6 +549,13 @@ test("a swapped-in card announces its remaining count once per settle", () => {
   assert.strictEqual(browser.announcer.textContent, "4 remaining");
   browser.settle({ ".review-remaining": "3 remaining" });
   assert.strictEqual(browser.announcer.textContent, "3 remaining");
+});
+
+test("a replacement card with the same count still announces (Skip)", () => {
+  const browser = makeBrowser();
+  browser.settle({ ".review-remaining": "4 remaining" });
+  browser.settle({ ".review-remaining": "4 remaining" });
+  assert.strictEqual(browser.announcer.writes, 2);
 });
 
 test("done and empty states announce their message", () => {
@@ -546,13 +567,26 @@ test("done and empty states announce their message", () => {
   assert.strictEqual(browser.announcer.textContent, "Nothing to review.");
 });
 
-test("settles that are not card swaps or carry no count leave the announcer alone", () => {
+test("autosave settles on the existing card do not rewrite the announcer", () => {
   const browser = makeBrowser();
   browser.settle({ ".review-remaining": "2 remaining" });
-  // Autosave settle: the element is a form control, not the card.
-  browser.settle({}, { elt: { id: "review-notes", querySelector: () => null } });
+  assert.strictEqual(browser.announcer.writes, 1);
+  browser.settle({}, { same: true });
+  browser.settle({}, { same: true });
+  assert.strictEqual(browser.announcer.writes, 1);
   assert.strictEqual(browser.announcer.textContent, "2 remaining");
-  // Delete dialog state: card without count or done message.
+});
+
+test("the card present at load is not announced by an autosave settle", () => {
+  const browser = makeBrowser();
+  browser.settle({}, { same: true });
+  assert.strictEqual(browser.announcer.writes, 0);
+});
+
+test("a replacement card with no count or done message leaves the announcer alone", () => {
+  const browser = makeBrowser();
+  browser.settle({ ".review-remaining": "2 remaining" });
   browser.settle({});
+  assert.strictEqual(browser.announcer.writes, 1);
   assert.strictEqual(browser.announcer.textContent, "2 remaining");
 });
