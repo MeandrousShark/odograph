@@ -75,6 +75,10 @@ reproduced here.
   field, so the field accepts typing and shows the chosen purpose.
 - A successful split no longer briefly reports that it did not complete
   before the trip list loads.
+- XLSX exports and report workbooks store text that begins with `=` as text
+  instead of a formula.
+- Review announces the remaining count from a persistent live region after each
+  card change, and reads trip distance with its unit.
 
 ### Security
 

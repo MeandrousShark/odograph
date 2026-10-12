@@ -354,6 +354,12 @@ Use the output that matches the job:
   supported schema-version transitions are accepted, including some older
   bundles. Use **Dry run** to validate without writing.
 
+XLSX exports store text such as purposes, notes, and vehicle names as text, so
+a value beginning with `=` is shown as written and not evaluated. CSV values are
+written literally. A spreadsheet application may evaluate a CSV cell that begins
+with a character such as `=`, `+`, `-`, or `@`, so review untrusted text before
+opening a CSV there.
+
 An import temporarily pauses other work for that account. If an import is
 busy, wait briefly and submit it again. Imports are never retried automatically.
 Imports must fit the account's transaction-final allowance. Dry run validates
