@@ -60,7 +60,7 @@ COLUMN_SELECT = {
     (CONTROL_ROLE, "tracking_devices"): ("id", "account_id", "enabled", "generation", "revoked_at"),
 }
 ACCOUNT_CONTROL_UPDATE_COLUMNS = (
-    "updated_at", "avatar_bytes", "avatar_mime", "avatar_updated_at",
+    "updated_at", "avatar_bytes", "avatar_mime", "avatar_updated_at", "display_name",
 )
 BOOTSTRAP_INSERT_TABLES = ("accounts", "account_settings", "vehicles", "tag_rules", "mileage_rates")
 BOOTSTRAP_LOCK_TABLES = ("accounts", "ingest_credentials", "tracking_devices", "tracking_device_aliases")
@@ -325,7 +325,12 @@ def _table_rights(role: str, table: str) -> set[str]:
     return set()
 
 
-def _policy_contract(schema_version: int = 42) -> dict[tuple[str, str], tuple[str, str, str | None, str | None]]:
+def _account_control_update_columns(schema_version: int) -> tuple[str, ...]:
+    return tuple(column for column in ACCOUNT_CONTROL_UPDATE_COLUMNS
+                 if schema_version >= 43 or column != "display_name")
+
+
+def _policy_contract(schema_version: int = 43) -> dict[tuple[str, str], tuple[str, str, str | None, str | None]]:
     expression = "account_id = NULLIF(current_setting('app.account_id'::text,true),''::text)::bigint"
     policies = {(table, "account_isolation"): (RUNTIME_ROLE, "ALL", expression, expression)
                 for table in OWNED_TABLES + PROTECTED_TABLES
@@ -419,7 +424,7 @@ async def _provision(conn) -> None:
         await conn.execute(sql.SQL("GRANT SELECT ({}) ON {} TO {}").format(
             sql.SQL(",").join(map(sql.Identifier, columns)), sql.Identifier("public", table), sql.Identifier(role)))
     await conn.execute(sql.SQL("GRANT UPDATE ({}) ON public.accounts TO odograph_control").format(
-        sql.SQL(",").join(map(sql.Identifier, ACCOUNT_CONTROL_UPDATE_COLUMNS))))
+        sql.SQL(",").join(map(sql.Identifier, _account_control_update_columns(schema_version)))))
     for table, sequence in await _sequences(conn):
         ident = sql.Identifier("public", sequence)
         await conn.execute(sql.SQL("REVOKE ALL ON SEQUENCE {} FROM PUBLIC,odograph_control,odograph_runtime,odograph_bootstrap").format(ident))
@@ -492,6 +497,7 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
     contract_functions = {signature: caller for signature, caller in FUNCTIONS.items()
                           if (schema_version >= 42 or signature not in S2_FUNCTIONS)
                           and (schema_version >= 41 or signature not in GEOCODE_FUNCTIONS)}
+    account_update_columns = _account_control_update_columns(schema_version)
     cur = await conn.execute(
         "SELECT c.relname,pg_get_userbyid(c.relowner),c.relrowsecurity,c.relforcerowsecurity "
         "FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
@@ -601,7 +607,7 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
                 expected_allowed = privilege in rights or (
                     privilege == "SELECT" and column in COLUMN_SELECT.get((role, table), ()))
                 if privilege == "UPDATE" and role == CONTROL_ROLE and table == "accounts":
-                    expected_allowed = "UPDATE" in rights or column in ACCOUNT_CONTROL_UPDATE_COLUMNS
+                    expected_allowed = "UPDATE" in rights or column in account_update_columns
                 if allowed != expected_allowed:
                     bad_columns.append((column, privilege))
             _require_contract(not bad_columns, f"column privilege: {role} public.{table} {bad_columns}")
@@ -761,7 +767,7 @@ async def _validate_s2_schema(conn) -> None:
                           f"S2 index definition: {name}")
 
 
-async def _validate_geocode_schema(conn, schema_version: int = 42) -> None:
+async def _validate_geocode_schema(conn, schema_version: int = 43) -> None:
     columns = {
         "geocode_retry": (
             ("account_id", "bigint", True, None),
@@ -841,7 +847,7 @@ async def _validate_geocode_schema(conn, schema_version: int = 42) -> None:
     ] + [("geocode_work_unit", unit) for unit in ("discovery", "coordinate")], "geocode enum definition")
 
 
-async def _validate_geocode_indexes(conn, schema_version: int = 42) -> None:
+async def _validate_geocode_indexes(conn, schema_version: int = 43) -> None:
     definitions = {
         "geocode_retry_pkey": "CREATE UNIQUE INDEX geocode_retry_pkey ON public.geocode_retry "
             "USING btree (account_id, rounded_lat, rounded_lon)",
@@ -882,7 +888,7 @@ async def _validate_geocode_indexes(conn, schema_version: int = 42) -> None:
                           f"geocode index definition: {name}")
 
 
-async def _validate_storage_triggers(conn, schema_version: int = 42) -> None:
+async def _validate_storage_triggers(conn, schema_version: int = 43) -> None:
     expected = {}
     charged_tables = tuple(table for table in OWNED_TABLES
                            if schema_version >= 41 or table not in GEOCODE_TABLES)
