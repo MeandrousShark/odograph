@@ -53,6 +53,63 @@
     const status = manualTripForm()?.querySelector('.route-picker-status');
     if (status) status.textContent = message;
   }
+  // Address-search mode: each endpoint ("start"/"end") has a search input,
+  // a results container and a chosen-label line. The picked coordinates go
+  // into the same hidden start_*/end_* fields map mode uses.
+  const SEARCH_ENDPOINTS = ['start', 'end'];
+  function searchInput(endpoint) {
+    return manualTripForm()?.querySelector(`[data-route-search="${endpoint}"]`);
+  }
+  function searchResults(endpoint) {
+    return manualTripForm()?.querySelector(`[data-route-search-results="${endpoint}"]`);
+  }
+  function searchChosen(endpoint) {
+    return manualTripForm()?.querySelector(`[data-route-search-chosen="${endpoint}"]`);
+  }
+  function searchStatus() {
+    return manualTripForm()?.querySelector('[data-route-search-status]');
+  }
+  // Per-endpoint request bookkeeping. `gen` is bumped whenever responses
+  // already on their way must be ignored (a pick or a state reset);
+  // `picked` blocks every request and response until the user types again;
+  // `lastQuery` is the text of the last request sent, so a keyup that did not
+  // change the text does not search (and abort) again. htmx's own "changed"
+  // modifier is not used because its remembered value cannot be reset here.
+  const searchState = {};
+  SEARCH_ENDPOINTS.forEach((endpoint) => {
+    searchState[endpoint] = { gen: 0, picked: false, lastQuery: null };
+  });
+  function abortSearchRequest(endpoint) {
+    const input = searchInput(endpoint);
+    if (input && typeof htmx !== 'undefined') htmx.trigger(input, 'htmx:abort');
+  }
+  function resetSearchRequestState(endpoint) {
+    const state = searchState[endpoint];
+    state.gen++;
+    state.picked = false;
+    state.lastQuery = null;
+    abortSearchRequest(endpoint);
+  }
+  function clearSearchEndpointCoords(endpoint) {
+    setRouteFieldValue(`${endpoint}_lat`, '');
+    setRouteFieldValue(`${endpoint}_lon`, '');
+    const chosen = searchChosen(endpoint);
+    if (chosen) chosen.textContent = '';
+  }
+  function clearSearchState() {
+    SEARCH_ENDPOINTS.forEach((endpoint) => {
+      resetSearchRequestState(endpoint);
+      const input = searchInput(endpoint);
+      if (input) input.value = '';
+      const results = searchResults(endpoint);
+      if (results) results.innerHTML = '';
+      const chosen = searchChosen(endpoint);
+      if (chosen) chosen.textContent = '';
+    });
+    const status = searchStatus();
+    if (status) status.textContent = '';
+  }
+
   function setDistanceRequired(required) {
     const distance = routeField('distance');
     if (distance) distance.required = required;
@@ -118,14 +175,15 @@
   // a route the server just rejected. Markers are different by mode: in
   // named-places mode the markers came from the previous preview response's
   // start/end coordinates, so they are part of the same invalidated
-  // selection and must go with the line. In map-picked mode the markers are
+  // selection and must go with the line (address-search mode works the same
+  // way: its markers also come from the preview response). In map-picked mode the markers are
   // the points the user themselves clicked -- still their current selection
   // even though no route connects them -- so removing them would silently
   // discard input the user has to redo.
   function clearStaleRouteLine() {
     if (!routeMap) return;
     if (routeLine) { routeMap.removeLayer(routeLine); routeLine = null; }
-    if (currentRouteMode() === 'places') {
+    if (currentRouteMode() === 'places' || currentRouteMode() === 'search') {
       if (routeStartMarker) { routeMap.removeLayer(routeStartMarker); routeStartMarker = null; }
       if (routeEndMarker) { routeMap.removeLayer(routeEndMarker); routeEndMarker = null; }
     }
@@ -176,6 +234,7 @@
     clearRoutePlaceSelection();
     clearRouteMapLayers();
     ROUTE_COORD_FIELDS.forEach((name) => setRouteFieldValue(name, ''));
+    clearSearchState();
   }
 
   // Hidden and disabled together for "places"/"map": `hidden` alone would
@@ -194,9 +253,11 @@
     const nonePanel = routePanel('none');
     const placesPanel = routePanel('places');
     const mapPanel = routePanel('map');
+    const searchPanel = routePanel('search');
     if (nonePanel) nonePanel.hidden = mode !== 'none';
     if (placesPanel) placesPanel.hidden = mode !== 'places';
     if (mapPanel) mapPanel.hidden = mode !== 'map';
+    if (searchPanel) searchPanel.hidden = mode !== 'search';
     setLabelFieldsEnabled(mode === 'none');
     const hint = manualTripForm()?.querySelector('.route-distance-hint');
     if (hint) hint.hidden = mode === 'none';
@@ -246,6 +307,91 @@
     maybePreviewRoute();
   });
 
+  // Editing a search field's text after a pick drops that endpoint: the old
+  // coordinates no longer describe what the field says.
+  document.addEventListener('input', (event) => {
+    const endpoint = event.target.dataset?.routeSearch;
+    if (!endpoint) return;
+    searchState[endpoint].picked = false;
+    searchState[endpoint].lastQuery = null;
+    invalidateRoutePreview();
+    clearSearchEndpointCoords(endpoint);
+  });
+
+  // Gate every autocomplete request. This runs on htmx:confirm, before
+  // hx-sync, so a request refused here does not abort the one in flight.
+  // Refused: not in Search mode, a result already picked, text unchanged
+  // since the last request, or empty text (which also drops anything pending
+  // and clears the list).
+  document.addEventListener('htmx:confirm', (event) => {
+    const input = event.detail?.elt;
+    const endpoint = input?.dataset?.routeSearch;
+    if (!endpoint || !searchState[endpoint]) return;
+    const state = searchState[endpoint];
+    const query = (input.value || '').trim();
+    if (currentRouteMode() !== 'search' || state.picked) {
+      event.preventDefault();
+      return;
+    }
+    if (!query) {
+      event.preventDefault();
+      state.gen++;
+      state.lastQuery = null;
+      abortSearchRequest(endpoint);
+      const results = searchResults(endpoint);
+      if (results) results.innerHTML = '';
+      return;
+    }
+    if (query === state.lastQuery) {
+      event.preventDefault();
+      return;
+    }
+    state.lastQuery = query;
+  });
+  document.addEventListener('htmx:beforeRequest', (event) => {
+    const endpoint = event.detail?.elt?.dataset?.routeSearch;
+    if (!endpoint || !searchState[endpoint] || !event.detail.xhr) return;
+    event.detail.xhr.routeSearch = { endpoint, gen: searchState[endpoint].gen };
+  });
+  // A response is only swapped in if nothing invalidated its request while
+  // it was in flight.
+  document.addEventListener('htmx:beforeSwap', (event) => {
+    const tag = event.detail?.xhr?.routeSearch;
+    if (!tag) return;
+    const state = searchState[tag.endpoint];
+    if (tag.gen !== state.gen || state.picked || currentRouteMode() !== 'search') {
+      event.detail.shouldSwap = false;
+    }
+  });
+
+  // One delegated handler for every result button in either endpoint's list.
+  document.addEventListener('click', (event) => {
+    const btn = event.target.closest('[data-fill-place-latlon]');
+    if (!btn) return;
+    const endpoint = btn.closest('[data-route-search-results]')?.dataset.routeSearchResults;
+    if (!SEARCH_ENDPOINTS.includes(endpoint)) return;
+    const lat = parseFloat(btn.dataset.lat);
+    const lon = parseFloat(btn.dataset.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+    invalidateRoutePreview();
+    setRouteFieldValue(`${endpoint}_lat`, lat.toFixed(6));
+    setRouteFieldValue(`${endpoint}_lon`, lon.toFixed(6));
+    const label = (btn.textContent || '').trim();
+    const chosen = searchChosen(endpoint);
+    if (chosen) chosen.textContent = label;
+    const results = searchResults(endpoint);
+    if (results) results.innerHTML = '';
+    // A search still in flight or waiting out its debounce must not
+    // repopulate the list that was just cleared.
+    searchState[endpoint].gen++;
+    searchState[endpoint].picked = true;
+    abortSearchRequest(endpoint);
+    const title = endpoint === 'start' ? 'Start' : 'End';
+    const status = searchStatus();
+    if (status) status.textContent = `${title} set to ${label}`;
+    maybePreviewRoute();
+  });
+
   function onRoutePickerMapClick(event) {
     if (currentRouteMode() !== 'map') return;
     if (routeStartMarker && routeEndMarker) return; // both set; Reset first.
@@ -279,9 +425,10 @@
       routeLine = L.geoJSON(data.geometry, { style: { color: routeColor, weight: 4 } }).addTo(map);
       map.fitBounds(routeLine.getBounds().pad(0.15));
     }
-    // Named-places mode has no click flow to place markers, so the preview
-    // response's own start/end coordinates are what places them.
-    if (currentRouteMode() === 'places') {
+    // Named-places and address-search modes have no click flow to place
+    // markers, so the preview response's own start/end coordinates are what
+    // places them.
+    if (currentRouteMode() === 'places' || currentRouteMode() === 'search') {
       if (routeStartMarker) map.removeLayer(routeStartMarker);
       if (routeEndMarker) map.removeLayer(routeEndMarker);
       if (data.start) routeStartMarker = L.marker(data.start, { title: 'Start' }).addTo(map);
@@ -305,7 +452,7 @@
       const endLon = routeField('end_lon')?.value;
       if (!startLat || !startLon || !endLat || !endLon) return;
       body = new URLSearchParams({
-        route_mode: 'map', start_lat: startLat, start_lon: startLon, end_lat: endLat, end_lon: endLon,
+        route_mode: mode, start_lat: startLat, start_lon: startLon, end_lat: endLat, end_lon: endLon,
       });
     }
     // A newer call to maybePreviewRoute (a further endpoint change) also

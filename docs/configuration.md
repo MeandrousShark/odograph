@@ -445,8 +445,9 @@ Prepare a regional dataset before setting these values. See
 
 Address search and reverse lookups share one FIFO provider pacer. Waiting
 reverse lookups release background ownership before pacing, and provider
-failures still consume their interval. Address search may therefore wait
-behind an earlier lookup. This interval is operator configuration, not a
+failures still consume their interval. Address search, both in Settings and in
+the manual trip form's Search mode, may therefore wait behind an earlier
+lookup. This interval is operator configuration, not a
 claim about a hosted provider's usage policy.
 
 Provider HTTP operations have a 15-second total network deadline through

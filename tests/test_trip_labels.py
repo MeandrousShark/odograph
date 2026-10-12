@@ -81,7 +81,10 @@ def test_normalize_trip_label_error_names_the_field_that_failed():
     assert "start_label" not in exc.value.errors
 
 
-@pytest.mark.parametrize("route_mode,field", [("places", "start_label"), ("map", "end_label")])
+@pytest.mark.parametrize(
+    "route_mode,field",
+    [("places", "start_label"), ("map", "end_label"), ("search", "start_label"), ("search", "end_label")],
+)
 def test_create_rejects_nonblank_label_for_any_route_mode_other_than_none(route_mode, field):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(_add(route_mode=route_mode, **{field: "Somewhere"}))
