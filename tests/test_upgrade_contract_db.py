@@ -471,3 +471,51 @@ def test_geocode_upgrade_keeps_contract_without_reprovisioning(monkeypatch, tmp_
             monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
             await pool.close()
     asyncio.run(scenario())
+
+
+def test_display_name_upgrade_keeps_contract_without_reprovisioning(monkeypatch, tmp_path):
+    async def scenario():
+        pool = make_pool(TEST_DB)
+        await pool.open(wait=True)
+        try:
+            await drop_and_recreate_schema(pool)
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", _migration_dir(tmp_path, "before_display_name", through=42))
+            await run_migrations(pool)
+            await prepare_application_roles(TEST_DB)
+            async with pool.connection() as conn:
+                await conn.execute(
+                    "INSERT INTO accounts(id,email,password_hash,is_admin) "
+                    "VALUES(41,'upgrade-name@example.invalid','unused',true)")
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
+            await run_migrations(pool)
+
+            async def forbidden_reprovision(conn):
+                raise AssertionError("upgrade must validate rather than provision")
+
+            monkeypatch.setattr(application_roles, "_provision", forbidden_reprovision)
+            await prepare_application_roles(TEST_DB)
+            async with pool.connection() as conn:
+                assert await (await conn.execute(
+                    "SELECT MAX(version) FROM schema_migrations")).fetchone() == (43,)
+                assert await (await conn.execute(
+                    "SELECT display_name FROM accounts WHERE id=41")).fetchone() == (None,)
+                assert await (await conn.execute(
+                    "SELECT has_column_privilege('odograph_control','public.accounts','display_name','UPDATE'),"
+                    "has_column_privilege('odograph_control','public.accounts','email','UPDATE'),"
+                    "has_column_privilege('odograph_runtime','public.accounts','display_name','UPDATE')"
+                )).fetchone() == (True, False, False)
+                assert await (await conn.execute("SELECT public.storage_usage_consistent()")).fetchone() == (True,)
+            async with application_roles.application_role_pools(TEST_DB) as roles:
+                async with roles.control.connection() as conn:
+                    await conn.execute("UPDATE public.accounts SET display_name='Upgraded' WHERE id=41")
+                    await conn.commit()
+                    with pytest.raises(errors.InsufficientPrivilege):
+                        await conn.execute("UPDATE public.accounts SET email='other@example.invalid' WHERE id=41")
+            async with pool.connection() as conn:
+                assert await (await conn.execute(
+                    "SELECT display_name FROM accounts WHERE id=41")).fetchone() == ("Upgraded",)
+                assert await (await conn.execute("SELECT public.storage_usage_consistent()")).fetchone() == (True,)
+        finally:
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
+            await pool.close()
+    asyncio.run(scenario())

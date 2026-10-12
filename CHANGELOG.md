@@ -11,6 +11,10 @@ reproduced here.
 
 ### Added
 
+- An optional account display name, set in Account Settings under Profile,
+  replaces the email-based name and initials in the header and report pages
+  and appears in the administrator account list. Schema 43 adds the nullable
+  column; existing accounts keep their current header until a name is set.
 - Native signed PostgreSQL 16.15/PostGIS 3.6.4 images for supported Linux
   AMD64 and ARM64 hosts, published as the immutable
   `ghcr.io/meandrousshark/odograph-postgis` multi-architecture index.

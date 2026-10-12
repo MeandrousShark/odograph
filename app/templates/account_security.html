@@ -59,6 +59,19 @@
   </div>
 </div>
 </section>
+<section class="account-security-section account-settings-display-name-section" aria-labelledby="account-display-name-heading">
+<h4 id="account-display-name-heading">Display name</h4>
+<form method="post" action="/settings/account/display-name" class="auth-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <label>Display name
+    <input type="text" name="display_name" value="{{ display_name_value|default('', true) }}" maxlength="100" autocomplete="name"
+           aria-describedby="account-display-name-hint{% if display_name_error %} account-display-name-error{% endif %}"{% if display_name_error %} aria-invalid="true"{% endif %}>
+  </label>
+  {% if display_name_error %}<span class="field-error" id="account-display-name-error">{{ display_name_error }}</span>{% endif %}
+  <p class="muted" id="account-display-name-hint">Shown in the header instead of your login email. Leave blank to use your email.</p>
+  <button type="submit" class="control control-primary auth-submit">Save display name</button>
+</form>
+</section>
 </section>
 
 <section class="card account-settings-card account-settings-security" aria-labelledby="security-heading">

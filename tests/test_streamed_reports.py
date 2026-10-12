@@ -185,3 +185,34 @@ def test_illegal_character_inside_xlsx_prefix_still_fails_and_cleans(tmp_path):
         with pytest.raises(IllegalCharacterError): renderer.render()
         assert not list(reservation.directory.glob('report-sheet-*'))
     finally: renderer.close();reservation.release()
+
+
+@pytest.mark.parametrize('kind', ['annual_html', 'range_html'])
+@pytest.mark.parametrize('display_name', ['Ada @ Work <x>', 'ops@home', '山田 太郎', 'Cher', ''])
+def test_html_header_uses_display_name_without_email_split(tmp_path, kind, display_name):
+    from types import SimpleNamespace
+    from app.main import make_templates
+    from app.report import next_year_disabled
+    rows = [trip(1, 2)]
+    renderer,reservation = populated(tmp_path,rows,[],[],kind)
+    email = 'ß A<&@example.com'
+    text(renderer,'display_name',display_name)
+    text(renderer,'csrf','csrf')
+    text(renderer,'csp_nonce','nonce')
+    try:
+        result = renderer.render()
+        assert 'display_name' not in renderer.metadata['user']
+        report = build_annual_report(rows,RATES,TZ,2026) if kind.startswith('annual') else build_range_report(rows,RATES,TZ,date(2026,1,1),date(2026,12,31))
+        templates = make_templates(SimpleNamespace(display_tz=TZ,app_version='test'))
+        user = {**renderer.metadata['user'],'email':email,'name':display_name or email.split('@',1)[0]}
+        if display_name:
+            user['display_name'] = display_name
+        expected = templates.env.get_template('report.html' if kind.startswith('annual') else 'report_range.html').render(
+            report=report,odometer_coverage=[],expense_report=build_expense_report(2026,rows,[],[],RATES,TZ),user=user,
+            csrf='csrf',csp_nonce='nonce',review_count=1,storage=None,
+            next_year_disabled=next_year_disabled(2026,datetime.now(TZ)),request=SimpleNamespace(url=SimpleNamespace(path='/report/2026')))
+        actual = renderer.budget.path(result['path']).read_text()
+        assert actual == expected
+        if display_name:
+            assert display_name.split()[0][0].upper() in actual.split('class="account-avatar" aria-hidden="true">', 1)[1][:16]
+    finally: renderer.close(); reservation.release()

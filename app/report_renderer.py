@@ -143,7 +143,7 @@ class Renderer:
         return ''.join(self.chunks(self.refs[name]))
 
     def text(self, key, size, channel, encoding=None):
-        if key not in ('display_tz', 'email', 'app_version', 'rate1', 'rate2', 'vehicle_name', 'expense_amount', 'csrf', 'csp_nonce', 'timezone_paths') and key not in ('field:purpose', 'field:notes', 'field:vehicle_name', 'field:start_place_name', 'field:end_place_name', 'field:start_address', 'field:end_address'):
+        if key not in ('display_tz', 'email', 'display_name', 'app_version', 'rate1', 'rate2', 'vehicle_name', 'expense_amount', 'csrf', 'csp_nonce', 'timezone_paths') and key not in ('field:purpose', 'field:notes', 'field:vehicle_name', 'field:start_place_name', 'field:end_place_name', 'field:start_address', 'field:end_address'):
             raise ValueError('unknown report metadata')
         if key in ('email', 'display_tz') and encoding == 'ascii':
             raise TypeError('timezone key must be str')
@@ -511,6 +511,28 @@ class Renderer:
                 return super().split(separator, maxsplit)
         user['name'] = DisplayName(user['name']) if local_size else ''
         user['email'] = DisplayName(user['email']) if email_ref[1] else ''
+        display_ref = self.refs.get('display_name')
+        if display_ref is not None and display_ref[1]:
+            # A chosen name replaces the email label, and its initials come
+            # from its own first and last words with no "@" cut.
+            name_words = 0
+            name_first = name_last = ''
+            in_word = False
+            for chars in self.chunks(display_ref):
+                for char in chars:
+                    if char.isspace():
+                        in_word = False
+                    elif not in_word:
+                        name_words += 1
+                        name_first = name_first or char
+                        name_last = char
+                        in_word = True
+            class ChosenName(str):
+                def split(inner, separator=None, maxsplit=-1):
+                    if separator is not None:
+                        raise TypeError('a chosen name is never split on a separator')
+                    return [] if not name_words else [name_first] if name_words == 1 else [name_first, name_last]
+            user['name'] = user['display_name'] = ChosenName(self.token(display_ref))
         context = dict(report=report, odometer_coverage=coverage, expense_report=expenses, user=user,
                        csrf=self.token(self.refs['csrf']) if 'csrf' in self.refs else self.metadata['csrf'], csp_nonce=self.token(self.refs['csp_nonce']) if 'csp_nonce' in self.refs else self.metadata['csp_nonce'], review_count=self.metadata['review_count'], storage=self.metadata['storage'],
                        next_year_disabled=next_year_disabled(self.year, datetime.now(self.tz)), request=SimpleNamespace(url=SimpleNamespace(path=self.metadata['request_path'])))

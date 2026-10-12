@@ -69,7 +69,9 @@
     {% set account_settings_active = current_path == "/settings/account" %}
     {% set account_menu_active = current_path == "/settings" or current_path.startswith("/settings/") or active_page == "accounts" %}
     {% set display_name = user.name or user.email or user.sub or "User" %}
-    {% set avatar_seed = display_name.split("@", 1)[0] %}
+    {# A chosen display name may itself contain "@"; only the email
+       fallback is cut at its local part. #}
+    {% set avatar_seed = display_name if user.display_name else display_name.split("@", 1)[0] %}
     {% set name_parts = avatar_seed.split() %}
     {% set initials = ((name_parts[0][0] ~ (name_parts[-1][0] if name_parts|length > 1 else "")) if name_parts else "U")|upper %}
     {% set review_badge_count = review_count|default(0, true) %}

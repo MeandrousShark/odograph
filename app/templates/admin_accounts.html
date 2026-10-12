@@ -62,13 +62,14 @@
   <div class="table-wrapper">
   <table class="admin-card-table" role="table" aria-labelledby="accounts-heading">
     <thead role="rowgroup"><tr role="row">
-      <th scope="col" role="columnheader">ID</th><th scope="col" role="columnheader">Login email</th><th scope="col" role="columnheader">Email verified</th><th scope="col" role="columnheader">Role</th>
+      <th scope="col" role="columnheader">ID</th><th scope="col" role="columnheader">Display name</th><th scope="col" role="columnheader">Login email</th><th scope="col" role="columnheader">Email verified</th><th scope="col" role="columnheader">Role</th>
       <th scope="col" role="columnheader">Access</th><th scope="col" role="columnheader">Login methods</th><th scope="col" role="columnheader">Deletion</th><th scope="col" role="columnheader">Recovery</th>
     </tr></thead>
     <tbody role="rowgroup">
     {% for account in accounts %}
       <tr role="row" class="admin-account-row{% if multiuser_available and account.id != user.id %} admin-account-row-with-deletion{% endif %}">
         <td role="cell" class="num" data-label="ID">{{ account.id }}</td>
+        <td role="cell" data-label="Display name">{{ account.display_name or "" }}</td>
         <td role="cell" data-label="Login email">{{ account.email }}</td>
         <td role="cell" data-label="Email verified">{{ "Yes" if account.email_verified else "No" }}</td>
         <td role="cell" data-label="Role">{{ "Administrator" if account.is_admin else "Member" }}</td>
@@ -104,7 +105,7 @@
       </tr>
       {% if multiuser_available and account.id != user.id %}
       <tr role="row" class="admin-account-deletion-row">
-        <td role="cell" colspan="8">
+        <td role="cell" colspan="9">
           {% if not account.deletion_deadline %}
           <details class="admin-account-deletion">
             <summary>Schedule deletion for {{ account.email }}</summary>
@@ -156,7 +157,7 @@
       </tr>
       {% endif %}
     {% else %}
-      <tr role="row"><td role="cell" colspan="8" class="muted">No accounts.</td></tr>
+      <tr role="row"><td role="cell" colspan="9" class="muted">No accounts.</td></tr>
     {% endfor %}
     </tbody>
   </table>

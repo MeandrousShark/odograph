@@ -358,12 +358,14 @@ async def prepare_report(request, user, kind, year=None, start=None, end=None):
         await control.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
         await projection.timeout(control)
         row = await projection.scalar(control,
-            "SELECT octet_length(convert_to(email,%s)) AS size FROM accounts WHERE id=%s AND is_enabled AND auth_version=%s",
-            (control.info.parameter_status('client_encoding'),principal.account_id,principal.auth_version))
+            "SELECT octet_length(convert_to(email,%s)) AS size,octet_length(convert_to(display_name,%s)) AS name_size "
+            "FROM accounts WHERE id=%s AND is_enabled AND auth_version=%s",
+            (*([control.info.parameter_status('client_encoding')] * 2),principal.account_id,principal.auth_version))
         if row is None:
             raise RuntimeError('report account binding changed')
         snapshot = await projection.scalar(control,'SELECT pg_export_snapshot() AS snapshot')
         await projection.text(control,'email',row['size'],'email','accounts','id=%s',(principal.account_id,))
+        await projection.text(control,'display_name',row['name_size'],'display_name','accounts','id=%s',(principal.account_id,))
         async with request.state.account_pool.connection(snapshot_id=snapshot['snapshot']) as conn:
             owner = account_id(conn)
             settings = await projection.scalar(conn,"SELECT octet_length(convert_to(display_tz,%s)) AS size FROM account_settings WHERE account_id=%s",(conn.info.parameter_status('client_encoding'),owner))

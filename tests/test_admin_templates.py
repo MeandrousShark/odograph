@@ -108,7 +108,7 @@ def test_account_deletion_actions_stay_with_their_target_in_full_width_rows():
     assert len(deletion_rows) == 4
 
     schedule_row = deletion_rows[0].split("</tr>", 1)[0]
-    assert 'colspan="8"' in schedule_row
+    assert 'colspan="9"' in schedule_row
     assert "Schedule deletion for enabled-member@example.invalid" in schedule_row
     assert 'action="/admin/accounts/2/deletion"' in schedule_row
     assert 'name="target_email"' in schedule_row
