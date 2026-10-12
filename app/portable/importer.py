@@ -35,8 +35,8 @@ log = logging.getLogger(__name__)
 # Schema 38 adds internal snap retry state, 39 adds import admission, and
 # 40 adds protected logical storage accounting; 41 adds internal durable
 # geocode retry and discovery state; 42 adds protected storage limits and raw
-# replay receipts. Schema 43 adds accounts.display_name, a table the bundle
-# never carries.
+# replay receipts. Schema 43 adds accounts.display_name, a column of a table
+# the bundle never carries.
 # None changes the portable bundle.
 # Keep the tuples explicit so a future migration never becomes cross-schema
 # compatible merely because its version is adjacent.

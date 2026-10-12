@@ -215,10 +215,10 @@ def test_length_limit_and_disallowed_characters_rerender_without_change():
             assert 'aria-invalid="true"' in response.text
             assert (await _account(pool))["display_name"] == "Keep Me"
 
-            for bad in ("Ada\x07", "Ada​Lovelace", "Ada‮ecalevol", "Ada", "A\x00b"):
+            for bad in ("Ada\x07", "Ada\u200bLovelace", "Ada\u202eecalevol", "Ada\ue000", "A\x00b", "Ada\u2028Lovelace", "Ada\u2029Lovelace"):
                 response = await _post_name(client, csrf, bad)
                 assert response.status_code == 422, repr(bad)
-                assert 'id="account-display-name-error">Remove control or invisible formatting characters.</span>' in response.text
+                assert 'id="account-display-name-error">Remove line breaks, control characters, and invisible formatting characters.</span>' in response.text
                 assert (await _account(pool))["display_name"] == "Keep Me"
             # The header still shows the stored name, not the rejected input.
             assert HEADER_RE.search(response.text).group(1) == "Keep Me"

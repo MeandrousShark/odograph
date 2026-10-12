@@ -7,7 +7,8 @@ from psycopg.rows import dict_row
 
 # Matches migrations/043_account_display_name.sql's char_length cap.
 DISPLAY_NAME_MAX_LENGTH = 100
-_DISALLOWED_DISPLAY_NAME_CATEGORIES = frozenset(("Cc", "Cf", "Cs", "Co"))
+# Zl and Zp are line and paragraph separators, rejected like a newline.
+_DISALLOWED_DISPLAY_NAME_CATEGORIES = frozenset(("Cc", "Cf", "Cs", "Co", "Zl", "Zp"))
 
 
 def normalize_email(email: str) -> str:
@@ -40,16 +41,16 @@ class DisplayNameError(ValueError):
 
 
 def normalize_display_name(value: str) -> str | None:
-    """Trim, clear when blank, and reject over-long text or invisible
-    control, format, surrogate and private-use characters, which could make
-    one name render like another."""
+    """Trim, clear when blank, and reject over-long text or control, format,
+    line or paragraph separator, surrogate and private-use characters, which
+    could break the header or make one name render like another."""
     trimmed = value.strip()
     if not trimmed:
         return None
     if len(trimmed) > DISPLAY_NAME_MAX_LENGTH:
         raise DisplayNameError(f"Keep it to {DISPLAY_NAME_MAX_LENGTH} characters or fewer.")
     if any(unicodedata.category(char) in _DISALLOWED_DISPLAY_NAME_CATEGORIES for char in trimmed):
-        raise DisplayNameError("Remove control or invisible formatting characters.")
+        raise DisplayNameError("Remove line breaks, control characters, and invisible formatting characters.")
     return trimmed
 
 

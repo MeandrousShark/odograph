@@ -508,8 +508,13 @@ def test_display_name_upgrade_keeps_contract_without_reprovisioning(monkeypatch,
             async with application_roles.application_role_pools(TEST_DB) as roles:
                 async with roles.control.connection() as conn:
                     await conn.execute("UPDATE public.accounts SET display_name='Upgraded' WHERE id=41")
+                    await conn.commit()
                     with pytest.raises(errors.InsufficientPrivilege):
                         await conn.execute("UPDATE public.accounts SET email='other@example.invalid' WHERE id=41")
+            async with pool.connection() as conn:
+                assert await (await conn.execute(
+                    "SELECT display_name FROM accounts WHERE id=41")).fetchone() == ("Upgraded",)
+                assert await (await conn.execute("SELECT public.storage_usage_consistent()")).fetchone() == (True,)
         finally:
             monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
             await pool.close()

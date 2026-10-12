@@ -51,8 +51,8 @@ def test_normalize_display_name_accepts(value, expected):
 @pytest.mark.parametrize("value", [
     "x" * 101,
     "Ada\x00", "Ada\x07Lovelace", "Ada\nLovelace", "Ada\x7f", "Ada\x85x",
-    "Ada​Lovelace", "Ada‍", "‮Ada", "Ada⁦", "﻿Ada",
-    "Ada", "Ada\U000f0000", "Ada\ud800",
+    "Ada\u200bLovelace", "Ada\u200d", "\u202eAda", "Ada\u2066", "\ufeffAda",
+    "Ada\ue000", "Ada\U000f0000", "Ada\ud800", "Ada\u2028Lovelace", "Ada\u2029Lovelace",
 ])
 def test_normalize_display_name_rejects(value):
     with pytest.raises(DisplayNameError):
