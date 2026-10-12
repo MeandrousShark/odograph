@@ -14,7 +14,6 @@ import pytest
 from psycopg.types.json import Jsonb
 
 import app.db as db_module
-from app.accounts import create_admin
 from app.db import MIGRATIONS_DIR, make_pool, run_migrations
 from conftest import LATEST_SCHEMA_VERSION, drop_and_recreate_schema
 
@@ -50,11 +49,16 @@ async def _migrate_through_026_with_messages(pool, tmp_path, monkeypatch):
     monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
     async with pool.connection() as conn:
         await conn.execute((SQL_DIR / "account_bootstrap.sql").read_text())
-        account = await create_admin(conn, "owner@example.invalid", "unused-test-hash")
+        # The bootstrap function itself, not create_admin: its account read
+        # selects current-schema columns that a schema-26 database lacks.
+        cur = await conn.execute(
+            "SELECT public.bootstrap_first_account(%s, %s, %s)",
+            ("owner@example.invalid", "unused-test-hash", "UTC"))
+        account_id = (await cur.fetchone())[0]
         for payload in KEPT + DELETED:
             await conn.execute(
                 "INSERT INTO raw_messages(account_id, payload) VALUES (%s, %s)",
-                (account["id"], Jsonb(payload)))
+                (account_id, Jsonb(payload)))
         cur = await conn.execute("SELECT id, payload FROM raw_messages ORDER BY id")
         return await cur.fetchall()
 
