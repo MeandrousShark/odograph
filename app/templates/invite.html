@@ -4,6 +4,29 @@
 <script nonce="{{ csp_nonce }}">
   (function () {
     var pendingToken = null;
+    function requireMatchingPasswords(passwordId, confirmId) {
+      var password = document.getElementById(passwordId);
+      var confirm = document.getElementById(confirmId);
+      if (!password || !confirm || !confirm.form) return;
+      function check() {
+        confirm.setCustomValidity(confirm.value === password.value ? "" : "Passwords do not match.");
+      }
+      // Autofill may change values without input events. The submit
+      // button's click, also sent for Enter, runs before native validation.
+      ["input", "change"].forEach(function (type) {
+        password.addEventListener(type, check);
+        confirm.addEventListener(type, check);
+      });
+      var button = confirm.form.querySelector('button[type="submit"]');
+      if (button) button.addEventListener("click", check);
+      confirm.form.addEventListener("submit", function (event) {
+        check();
+        if (!confirm.checkValidity()) {
+          event.preventDefault();
+          confirm.reportValidity();
+        }
+      });
+    }
     function consumeFragment() {
       if (!window.location.hash) return;
       var fragment = new URLSearchParams(window.location.hash.slice(1));
@@ -27,6 +50,7 @@
         if (oidcField) oidcField.value = pendingToken;
         pendingToken = null;
       }
+      requireMatchingPasswords("invite-password", "invite-password-confirm");
     });
   })();
 </script>
@@ -41,7 +65,9 @@
 </div>
 
 {% if error %}
-<div class="notice notice-danger form-error-summary" role="alert">{{ error }}</div>
+<div class="notice notice-danger form-error-summary" role="alert">{{ error }}
+  <p>If the invitation token field is empty, open your invitation link again or paste the token.</p>
+</div>
 {% endif %}
 
 <form method="post" action="/invite" class="auth-form" autocomplete="off">
@@ -50,10 +76,10 @@
     <input id="invitation-token" type="text" name="token" required autocomplete="off" spellcheck="false" autofocus>
   </label>
   <label>Password
-    <input type="password" name="password" required autocomplete="new-password" minlength="8">
+    <input id="invite-password" type="password" name="password" required autocomplete="new-password" minlength="8">
   </label>
   <label>Confirm password
-    <input type="password" name="password_confirm" required autocomplete="new-password" minlength="8">
+    <input id="invite-password-confirm" type="password" name="password_confirm" required autocomplete="new-password" minlength="8">
   </label>
   <label>Time zone
     <input type="text" name="display_timezone" value="{{ display_timezone }}" required placeholder="America/Los_Angeles">

@@ -216,6 +216,8 @@ FUNCTIONS = {spec.signature: spec.caller for spec in FUNCTION_SPECS}
 FUNCTION_OWNERS = {spec.signature: spec.owner for spec in FUNCTION_SPECS}
 RESTORE_AUTH_VERSION_STEP = 1_000_000_000
 PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER")
+SEQUENCE_PRIVILEGES = ("USAGE", "SELECT", "UPDATE")
+STATE_TABLES = ("managed_role_state", "recovery_metadata")
 
 
 def _contract_function_specs(schema_version: int) -> tuple[FunctionSpec, ...]:
@@ -525,14 +527,12 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
     extra_functions = [row[0] for row in await cur.fetchall()]
     _require_contract(not extra_functions, f"extra security-definer function: {extra_functions}")
     legacy_issue = "public.issue_member_invitation(bigint,text,text)"
-    cur = await conn.execute("SELECT to_regprocedure(%s)", (legacy_issue,))
-    if (await cur.fetchone())[0] is not None:
-        for role in (CONTROL_ROLE, RUNTIME_ROLE):
-            cur = await conn.execute(
-                "SELECT has_function_privilege(%s,%s,'EXECUTE')", (role, legacy_issue),
-            )
-            _require_contract(not (await cur.fetchone())[0],
-                              f"legacy function privilege: {role} {legacy_issue}")
+    cur = await conn.execute(
+        "SELECT r,has_function_privilege(r,to_regprocedure(%s),'EXECUTE') "
+        "FROM unnest(%s::text[]) WITH ORDINALITY u(r,o) WHERE to_regprocedure(%s) IS NOT NULL ORDER BY o",
+        (legacy_issue, [CONTROL_ROLE, RUNTIME_ROLE], legacy_issue))
+    for role, allowed in await cur.fetchall():
+        _require_contract(not allowed, f"legacy function privilege: {role} {legacy_issue}")
     cur = await conn.execute("SELECT contract_version,owner_role,installation_id FROM odograph_service.recovery_metadata WHERE id=1")
     _require_contract(await cur.fetchone() == (state.contract_version, MIGRATE_ROLE, state.installation_id), "recovery metadata")
     cur = await conn.execute(
@@ -588,22 +588,21 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
             f"policy set: {table}.{name} using expression")
         _require_contract(_policy_expression(check) == _policy_expression(expected_check),
             f"policy set: {table}.{name} check expression")
-    for role in (CONTROL_ROLE, RUNTIME_ROLE, BOOTSTRAP_ROLE):
-        cur = await conn.execute("SELECT has_database_privilege(%s,current_database(),'CREATE'),has_schema_privilege(%s,'public','CREATE')", (role, role))
-        _require_contract(await cur.fetchone() == (False, False), f"database or schema privilege: {role}")
+    # Effective rights are fetched once per kind, then checked in the same
+    # order and with the same messages as one query per object would.
+    roles = (CONTROL_ROLE, RUNTIME_ROLE, BOOTSTRAP_ROLE)
+    effective = await _effective_rights(conn, roles, contract_tables, contract_functions)
+    for role in roles:
+        _require_contract(effective.database.get(role) == (False, False), f"database or schema privilege: {role}")
         for table in contract_tables:
             rights = _table_rights(role, table)
-            cur = await conn.execute(
-                "SELECT privilege,has_table_privilege(%s,%s,privilege) FROM unnest(%s::text[]) privilege",
-                (role, "public." + table, list(PRIVILEGES)))
-            bad_privileges = [privilege for privilege, allowed in await cur.fetchall() if allowed != (privilege in rights)]
+            bad_privileges = [privilege for privilege in PRIVILEGES
+                              if effective.table.get((role, table, privilege)) != (privilege in rights)]
             _require_contract(not bad_privileges, f"table privilege: {role} public.{table} {bad_privileges}")
-            cur = await conn.execute(
-                "SELECT a.attname,p.privilege,has_column_privilege(%s,a.attrelid,a.attnum,p.privilege) "
-                "FROM pg_attribute a CROSS JOIN unnest(ARRAY['SELECT','INSERT','UPDATE','REFERENCES']) p(privilege) "
-                "WHERE a.attrelid=%s::regclass AND a.attnum>0 AND NOT a.attisdropped", (role, "public." + table))
+            columns = effective.column.get((role, table))
+            _require_contract(bool(columns), f"column privilege: {role} public.{table} missing")
             bad_columns = []
-            for column, privilege, allowed in await cur.fetchall():
+            for column, privilege, allowed in columns:
                 expected_allowed = privilege in rights or (
                     privilege == "SELECT" and column in COLUMN_SELECT.get((role, table), ()))
                 if privilege == "UPDATE" and role == CONTROL_ROLE and table == "accounts":
@@ -612,23 +611,18 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
                     bad_columns.append((column, privilege))
             _require_contract(not bad_columns, f"column privilege: {role} public.{table} {bad_columns}")
         for function, caller in contract_functions.items():
-            cur = await conn.execute("SELECT has_function_privilege(%s,%s,'EXECUTE')", (role, function))
-            allowed = (await cur.fetchone())[0]
-            _require_contract(allowed == (role in (caller, FUNCTION_OWNERS[function])),
+            _require_contract(effective.function.get((role, function)) == (role in (caller, FUNCTION_OWNERS[function])),
                               f"function privilege: {role} {function}")
-        for table, sequence in await _sequences(conn):
-            cur = await conn.execute(
-                "SELECT p,has_sequence_privilege(%s,%s,p) FROM unnest(ARRAY['USAGE','SELECT','UPDATE']) p",
-                (role, "public." + sequence))
-            bad_privileges = [privilege for privilege, allowed in await cur.fetchall()
-                              if allowed != (privilege == "USAGE" and "INSERT" in _table_rights(role, table))]
+        for table, sequence in effective.sequences:
+            bad_privileges = [privilege for privilege in SEQUENCE_PRIVILEGES
+                              if effective.sequence.get((role, sequence, privilege))
+                              != (privilege == "USAGE" and "INSERT" in _table_rights(role, table))]
             _require_contract(not bad_privileges, f"sequence privilege: {role} public.{sequence} {bad_privileges}")
-        for table in ("managed_role_state", "recovery_metadata"):
-            cur = await conn.execute(
-                "SELECT p,has_table_privilege(%s,%s,p) FROM unnest(%s::text[]) p",
-                (role, STATE_SCHEMA + "." + table, list(PRIVILEGES)))
-            bad_privileges = [privilege for privilege, allowed in await cur.fetchall()
-                              if allowed != (privilege == "SELECT" and table == "recovery_metadata" and role in (RUNTIME_ROLE, CONTROL_ROLE))]
+        for table in STATE_TABLES:
+            bad_privileges = [privilege for privilege in PRIVILEGES
+                              if effective.state.get((role, table, privilege))
+                              != (privilege == "SELECT" and table == "recovery_metadata"
+                                  and role in (RUNTIME_ROLE, CONTROL_ROLE))]
             _require_contract(not bad_privileges, f"table privilege: {role} {STATE_SCHEMA}.{table} {bad_privileges}")
     if "public.storage_usage_consistent()" in contract_functions:
         await _validate_storage_triggers(conn, schema_version)
@@ -637,24 +631,88 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
         await _validate_geocode_indexes(conn, schema_version)
     if schema_version >= 42 and "public.storage_find_replay(bigint,text,text,bytea,text)" in contract_functions:
         await _validate_s2_schema(conn)
+    specs = [spec for spec in _contract_function_specs(schema_version) if spec.signature in contract_functions]
+    cur = await conn.execute(
+        "SELECT s.signature,pg_get_userbyid(p.proowner),p.prosecdef,p.proconfig,p.prosrc,l.lanname,p.provolatile "
+        "FROM unnest(%s::text[]) s(signature) JOIN pg_proc p ON p.oid=to_regprocedure(s.signature) "
+        "JOIN pg_language l ON l.oid=p.prolang", ([spec.signature for spec in specs],))
+    definitions = {row[0]: row[1:] for row in await cur.fetchall()}
     sources = {}
-    for spec in _contract_function_specs(schema_version):
+    for spec in specs:
         function = spec.signature
-        if function not in contract_functions:
-            continue
-        cur = await conn.execute(
-            "SELECT pg_get_userbyid(p.proowner),p.prosecdef,p.proconfig,p.prosrc,l.lanname,p.provolatile "
-            "FROM pg_proc p JOIN pg_language l ON l.oid=p.prolang WHERE p.oid=%s::regprocedure",
-            (function,))
-        row = await cur.fetchone()
         source_dir = MIGRATIONS_DIR if spec.source.endswith(".sql") and spec.source[0].isdigit() else SQL_DIR
         path = source_dir / spec.source
         if path not in sources:
             sources[path] = path.read_text()
         body = _function_body(sources[path], function)
-        _require_contract(row == (spec.owner, spec.security_definer, ["search_path=pg_catalog, pg_temp"], body,
-                                  spec.language, spec.volatility),
+        _require_contract(definitions.get(function) == (
+            spec.owner, spec.security_definer, ["search_path=pg_catalog, pg_temp"], body,
+            spec.language, spec.volatility),
             f"function definition: {function}")
+
+
+@dataclass(frozen=True)
+class _EffectiveRights:
+    database: dict
+    table: dict
+    column: dict
+    function: dict
+    sequences: list
+    sequence: dict
+    state: dict
+
+
+async def _effective_rights(conn, roles, tables, functions) -> _EffectiveRights:
+    """Effective privileges of each managed role, one query per object kind.
+
+    Callers have already checked that every table and function exists, but
+    each statement sees a new snapshot, so an object dropped meanwhile is
+    absent here. Callers treat an absent result as a mismatch, never a pass.
+    """
+    roles = list(roles)
+    cur = await conn.execute(
+        "SELECT r,has_database_privilege(r,current_database(),'CREATE'),"
+        "has_schema_privilege(r,'public','CREATE') FROM unnest(%s::text[]) r", (roles,))
+    database = {row[0]: tuple(row[1:]) for row in await cur.fetchall()}
+    cur = await conn.execute(
+        "SELECT r,c.relname,p,has_table_privilege(r,c.oid,p) "
+        "FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
+        "CROSS JOIN unnest(%s::text[]) r CROSS JOIN unnest(%s::text[]) p "
+        "WHERE n.nspname='public' AND c.relname=ANY(%s) AND c.relkind IN ('r','p','v','m','f')",
+        (roles, list(PRIVILEGES), list(tables)))
+    table = {tuple(row[:3]): row[3] for row in await cur.fetchall()}
+    cur = await conn.execute(
+        "SELECT r,c.relname,a.attname,p,has_column_privilege(r,c.oid,a.attnum,p) "
+        "FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
+        "JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped "
+        "CROSS JOIN unnest(%s::text[]) r "
+        "CROSS JOIN unnest(ARRAY['SELECT','INSERT','UPDATE','REFERENCES']) WITH ORDINALITY q(p,o) "
+        "WHERE n.nspname='public' AND c.relname=ANY(%s) AND c.relkind IN ('r','p','v','m','f') "
+        "ORDER BY c.relname,a.attnum,q.o", (roles, list(tables)))
+    column = {}
+    for role, name, attribute, privilege, allowed in await cur.fetchall():
+        column.setdefault((role, name), []).append((attribute, privilege, allowed))
+    cur = await conn.execute(
+        "SELECT r,f,has_function_privilege(r,to_regprocedure(f),'EXECUTE') "
+        "FROM unnest(%s::text[]) r CROSS JOIN unnest(%s::text[]) f "
+        "WHERE to_regprocedure(f) IS NOT NULL", (roles, list(functions)))
+    function = {tuple(row[:2]): row[2] for row in await cur.fetchall()}
+    sequences = await _sequences(conn)
+    cur = await conn.execute(
+        "SELECT r,s.relname,p,has_sequence_privilege(r,s.oid,p) "
+        "FROM pg_class s JOIN pg_namespace n ON n.oid=s.relnamespace "
+        "CROSS JOIN unnest(%s::text[]) r CROSS JOIN unnest(%s::text[]) p "
+        "WHERE n.nspname='public' AND s.relkind='S' AND s.relname=ANY(%s)",
+        (roles, list(SEQUENCE_PRIVILEGES), [sequence for _, sequence in sequences]))
+    sequence = {tuple(row[:3]): row[3] for row in await cur.fetchall()}
+    cur = await conn.execute(
+        "SELECT r,c.relname,p,has_table_privilege(r,c.oid,p) "
+        "FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
+        "CROSS JOIN unnest(%s::text[]) r CROSS JOIN unnest(%s::text[]) p "
+        "WHERE n.nspname=%s AND c.relname=ANY(%s) AND c.relkind='r'",
+        (roles, list(PRIVILEGES), STATE_SCHEMA, list(STATE_TABLES)))
+    state = {tuple(row[:3]): row[3] for row in await cur.fetchall()}
+    return _EffectiveRights(database, table, column, function, sequences, sequence, state)
 
 
 async def _validate_s2_schema(conn) -> None:
