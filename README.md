@@ -306,7 +306,9 @@ destinations. Email verification is not a password reset flow.
 Odograph supports Geoapify as a hosted provider and Nominatim as a self-hosted
 one. Read the
 [configuration reference](docs/configuration.md#external-services) and the
-[privacy guide](docs/privacy.md) before turning either on.
+[privacy guide](docs/privacy.md) before turning either on. Address search in
+Settings and in the manual trip form's Search mode shares the
+`GEOCODE_MIN_INTERVAL_S` pacer with background reverse lookups.
 
 ### OSRM
 

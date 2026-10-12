@@ -227,8 +227,14 @@ Choose one Route mode:
   available, Odograph previews the road route and fills the distance.
 - **Pick on map:** click the map once for the start and once for the end. Use
   **Reset points** to choose them again.
+- **Search:** type an address or place in the Start and End search fields and
+  pick a result from each list. The text you type is sent to the configured
+  geocoding service before the trip is saved, even for a place you never use.
+  The trip stores the picked coordinates, not the address text, so its
+  endpoints show whatever address the geocoder later returns for them. This
+  mode appears only when a geocoder is configured.
 
-With Named places or Pick on map, an available routing service previews the
+With Named places, Pick on map or Search, an available routing service previews the
 route and fills Distance. You can enter a different positive distance to
 override that preview. If routing is unavailable, a trip can still save when
 you enter a distance; Trips shows a notice that the entered distance was used.
@@ -431,7 +437,9 @@ need review.
 ### What happens when optional services are off?
 
 Odograph can run without hosted geocoding, routing, notifications, or email.
-Without geocoding, endpoints can remain coordinates or saved place names.
+Without geocoding, endpoints can remain coordinates or saved place names, and
+the manual trip form hides the **Search** route mode and Settings hides address
+search for a new Place.
 Without routing, use **No route** and enter a distance, or provide a distance
 when a routed preview is unavailable. See the [configuration reference](configuration.md)
 and [privacy guide](privacy.md) for options and data flows.
