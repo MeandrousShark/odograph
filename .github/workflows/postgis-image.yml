@@ -7,8 +7,6 @@ on:
     paths:
       - docker/postgis/**
       - .github/workflows/postgis-image.yml
-      - scripts/release_preflight_smoke.sh
-      - tests/test_postgis_image_workflow.py
   pull_request:
     paths:
       - docker/postgis/**

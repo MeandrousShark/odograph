@@ -21,15 +21,20 @@ def steps_by_name(job: dict) -> dict:
 
 def test_workflow_only_builds_for_scoped_changes_and_serializes_refs():
     workflow = load_workflow()
-    paths = [
+    # Pushes to main publish the image, so only changes to the image itself
+    # may trigger a publish. Smoke script and test edits are checked on PRs.
+    push_paths = [
         "docker/postgis/**",
         ".github/workflows/postgis-image.yml",
+    ]
+    pull_request_paths = [
+        *push_paths,
         "scripts/release_preflight_smoke.sh",
         "tests/test_postgis_image_workflow.py",
     ]
 
-    assert workflow["on"]["push"] == {"branches": ["main"], "paths": paths}
-    assert workflow["on"]["pull_request"] == {"paths": paths}
+    assert workflow["on"]["push"] == {"branches": ["main"], "paths": push_paths}
+    assert workflow["on"]["pull_request"] == {"paths": pull_request_paths}
     assert workflow["on"]["workflow_dispatch"] == ""
     assert workflow["permissions"] == {"contents": "read"}
     assert workflow["concurrency"] == {
@@ -46,8 +51,8 @@ def test_dockerfile_pins_base_toolchain_and_verifies_gosu_source():
         "sha256:de90689b3a56831db2b4d520a65b8acee01581d14060749a17b50026c8e37d70"
     ) in source
     assert (
-        "docker.io/library/golang:1.27.1-bookworm@"
-        "sha256:648f440f42a0958804efb24df176f806f9d353b41f1c0627f666428e40310f6b"
+        "docker.io/library/golang:1.27.2-bookworm@"
+        "sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61"
     ) in source
     assert "GOSU_COMMIT=6456aaa0f3c854d199d0f037f068eb97515b7513" in source
     assert "git fetch --depth 1 origin \"$GOSU_COMMIT\"" in source
