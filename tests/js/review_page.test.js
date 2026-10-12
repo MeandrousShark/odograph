@@ -146,6 +146,7 @@ function makeBrowser() {
       addListener(bodyListeners, type, callback);
     },
   };
+  const announcer = { id: "review-announcer", textContent: "" };
 
   const document = {
     body,
@@ -162,6 +163,7 @@ function makeBrowser() {
       if (id === "review-next") return next;
       if (id === "review-skip") return skip;
       if (id === "review-undo") return undo;
+      if (id === "review-announcer") return announcer;
       return null;
     },
     querySelector(selector) {
@@ -286,8 +288,23 @@ function makeBrowser() {
     await flush();
   };
 
+  // A settled card as htmx hands it to afterSettle: only the pieces the
+  // announcer reads. `parts` maps selector to the text it holds.
+  const settle = (parts, { elt } = {}) => {
+    const card = {
+      id: "review-card",
+      querySelector(selector) {
+        return selector in parts ? { textContent: parts[selector] } : null;
+      },
+    };
+    const event = { target: body, detail: { elt: elt || card } };
+    for (const callback of bodyListeners.get("htmx:afterSettle") || []) callback(event);
+  };
+
   return {
     context,
+    announcer,
+    settle,
     dispatch,
     body,
     form,
@@ -505,4 +522,37 @@ test("an auto-selected Business is committed so re-activating it clears it", () 
   browser.dispatch("click", browser.fields.category);
   assert.strictEqual(browser.fields.category.checked, false);
   assert.strictEqual(browser.context.committedReviewCategory, null);
+});
+
+test("announcer is empty on initial load", () => {
+  const browser = makeBrowser();
+  assert.strictEqual(browser.announcer.textContent, "");
+});
+
+test("a swapped-in card announces its remaining count once per settle", () => {
+  const browser = makeBrowser();
+  browser.settle({ ".review-remaining": "\n    4 remaining\n  " });
+  assert.strictEqual(browser.announcer.textContent, "4 remaining");
+  browser.settle({ ".review-remaining": "3 remaining" });
+  assert.strictEqual(browser.announcer.textContent, "3 remaining");
+});
+
+test("done and empty states announce their message", () => {
+  const browser = makeBrowser();
+  browser.settle({ ".review-remaining": "1 remaining" });
+  browser.settle({ ".review-state-message": "No more unclassified trips in this pass." });
+  assert.strictEqual(browser.announcer.textContent, "No more unclassified trips in this pass.");
+  browser.settle({ ".review-state-message": "Nothing to review." });
+  assert.strictEqual(browser.announcer.textContent, "Nothing to review.");
+});
+
+test("settles that are not card swaps or carry no count leave the announcer alone", () => {
+  const browser = makeBrowser();
+  browser.settle({ ".review-remaining": "2 remaining" });
+  // Autosave settle: the element is a form control, not the card.
+  browser.settle({}, { elt: { id: "review-notes", querySelector: () => null } });
+  assert.strictEqual(browser.announcer.textContent, "2 remaining");
+  // Delete dialog state: card without count or done message.
+  browser.settle({});
+  assert.strictEqual(browser.announcer.textContent, "2 remaining");
 });

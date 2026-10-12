@@ -599,11 +599,36 @@ def test_review_page_header_has_eyebrow_heading_subtitle_and_close_link():
     assert '<a class="icon-button review-close" href="/trips" aria-label="Close review" title="Close review">' in body
 
 
-def test_review_remaining_count_is_a_live_status_region():
+def test_review_remaining_count_is_visible_but_not_a_live_region():
     body = _render(trip=_trip("manual"), remaining=5)
 
-    assert '<p class="review-remaining" role="status" aria-live="polite">' in body
+    assert '<p class="review-remaining">' in body
     assert "<strong>5</strong> remaining" in body
+    card = body[body.index('id="review-card"'):]
+    assert "aria-live" not in card.split('class="review-trip-overview', 1)[0]
+
+
+def test_review_page_announcer_is_outside_card_and_empty_on_load():
+    body = _render_page(trip=_trip("manual"), remaining=5)
+
+    announcer = re.search(r'<div id="review-announcer"[^>]*></div>', body)
+    assert announcer, "announcer must be empty on initial load"
+    assert 'role="status"' in announcer.group(0)
+    assert 'aria-live="polite"' in announcer.group(0)
+    assert "visually-hidden" in announcer.group(0)
+    assert announcer.start() < body.index('id="review-card"')
+    assert announcer.group(0) not in _render(trip=_trip("manual"), remaining=5)
+    assert "htmx:afterSettle', announceReviewCard" in body
+
+
+def test_review_distance_has_no_aria_label_and_reads_unit_in_text():
+    body = _render(trip=_trip("manual"))
+
+    paragraph = re.search(r'<p class="review-trip-distance"[^>]*>.*?</p>', body, re.S).group(0)
+    assert "aria-label" not in paragraph
+    assert 'class="review-trip-distance-unit" aria-hidden="true">mi</span>' in paragraph
+    assert '<span class="visually-hidden"> miles</span>' in paragraph
+    assert "(8.0 km)" in paragraph
 
 
 def test_review_card_shows_both_route_endpoints():

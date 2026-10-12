@@ -5,7 +5,7 @@
 {% from "_category_segmented.html" import category_segmented %}
 <div id="review-card" class="review-card">
 {% if state == 'card' %}
-  <p class="review-remaining" role="status" aria-live="polite">
+  <p class="review-remaining">
     <strong>{{ remaining }}</strong> remaining
   </p>
 
@@ -17,9 +17,9 @@
         {% if trip.source == 'manual' %}<span class="manual-badge">manual</span>{% endif %}
         {% if trip.has_gap %}<span class="status-badge status-warning" title="Distance may under-read">Recording gap</span>{% endif %}
       </h3>
-      <p class="review-trip-distance" aria-label="{{ trip.display_distance_m | mi }} miles">
+      <p class="review-trip-distance">
         <strong>{{ trip.display_distance_m | mi }}</strong>
-        <span class="review-trip-distance-unit">mi</span>
+        <span class="review-trip-distance-unit" aria-hidden="true">mi</span><span class="visually-hidden"> miles</span>
         <span class="review-trip-distance-secondary muted">({{ trip.display_distance_m | km }} km)</span>
       </p>
       <p class="review-trip-time">
