@@ -11,6 +11,13 @@ On a desktop browser, the main navigation shows **Dashboard**, **Trips**,
 the header. On a phone, **Week** opens the Dashboard, **More** contains
 Expenses and Stats, and Settings is under the avatar or initials menu.
 
+The header shows your account's display name, or the part of your login email
+before the `@` when none is set. To change it, open **Account Settings** and
+use **Display name** in the **Profile** card. A display name can be up to 100
+characters; leave it blank to return to the email-based name. It only changes
+what the header, its initials, and the administrator account list show; it is
+not a login name and does not change your login email or sign-in methods.
+
 ## First trip to first report
 
 1. **Add a vehicle.** Open **Settings**, expand **Add vehicle** under
