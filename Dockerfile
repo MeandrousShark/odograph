@@ -2,7 +2,7 @@
 # manifest, so the same immutable reference resolves correctly for both
 # linux/amd64 and linux/arm64. requirements.lock was verified against this
 # exact base on both target architectures.
-# Digest confirmed 2026-09-12 from Docker Hub for python:3.13-slim.
+# Digest confirmed 2026-10-12 from Docker Hub for python:3.13-slim.
 # A digest pin is reproducible but frozen, so it stops receiving the base
 # distribution's rebuilt packages and eventually fails the release image scan
 # on findings that are fixed upstream. Re-resolve it as part of preparing a
@@ -15,14 +15,14 @@
 # it prints silently produces a single-architecture base. The correct value has
 # mediaType application/vnd.oci.image.index.v1+json and lists both linux/amd64
 # and linux/arm64.
-FROM docker.io/library/python:3.13-slim@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285
+FROM docker.io/library/python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f
 
-# The pinned base predates available Debian fixes in these four packages.
-# Upgrade only the affected packages; remove this layer when the base includes
-# their fixes. The refreshed base already includes the previous OpenSSL fix.
+# The pinned base predates an available Debian security fix in this package.
+# Upgrade only the affected package; remove this layer when the base includes
+# its fix. The refreshed base already includes the OpenSSL fix.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends --only-upgrade \
-        gzip libpcre2-8-0 libsqlite3-0 perl-base \
+        liblzma5 \
     && rm -rf /var/lib/apt/lists/*
 
 # VERSION/GIT_REVISION default to dev values so unlabeled local builds still

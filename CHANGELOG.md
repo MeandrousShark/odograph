@@ -9,6 +9,12 @@ reproduced here.
 
 ## [Unreleased]
 
+### Security
+
+- Refresh the Python 3.13 runtime base image to OpenSSL `3.5.7-1~deb13u3`,
+  which fixes CVE-2026-84782, and apply the pending Debian security update
+  for `liblzma5`.
+
 ## [0.11.2] - 2026-09-23
 
 ### Changed
