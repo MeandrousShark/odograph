@@ -92,7 +92,7 @@ def test_docker_base_is_pinned_to_the_verified_multi_arch_index():
 
     assert (
         "FROM docker.io/library/python:3.13-slim@"
-        "sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285"
+        "sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f"
     ) in source
     assert "Pinned to the OCI image index" in source
     assert "linux/amd64 and linux/arm64" in source
