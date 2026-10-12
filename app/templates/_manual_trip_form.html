@@ -28,6 +28,9 @@
       <label class="route-mode-option"><input type="radio" name="route_mode" value="none" checked> No route</label>
       <label class="route-mode-option"><input type="radio" name="route_mode" value="places"> Named places</label>
       <label class="route-mode-option"><input type="radio" name="route_mode" value="map"> Pick on map</label>
+      {% if geocode_enabled %}
+      <label class="route-mode-option"><input type="radio" name="route_mode" value="search"> Search</label>
+      {% endif %}
     </fieldset>
 
     <div class="route-mode-panel" data-route-panel="none">
@@ -61,11 +64,35 @@
     <div class="route-mode-panel" data-route-panel="map" hidden>
       <p class="route-map-hint">Click the map to set the start, then the end.</p>
       <button type="button" class="control control-secondary" data-route-map-reset>Reset points</button>
-      <input type="hidden" name="start_lat">
-      <input type="hidden" name="start_lon">
-      <input type="hidden" name="end_lat">
-      <input type="hidden" name="end_lon">
     </div>
+
+    {% if geocode_enabled %}
+    {# The search inputs name their query "q" for /places/search but point
+       their form owner at an id that does not exist, so they are never part
+       of this form's submission and Enter in them submits nothing. #}
+    <div class="route-mode-panel route-search-panel" data-route-panel="search" hidden>
+      <p class="route-map-hint">Search for an address or place. The text you type is sent to the configured geocoding service.</p>
+      {% for endpoint, title in (("start", "Start"), ("end", "End")) %}
+      <div class="route-search-field">
+        <label for="route-search-{{ endpoint }}">{{ title }} address</label>
+        <input type="text" id="route-search-{{ endpoint }}" name="q" form="route-search-detached"
+               autocomplete="off" placeholder="Start typing an address..."
+               data-route-search="{{ endpoint }}"
+               hx-get="/places/search" hx-trigger="keyup delay:400ms"
+               hx-sync="this:replace" hx-target="#route-search-results-{{ endpoint }}"
+               aria-describedby="route-search-chosen-{{ endpoint }}">
+        <div id="route-search-results-{{ endpoint }}" data-route-search-results="{{ endpoint }}"></div>
+        <p class="route-search-chosen" id="route-search-chosen-{{ endpoint }}" data-route-search-chosen="{{ endpoint }}"></p>
+      </div>
+      {% endfor %}
+      <p class="visually-hidden" role="status" aria-live="polite" data-route-search-status></p>
+    </div>
+    {% endif %}
+
+    <input type="hidden" name="start_lat">
+    <input type="hidden" name="start_lon">
+    <input type="hidden" name="end_lat">
+    <input type="hidden" name="end_lon">
 
     <div id="route-picker-map" class="route-picker-map" hidden></div>
     <p class="route-picker-status" role="status"></p>
