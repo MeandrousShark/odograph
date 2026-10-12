@@ -79,7 +79,7 @@ def _actor(user: dict, request: Request) -> dict:
 async def _metadata_accounts(conn) -> list[dict]:
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
-        "SELECT a.id, a.email, a.email_verified_at IS NOT NULL AS email_verified, "
+        "SELECT a.id, a.display_name, a.email, a.email_verified_at IS NOT NULL AS email_verified, "
         "a.is_admin, a.is_enabled, "
         "(a.password_hash IS NOT NULL AND a.password_hash <> '') AS has_password, "
         "EXISTS (SELECT 1 FROM public.oidc_identities i WHERE i.account_id = a.id) AS has_oidc, "

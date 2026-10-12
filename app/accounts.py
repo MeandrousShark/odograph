@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from psycopg.rows import dict_row
+
+# Matches migrations/043_account_display_name.sql's char_length cap.
+DISPLAY_NAME_MAX_LENGTH = 100
+_DISALLOWED_DISPLAY_NAME_CATEGORIES = frozenset(("Cc", "Cf", "Cs", "Co"))
 
 
 def normalize_email(email: str) -> str:
@@ -30,6 +35,24 @@ def safe_delivery_email(email: str) -> bool:
     return bool(labels and all(len(label) <= 63 and _EMAIL_LABEL_RE.fullmatch(label) for label in labels))
 
 
+class DisplayNameError(ValueError):
+    pass
+
+
+def normalize_display_name(value: str) -> str | None:
+    """Trim, clear when blank, and reject over-long text or invisible
+    control, format, surrogate and private-use characters, which could make
+    one name render like another."""
+    trimmed = value.strip()
+    if not trimmed:
+        return None
+    if len(trimmed) > DISPLAY_NAME_MAX_LENGTH:
+        raise DisplayNameError(f"Keep it to {DISPLAY_NAME_MAX_LENGTH} characters or fewer.")
+    if any(unicodedata.category(char) in _DISALLOWED_DISPLAY_NAME_CATEGORIES for char in trimmed):
+        raise DisplayNameError("Remove control or invisible formatting characters.")
+    return trimmed
+
+
 async def get_account(conn, account_id: int) -> dict | None:
     # Runs on essentially every authenticated request via require_user, so
     # this must never select avatar_bytes -- see get_account_avatar for the
@@ -37,7 +60,7 @@ async def get_account(conn, account_id: int) -> dict | None:
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         "SELECT id, email, password_hash, is_admin, is_enabled, auth_version, "
-        "created_at, updated_at, avatar_mime, avatar_updated_at "
+        "created_at, updated_at, avatar_mime, avatar_updated_at, display_name "
         "FROM accounts WHERE id = %s",
         (account_id,),
     )
@@ -49,7 +72,7 @@ async def get_account_by_email(conn, email: str) -> dict | None:
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         "SELECT id, email, password_hash, is_admin, is_enabled, auth_version, "
-        "created_at, updated_at, avatar_mime, avatar_updated_at "
+        "created_at, updated_at, avatar_mime, avatar_updated_at, display_name "
         "FROM accounts WHERE email = %s",
         (normalize_email(email),),
     )
@@ -85,7 +108,7 @@ async def set_account_avatar(
         "avatar_updated_at = now() WHERE id = %s "
         "AND (%s::bigint IS NULL OR (is_enabled AND auth_version = %s)) "
         "RETURNING id, email, password_hash, is_admin, is_enabled, auth_version, "
-        "avatar_mime, avatar_updated_at",
+        "avatar_mime, avatar_updated_at, display_name",
         (avatar_bytes, avatar_mime, account_id, expected_auth_version, expected_auth_version),
     )
     return await cur.fetchone()
@@ -103,10 +126,34 @@ async def clear_account_avatar(conn, account_id: int, *, expected_auth_version: 
         "avatar_updated_at = NULL WHERE id = %s "
         "AND (%s::bigint IS NULL OR (is_enabled AND auth_version = %s)) "
         "RETURNING id, email, password_hash, is_admin, is_enabled, auth_version, "
-        "avatar_mime, avatar_updated_at",
+        "avatar_mime, avatar_updated_at, display_name",
         (account_id, expected_auth_version, expected_auth_version),
     )
     return await cur.fetchone()
+
+
+async def set_account_display_name(
+    conn, account_id: int, display_name: str | None,
+    *, expected_auth_version: int | None = None,
+) -> dict | None:
+    """Stores an already validated display name, or clears it with None.
+    Like set_account_avatar, presentation metadata never touches
+    auth_version, the login email or linked identities, so other sessions
+    stay signed in.
+    """
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(
+        "UPDATE accounts SET display_name = %s WHERE id = %s "
+        "AND (%s::bigint IS NULL OR (is_enabled AND auth_version = %s)) "
+        "RETURNING id, email, password_hash, is_admin, is_enabled, auth_version, "
+        "avatar_mime, avatar_updated_at, display_name",
+        (display_name, account_id, expected_auth_version, expected_auth_version),
+    )
+    return await cur.fetchone()
+
+
+async def clear_account_display_name(conn, account_id: int, *, expected_auth_version: int | None = None) -> dict | None:
+    return await set_account_display_name(conn, account_id, None, expected_auth_version=expected_auth_version)
 
 
 async def account_exists(conn) -> bool:

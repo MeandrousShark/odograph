@@ -22,15 +22,19 @@ from starlette.responses import JSONResponse, RedirectResponse
 
 from app.accounts import (
     account_exists,
+    DisplayNameError,
     clear_account_avatar,
+    clear_account_display_name,
     create_admin,
     get_account,
     get_account_avatar,
     get_account_by_email,
+    normalize_display_name,
     normalize_email,
     replace_password,
     safe_delivery_email as _safe_delivery_email,
     set_account_avatar,
+    set_account_display_name,
     sign_out_everywhere,
     valid_email,
 )
@@ -256,9 +260,11 @@ def _if_none_match_matches(header_value: str, etag: str) -> bool:
 
 
 def _account_user(account: dict) -> dict:
+    display_name = account.get("display_name")
     return {
         "id": account["id"],
-        "name": account["email"].split("@", 1)[0],
+        "name": display_name or account["email"].split("@", 1)[0],
+        "display_name": display_name,
         "email": account["email"],
         "is_admin": account["is_admin"],
         "is_enabled": account["is_enabled"],
@@ -496,6 +502,7 @@ async def require_legacy_establishment(request: Request) -> dict:
         return {
             "id": None,
             "name": legacy.get("name"),
+            "display_name": None,
             "email": legacy.get("email"),
             "is_admin": False,
             "legacy_oidc": True,
@@ -839,6 +846,8 @@ def make_router() -> APIRouter:
         success: str | None = None,
         status_code: int = 200,
         include_review_count: bool = False,
+        display_name_error: str | None = None,
+        display_name_value: str | None = None,
     ):
         oidc_configured = bool(
             request.app.state.oauth is not None
@@ -892,6 +901,11 @@ def make_router() -> APIRouter:
             "linked_identity": linked_identity,
             "avatar_max_bytes": avatar_max_bytes,
             "avatar_max_label": _human_size(avatar_max_bytes),
+            "display_name_value": (
+                display_name_value if display_name_error is not None
+                else account.get("display_name") or ""
+            ),
+            "display_name_error": display_name_error,
             "error": error,
             "success": success,
             "method_notice": success if success in (OIDC_REAUTH_NOTICE, PASSWORD_SAVED_NOTICE) else None,
@@ -2033,6 +2047,49 @@ def make_router() -> APIRouter:
             raise AuthRedirect()
 
         request.session["account_notice"] = "Avatar removed."
+        return RedirectResponse("/settings/account", status_code=303)
+
+    @router.post("/settings/account/display-name")
+    async def update_display_name(
+        request: Request,
+        csrf_token: str = Form(...),
+        display_name: str = Form(""),
+        user: dict = Depends(require_user),
+    ):
+        check_form_csrf(request, csrf_token)
+        try:
+            normalized = normalize_display_name(display_name)
+        except DisplayNameError as exc:
+            async with control_connection(request.app.state.control_pool) as conn:
+                account = await get_account(conn, user["id"])
+            if account is None:
+                request.session.clear()
+                raise AuthRedirect()
+            return await _render_account(
+                request, account, user,
+                display_name_error=str(exc), display_name_value=display_name,
+                status_code=422,
+            )
+        # Like the avatar routes: presentation metadata, so no password
+        # re-verification, auth_version change or session revocation.
+        async with control_connection(request.app.state.control_pool) as conn:
+            if normalized is None:
+                updated = await clear_account_display_name(
+                    conn, user["id"],
+                    expected_auth_version=request.state.principal.auth_version,
+                )
+            else:
+                updated = await set_account_display_name(
+                    conn, user["id"], normalized,
+                    expected_auth_version=request.state.principal.auth_version,
+                )
+        if updated is None:
+            request.session.clear()
+            raise AuthRedirect()
+
+        request.session["account_notice"] = (
+            "Display name updated." if normalized is not None else "Display name cleared."
+        )
         return RedirectResponse("/settings/account", status_code=303)
 
     @router.post("/settings/account/password")
