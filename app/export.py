@@ -40,11 +40,20 @@ def _write_only_cell(ws, value, *, font=None, number_format=None):
     from openpyxl.cell import WriteOnlyCell
 
     cell = WriteOnlyCell(ws, value=value)
+    if isinstance(value, str):
+        # openpyxl types any str starting with "=" as a formula; set after
+        # assignment because assigning the value is what infers the type.
+        cell.data_type = 's'
     if font is not None:
         cell.font = font
     if number_format is not None:
         cell.number_format = number_format
     return cell
+
+
+def _text_row(ws, row: list) -> list:
+    """Data-row values with text forced to text cells, other types untouched."""
+    return [_write_only_cell(ws, v) if isinstance(v, str) else v for v in row]
 
 
 def _cleanup_write_only_workbook(wb) -> None:
@@ -182,7 +191,7 @@ def _populate_trips_sheet(ws, trips: list[dict], rates: dict[int, YearRate], tz:
             row[-1] = _write_only_cell(
                 ws, deduction_value, number_format='"$"#,##0.00'
             )
-        ws.append(row)
+        ws.append(_text_row(ws, row))
         if index % 64 == 0:
             # Release the GIL so a large export's owned thread leaves intake responsive.
             time.sleep(.001)
@@ -357,7 +366,7 @@ def _populate_expenses_sheet(ws, expenses: list[dict]) -> None:
             TREATMENT_LABELS[expense["treatment"]], expense.get("notes") or "",
         ]
         row[3] = _write_only_cell(ws, row[3], number_format='"$"#,##0.00')
-        ws.append(row)
+        ws.append(_text_row(ws, row))
     total_row = ["Total", "", "", float(total.quantize(Decimal("0.01"))), "", ""]
     total_cells = []
     for index, value in enumerate(total_row):

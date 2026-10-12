@@ -20,6 +20,10 @@
     </a>
   </div>
 
+  {# Outside #review-card so it survives the card's outerHTML swaps; a live
+     region inserted by a swap is not reliably announced. Filled on swap only. #}
+  <div id="review-announcer" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+
   {% include "_review_card.html" %}
 </section>
 
@@ -460,12 +464,37 @@
     });
   }
 
+  // Announces the swapped-in card's remaining count (or done/empty message).
+  // A card with neither leaves the region as is. Not run for the initial
+  // load: the page itself is the announcement.
+  //
+  // Settles also fire for the autosave posts, which target the existing
+  // #review-card without replacing it. Card identity, not text, tells a
+  // replacement from that: Skip is a real advance that keeps the same count
+  // and still has to announce.
+  var lastAnnouncedCard = document.getElementById('review-card');
+
+  function announceReviewCard(event) {
+    var scope = (event.detail && event.detail.elt) || event.target;
+    var card = null;
+    if (scope) {
+      card = scope.id === 'review-card' ? scope : (scope.querySelector ? scope.querySelector('#review-card') : null);
+    }
+    var region = document.getElementById('review-announcer');
+    if (!card || !region || card === lastAnnouncedCard) return;
+    lastAnnouncedCard = card;
+    var source = card.querySelector('.review-remaining') || card.querySelector('.review-state-message');
+    if (!source) return;
+    region.textContent = (source.textContent || '').replace(/\s+/g, ' ').trim();
+  }
+
   initReviewMap();
   // A swapped-in card brings its own radios, so the committed value is
   // re-derived from it rather than carried across the swap.
   syncReviewCategorySelection();
   updateReviewNextButton();
   document.body.addEventListener('htmx:afterSettle', initReviewMap);
+  document.body.addEventListener('htmx:afterSettle', announceReviewCard);
   document.body.addEventListener('htmx:afterSettle', updateReviewUndoButton);
   document.body.addEventListener('htmx:afterSettle', syncReviewCategorySelection);
   document.body.addEventListener('htmx:afterSettle', updateReviewNextButton);

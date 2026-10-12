@@ -75,9 +75,14 @@ reproduced here.
   field, so the field accepts typing and shows the chosen purpose.
 - A successful split no longer briefly reports that it did not complete
   before the trip list loads.
+- Review announces the remaining count from a persistent live region after each
+  card change, and reads trip distance with its unit.
 
 ### Security
 
+- XLSX exports and report workbooks store text as text, so imported or
+  user-entered values beginning with `=` are not evaluated as formulas. CSV
+  output is unchanged.
 - Ingest stores only `location`, `transition`, `waypoint`, and `waypoints`
   messages. Other message types, including the configuration dump OwnTracks'
   Publish Settings button sends (which contains the tracker's plaintext

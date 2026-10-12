@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import zoneinfo
 
-from app.export import HEADERS, _export_row, _trip_distance_and_deduction, _write_only_cell, _cleanup_write_only_workbook
+from app.export import HEADERS, _export_row, _trip_distance_and_deduction, _write_only_cell, _text_row, _cleanup_write_only_workbook
 from app.export_filters import TextStore, prepare_filters
 from app.rates import METERS_PER_MILE, YearRate
 from app.report_renderer import _decode
@@ -110,7 +110,7 @@ class Renderer:
                 self.total_ded += ded
             if isinstance(row[-1],(int,float)):
                 row[-1] = _write_only_cell(self.sheet,row[-1],number_format='"$"#,##0.00')
-            self.sheet.append(row)
+            self.sheet.append(_text_row(self.sheet,row))
 
     def render(self):
         self.start()
