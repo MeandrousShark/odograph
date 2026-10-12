@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 ARG POSTGIS_BASE=docker.io/nickblah/postgis:16-bookworm-postgis-3.6.4@sha256:de90689b3a56831db2b4d520a65b8acee01581d14060749a17b50026c8e37d70
-ARG GOSU_BUILDER=docker.io/library/golang:1.27.1-bookworm@sha256:648f440f42a0958804efb24df176f806f9d353b41f1c0627f666428e40310f6b
+ARG GOSU_BUILDER=docker.io/library/golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61
 ARG GOSU_REPOSITORY=https://github.com/tianon/gosu.git
 ARG GOSU_COMMIT=6456aaa0f3c854d199d0f037f068eb97515b7513
 
