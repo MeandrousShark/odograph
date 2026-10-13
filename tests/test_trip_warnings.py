@@ -216,6 +216,7 @@ def test_dashboard_acknowledge_response_focuses_the_rows_actions():
 
 def test_trip_detail_shows_both_warnings_without_markers_until_acknowledged():
     body = _detail(_missing(has_gap=True))
+    assert 'role="group" aria-label="Trip warnings"' in body
     warnings = body.split('id="trip-warnings-42"', 1)[1].split("</div>", 1)[0]
     assert "Recording gap" in warnings and "Possible missing trip" in warnings
     assert "Acknowledged" not in warnings and "Show in lists again" not in warnings
@@ -231,7 +232,9 @@ def test_trip_detail_marks_each_acknowledged_warning_with_undo():
     assert """hx-vals='{"kind": "missing_trip", "view": "detail"}'""" in warnings
     assert warnings.count('hx-post="/trips/42/warnings/unacknowledge"') == 2
     assert warnings.count('hx-target="#trip-warnings-42"') == 2
-    assert 'aria-label="Show recording gap in lists again"' in warnings
+    # The accessible name starts with the visible label (WCAG 2.5.3).
+    assert 'Show in lists again<span class="visually-hidden">: recording gap</span>' in warnings
+    assert "aria-label=\"Show" not in warnings
 
 
 def test_trip_detail_without_warnings_renders_no_warning_section():

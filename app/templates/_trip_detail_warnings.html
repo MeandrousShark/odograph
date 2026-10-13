@@ -8,11 +8,10 @@
 <button type="button" class="control control-secondary trip-detail-warning-undo"
         hx-post="/trips/{{ trip.id }}/warnings/unacknowledge"
         hx-vals='{"kind": "{{ kind }}", "view": "detail"}'
-        hx-target="#trip-warnings-{{ trip.id }}" hx-swap="outerHTML"
-        aria-label="Show {{ name }} in lists again">Show in lists again</button>
+        hx-target="#trip-warnings-{{ trip.id }}" hx-swap="outerHTML">Show in lists again<span class="visually-hidden">: {{ name }}</span></button>
 {% endmacro %}
 {% if warnings.gap or warnings.missing %}
-<div id="trip-warnings-{{ trip.id }}" class="trip-detail-warnings" aria-label="Trip warnings"{% if focus_warnings | default(false) %} tabindex="-1" autofocus{% endif %}>
+<div id="trip-warnings-{{ trip.id }}" class="trip-detail-warnings" role="group" aria-label="Trip warnings"{% if focus_warnings | default(false) %} tabindex="-1" autofocus{% endif %}>
   {% if warnings.gap %}
   <p class="trip-detail-warning">
     <span class="status-badge status-warning" title="Distance may under-read">Recording gap</span>
