@@ -1827,6 +1827,10 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
   margin-top: var(--space-4); color: var(--fg-muted); font-size: .8rem;
 }
 .trip-detail-snap { overflow-wrap: anywhere; }
+.trip-detail-warnings { display: grid; gap: var(--space-2); margin-top: var(--space-3); }
+.trip-detail-warning {
+  display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0;
+}
 .trip-detail-route {
   grid-area: route; min-width: 0; padding: var(--space-3) var(--space-4);
   border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);

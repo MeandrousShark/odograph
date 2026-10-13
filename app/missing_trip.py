@@ -5,9 +5,10 @@ no migration, no persistence, no detector change.
 Kept as a pure function (same "pure core, thin I/O wrapper" split as
 app/snap.py, app/rates.py, app/export.py) so the threshold-and-suppression
 logic is unit-testable without a database, and is the one place the flag's
-actual truth condition lives -- `app/main.py` wires it in as a Jinja global,
-`_trip_archive_row.html` is the only template that calls it (deliberately the
-list page only; not review or detail).
+actual truth condition lives -- `app/main.py` wires it in as a Jinja global.
+The Archive and Dashboard rows and Trip Detail show the badge (not Review).
+Trip Detail shows it even after app/trip_warnings.py acknowledges it, so an
+acknowledged warning stays visible somewhere.
 """
 from __future__ import annotations
 

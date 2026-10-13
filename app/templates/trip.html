@@ -35,7 +35,6 @@
         <span class="status-badge{% if trip.source == 'manual' %} manual-badge{% else %} badge-neutral{% endif %}">
           {{ 'Manual' if trip.source == 'manual' else 'Detected' }} trip
         </span>
-        {% if trip.has_gap %}<span class="status-badge status-warning" title="Distance may under-read">Recording gap</span>{% endif %}
       </h3>
       <p class="trip-detail-distance">
         <strong>{{ trip.display_distance_m | mi }}</strong>
@@ -60,6 +59,7 @@
         <span class="trip-detail-snap">Road-snap failed, showing raw GPS distance</span>
         {% endif %}
       </div>
+      {% include "_trip_detail_warnings.html" %}
     </div>
 
     <div class="trip-detail-route" aria-label="Route endpoints">

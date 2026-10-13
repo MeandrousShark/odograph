@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 
 from app.missing_trip import MissingTripBadge, missing_trip_badge
 from app.rates import YearRate, deduction
+from app.trip_warnings import trip_warnings
 
 
 @dataclass(frozen=True)
@@ -240,7 +241,9 @@ def build_week_dashboard(
         else:
             daily[2] += distance_m
 
+        # An acknowledged warning leaves the attention strip, not the trip.
         badge = missing_trip_badge(trip, missing_trip_threshold_m, tz)
+        badge = trip_warnings(trip, badge).listed_missing
         if badge is not None:
             badges.append(badge)
 

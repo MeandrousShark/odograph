@@ -6,13 +6,15 @@
 {% set compact_start = describe_compact_endpoint(trip.start_place_name, trip.start_lat, trip.start_lon, trip.get('start_address')) %}
 {% set compact_end = describe_compact_endpoint(trip.end_place_name, trip.end_lat, trip.end_lon, trip.get('end_address')) %}
 {% set missing = missing_trip_badge(trip) %}
+{# Acknowledged warnings stay on Trip Detail but leave this row. #}
+{% set warnings = trip_warnings(trip) %}
 {% set delete_dialog_id = 'trip-delete-archive-' ~ trip.id %}
 {% set default_vehicle_ids = vehicles | default([], true) | selectattr('is_default') | map(attribute='id') | list %}
 {% set vehicle_is_default = trip.vehicle_id is not none and trip.vehicle_id in default_vehicle_ids %}
 {% set vehicle_label = trip.vehicle_name or 'Not assigned' %}
 {% set show_vehicle_inline = not vehicle_is_default %}
 {% set needs_category = trip.category == 'unclassified' and not trip.exclusion %}
-{% set has_statuses = needs_category or trip.exclusion or trip.source == 'manual' or trip.expense_count or trip.has_gap or missing %}
+{% set has_statuses = needs_category or trip.exclusion or trip.source == 'manual' or trip.expense_count or warnings.any_listed %}
 {#
   `trip-archive-item` is a bare marker class carrying no CSS of its own,
   present on both this row and `_trip_edit_card.html`'s root article (shared
@@ -69,8 +71,8 @@
       {% if trip.exclusion %}<span class="status-badge exclusion-badge trip-archive-row-exclusion">{{ exclusion_labels[trip.exclusion] }}</span>{% endif %}
       {% if trip.source == 'manual' %}<span class="status-badge manual-badge">Manual</span>{% endif %}
       {% if trip.expense_count %}<span class="status-badge expense-badge">{{ trip.expense_count }} expense{{ 's' if trip.expense_count != 1 }}</span>{% endif %}
-      {% if trip.has_gap %}<span class="status-badge status-warning">Recording gap</span>{% endif %}
-      {% if missing %}<span class="status-badge status-warning missing-trip-badge">Possible missing trip</span>{% endif %}
+      {% if warnings.listed_gap %}<span class="status-badge status-warning">Recording gap</span>{% endif %}
+      {% if warnings.listed_missing %}<span class="status-badge status-warning missing-trip-badge">Possible missing trip</span>{% endif %}
     </div>
     {% endif %}
   </div>
@@ -92,11 +94,17 @@
       </summary>
       <div class="trip-archive-row-more-panel">
         {% if missing %}
-        {# `trip.html` never renders this badge or its bridge-prefill link
-           (app/missing_trip.py keeps the flag list-page only), so this
-           overflow item is the only place left to reach it once the row's
-           old always-expanded details panel is gone. #}
+        {# `trip.html` shows the badge but not its bridge-prefill link, so
+           this overflow item is the only place to reach it once the row's
+           old always-expanded details panel is gone. It stays after the
+           warning is acknowledged. #}
         <a class="trip-archive-row-action" href="{{ missing.prefill_url }}">{{ icon('plus') }}<span>Add missing trip</span></a>
+        {% endif %}
+        {% if warnings.any_listed %}
+        <button type="button" class="trip-archive-row-action" hx-post="/trips/{{ trip.id }}/warnings/acknowledge"
+                hx-target="#trip-{{ trip.id }}" hx-swap="outerHTML">
+          {{ icon('check') }}<span>Acknowledge warnings</span>
+        </button>
         {% endif %}
         {% if trip.category != 'unclassified' %}
         <button type="button" class="trip-archive-row-action" hx-post="/trips/{{ trip.id }}/tag"

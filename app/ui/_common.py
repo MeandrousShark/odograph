@@ -129,7 +129,24 @@ TRIP_COLUMNS = f"""{REPORT_TRIP_COLUMNS},
             AND p.started_at < trips.started_at
           ORDER BY p.started_at DESC LIMIT 1
         )
-    ) AS missing_trip_covered
+    ) AS missing_trip_covered,
+    -- The predecessor's ID and the stored acknowledgement fingerprints let
+    -- app/trip_warnings.py decide which list warnings stay acknowledged.
+    (SELECT p.id FROM trips p
+     WHERE p.account_id = trips.account_id AND p.tracking_device_id = trips.tracking_device_id AND p.source = 'detected'
+       AND p.exclusion IS DISTINCT FROM 'not_my_vehicle'
+       AND p.started_at < trips.started_at
+     ORDER BY p.started_at DESC LIMIT 1) AS prev_trip_id,
+    (SELECT a.trip_started_at FROM trip_warning_acks a
+     WHERE a.account_id = trips.account_id AND a.trip_id = trips.id AND a.kind = 'recording_gap') AS gap_ack_trip_started_at,
+    (SELECT a.trip_ended_at FROM trip_warning_acks a
+     WHERE a.account_id = trips.account_id AND a.trip_id = trips.id AND a.kind = 'recording_gap') AS gap_ack_trip_ended_at,
+    (SELECT a.trip_started_at FROM trip_warning_acks a
+     WHERE a.account_id = trips.account_id AND a.trip_id = trips.id AND a.kind = 'missing_trip') AS missing_ack_trip_started_at,
+    (SELECT a.prev_trip_id FROM trip_warning_acks a
+     WHERE a.account_id = trips.account_id AND a.trip_id = trips.id AND a.kind = 'missing_trip') AS missing_ack_prev_trip_id,
+    (SELECT a.prev_ended_at FROM trip_warning_acks a
+     WHERE a.account_id = trips.account_id AND a.trip_id = trips.id AND a.kind = 'missing_trip') AS missing_ack_prev_ended_at
 """
 
 CATEGORIES = ("business", "personal", "unclassified")
