@@ -413,11 +413,11 @@ the exact version and tagged git revision, plus the expected schema and
 detector versions. Confirm `/healthz` exposes none of those identifiers.
 
 The default PostGIS image is the signed native multi-architecture index
-`ghcr.io/meandrousshark/odograph-postgis@sha256:b352024dd6f9ca2ba0f1e7125dcfdcf78b824f2cbe86edf89559e1ddf4d80241`.
+`ghcr.io/meandrousshark/odograph-postgis@sha256:c4c1184f0c4d899f65c3df9ea6d296c3a3a5f1b233090651ac49429b4e2100b4`.
 Inspect its index and child digests, verify the index and both child signatures,
 and verify each child SPDX subject before pinning a replacement in repository
 references. This index was published by the trusted `main` workflow at source
-commit `095138acecca709fd0a28a591f13e871a57e5a3b`.
+commit `17048177dfea29e07be81bbb719e0d1e79fe4017`.
 
 ## Run the artifact upgrade and rollback drill
 
