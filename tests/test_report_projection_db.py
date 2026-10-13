@@ -28,6 +28,8 @@ TZ = ZoneInfo("America/Los_Angeles")
 BADGE_FIELDS = {
     "prev_end_gap_m", "prev_trip_ended_at", "prev_trip_end_lat",
     "prev_trip_end_lon", "prev_trip_end_place_name", "missing_trip_covered",
+    "prev_trip_id", "gap_ack_trip_started_at", "gap_ack_trip_ended_at",
+    "missing_ack_trip_started_at", "missing_ack_prev_trip_id", "missing_ack_prev_ended_at",
 }
 DETAIL_ONLY_FIELDS = BADGE_FIELDS | {"snap_capacity_needed_bytes"}
 
