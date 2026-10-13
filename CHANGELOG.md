@@ -100,6 +100,45 @@ reproduced here.
   rows of the account bound to its transaction, and none without one. Startup
   and restore validate the `ownership-activated-v1` contract.
 
+## [0.11.3] - 2026-10-12
+
+### Security
+
+- Refresh the Python 3.13 runtime base image to OpenSSL `3.5.7-1~deb13u3`,
+  which fixes CVE-2026-84782, and apply the pending Debian security update
+  for `liblzma5`.
+
+### Correcting road-snapped trips from before v0.11.1
+
+If you are upgrading from v0.11.0 or earlier and have not applied the v0.11.1
+road-snap correction, apply it now. Save the values it changes first, so the
+correction can be reversed without restoring a backup. In `psql`:
+
+```sql
+\copy (SELECT id, distance_snapped_m FROM trips WHERE distance_snapped_m IS NOT NULL AND distance_m > 0 AND distance_snapped_m / distance_m < 0.85) TO 'snap-correction.csv' CSV HEADER
+
+UPDATE trips SET distance_snapped_m = NULL
+WHERE distance_snapped_m IS NOT NULL
+  AND distance_m > 0
+  AND distance_snapped_m / distance_m < 0.85;
+```
+
+Keep `snap-correction.csv` with your backups. The saved file lives outside
+the database, so it adds no table that a later upgrade would have to account
+for.
+
+### Supported upgrade path
+
+- `v0.11.2`, `v0.11.1` and `v0.10.2` may upgrade directly to `v0.11.3`.
+  Earlier releases should first follow the supported upgrade path to
+  `v0.10.2`.
+
+### Breaking changes
+
+- There are no breaking application, database, configuration, or operational
+  changes. Schema version 25, detector version 2, and portable format 2 are
+  unchanged.
+
 ## [0.11.2] - 2026-09-23
 
 ### Changed
