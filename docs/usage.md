@@ -152,8 +152,8 @@ browse its next page. An archive export uses the filters currently shown.
 Each row links to **Trip detail**. **Edit trip** opens an inline card with
 **Save** and **Cancel**. Inline Business and Personal buttons change a
 category immediately. The row's **More trip actions** menu can clear a
-category, add a manual trip for a possible missing-trip gap, or delete the
-trip.
+category, add a manual trip for a possible missing-trip gap, acknowledge the
+row's warnings, or delete the trip.
 
 To update several trips, select their checkboxes. In the filter and status
 area, **Select all matching** selects every trip matching the current filters,
@@ -211,6 +211,33 @@ or split recalculates nearby trips for the affected device, so boundaries and
 distance can change. Settings contains **Manual trip edits**, where **Undo**
 reverses a stored merge or split and **Restore** brings back a deleted detected
 trip.
+
+### Acknowledging trip warnings
+
+Two warnings appear on Trips and Dashboard rows: **Recording gap** and
+**Possible missing trip**. After you have checked one, choose **Acknowledge
+warnings** from the row's **More trip actions** menu. It applies to every
+warning the row shows. The badges leave the row, and an acknowledged missing
+trip no longer counts in the Dashboard **Needs attention** area. **Add missing
+trip** stays in the menu.
+
+Acknowledging never changes the trip, its points, its distance, or its
+category. Review, reports, CSV exports, and notifications are unchanged.
+Trip Detail always shows the trip's warnings and marks an acknowledged one
+**Acknowledged**. Select **Show in lists again** to undo it.
+
+An acknowledgement covers the condition you saw, not the trip forever:
+
+- A recording gap stays acknowledged while the trip keeps the same start and
+  end times.
+- A possible missing trip stays acknowledged while the trip keeps its start
+  time and the previous trip is the same trip with the same end time.
+
+Re-detection that keeps those times keeps the acknowledgement. A merge, split,
+or other boundary change that moves those times, or a different previous trip,
+shows the warning in lists again. Deleting a trip removes its
+acknowledgements. Portable exports leave acknowledgements out, and an import
+neither creates nor clears them. A full database backup keeps them.
 
 ### Add a manual trip
 

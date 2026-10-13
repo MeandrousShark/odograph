@@ -11,6 +11,14 @@ reproduced here.
 
 ### Added
 
+- Trip warnings can be acknowledged. **Acknowledge warnings** in a Trips or
+  Dashboard row's More menu hides that row's **Recording gap** and **Possible
+  missing trip** badges and removes an acknowledged missing trip from the
+  Dashboard attention count. Trip Detail keeps showing each warning, now
+  including possible missing trip, with an **Acknowledged** marker and **Show
+  in lists again**. A warning shows again when the trip's times or its previous
+  trip change. Schema 44 adds the acknowledgement table; trips, reports, CSV
+  and the portable format are unchanged.
 - An optional account display name, set in Account Settings under Profile,
   replaces the email-based name and initials in the header and report pages
   and appears in the administrator account list. Schema 43 adds the nullable

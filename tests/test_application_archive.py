@@ -75,10 +75,16 @@ async def _seed(database_url):
                     )).fetchone())[0]
                     await conn.execute("SELECT public.storage_record_replay(%s,%s,'device',%s)",
                                        (owner, message_id, str(issued.tracking_device_id)))
-                    await conn.execute(
+                    trip_id = (await (await conn.execute(
                         "INSERT INTO trips(account_id,device,source,started_at,ended_at,distance_m,category) "
-                        "VALUES(%s,'portable provenance','manual','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',%s,'business')",
+                        "VALUES(%s,'portable provenance','manual','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',%s,'business') "
+                        "RETURNING id",
                         (owner, owner * 100),
+                    )).fetchone())[0]
+                    await conn.execute(
+                        "INSERT INTO trip_warning_acks(account_id,trip_id,kind,trip_started_at,trip_ended_at) "
+                        "VALUES(%s,%s,'recording_gap','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')",
+                        (owner, trip_id),
                     )
                     await conn.execute(
                         "INSERT INTO geocode_retry(account_id,rounded_lat,rounded_lon,attempted_at,"
@@ -135,6 +141,10 @@ async def _verify(database_url, first, version=1):
                 assert await (await conn.execute(
                     "SELECT account_id,capacity_paused,capacity_needed_bytes FROM geocode_retry"
                 )).fetchall() == [(owner, True, 128)]
+                assert await (await conn.execute(
+                    "SELECT a.account_id,a.kind::text FROM trip_warning_acks a "
+                    "JOIN trips t ON t.account_id=a.account_id AND t.id=a.trip_id"
+                )).fetchall() == [(owner, "recording_gap")]
                 with pytest.raises(psycopg.errors.InsufficientPrivilege):
                     async with conn.transaction():
                         await conn.execute("SELECT * FROM raw_replay_receipts")
