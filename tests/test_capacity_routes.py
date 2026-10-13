@@ -56,6 +56,10 @@ def test_audited_inventory_uses_actual_registered_routes():
                 assert route.capacity_lane == 'auth_interactive'
     policies = {(method, route.path): route.capacity_lane
                 for route in routes for method in route.methods}
+    # Like tag, these can re-render the Dashboard row, whose week context
+    # needs an operation owner.
+    assert policies[('POST', '/trips/{trip_id}/warnings/acknowledge')] == 'navigation'
+    assert policies[('POST', '/trips/{trip_id}/warnings/unacknowledge')] == 'navigation'
     assert policies[('GET', '/trips/{trip_id}/card')] is None
     assert policies[('GET', '/trips/{trip_id}/edit')] is None
     assert policies[('POST', '/trips/{trip_id}/edit')] == 'form'
