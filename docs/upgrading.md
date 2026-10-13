@@ -31,7 +31,7 @@ the pre-upgrade backup, described in [Rollback](#rollback) below.
 
 When a target release's `compose.yaml` uses the signed native PostgreSQL
 16.15/PostGIS 3.6.4 index
-`ghcr.io/meandrousshark/odograph-postgis@sha256:b352024dd6f9ca2ba0f1e7125dcfdcf78b824f2cbe86edf89559e1ddf4d80241`,
+`ghcr.io/meandrousshark/odograph-postgis@sha256:c4c1184f0c4d899f65c3df9ea6d296c3a3a5f1b233090651ac49429b4e2100b4`,
 an installation that still uses the older `postgis/postgis:16-3.4` image must
 be treated as a database-image migration. A normal `docker compose up -d`
 against the existing project is not the migration procedure.
