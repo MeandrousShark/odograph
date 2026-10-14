@@ -244,26 +244,15 @@ spells out what.
 
 ### OIDC
 
-OIDC can be linked as a second way to sign in to an existing account. The
-administrator configures one OIDC provider for the instance.
+- A second way to sign in to an existing account, using one provider per
+  instance.
+- Register `https://mileage.example.com/auth/callback` with your provider and
+  set the three OIDC variables, then link it from **Settings > Account
+  Settings** with your current password.
+- The link follows the provider's issuer and subject, so it survives an email
+  change at the provider.
 
-Register `https://mileage.example.com/auth/callback` with your provider and set
-the three OIDC variables. To link it to an existing password account, open
-**Settings > Account Settings** while signed in, enter your current password,
-and authorize with the provider.
-
-After linking, either method signs you into the same account. The link follows
-the provider's issuer and subject, so it survives your email address changing
-there. Invitation redemption without a local password and OIDC-only method
-management are implemented for controlled activation fixtures. Normal
-installations retain the single-account database guard; these flows are not
-available for regular use until a separately reviewed activation migration is
-released. When enabled, OIDC-only security actions require fresh provider
-authentication with a valid `auth_time` from a provider that honors
-`max_age=0`. See the
-[authentication settings](docs/configuration.md#authentication-and-ingest) for
-details, and [Upgrading](docs/upgrading.md) if you are moving an older
-OIDC-only installation.
+See [OIDC sign-in](docs/oidc.md) for setup, linking and sign-out behavior.
 
 In controlled activation fixtures, an enabled administrator can issue, resend,
 and revoke member invitations in **Admin > Accounts**. The new invitation link
@@ -364,11 +353,6 @@ released.
 
 Changing your login email is separate from password recovery. The new address
 becomes the login only after you confirm the emailed challenge.
-
-If you use OIDC, signing out of Odograph does not sign you out of your identity
-provider, so signing back in may not prompt you at all. Sign out of the
-provider separately to end that session. Odograph does not keep provider tokens
-after sign-in.
 
 ## Updating
 

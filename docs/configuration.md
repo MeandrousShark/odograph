@@ -322,7 +322,8 @@ failures defer that coordinate with exponential backoff from 60 seconds to a
 processes at most 500 trips per turn and resumes its cursor after restart.
 Multi-account activation remains separately controlled.
 
-OIDC is optional. Set all three required provider values together and register
+OIDC is optional; see [OIDC sign-in](oidc.md) for setup and linking. Set all
+three required provider values together and register
 `https://your-domain/auth/callback`. Existing password accounts can link the
 configured identity from Account Security while signed in with a password.
 Invitation redemption without a password and OIDC-only method management are

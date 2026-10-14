@@ -24,6 +24,7 @@ PUBLIC_MARKDOWN = (
     "docs/configuration.md",
     "docs/install-compose.md",
     "docs/known-issues.md",
+    "docs/oidc.md",
     "docs/osrm.md",
     "docs/owntracks.md",
     "docs/privacy.md",
