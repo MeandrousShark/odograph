@@ -567,6 +567,7 @@ _OPS_MODULE_STEMS = {
     "test_generate_env_script",
     "test_no_dashes",
     "test_provision_osrm_script",
+    "test_rehearse_upgrade_script",
     "test_public_docs",
     "test_public_tree",
     "test_release_contract",

@@ -240,7 +240,8 @@ label. Together they change the following for an operator.
 
 Rehearse the upgrade against a copy of your own backup before you upgrade the
 live installation, to learn the first-start duration and catch any refusal
-above. <!-- Link the rehearsal section here once it lands. -->
+above. See
+[Rehearse an upgrade against your own backup](#rehearse-an-upgrade-against-your-own-backup).
 
 ### Recovery
 
@@ -248,6 +249,73 @@ No exact-image rollback is supported across 0.x to 1.0. Recovery means
 restoring the verified pre-upgrade backup into a fresh volume under the old
 image. That loses every write made after the backup. The steps are in
 [Rollback](#rollback).
+
+## Rehearse an upgrade against your own backup
+
+`scripts/rehearse_upgrade.sh` shows how a target release behaves on your data
+before you upgrade. It restores a verified backup into a new, disposable
+Compose project that uses the target's database image (the same fresh-volume
+path as [Upgrading the PostGIS database image](#upgrading-the-postgis-database-image)),
+starts the target release against that copy, and writes a summary:
+
+```sh
+git fetch --tags
+scripts/backup_database.sh --output backups/rehearsal.dump
+scripts/rehearse_upgrade.sh --archive backups/rehearsal.dump \
+  --candidate vX.Y.Z --candidate-image ghcr.io/meandrousshark/odograph:vX.Y.Z
+```
+
+`--candidate` supplies the target's Compose file and scripts.
+`--candidate-image` runs that exact published image; without it, the script
+builds the app from the target's source. If your installed release predates
+the script, run it from a separate clone of the repository and pass the
+archive's full path. The script prints the summary path, or writes to
+`--output PATH`. It exits non-zero when any check fails.
+
+The summary lists how long each migration took, the time from start to
+healthy or failure, the startup and `application_roles verify` results, the
+schema version before and after, row counts per table with their change, and
+any public relation the target does not know, which makes startup refuse. It
+also names the image identities, the loopback port and the environment
+source. It never contains row values, email addresses, coordinates or log
+lines.
+
+The rehearsal is isolated from your installation:
+
+- It uses a new project named `odorehearse<number>` and refuses to run if
+  anything with that name exists. It never reads your `.env` or touches your
+  running project, its volume or any other project.
+- The project network is internal, so the app and its workers cannot reach
+  the internet. Only one loopback health port, never 8077, is published.
+- The environment is generated with fresh secrets and contains no SMTP,
+  geocoding, routing, OIDC, ntfy or other outbound credentials.
+- On success or failure, it removes its containers, volume, network and any
+  image it built. `--keep` leaves them in place and saves raw app logs in its
+  scratch directory. Those logs can contain personal data; delete them when
+  you are done.
+
+For an archive below schema 26, migration 026 imports personal preferences
+and mileage-rate overrides from the environment. To rehearse that import,
+copy only the relevant lines into a separate file and pass
+`--legacy-env FILE`. Allowed keys are `DISPLAY_TZ`, `NTFY_TOPIC`,
+`NUDGE_WEEKLY_HOUR`, `ODOMETER_REMINDER`, `ODOMETER_REMINDER_HOUR`,
+`EMAIL_TO`, `EMAIL_WEEKLY_NUDGE`, `EMAIL_MONTHLY_SUMMARY`,
+`EMAIL_FILING_REMINDER`, `EMAIL_ODOMETER_REMINDER`, `EMAIL_DIGEST_HOUR`,
+`EMAIL_FILING_REMINDER_MMDD` and `MILEAGE_RATE_<YEAR>`. Any other non-empty
+key is refused. If ntfy was configured without an explicit
+`ODOMETER_REMINDER`, add `ODOMETER_REMINDER=1` to match the real import. The
+old ingest password is never copied; the rehearsal imports a synthetic one.
+
+The rehearsal needs free disk for a full copy of your database in its new
+volume, plus the archive rendered to SQL in a temporary directory. Set
+`TMPDIR` to a directory with room for it. Migrations that rewrite large tables
+can take a long time; `--health-timeout SECONDS` (default 3600) sets how long
+to wait.
+
+A rehearsal is not a backup. It never changes the archive and keeps nothing
+after cleanup. Take and verify the pre-upgrade backup as described below
+even after a passing rehearsal.
+
 
 ## Upgrade procedure
 
