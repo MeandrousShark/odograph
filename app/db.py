@@ -58,6 +58,28 @@ async def check_migration_role(conn) -> None:
         )
 
 
+class SchemaTooNewError(RuntimeError):
+    """The database was migrated by a newer release than this image."""
+
+    def __init__(self, stored: int, newest: int):
+        self.stored = stored
+        self.newest = newest
+        super().__init__(
+            f"database schema version {stored} is newer than this image's newest "
+            f"migration {newest}, so a newer release migrated it. Run the newer "
+            "release that migrated this database, or restore the verified "
+            "pre-upgrade backup under this image (see docs/upgrading.md, Rollback)"
+        )
+
+
+def _migration_version(path: pathlib.Path) -> int:
+    return int(path.name.split("_", 1)[0])
+
+
+def newest_migration_version(paths) -> int:
+    return max((_migration_version(path) for path in paths), default=0)
+
+
 async def _fetch_schema_version(conn) -> int:
     cur = await conn.execute("SELECT COALESCE(max(version), 0) FROM schema_migrations")
     row = await cur.fetchone()
@@ -72,6 +94,7 @@ async def run_migrations(pool: AsyncConnectionPool, config=None) -> None:
                 f"migration filename {path.name!r} does not start with a "
                 "numeric NNN_ prefix"
             )
+    newest = newest_migration_version(paths)
 
     async with pool.connection() as conn:
         await check_migration_role(conn)
@@ -94,8 +117,13 @@ async def run_migrations(pool: AsyncConnectionPool, config=None) -> None:
         )
         cur = await conn.execute("SELECT version FROM schema_migrations")
         applied = {row[0] for row in await cur.fetchall()}
+        # Refuse before applying anything: an older image cannot know what a
+        # newer release's migrations changed.
+        stored = max(applied, default=0)
+        if stored > newest:
+            raise SchemaTooNewError(stored, newest)
         for path in paths:
-            version = int(path.name.split("_", 1)[0])
+            version = _migration_version(path)
             if version in applied:
                 continue
             log.info("applying migration %s", path.name)

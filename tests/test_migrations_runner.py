@@ -17,7 +17,10 @@ from app.db import (
     INVITATION_EMAIL_LOCK_CLASS_ID,
     NUDGE_ADVISORY_LOCK_KEY,
     ODOMETER_REMINDER_ADVISORY_LOCK_KEY,
+    MIGRATIONS_DIR,
     RUN_MIGRATIONS_ADVISORY_LOCK_KEY,
+    SchemaTooNewError,
+    newest_migration_version,
     run_migrations,
 )
 
@@ -58,3 +61,28 @@ def test_bad_migration_filename_rejected_before_applying_anything(tmp_path, monk
 
     with pytest.raises(ValueError, match="not_numbered.sql"):
         asyncio.run(run_migrations(FakePool()))
+
+
+def test_newest_migration_version_is_the_highest_number_not_the_last_name(tmp_path):
+    for name in ("001_a.sql", "010_b.sql", "002_c.sql", "9_d.sql"):
+        (tmp_path / name).write_text("SELECT 1;")
+
+    assert newest_migration_version(sorted(tmp_path.glob("*.sql"))) == 10
+    assert newest_migration_version([]) == 0
+
+
+def test_newest_migration_version_matches_the_shipped_migrations():
+    paths = sorted(MIGRATIONS_DIR.glob("*.sql"))
+    assert newest_migration_version(paths) == max(int(p.name.split("_", 1)[0]) for p in paths)
+
+
+def test_schema_too_new_message_names_both_versions_and_the_recovery():
+    error = SchemaTooNewError(45, 44)
+
+    assert (error.stored, error.newest) == (45, 44)
+    assert str(error) == (
+        "database schema version 45 is newer than this image's newest migration 44, "
+        "so a newer release migrated it. Run the newer release that migrated this "
+        "database, or restore the verified pre-upgrade backup under this image "
+        "(see docs/upgrading.md, Rollback)"
+    )
