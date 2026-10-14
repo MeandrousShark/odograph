@@ -280,6 +280,15 @@ code, into a fresh volume, not running old code against the migrated database,
 and not attempting to undo a migration in place. A database-image migration
 also requires a fresh old-image project.
 
+Odograph 1.0 and later refuse to start against a database migrated by a newer
+release. Startup stops before applying any migration and logs that the
+database schema version is newer than the image's newest migration, naming
+both numbers. Nothing in the database is changed. Either run the newer release
+that migrated the database, or restore the verified pre-upgrade backup under
+this release as described below. Images before 1.0 do not have this check, so
+running an older 0.x image against a migrated database remains unsupported
+even if it appears to start.
+
 ### Rollback after a database-image migration
 
 1. Stop the target app and database, leaving the target volume available for
