@@ -923,7 +923,7 @@ def test_wrong_format_or_version_rejected(mutate, expected_field):
     _scenario(run)
 
 
-@pytest.mark.parametrize("schema_version", [26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43])
+@pytest.mark.parametrize("schema_version", [26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44])
 def test_format_3_bundles_import_into_current_schema(schema_version):
     """Migration 027 only deletes raw_messages rows, which bundles never
     carry, 028 only enforces row-level security, 029 adds invitations, 030
@@ -932,9 +932,10 @@ def test_format_3_bundles_import_into_current_schema(schema_version):
     35 adds administrator recovery functions, and 36 adds account audit and
     lifecycle state. Schema 38 adds internal snap retry state, and 39 adds
     import admission. Schema 40 adds internal storage accounting, 41 adds
-    durable geocode state, 42 adds storage limits, and 43 adds the account
-    display name. Format-3 exports from schema 26 through 43 import because
-    these additions do not change bundle data."""
+    durable geocode state, 42 adds storage limits, 43 adds the account
+    display name, and 44 adds trip warning acknowledgements. Format-3 exports
+    from schema 26 through 44 import because these additions do not change
+    bundle data."""
     async def run(pool):
         transport = httpx.ASGITransport(app=_bare_app(pool))
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:

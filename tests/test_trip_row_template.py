@@ -307,9 +307,8 @@ def test_missing_trip_badge_renders_on_flagged_row():
     ))
 
     assert '<span class="status-badge status-warning missing-trip-badge">Possible missing trip</span>' in body
-    # trip.html deliberately never renders this badge or its bridge-prefill
-    # link (app/missing_trip.py keeps the flag list-page only), so the row's
-    # overflow menu is the only remaining way to reach the prefill link once
+    # trip.html shows the badge but never its bridge-prefill link, so the
+    # row's overflow menu is the only remaining way to reach the prefill link once
     # the row itself no longer expands an inline details panel.
     panel = body.split('class="trip-archive-row-more-panel"', 1)[1].split("</details>", 1)[0]
     assert "Add missing trip" in panel

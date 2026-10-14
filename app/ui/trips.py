@@ -13,6 +13,7 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 
 from app.account_context import account_id
 from app.capacity import owned_thread
+from app.config import DEFAULT_MISSING_TRIP_GAP_M
 from app.auth import require_csrf, require_user
 from app.page import _fetch_review_count, render_page, render_template
 from app.dashboard import parse_week_anchor
@@ -25,9 +26,16 @@ from app.expenses import (
     TREATMENT_LABELS,
 )
 from app.formatting import format_miles
+from app.missing_trip import missing_trip_badge
 from app.rates import deduction, load_rates
 from app.report import sum_month_deductions
 from app.trip_queries import DISPLAY_DISTANCE_SQL
+from app.trip_warnings import (
+    WARNING_KINDS,
+    acknowledge as acknowledge_warnings,
+    current_fingerprints,
+    unacknowledge as unacknowledge_warning,
+)
 from app.vehicles import list_vehicles
 
 from app.ui._common import (
@@ -840,6 +848,48 @@ def register_month_page(router: APIRouter) -> None:
             )
 
 
+# Where a warning acknowledgement was made: a list row, or Trip Detail.
+WARNING_VIEWS = ("", "detail")
+
+
+async def _trip_warnings_response(
+    request: Request, trip_id: int, dashboard_week: str, view: str,
+) -> Response:
+    """Re-render whatever surface sent a warning acknowledgement change."""
+    pool = request.state.account_pool
+    if view == "detail":
+        trip = await _fetch_trip(pool, trip_id)
+        return await render_template(
+            request, "_trip_detail_warnings.html", {"trip": trip, "focus_warnings": True}
+        )
+    if dashboard_week:
+        # Same imports and hero refresh as tag_trip's dashboard branch: the
+        # attention strip's missing-trip count can change with this row.
+        from app.ui.stats import _build_week_dashboard_context
+
+        tz = request.state.config.display_tz
+        now = datetime.now(tz)
+        anchor = parse_week_anchor(dashboard_week, tz, now)
+        dashboard_context = await _build_week_dashboard_context(request, anchor, now)
+        ctx = await _fetch_trip_card_context(
+            pool, trip_id,
+            vehicles=dashboard_context["vehicles"],
+            recent_purposes=dashboard_context["recent_purposes"],
+        )
+        async with pool.connection() as conn:
+            review_count = await _fetch_review_count(conn)
+        return await render_template(
+            request,
+            "_dashboard_tag_response.html",
+            {**ctx, **dashboard_context, "review_count": review_count,
+             "dashboard_oob": True, "focus_row_actions": True},
+        )
+    ctx = await _fetch_trip_card_context(pool, trip_id)
+    return _mark_archive_write(
+        await render_template(request, "_trip_archive_row.html", ctx)
+    )
+
+
 def register(router: APIRouter) -> None:
         @router.get("/trips/{trip_id}/card")
         async def trip_card(
@@ -1403,6 +1453,60 @@ def register(router: APIRouter) -> None:
                     },
                 )
             )
+
+        @router.post("/trips/{trip_id}/warnings/acknowledge", dependencies=[Depends(require_csrf)])
+        async def acknowledge_trip_warnings(
+            request: Request,
+            trip_id: int,
+            user: dict = Depends(require_user),
+            dashboard_week: Annotated[str, Form()] = "",
+            view: Annotated[str, Form()] = "",
+        ):
+            """Acknowledge every list warning the trip shows now. The
+            fingerprints come from the trip as stored, never from the client."""
+            if view not in WARNING_VIEWS:
+                raise HTTPException(status_code=400, detail="Unknown view")
+            config = request.state.config
+            threshold_m = getattr(config, "missing_trip_gap_m", DEFAULT_MISSING_TRIP_GAP_M)
+            async with request.state.account_pool.connection() as conn:
+                cur = conn.cursor(row_factory=dict_row)
+                await cur.execute(
+                    f"SELECT {TRIP_COLUMNS} FROM trips WHERE id = %s AND account_id = %s",
+                    (trip_id, account_id(conn)),
+                )
+                trip = await cur.fetchone()
+                if not trip:
+                    raise HTTPException(status_code=404, detail="No such trip")
+                badge = missing_trip_badge(trip, threshold_m, config.display_tz)
+                try:
+                    await acknowledge_warnings(conn, trip_id, current_fingerprints(trip, badge))
+                except errors.ForeignKeyViolation:
+                    raise HTTPException(status_code=404, detail="No such trip")
+            request.state._capacity_mutation_committed = True
+            return await _trip_warnings_response(request, trip_id, dashboard_week, view)
+
+        @router.post("/trips/{trip_id}/warnings/unacknowledge", dependencies=[Depends(require_csrf)])
+        async def unacknowledge_trip_warning(
+            request: Request,
+            trip_id: int,
+            kind: str = Form(...),
+            user: dict = Depends(require_user),
+            dashboard_week: Annotated[str, Form()] = "",
+            view: Annotated[str, Form()] = "",
+        ):
+            if kind not in WARNING_KINDS:
+                raise HTTPException(status_code=400, detail="Unknown warning")
+            if view not in WARNING_VIEWS:
+                raise HTTPException(status_code=400, detail="Unknown view")
+            async with request.state.account_pool.connection() as conn:
+                cur = await conn.execute(
+                    "SELECT 1 FROM trips WHERE id = %s AND account_id = %s", (trip_id, account_id(conn)),
+                )
+                if await cur.fetchone() is None:
+                    raise HTTPException(status_code=404, detail="No such trip")
+                await unacknowledge_warning(conn, trip_id, kind)
+            request.state._capacity_mutation_committed = True
+            return await _trip_warnings_response(request, trip_id, dashboard_week, view)
 
         @router.post("/trips/{trip_id}/notes", dependencies=[Depends(require_csrf)])
         async def note_trip(

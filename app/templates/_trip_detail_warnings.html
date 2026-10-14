@@ -1,0 +1,28 @@
+{# Trip Detail always shows the trip's list warnings, acknowledged or not, so
+   an acknowledgement never hides a warning everywhere. The acknowledge and
+   undo routes re-render this fragment; `focus_warnings` keeps keyboard focus
+   here after the undo control that had it is removed. #}
+{% set warnings = trip_warnings(trip) %}
+{% macro acknowledged(kind, name) %}
+<span class="status-badge badge-neutral">Acknowledged</span>
+<button type="button" class="control control-secondary trip-detail-warning-undo"
+        hx-post="/trips/{{ trip.id }}/warnings/unacknowledge"
+        hx-vals='{"kind": "{{ kind }}", "view": "detail"}'
+        hx-target="#trip-warnings-{{ trip.id }}" hx-swap="outerHTML">Show in lists again<span class="visually-hidden">: {{ name }}</span></button>
+{% endmacro %}
+{% if warnings.gap or warnings.missing %}
+<div id="trip-warnings-{{ trip.id }}" class="trip-detail-warnings" role="group" aria-label="Trip warnings"{% if focus_warnings | default(false) %} tabindex="-1" autofocus{% endif %}>
+  {% if warnings.gap %}
+  <p class="trip-detail-warning">
+    <span class="status-badge status-warning" title="Distance may under-read">Recording gap</span>
+    {% if warnings.gap_acknowledged %}{{ acknowledged('recording_gap', 'recording gap') }}{% endif %}
+  </p>
+  {% endif %}
+  {% if warnings.missing %}
+  <p class="trip-detail-warning">
+    <span class="status-badge status-warning missing-trip-badge">Possible missing trip</span>
+    {% if warnings.missing_acknowledged %}{{ acknowledged('missing_trip', 'possible missing trip') }}{% endif %}
+  </p>
+  {% endif %}
+</div>
+{% endif %}

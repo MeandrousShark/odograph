@@ -54,6 +54,7 @@ from app.report import caveat_lines, format_rate_periods, quarter_bounds, range_
 from app.retention import RetentionWorker
 from app.snap import SnapWorker
 from app.storage_errors import register_storage_errors
+from app.trip_warnings import trip_warnings
 from app.ui import EXCLUSION_LABELS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -270,6 +271,12 @@ def make_templates(config: Config) -> Jinja2Templates:
         return missing_trip_badge(trip, threshold_m, timezone_for(context))
 
     templates.env.globals["missing_trip_badge"] = account_missing_trip_badge
+
+    @pass_context
+    def account_trip_warnings(context, trip):
+        return trip_warnings(trip, missing_trip_badge(trip, threshold_m, timezone_for(context)))
+
+    templates.env.globals["trip_warnings"] = account_trip_warnings
     # A query-string version, not the Cache-Control header alone, is what
     # actually unsticks a browser that cached style.css *before* this
     # value existed on a response -- that old cache entry's freshness was

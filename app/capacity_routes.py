@@ -20,6 +20,8 @@ from app.preparation_resources import PreparationBusy, PreparationResourceError
 # The keys describe server-owned route definitions, never client account claims.
 NAVIGATION_ROUTES = frozenset({
     ('GET', '/'), ('POST', '/trips/{trip_id}/tag'),
+    ('POST', '/trips/{trip_id}/warnings/acknowledge'),
+    ('POST', '/trips/{trip_id}/warnings/unacknowledge'),
 })
 FOREGROUND_ROUTES = frozenset({
     ('GET', '/places/search'),

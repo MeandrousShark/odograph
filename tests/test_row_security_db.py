@@ -49,6 +49,8 @@ async def _seed_every_owned_table(conn, owner: int) -> None:
                       (owner, device, label, trip))
     await conn.execute(f"INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom,trip_id) "
                        f"VALUES(%s,%s,%s,'2026-01-01T01:00Z',{POINT},%s)", (owner,device,label,trip))
+    await conn.execute("INSERT INTO trip_warning_acks(account_id,trip_id,kind,trip_started_at,trip_ended_at) "
+                       "VALUES(%s,%s,'recording_gap','2026-01-01T00:00Z','2026-01-01T01:00Z')", (owner, trip))
     await conn.execute(f"INSERT INTO stays(account_id,tracking_device_id,device,started_at,ended_at,centroid,"
                        f"point_count) VALUES(%s,%s,%s,'2026-01-01T00:00Z','2026-01-01T00:10Z',{POINT},1)",
                        (owner, device, label))

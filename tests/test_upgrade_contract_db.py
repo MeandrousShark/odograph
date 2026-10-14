@@ -43,7 +43,7 @@ ACTIVATED_SCHEMA = 28
 PROVISIONED_SCHEMAS = pytest.mark.parametrize("provisioned_schema", [PREPARED_SCHEMA, ACTIVATED_SCHEMA])
 HISTORICAL_SQL = Path(__file__).parent / "fixtures" / "schema26_roles"
 OWNED_TABLES = tuple(table for table in application_roles.OWNED_TABLES
-                    if table not in application_roles.GEOCODE_TABLES)
+                    if table not in application_roles.GEOCODE_TABLES + application_roles.WARNING_ACK_TABLES)
 
 
 def _historical_table_rights(role, table):
@@ -486,7 +486,7 @@ def test_display_name_upgrade_keeps_contract_without_reprovisioning(monkeypatch,
                 await conn.execute(
                     "INSERT INTO accounts(id,email,password_hash,is_admin) "
                     "VALUES(41,'upgrade-name@example.invalid','unused',true)")
-            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", _migration_dir(tmp_path, "display_name", through=43))
             await run_migrations(pool)
 
             async def forbidden_reprovision(conn):
@@ -514,6 +514,70 @@ def test_display_name_upgrade_keeps_contract_without_reprovisioning(monkeypatch,
             async with pool.connection() as conn:
                 assert await (await conn.execute(
                     "SELECT display_name FROM accounts WHERE id=41")).fetchone() == ("Upgraded",)
+                assert await (await conn.execute("SELECT public.storage_usage_consistent()")).fetchone() == (True,)
+        finally:
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
+            await pool.close()
+    asyncio.run(scenario())
+
+
+def test_warning_ack_upgrade_keeps_contract_without_reprovisioning(monkeypatch, tmp_path):
+    async def scenario():
+        pool = make_pool(TEST_DB)
+        await pool.open(wait=True)
+        try:
+            await drop_and_recreate_schema(pool)
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", _migration_dir(tmp_path, "before_warning_acks", through=43))
+            await run_migrations(pool)
+            await prepare_application_roles(TEST_DB)
+            async with pool.connection() as conn:
+                await conn.execute(
+                    "INSERT INTO accounts(id,email,password_hash,is_admin) "
+                    "VALUES(41,'upgrade-acks@example.invalid','unused',true)")
+                trip_id = (await (await conn.execute(
+                    "INSERT INTO trips(account_id,device,source,started_at,ended_at,distance_m,has_gap) "
+                    "VALUES(41,'manual','manual','2026-07-01T10:00Z','2026-07-01T11:00Z',100,true) "
+                    "RETURNING id")).fetchone())[0]
+                trip_before = (await (await conn.execute(
+                    "SELECT row_to_json(t)::text FROM trips t WHERE id=%s", (trip_id,))).fetchone())[0]
+                before = (await (await conn.execute(
+                    "SELECT actual_bytes,reserved_bytes,raw_bytes,enhancement_bytes "
+                    "FROM account_usage WHERE account_id=41")).fetchone())
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
+            await run_migrations(pool)
+
+            async def forbidden_reprovision(conn):
+                raise AssertionError("upgrade must validate rather than provision")
+
+            monkeypatch.setattr(application_roles, "_provision", forbidden_reprovision)
+            await prepare_application_roles(TEST_DB)
+            async with pool.connection() as conn:
+                assert await (await conn.execute(
+                    "SELECT MAX(version) FROM schema_migrations")).fetchone() == (44,)
+                assert await (await conn.execute(
+                    "SELECT row_to_json(t)::text FROM trips t WHERE id=%s", (trip_id,))).fetchone() == (trip_before,)
+                assert await (await conn.execute(
+                    "SELECT relrowsecurity,relforcerowsecurity FROM pg_class "
+                    "WHERE oid='public.trip_warning_acks'::regclass")).fetchone() == (True, True)
+                assert await (await conn.execute(
+                    "SELECT actual_bytes,reserved_bytes,raw_bytes,enhancement_bytes "
+                    "FROM account_usage WHERE account_id=41")).fetchone() == before
+                assert await (await conn.execute("SELECT public.storage_usage_consistent()")).fetchone() == (True,)
+            async with application_roles.application_role_pools(TEST_DB) as roles:
+                from app.account_context import AccountPool, AccountPrincipal
+                bound = AccountPool(roles.runtime, AccountPrincipal(41, True, 1))
+                async with bound.connection() as conn:
+                    await conn.execute(
+                        "INSERT INTO trip_warning_acks(account_id,trip_id,kind,trip_started_at,trip_ended_at) "
+                        "VALUES(41,%s,'recording_gap','2026-07-01T10:00Z','2026-07-01T11:00Z')", (trip_id,))
+            async with pool.connection() as conn:
+                assert await (await conn.execute(
+                    "SELECT actual_bytes FROM account_usage WHERE account_id=41"
+                )).fetchone() == (before[0] + 128 + len("recording_gap"),)
+                assert await (await conn.execute("SELECT public.storage_usage_consistent()")).fetchone() == (True,)
+                await conn.execute("DELETE FROM trips WHERE id=%s", (trip_id,))
+                assert await (await conn.execute(
+                    "SELECT count(*) FROM trip_warning_acks")).fetchone() == (0,)
                 assert await (await conn.execute("SELECT public.storage_usage_consistent()")).fetchone() == (True,)
         finally:
             monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)

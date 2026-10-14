@@ -34,12 +34,14 @@ OWNED_TABLES = (
     "mileage_rates", "odometer_readings", "expenses", "nudge_delivery_windows",
     "odometer_reminder_windows", "email_deliveries", "account_settings",
     "tracking_devices", "tracking_device_aliases", "ingest_credentials", "geocode_retry",
+    "trip_warning_acks",
 )
 STORAGE_TABLES = ("account_usage", "device_storage_envelopes")
 S2_PROTECTED_TABLES = ("storage_grants", "storage_quota_baseline", "raw_replay_receipts")
 S2_TABLES = S2_PROTECTED_TABLES + ("storage_policy",)
 GEOCODE_TABLES = ("geocode_retry", "geocode_discovery")
 GEOCODE_PROTECTED_TABLES = ("geocode_discovery",)
+WARNING_ACK_TABLES = ("trip_warning_acks",)
 PROTECTED_TABLES = ("email_challenges",) + STORAGE_TABLES + GEOCODE_PROTECTED_TABLES + S2_PROTECTED_TABLES
 CONTROL_TABLES = (
     "accounts", "oidc_identities", "instance_state", "invitations",
@@ -135,7 +137,7 @@ PASSWORD_RESET_FUNCTIONS = tuple(s.signature for s in FUNCTION_SPECS
                                  if s.source in ("031_password_reset.sql", "035_admin_recovery.sql")
                                  and s.signature not in EMAIL_CHALLENGE_FUNCTIONS)
 STORAGE_FUNCTIONS = tuple(
-    "public.storage_charge_" + table + "(public." + table + ")" for table in OWNED_TABLES if table not in GEOCODE_TABLES
+    "public.storage_charge_" + table + "(public." + table + ")" for table in OWNED_TABLES if table not in GEOCODE_TABLES + WARNING_ACK_TABLES
 ) + (
     "public.storage_account_init()", "public.storage_apply_statement()",
     "public.storage_row_account_guard()",
@@ -212,6 +214,18 @@ FUNCTION_SPECS = tuple(
     for spec in FUNCTION_SPECS
 ) + S2_FUNCTION_SPECS
 STORAGE_FUNCTIONS += ("public.storage_charge_raw_replay_receipts(public.raw_replay_receipts)",)
+WARNING_ACK_FUNCTION_SPECS = tuple(
+    FunctionSpec("public.storage_charge_" + table + "(public." + table + ")",
+                 MIGRATE_ROLE, "044_trip_warning_acks.sql", MIGRATE_ROLE, False, "sql", "i")
+    for table in WARNING_ACK_TABLES
+)
+WARNING_ACK_FUNCTIONS = tuple(spec.signature for spec in WARNING_ACK_FUNCTION_SPECS)
+FUNCTION_SPECS = tuple(
+    replace(spec, source="044_trip_warning_acks.sql")
+    if spec.signature == "public.storage_expected_usage()" else spec
+    for spec in FUNCTION_SPECS
+) + WARNING_ACK_FUNCTION_SPECS
+STORAGE_FUNCTIONS += WARNING_ACK_FUNCTIONS
 FUNCTIONS = {spec.signature: spec.caller for spec in FUNCTION_SPECS}
 FUNCTION_OWNERS = {spec.signature: spec.owner for spec in FUNCTION_SPECS}
 RESTORE_AUTH_VERSION_STEP = 1_000_000_000
@@ -223,12 +237,16 @@ STATE_TABLES = ("managed_role_state", "recovery_metadata")
 def _contract_function_specs(schema_version: int) -> tuple[FunctionSpec, ...]:
     specs = []
     for spec in FUNCTION_SPECS:
+        if schema_version < 44 and spec.signature in WARNING_ACK_FUNCTIONS:
+            continue
         if schema_version < 42 and spec.signature in S2_FUNCTIONS:
             continue
         if schema_version < 41 and spec.signature in GEOCODE_FUNCTIONS:
             continue
-        if schema_version < 42 and spec.signature == "public.storage_expected_usage()":
-            source = "041_geocode_progress.sql" if schema_version >= 41 else "040_storage_accounting.sql"
+        if schema_version < 44 and spec.signature == "public.storage_expected_usage()":
+            source = ("042_storage_ceiling.sql" if schema_version >= 42
+                      else "041_geocode_progress.sql" if schema_version >= 41
+                      else "040_storage_accounting.sql")
             spec = replace(spec, source=source)
         if schema_version < 42 and spec.signature == "public.reconcile_storage_usage()":
             spec = replace(spec, source="040_storage_accounting.sql")
@@ -332,7 +350,7 @@ def _account_control_update_columns(schema_version: int) -> tuple[str, ...]:
                  if schema_version >= 43 or column != "display_name")
 
 
-def _policy_contract(schema_version: int = 43) -> dict[tuple[str, str], tuple[str, str, str | None, str | None]]:
+def _policy_contract(schema_version: int = 44) -> dict[tuple[str, str], tuple[str, str, str | None, str | None]]:
     expression = "account_id = NULLIF(current_setting('app.account_id'::text,true),''::text)::bigint"
     policies = {(table, "account_isolation"): (RUNTIME_ROLE, "ALL", expression, expression)
                 for table in OWNED_TABLES + PROTECTED_TABLES
@@ -348,6 +366,8 @@ def _policy_contract(schema_version: int = 43) -> dict[tuple[str, str], tuple[st
     for table in OWNED_TABLES + PROTECTED_TABLES:
         if _table_rights(BOOTSTRAP_ROLE, table):
             policies[table, "bootstrap_defaults"] = (BOOTSTRAP_ROLE, "ALL", "true", "true")
+    if schema_version < 44:
+        policies = {key: value for key, value in policies.items() if key[0] not in WARNING_ACK_TABLES}
     if schema_version < 42:
         policies = {key: value for key, value in policies.items() if key[0] not in S2_TABLES}
     if schema_version < 41:
@@ -385,10 +405,12 @@ async def _provision(conn) -> None:
     """Initial provisioning or explicit restore only, never a startup repair."""
     schema_version = await _installed_schema_version(conn)
     contract_tables = tuple(table for table in TABLES
-                            if (schema_version >= 42 or table not in S2_TABLES)
+                            if (schema_version >= 44 or table not in WARNING_ACK_TABLES)
+                            and (schema_version >= 42 or table not in S2_TABLES)
                             and (schema_version >= 41 or table not in GEOCODE_TABLES))
     contract_functions = {signature: caller for signature, caller in FUNCTIONS.items()
-                          if (schema_version >= 42 or signature not in S2_FUNCTIONS)
+                          if (schema_version >= 44 or signature not in WARNING_ACK_FUNCTIONS)
+                          and (schema_version >= 42 or signature not in S2_FUNCTIONS)
                           and (schema_version >= 41 or signature not in GEOCODE_FUNCTIONS)}
     await conn.execute("REVOKE CREATE ON SCHEMA public FROM PUBLIC")
     await conn.execute("GRANT USAGE,CREATE ON SCHEMA public TO odograph_migrate")
@@ -494,10 +516,12 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
     """Validate effective privileges and policies without fixing drift."""
     schema_version = await _installed_schema_version(conn)
     contract_tables = tuple(table for table in TABLES
-                            if (schema_version >= 42 or table not in S2_TABLES)
+                            if (schema_version >= 44 or table not in WARNING_ACK_TABLES)
+                            and (schema_version >= 42 or table not in S2_TABLES)
                             and (schema_version >= 41 or table not in GEOCODE_TABLES))
     contract_functions = {signature: caller for signature, caller in FUNCTIONS.items()
-                          if (schema_version >= 42 or signature not in S2_FUNCTIONS)
+                          if (schema_version >= 44 or signature not in WARNING_ACK_FUNCTIONS)
+                          and (schema_version >= 42 or signature not in S2_FUNCTIONS)
                           and (schema_version >= 41 or signature not in GEOCODE_FUNCTIONS)}
     account_update_columns = _account_control_update_columns(schema_version)
     cur = await conn.execute(
@@ -825,7 +849,7 @@ async def _validate_s2_schema(conn) -> None:
                           f"S2 index definition: {name}")
 
 
-async def _validate_geocode_schema(conn, schema_version: int = 43) -> None:
+async def _validate_geocode_schema(conn, schema_version: int = 44) -> None:
     columns = {
         "geocode_retry": (
             ("account_id", "bigint", True, None),
@@ -905,7 +929,7 @@ async def _validate_geocode_schema(conn, schema_version: int = 43) -> None:
     ] + [("geocode_work_unit", unit) for unit in ("discovery", "coordinate")], "geocode enum definition")
 
 
-async def _validate_geocode_indexes(conn, schema_version: int = 43) -> None:
+async def _validate_geocode_indexes(conn, schema_version: int = 44) -> None:
     definitions = {
         "geocode_retry_pkey": "CREATE UNIQUE INDEX geocode_retry_pkey ON public.geocode_retry "
             "USING btree (account_id, rounded_lat, rounded_lon)",
@@ -946,10 +970,11 @@ async def _validate_geocode_indexes(conn, schema_version: int = 43) -> None:
                           f"geocode index definition: {name}")
 
 
-async def _validate_storage_triggers(conn, schema_version: int = 43) -> None:
+async def _validate_storage_triggers(conn, schema_version: int = 44) -> None:
     expected = {}
     charged_tables = tuple(table for table in OWNED_TABLES
-                           if schema_version >= 41 or table not in GEOCODE_TABLES)
+                           if (schema_version >= 44 or table not in WARNING_ACK_TABLES)
+                           and (schema_version >= 41 or table not in GEOCODE_TABLES))
     if schema_version >= 41:
         charged_tables += GEOCODE_PROTECTED_TABLES
     if schema_version >= 42:
@@ -1011,7 +1036,8 @@ async def _validate_storage_triggers(conn, schema_version: int = 43) -> None:
         "JOIN pg_proc p ON p.oid=t.tgfoid WHERE NOT t.tgisinternal "
         "AND c.relnamespace='public'::regnamespace AND c.relname=ANY(%s)",
         (list(table for table in TABLES
-              if (schema_version >= 42 or table not in S2_TABLES)
+              if (schema_version >= 44 or table not in WARNING_ACK_TABLES)
+              and (schema_version >= 42 or table not in S2_TABLES)
               and (schema_version >= 41 or table not in GEOCODE_TABLES)),))
     rows = await cur.fetchall()
     found = {(row[0], row[1]) for row in rows}
@@ -1077,6 +1103,7 @@ async def prepare_application_roles(database_url: str, *, restoring: bool = Fals
                     await _check_contract_functions_exist(
                         conn, (spec.signature for spec in FUNCTION_SPECS
                                if spec.signature in FUNCTIONS and spec.source not in FUNCTION_FILES
+                               and (schema_version >= 44 or spec.signature not in WARNING_ACK_FUNCTIONS)
                                and (schema_version >= 42 or spec.signature not in S2_FUNCTIONS)
                                and (schema_version >= 41 or spec.signature not in GEOCODE_FUNCTIONS)))
                 for role, password in ((CONTROL_ROLE, state.control_password), (RUNTIME_ROLE, state.runtime_password)):

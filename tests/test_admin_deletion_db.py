@@ -96,6 +96,8 @@ def test_first_admin_purge_cleans_dependency_graph_preserves_other_account_and_b
             point = (await (await conn.execute("INSERT INTO points(account_id,tracking_device_id,device,recorded_at,geom) VALUES (%s,%s,'phone',now(),ST_SetSRID(ST_MakePoint(1,2),4326)) RETURNING id", (first["id"],device))).fetchone())[0]
             await conn.execute("INSERT INTO trip_boundary_overrides(account_id,tracking_device_id,device,kind,point_id) VALUES (%s,%s,'phone','force',%s)", (first["id"],device,point))
             await conn.execute("INSERT INTO expenses(account_id,vehicle_id,incurred_on,category,amount,treatment) VALUES (%s,%s,current_date,'fuel',20,'fully_business')", (first["id"],vehicle))
+            trip = (await (await conn.execute("INSERT INTO trips(account_id,device,source,started_at,ended_at,distance_m,has_gap) VALUES (%s,'manual','manual',now()-interval '1 hour',now(),1000,true) RETURNING id", (first["id"],))).fetchone())[0]
+            await conn.execute("INSERT INTO trip_warning_acks(account_id,trip_id,kind,trip_started_at,trip_ended_at) SELECT account_id,id,'recording_gap',started_at,ended_at FROM trips WHERE id=%s", (trip,))
             await conn.execute("INSERT INTO invitations(email,token_digest,issued_by,expires_at) VALUES ('invite@example.invalid',%s,%s,now()+interval '1 day')", ('a'*64, first["id"]))
             other_vehicle = (await (await conn.execute("INSERT INTO vehicles(account_id,name) VALUES (%s,'Survivor') RETURNING id", (second,))).fetchone())[0]
         actor = dict(first, id=second, email="second@example.invalid", password_hash="second-hash")
@@ -114,6 +116,7 @@ def test_first_admin_purge_cleans_dependency_graph_preserves_other_account_and_b
         async with owner.connection() as conn:
             for table in OWNED_TABLES:
                 assert (await (await conn.execute(f"SELECT count(*) FROM {table} WHERE account_id=%s", (first["id"],))).fetchone())[0] == 0
+            assert (await (await conn.execute("SELECT public.storage_usage_consistent()")).fetchone()) == (True,)
             marker = await (await conn.execute("SELECT first_account_id,bootstrap_completed_at IS NOT NULL FROM instance_state")).fetchone()
             assert marker == (None, True)
             assert (await (await conn.execute("SELECT name FROM vehicles WHERE id=%s", (other_vehicle,))).fetchone())[0] == "Survivor"
