@@ -11,6 +11,24 @@ reproduced here.
 
 ### Added
 
+- Multi-account operation. The administrator invites members from Admin >
+  Accounts; each member signs in with a password or the configured OIDC
+  provider and keeps private trips, places, vehicles and settings. The
+  administrator can disable, re-enable, schedule deletion of and purge member
+  accounts, and queue their password recovery. The first account stays the
+  only administrator, and public signup still closes after it is created.
+  Migration 045 removes the database guard that limited an installation to one
+  account. See [Account management](docs/accounts.md#administrator-account-management).
+- The storage grant budget is the account limit: on the defaults, five
+  accounts including the administrator. Creating an invitation while no grant
+  is fundable is refused with a message naming `STORAGE_INSTANCE_BUDGET_BYTES`,
+  and accepting an invitation after the budget ran out shows a distinct
+  capacity message, creates no account and leaves the invitation unused.
+- `scripts/rehearse_upgrade.sh` restores a verified backup into a disposable,
+  network-isolated Compose project, starts a candidate release against the
+  copy and writes a summary of migration timings, the startup result and
+  row-count changes. See
+  [Rehearse an upgrade](docs/upgrading.md#rehearse-an-upgrade-against-your-own-backup).
 - Startup and the account management, detector reprocessing, role
   verification and restore commands refuse a database migrated by a newer
   release, naming the database's schema version and the image's newest
@@ -42,8 +60,8 @@ reproduced here.
   the installation's established account, preserving its IDs and history.
   Requests, workers, and portable operations use explicit account-bound
   connections under restricted database roles whose exact permissions are
-  validated at startup. The installation remains single-account. The
-  migration refuses a populated database that has no account; follow the
+  validated at startup. The migration refuses a populated database that has
+  no account; follow the
   [schema 26 upgrade notes](docs/upgrading.md#account-ownership-migration-schema-26).
 - The `DATABASE_URL` role must be a superuser or have `BYPASSRLS`. Startup
   refuses to run migrations as any other role, because forced row-level
@@ -119,6 +137,9 @@ reproduced here.
   `-- migration-class:` header, so they have no per-migration label. The
   [Upgrading to 1.0](docs/upgrading.md#upgrading-to-10) section summarizes
   their operator impact, including a long first startup.
+- Migration 045 (`rewrite`) drops the single-account unique index and
+  administrator-only check on `accounts` and makes new accounts default to
+  non-administrator. Stored rows are unchanged.
 
 ### Supported upgrade path
 

@@ -213,10 +213,11 @@ database.
 
 ## Security
 
-Normal installations remain single-account. Account ownership is explicit in
-queries, restricted database roles are active, and row-level security is
-enabled and forced on every account-owned table. Do not operate a normal
-installation as a multi-user service. See the
+An installation has one administrator and any members the administrator
+invites; there is no open signup. Account ownership is explicit in queries,
+restricted database roles are active, and row-level security is enabled and
+forced on every account-owned table. The operator is trusted; do not run
+Odograph as a public multi-tenant service. See the
 [database role contract](docs/configuration.md#account-ownership-and-database-roles).
 
 Before relying on your installation, work through the

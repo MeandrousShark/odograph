@@ -35,12 +35,10 @@ application setting.
 
 The supported baseline is PostgreSQL 16 with PostGIS. Startup now runs the
 ownership migrations and validates the live `ownership-activated-v1` security
-contract before opening restricted pools. Normal installations remain
-single-account: the database singleton and admin-only account constraints stay
-in place, and public signup closes after the first administrator is created.
-Invitation redemption and passwordless OIDC provisioning are exercised only
-in a controlled activated fixture. A separately reviewed activation migration
-and release are required before those flows are available in normal installs.
+contract before opening restricted pools. An installation holds one
+administrator, the first account, and any members the administrator invites.
+Public signup closes after the first administrator is created; members join
+only by invitation, with a password or the configured OIDC provider.
 PostgreSQL row-level security is enabled and forced on every account-owned
 table. The runtime role reads and changes only the rows of the account bound
 to its transaction, and none without one. Personal queries also filter their
@@ -82,9 +80,8 @@ repair before migration.
 First-account creation atomically installs the administrator and fixed
 defaults. An empty instance admits no personal data or tracking writes before
 setup. Existing account data keeps its IDs and ownership, while legacy
-effective preferences and ingest credentials are imported once. The activated
-fixture also checks that invited accounts receive separate defaults and
-account-owned data.
+effective preferences and ingest credentials are imported once. Each invited
+account receives its own defaults and account-owned data.
 
 Use the [backup and fresh-target restore commands](backups.md) to preserve
 managed-role metadata and restore the required cluster roles, ownership, and
@@ -119,8 +116,11 @@ the account limit; reserve must be smaller than budget. At validated restart,
 the default grant applies to every extant account, including disabled accounts.
 The sum of grants must fit budget minus reserve, or startup refuses to serve.
 Account creation acquires a funded grant before any account state commits.
-Disabled accounts retain their grant until actual purge. These controls do not
-enable multi-account activation or provide a browser quota editor.
+Disabled accounts retain their grant until actual purge. The grant budget is
+also the account limit: on the defaults, budget minus reserve funds five
+2 GiB accounts, the administrator included. Invitations are refused while no
+grant is fundable; raise `STORAGE_INSTANCE_BUDGET_BYTES` and restart to admit
+more accounts. There is no browser quota editor.
 
 Lowering allowances never removes history. Positive net growth pauses at a
 ceiling, while reads, exports, sign-in, recovery, cleanup and zero/negative net
@@ -320,15 +320,12 @@ Reverse-geocode retries persist per rounded endpoint coordinate. Transient
 failures defer that coordinate with exponential backoff from 60 seconds to a
 3,600-second maximum, allowing other due coordinates to proceed. Discovery
 processes at most 500 trips per turn and resumes its cursor after restart.
-Multi-account activation remains separately controlled.
 
 OIDC is optional; see [OIDC sign-in](oidc.md) for setup and linking. Set all
 three required provider values together and register
 `https://your-domain/auth/callback`. Existing password accounts can link the
 configured identity from Account Security while signed in with a password.
-Invitation redemption without a password and OIDC-only method management are
-currently exercised only in the controlled activated fixture; normal installs
-retain the single-account guard until supported activation is released. When
+Invited members can also join with the provider and no password. When
 enabled, OIDC-only security actions require a provider that honors `max_age=0`
 and returns a valid `auth_time`; otherwise these actions fail closed.
 

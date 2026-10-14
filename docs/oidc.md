@@ -28,14 +28,11 @@ When enabled, OIDC-only security actions require fresh provider authentication
 with a valid `auth_time` from a provider that honors `max_age=0`. If the
 provider does not meet this, those actions fail closed.
 
-## Controlled activation only
+## Invited members
 
-Invitation redemption without a local password and OIDC-only method
-management are implemented for controlled activation fixtures. Normal
-installations retain the single-account database guard; these flows are not
-available for regular use until a separately reviewed activation migration is
-released. Establishing a password for an OIDC-only account is limited the same
-way; see [Account management](accounts.md).
+An invited member can accept the invitation with the configured provider
+instead of setting a local password. That creates an OIDC-only account, which
+can add a password later; see [Account management](accounts.md).
 
 ## Signing out
 

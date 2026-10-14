@@ -9,14 +9,12 @@ which data can leave your instance and under what configuration. This
 document is about who can reach the application and what it does with what
 they send it, not about outbound data flows.
 
-Normal installations remain single-account. Account ownership is explicit in
-queries, restricted database roles are active, and row-level security is
-enabled and forced on every account-owned table. The database singleton and
-admin-only account constraints remain in place until a separately reviewed
-activation migration is released. Invitation redemption and OIDC-only account
-flows described below are currently exercised only in a controlled activated
-fixture. Do not operate a normal installation as a multi-user service. The
-operator is trusted and controls the host and database; nothing here defends
+An installation has one administrator, the first account, and any members the
+administrator invites. There is no open signup. Account ownership is explicit
+in queries, restricted database roles are active, and row-level security is
+enabled and forced on every account-owned table, so each account's personal
+data stays private to it, including from the administrator. Odograph is not a
+public multi-tenant service. The operator is trusted and controls the host and database; nothing here defends
 against a hostile operator.
 
 ## Trust boundaries
@@ -103,15 +101,15 @@ Every network-reachable route, and what actually guards it:
   the normal database schema rejects additional accounts. The invitation
   redemption routes below are not a supported way to add users to a normal
   installation.
-- **`/invite`, `/invite/oidc`**: controlled-fixture flows for testing invited
-  account redemption. The invitee can set a local password or use the
+- **`/invite`, `/invite/oidc`**: invited account redemption. The invitee can set a local password or use the
   configured provider without setting one. OIDC redemption consumes the
   invitation only after callback state and nonce checks, and the invitation's
   email becomes the account login. Provider email claims neither choose nor
   verify it. The invitation token is not sent to the provider. A cancelled or
-  failed provider flow creates no account and consumes no invitation. Normal
-  deployments remain blocked by the database singleton guard until supported
-  activation is released.
+  failed provider flow creates no account and consumes no invitation. When the
+  instance storage budget cannot fund another account, redemption is refused
+  with a capacity message, creates no account and consumes no invitation; the
+  message does not reveal other accounts' usage.
 - **`/admin/accounts`, `/admin/invitations`, `/admin/accounts/{id}/recovery`,
   `/admin/accounts/{id}/disable`, `/admin/accounts/{id}/enable`,
   `/admin/accounts/{id}/deletion`, `/admin/accounts/{id}/deletion/cancel`,
@@ -131,7 +129,7 @@ Every network-reachable route, and what actually guards it:
   At least one enabled administrator with a usable login method must remain;
   the security audit shows only actor/target IDs, action, outcome and time.
   Live audit rows expire after 365 days through bounded periodic pruning.
-  In controlled activated fixtures, an administrator can schedule deletion of
+  An administrator can schedule deletion of
   another account by typing its login email and acknowledging export and
   backup effects. Scheduling immediately disables the account and starts a
   30-day grace period. An enabled administrator can cancel only during that
@@ -147,16 +145,11 @@ Every network-reachable route, and what actually guards it:
   but omits notification destinations, schedules and raw points. Purge removes
   data from the live database only. Backups may retain it until their retention
   period expires, and restoring an older backup can reintroduce purged data.
-  Restore finalization revokes sessions and pending proofs. Normal installations
-  retain the singleton account guard until separately reviewed multi-account
-  activation.
+  Restore finalization revokes sessions and pending proofs.
 - **`/settings/account`**: requires the caller's enabled account session.
   Password changes, OIDC linking and unlinking, and email verification or
   change require CSRF protection and reauthentication. Accounts with a password
-  use that password. OIDC-only account actions are implemented and tested in
-  the controlled activated fixture, but are not available as a supported
-  normal-install path yet. When supported activation is released, those
-  accounts must first complete a fresh provider authentication through
+  use that password. OIDC-only accounts must first complete a fresh provider authentication through
   `/settings/account/oidc/reauth`. Odograph requests
   `max_age=0` and requires a validated `auth_time` within 60 seconds of the
   fresh-authentication attempt, matched to the account's exact linked issuer
@@ -286,9 +279,9 @@ warning whenever `FORWARDED_ALLOW_IPS` is `*` or empty outside development
 mode, precisely because that combination is only safe under one specific
 topology. See the checklist below.
 
-Two things this scope deliberately does not cover: per-account limiting (this
-is a single-administrator application, so there is no meaningful notion of a
-second account to protect), and a background or IP-reputation-based ban list.
+Two things this scope deliberately does not cover: per-account limiting (the
+limiters key on client address, not on the account being attacked), and a
+background or IP-reputation-based ban list.
 A determined attacker who can present many source addresses is not stopped by
 this; that's a job for your reverse proxy or network edge, not this
 application.
