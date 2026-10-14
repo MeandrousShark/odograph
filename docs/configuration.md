@@ -322,7 +322,8 @@ failures defer that coordinate with exponential backoff from 60 seconds to a
 processes at most 500 trips per turn and resumes its cursor after restart.
 Multi-account activation remains separately controlled.
 
-OIDC is optional. Set all three required provider values together and register
+OIDC is optional; see [OIDC sign-in](oidc.md) for setup and linking. Set all
+three required provider values together and register
 `https://your-domain/auth/callback`. Existing password accounts can link the
 configured identity from Account Security while signed in with a password.
 Invitation redemption without a password and OIDC-only method management are
@@ -491,7 +492,8 @@ most one public reset request a minute and five a day, and a repeat request
 within 10 minutes of a delivered link does not replace it. Delivery failures
 are logged without the address or link. Save digest recipients and delivery choices in
 Settings. The personal values below are legacy one-time upgrade inputs, not
-live overrides.
+live overrides. [Account management](accounts.md) describes the password reset
+and login email flows that use this mail.
 
 Every admitted email send runs in a fresh helper process with a fixed
 30-second transport deadline, including DNS, connection, TLS, authentication,

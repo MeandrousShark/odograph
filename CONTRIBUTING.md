@@ -46,6 +46,9 @@ Do not force-push `main` or release tags. Maintainers merge approved pull
 requests to `main`; releases are cut only from the exact reviewed merge commit.
 See [the release procedure](docs/releasing.md) for release-specific checks.
 
+AI-assisted contributions are held to the same standard as any other; see
+[AI and contributions](ai-contribution.md).
+
 ## Load-bearing behavior
 
 - Keep `detect()` pure and do not casually bump `DETECTOR_VERSION`.

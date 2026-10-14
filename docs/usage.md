@@ -17,6 +17,8 @@ use **Display name** in the **Profile** card. A display name can be up to 100
 characters; leave it blank to return to the email-based name. It only changes
 what the header, its initials, and the administrator account list show; it is
 not a login name and does not change your login email or sign-in methods.
+For passwords, login email and signing out, see
+[Account management](accounts.md).
 
 ## First trip to first report
 

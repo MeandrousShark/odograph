@@ -369,8 +369,10 @@ configuration files.
 5. **Generate every secret with real entropy, and know which ones you can
    rotate later.** `scripts/generate_env.sh` does this for you at install
    time. `SESSION_SECRET` is safely regenerable at any time. See
-   [Password recovery and session revocation](../README.md#password-recovery)
-   for the account-level recovery commands and session behavior.
+   [Recover from the server](accounts.md#recover-from-the-server) for the
+   account-level recovery commands and
+   [Sessions and sign out everywhere](accounts.md#sessions-and-sign-out-everywhere)
+   for session behavior.
    Replace an issued device password in **Settings > Tracking** and update
    that phone. Editing `INGEST_PASSWORD` after the one-time upgrade import
    does not change the saved credential.

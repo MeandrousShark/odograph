@@ -27,9 +27,8 @@ checklist.
 
 Start with [Install](#install), then see [Use Odograph](docs/usage.md).
 
-> **US users only:** Odograph's deduction reports use IRS standard mileage
-> rates. Trip tracking still works anywhere, but the tax figures are only
-> meaningful for US filers.
+> [!NOTE]
+> **US users only**: Odograph's deduction reports use IRS standard mileage rates. Trip tracking still works anywhere, but the tax figures are only meaningful for US filers.
 
 ## Install
 
@@ -245,61 +244,15 @@ spells out what.
 
 ### OIDC
 
-OIDC can be linked as a second way to sign in to an existing account. The
-administrator configures one OIDC provider for the instance.
+- A second way to sign in to an existing account, using one provider per
+  instance.
+- Register `https://mileage.example.com/auth/callback` with your provider and
+  set the three OIDC variables. Then link it from **Account Settings** with
+  your current password.
+- The link follows the provider's issuer and subject, so it survives an email
+  change at the provider.
 
-Register `https://mileage.example.com/auth/callback` with your provider and set
-the three OIDC variables. To link it to an existing password account, open
-**Settings > Account Settings** while signed in, enter your current password,
-and authorize with the provider.
-
-After linking, either method signs you into the same account. The link follows
-the provider's issuer and subject, so it survives your email address changing
-there. Invitation redemption without a local password and OIDC-only method
-management are implemented for controlled activation fixtures. Normal
-installations retain the single-account database guard; these flows are not
-available for regular use until a separately reviewed activation migration is
-released. When enabled, OIDC-only security actions require fresh provider
-authentication with a valid `auth_time` from a provider that honors
-`max_age=0`. See the
-[authentication settings](docs/configuration.md#authentication-and-ingest) for
-details, and [Upgrading](docs/upgrading.md) if you are moving an older
-OIDC-only installation.
-
-In controlled activation fixtures, an enabled administrator can issue, resend,
-and revoke member invitations in **Admin > Accounts**. The new invitation link
-and manual token are shown once; optional email sends that same invitation.
-Resending creates a fresh token and invalidates the old one. The normal
-single-account installation cannot use invitations to add accounts until
-multi-account activation is separately released.
-
-In those fixtures, an administrator can also disable or re-enable another
-account. Disabling ends its app sessions and revokes its pending security
-proofs, invitations it issued, and tracking credentials. Re-enabling allows
-a fresh sign-in with a retained login method, but does not restore old sessions,
-links or tracking credentials. At least one usable administrator must remain.
-
-An administrator can also schedule another account for deletion in those
-fixtures by typing its login email and acknowledging the export and backup
-effects. Scheduling immediately disables the account and starts a 30-day
-grace period. An enabled administrator can cancel during that period; there is
-no automatic purge. After the grace period, permanent purge requires fresh
-administrator authentication with a password or the exact linked OIDC
-identity, the target login email, and a separate confirmation. Administrators
-cannot delete themselves, and a usable administrator must remain. The account
-owner can download a portable export before disablement or after cancellation.
-It includes the ledger, rates and basic preferences, but omits notification
-destinations, schedules and raw points. Purge removes data from the live
-database only; retained backups may still contain it. Restoring an older
-backup can reintroduce the account and its data. These flows remain unavailable
-in normal installations until multi-account activation is separately released.
-
-In **Settings > Account Settings**, you can verify your current login email or
-change it after confirming the new address. These actions require your current
-password and configured email delivery. Until a new address is confirmed, the
-current email remains the login. A confirmed change signs out other Odograph
-sessions; it does not change the linked OIDC identity or saved notification
-destinations. Email verification is not a password reset flow.
+See [OIDC sign-in](docs/oidc.md) for setup, linking and sign-out behavior.
 
 ### Reverse geocoding
 
@@ -318,24 +271,10 @@ Odograph itself. See the [OSRM guide](docs/osrm.md).
 
 ## Password recovery
 
-While signed in, open **Settings**, then **Account Settings**, and use
-**Change password** under **Security**.
-
-If your login email is verified, choose **Forgot password?** on the sign-in
-page to reset a forgotten password. This needs SMTP and `APP_URL`; see
-[Email](docs/configuration.md#email). The link goes only to your verified
-login email and expires in 30 minutes. Completing a reset signs that account
-out of every Odograph session, including the browser that used the link, and
-returns you to sign-in.
-
-In a controlled multi-account fixture, an enabled administrator can request a
-reset for another account in **Admin > Accounts**. The link goes only to that
-account's stored, verified login email; the administrator never sees it or
-chooses a password. Without a verified address, use the trusted host-local
-recovery command below.
-
-Otherwise, reset it from the server. Find the account ID, then confirm the
-account shown and type the new password when prompted:
+While signed in, change your password in **Settings > Account Settings**. If
+your login email is verified, use **Forgot password?** on the sign-in page for
+an emailed reset link. Otherwise, find the account ID and reset it from the
+server:
 
 ```sh
 docker compose exec app python -m app.manage_account list-accounts
@@ -343,33 +282,8 @@ docker compose exec app python -m app.manage_account reset-password ACCOUNT_ID
 # or: podman-compose exec app python -m app.manage_account reset-password ACCOUNT_ID
 ```
 
-Use `create-admin` only before the first account has been created, when public
-signup is closed. Completing bootstrap permanently closes first-account
-creation, even if the original administrator is later purged. Restoring an
-earlier database backup can restore a purged account and its data; there is no
-post-bootstrap `create-admin` recovery path.
-
-A password change signs out your other Odograph sessions; the browser that made
-the change stays signed in. An operator reset signs out every session for that
-account. Neither changes a linked sign-in provider, verified email or tracking
-devices.
-
-**Sign out everywhere** in Account Settings ends every Odograph browser
-session for your account, including the one you are using. It does not end a
-sign-in provider session or revoke tracking-device credentials.
-
-Establishing a password for an OIDC-only account and managing its sign-in
-methods are currently limited to controlled activation fixtures. They will be
-available for normal installations only after supported account activation is
-released.
-
-Changing your login email is separate from password recovery. The new address
-becomes the login only after you confirm the emailed challenge.
-
-If you use OIDC, signing out of Odograph does not sign you out of your identity
-provider, so signing back in may not prompt you at all. Sign out of the
-provider separately to end that session. Odograph does not keep provider tokens
-after sign-in.
+See [Account management](docs/accounts.md) for the details, session effects,
+login email changes and sign out everywhere.
 
 ## Updating
 
@@ -396,6 +310,8 @@ Development happens in this repository through pull requests. Its `main`
 branch may contain unreleased work, so use an immutable release tag for
 installations. Want to run the test suite or work on the code? See
 [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and local instructions.
+AI-assisted contributions are welcome under the same standard as any other; see
+[AI and contributions](ai-contribution.md).
 
 ## Support
 
@@ -410,16 +326,6 @@ Check [Known issues](docs/known-issues.md) for confirmed problems in
 published releases and their workarounds. Open a GitHub issue for bugs and
 feature requests. See [SECURITY.md](SECURITY.md) for security reporting and
 supported versions, and [CONTRIBUTING.md](CONTRIBUTING.md) for project scope.
-
-## AI assistance
-
-AI tools were used as development assistants on this project: implementation,
-debugging, testing, review, and documentation. I directed the product and
-design decisions, and I reviewed and tested the resulting work before release.
-
-Every release is signed and traceable to the exact source commit and CI run
-that built it. The verification commands are in
-[docs/releasing.md](docs/releasing.md).
 
 ## License
 

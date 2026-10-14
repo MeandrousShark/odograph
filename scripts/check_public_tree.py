@@ -14,15 +14,15 @@ import tempfile
 
 PUBLIC_DIRECTORIES = frozenset({".github", "app", "tests", "static", "migrations", "scripts", "docker"})
 PUBLIC_TOP_LEVEL = frozenset({
-    "AGENTS.md", "CLAUDE.md", "README.md", "LICENSE", "SECURITY.md",
+    "AGENTS.md", "CLAUDE.md", "ai-contribution.md", "README.md", "LICENSE", "SECURITY.md",
     "CONTRIBUTING.md", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md", "compose.yaml",
     "compose.build.override.yml", "Dockerfile", ".dockerignore", ".env.example",
     ".gitignore", "requirements.txt", "requirements-dev.txt",
     "requirements-dev.lock", "requirements.lock", "pyproject.toml",
 })
 PUBLIC_DOCS = frozenset({
-    "docs/backups.md", "docs/configuration.md", "docs/install-compose.md",
-    "docs/known-issues.md", "docs/osrm.md", "docs/owntracks.md", "docs/privacy.md", "docs/releasing.md",
+    "docs/accounts.md", "docs/backups.md", "docs/configuration.md", "docs/install-compose.md",
+    "docs/known-issues.md", "docs/oidc.md", "docs/osrm.md", "docs/owntracks.md", "docs/privacy.md", "docs/releasing.md",
     "docs/reverse-proxy.md", "docs/security.md", "docs/upgrading.md", "docs/usage.md",
     "docs/images/usage-dashboard.png", "docs/images/usage-review.png",
 })
