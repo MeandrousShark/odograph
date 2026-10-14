@@ -1192,6 +1192,29 @@ def make_router() -> APIRouter:
         if not (is_link_callback or is_invite_callback or is_reauth_callback) and not await _oidc_login_available(request):
             raise HTTPException(status_code=404)
 
+        try:
+            return await _auth_callback_flow(
+                request, callback_state, is_link_callback, is_login_callback,
+                is_invite_callback, is_reauth_callback,
+            )
+        except HTTPException as exc:
+            # A browser lands here, so show the failure on a page with a way
+            # back instead of raw JSON. Status and message are unchanged.
+            if not isinstance(exc.detail, str) or not exc.detail:
+                raise
+            if is_invite_callback:
+                return await _render_invite(
+                    request, error=exc.detail, status_code=exc.status_code
+                )
+            return await _render_login(
+                request, error=exc.detail, status_code=exc.status_code
+            )
+
+    async def _auth_callback_flow(
+        request: Request, callback_state: str, is_link_callback: bool,
+        is_login_callback: bool, is_invite_callback: bool,
+        is_reauth_callback: bool,
+    ):
         limiter: FailedAuthLimiter = request.app.state.login_limiter
         ip = client_ip(request)
         if limiter.blocked(ip):

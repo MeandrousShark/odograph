@@ -7,7 +7,6 @@ import time
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from fastapi import HTTPException
 
 import app.auth as auth
 from app.account_lifecycle import request_account_deletion, purge_account
@@ -46,8 +45,10 @@ def test_purge_reauthentication_has_exact_identity_freshness_and_admin_return(me
             assert destination_params["prompt"] == ["login"]
             request.query_params = {"state":destination_params["state"][0],"code":"valid"}
             provider.userinfo = claims
-            with pytest.raises(HTTPException):
-                await _endpoint("/auth/callback","GET")(request)
+            rejected = await _endpoint("/auth/callback","GET")(request)
+            assert rejected.status_code == 401
+            assert auth.GENERIC_OIDC_ERROR.encode() in rejected.body
+            assert b'action="/login/local"' in rejected.body
             assert "oidc_action_proof_nonce" not in request.session
         response = await reauth(request,action="purge_account",target=str(target),target_confirm="",csrf_token="csrf",user=user)
         destination_params = parse_qs(urlsplit(oidc_authorization_url(response)).query)

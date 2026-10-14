@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -13,6 +14,7 @@ from starlette.responses import RedirectResponse
 
 from app.accounts import create_admin, get_account, replace_password, sign_out_everywhere
 from app.account_context import AccountPrincipal
+import app.auth as auth
 from app.auth import AuthRedirect, make_router, require_user
 from app.db import make_pool
 from app.ingest import FailedAuthLimiter
@@ -48,6 +50,7 @@ def _app(pools, *, dev_no_auth=False, dev_principal=None):
     app.state.oauth = None
     app.state.login_limiter = FailedAuthLimiter(20, 900)
     app.state.templates = make_templates(config)
+    app.state.security_link_base = ""
     app.state.make_detector_runner = lambda pool: None
     app.state.dev_principal = dev_principal
 
@@ -175,6 +178,7 @@ def test_ordinary_logout_discards_protected_browser_state_before_callback():
     async def check(owner, pools, account):
         app = _app(pools)
         app.state.oauth = object()
+        app.state.config = replace(app.state.config, oidc_issuer="https://idp.example/")
         async with await _client(app) as client:
             await client.post(f"/test/transient/{account['id']}")
             assert all((await client.get("/test/transient-state")).json().values())
@@ -183,6 +187,8 @@ def test_ordinary_logout_discards_protected_browser_state_before_callback():
             assert not any((await client.get("/test/transient-state")).json().values())
             callback = await client.get("/auth/callback?state=reauth.pending")
             assert callback.status_code == 401
+            assert callback.headers["content-type"].startswith("text/html")
+            assert auth.GENERIC_OIDC_ERROR in callback.text
         async with owner.connection() as conn:
             assert (await get_account(conn, account["id"]))["auth_version"] == 1
     asyncio.run(_scenario(check))

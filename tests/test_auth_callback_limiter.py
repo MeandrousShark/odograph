@@ -22,9 +22,9 @@ import pytest
 from authlib.integrations.base_client import OAuthError
 from fastapi import FastAPI, Request, Response
 from starlette.middleware.sessions import SessionMiddleware
-from starlette.responses import JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse
 
-from app.auth import make_router
+from app.auth import GENERIC_OIDC_ERROR, make_router
 from app.ingest import FailedAuthLimiter
 
 MAX_FAILURES = 3
@@ -106,8 +106,23 @@ class _NoAccountPool:
         return _NoAccountContext()
 
 
+class _Templates:
+    """Stands in for Jinja: records the rendered page and its context."""
+
+    def __init__(self):
+        self.rendered: list[tuple[str, dict]] = []
+
+    def TemplateResponse(self, request, name, context, status_code=200, **kwargs):
+        self.rendered.append((name, context))
+        return HTMLResponse(
+            f"<p>{context.get('error') or ''}</p>", status_code=status_code
+        )
+
+
 def _app(oauth_client, *, allowed_email: str = ""):
     app = FastAPI()
+    app.state.security_link_base = ""
+    app.state.templates = _Templates()
     app.add_middleware(
         SessionMiddleware, secret_key="test-secret", same_site="lax", https_only=False
     )
@@ -160,6 +175,9 @@ def test_repeated_rejected_callbacks_trip_the_limiter():
     results = asyncio.run(run())
     assert results[:MAX_FAILURES] == [401] * MAX_FAILURES
     assert results[MAX_FAILURES:] == [429] * 2
+    # Rejections render the sign-in page with the unchanged message.
+    assert [name for name, _ in app.state.templates.rendered] == ["login.html"] * MAX_FAILURES
+    assert {c["error"] for _, c in app.state.templates.rendered} == {GENERIC_OIDC_ERROR}
     # One real token-exchange attempt per rejected callback, no more.
     assert oauth_client.calls == MAX_FAILURES
 
@@ -195,6 +213,9 @@ def test_callback_without_protected_flow_state_is_rejected_before_token_exchange
 
     response = asyncio.run(run())
     assert response.status_code == 401
+    assert response.headers["content-type"].startswith("text/html")
+    assert GENERIC_OIDC_ERROR in response.text
+    assert app.state.templates.rendered[-1][0] == "login.html"
     assert oauth_client.calls == 0
 
 
@@ -213,6 +234,9 @@ def test_cross_session_link_callback_is_rejected_before_token_exchange():
 
     response = asyncio.run(run())
     assert response.status_code == 401
+    assert response.headers["content-type"].startswith("text/html")
+    assert GENERIC_OIDC_ERROR in response.text
+    assert app.state.templates.rendered[-1][0] == "login.html"
     assert oauth_client.calls == 0
 
 
@@ -231,6 +255,9 @@ def test_rejected_allowed_email_also_counts_as_a_failure():
     results = asyncio.run(run())
     assert results[:MAX_FAILURES] == [403] * MAX_FAILURES
     assert results[MAX_FAILURES] == 429
+    assert {c["error"] for _, c in app.state.templates.rendered} == {
+        "This instance is not configured for your account."
+    }
 
 
 def test_successful_callback_records_no_failure():
