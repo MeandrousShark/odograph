@@ -93,8 +93,17 @@ Every release section must state:
 - the supported upgrade path, including which prior release or releases may be
   upgraded directly;
 - all breaking application, database, configuration, and operational changes,
-  or an explicit statement that there are none; and
+  or an explicit statement that there are none;
+- each new migration in the release with its `-- migration-class:` header
+  value, or an explicit statement that the release adds none; and
 - any security scan acceptance in the exact syntax described below.
+
+Migrations from 045 on declare `additive`, `rewrite` or `destructive` on their
+first line, and a test enforces it. List the class of every migration the
+release adds. For each `rewrite` or `destructive` migration, also state the
+operator impact, such as a longer first startup, a backfill, or data that is
+removed. Destructive changes to supported existing data belong at a major
+version boundary.
 
 For the first public release, use the explicit statement "Prior-release
 artifact upgrade gate: not applicable. No prior public release exists." Do
