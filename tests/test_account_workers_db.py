@@ -37,17 +37,11 @@ async def _accounts():
     try:
         first = await reset_account_db(raw)
         async with raw.connection() as conn:
-            await conn.execute("DROP INDEX accounts_singleton_idx")
             await conn.execute("INSERT INTO accounts(id,email,password_hash) VALUES(99,'second@example.test','hash')")
             await conn.execute("INSERT INTO account_settings(account_id) VALUES(99)")
         second = await account_pool(raw, 99)
         yield raw, first, second
     finally:
-        async with raw.connection() as conn:
-            # Keep the schema baseline intact; truncate both fixtures before
-            # restoring the production singleton guard.
-            await conn.execute("TRUNCATE accounts, instance_state CASCADE")
-            await conn.execute("CREATE UNIQUE INDEX accounts_singleton_idx ON accounts ((true))")
         await raw.close()
 
 

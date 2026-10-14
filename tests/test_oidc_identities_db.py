@@ -171,9 +171,8 @@ async def _duplicate_and_owner_scenario():
                 is None
             )
         async with pool.connection() as conn:
-            await conn.execute("DROP INDEX accounts_singleton_idx")
             # A privileged synthetic second identity isolates link ownership;
-            # first-account bootstrap correctly remains closed even without its index.
+            # first-account bootstrap remains closed for it.
             cur = conn.cursor(row_factory=dict_row)
             await cur.execute("INSERT INTO accounts(email,password_hash) VALUES('other@example.com','hash') RETURNING id")
             other = await cur.fetchone()
@@ -189,7 +188,6 @@ async def _duplicate_and_owner_scenario():
         finally:
             async with pool.connection() as conn:
                 await conn.execute("DELETE FROM accounts WHERE id = %s", (other["id"],))
-                await conn.execute("CREATE UNIQUE INDEX accounts_singleton_idx ON accounts ((true))")
     finally:
         await pool.close()
 
@@ -296,8 +294,6 @@ async def _oidc_only_last_method_scenario():
         async with roles.control.connection() as conn:
             await create_admin(conn, "first@example.invalid", "first-password-hash")
         async with pool.connection() as conn:
-            await conn.execute("DROP INDEX accounts_singleton_idx")
-            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
             account_id = (await (await conn.execute(
                 "INSERT INTO accounts(email,password_hash,is_admin) "
                 "VALUES ('oidc-only@example.invalid',NULL,false) RETURNING id",
@@ -371,9 +367,6 @@ async def _legacy_establishment_scenario():
     try:
         await reset_db(pool)
         roles = await bind_auth_test_roles(pool)
-        async with pool.connection() as conn:
-            await conn.execute("DROP INDEX accounts_singleton_idx")
-
         try:
             async with roles.control.connection() as conn:
                 owner = await create_admin(conn, "owner@example.com", "hash")
@@ -394,12 +387,11 @@ async def _legacy_establishment_scenario():
                 cur = await conn.execute("SELECT email FROM accounts ORDER BY id")
                 assert [row[0] for row in await cur.fetchall()] == ["owner@example.com"]
                 assert await _identity_count(conn) == 1
-                await conn.execute("CREATE UNIQUE INDEX accounts_singleton_idx ON accounts ((true))")
     finally:
         await pool.close()
 
 
-def test_legacy_establishment_cannot_bypass_completed_bootstrap_by_dropping_singleton_index():
+def test_legacy_establishment_cannot_bypass_completed_bootstrap_without_singleton_index():
     asyncio.run(_legacy_establishment_scenario())
 
 

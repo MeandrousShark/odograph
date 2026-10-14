@@ -152,7 +152,10 @@ find you skipped them.
 ### Operator impact
 
 Migrations 026 to 044 predate migration classes, so they carry no per-migration
-label. Together they change the following for an operator.
+label. Together they change the following for an operator. Migration 045 is
+class `rewrite`: it removes the database guard that limited an installation to
+one account, so the administrator can invite members. It changes no stored
+rows.
 
 1. **The database role must be a superuser or have `BYPASSRLS`.** Every
    startup checks this before it touches the database, and refuses to run
@@ -162,7 +165,7 @@ label. Together they change the following for an operator.
    database's bootstrap superuser, so it already qualifies. If you use an
    external database with a restricted `DATABASE_URL` role, change the role
    before upgrading. A refusal here happens before anything is applied.
-2. **The first startup is one long run.** It applies migrations 026 to 044 in
+2. **The first startup is one long run.** It applies migrations 026 to 045 in
    a single transaction under the migration advisory lock. The app is not
    healthy until that run finishes, so the container can report unhealthy
    meanwhile. Follow `docker compose logs -f app` rather than restarting it.

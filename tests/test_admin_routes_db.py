@@ -21,7 +21,7 @@ from app.db import make_pool
 from app.ingest import FailedAuthLimiter
 from app.main import SecurityHeadersMiddleware, make_templates
 from app.password_reset import SecurityMailAdmission
-from tests.auth_db_fixtures import auth_config
+from tests.auth_db_fixtures import auth_config, fund_account_grants
 from conftest import provisioned_role_pools, reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -93,13 +93,9 @@ def test_admin_routes_require_a_live_admin_and_ignore_forged_actor_fields():
             assert page.status_code == 200
             assert page.headers["cache-control"] == "no-store, private"
             assert page.headers["referrer-policy"] == "no-referrer"
-            assert "Invitations are unavailable until multi-account mode is activated." in page.text
+            assert "multi-account mode" not in page.text
+            assert 'action="/admin/invitations"' in page.text
             assert "Administrator" in page.text
-
-            locked = await admin_client.post("/admin/invitations", data={
-                "csrf_token": "route-csrf", "email": "new@example.invalid",
-            })
-            assert locked.status_code == 409
 
             stale = await _client(app)
             async with stale:
@@ -116,8 +112,6 @@ def test_admin_routes_require_a_live_admin_and_ignore_forged_actor_fields():
                 await conn.execute("UPDATE accounts SET is_enabled=true WHERE id=%s", (account["id"],))
 
             async with owner.connection() as conn:
-                await conn.execute("DROP INDEX accounts_singleton_idx")
-                await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
                 member_id = (await (await conn.execute(
                     "INSERT INTO accounts(email,password_hash,is_admin) "
                     "VALUES ('member@example.invalid','member-hash',false) RETURNING id"
@@ -165,9 +159,6 @@ def test_admin_invitation_token_is_copy_once_and_never_in_server_urls_or_lists(m
             app_url="https://odograph.example.invalid",
         )
         app = _app(pools, config=cfg)
-        async with owner.connection() as conn:
-            await conn.execute("DROP INDEX accounts_singleton_idx")
-            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
         async with await _client(app) as client:
             await client.post(f"/test/session/{account['id']}/1")
             issued = await client.post("/admin/invitations", data={
@@ -252,9 +243,6 @@ def test_admin_invitation_token_is_copy_once_and_never_in_server_urls_or_lists(m
 @pytest.mark.parametrize("barrier", ["before_admission", "inside_transaction"])
 def test_cancelled_invitation_send_owns_its_real_pool_connection(monkeypatch, barrier):
     async def check(owner, pools, account):
-        async with owner.connection() as conn:
-            await conn.execute("DROP INDEX accounts_singleton_idx")
-            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
         actor = dict(account, auth_version=1)
         async with pools.control.connection() as conn:
             invitation_id, token = await issue_invitation_record(
@@ -334,11 +322,37 @@ def test_cancelled_invitation_send_owns_its_real_pool_connection(monkeypatch, ba
     asyncio.run(_scenario(check))
 
 
+def test_admin_invitation_issuance_is_refused_when_no_account_grant_is_fundable():
+    async def check(owner, pools, account):
+        await fund_account_grants(owner, 1)
+        app = _app(pools)
+        async with await _client(app) as client:
+            await client.post(f"/test/session/{account['id']}/1")
+            refused = await client.post("/admin/invitations", data={
+                "csrf_token": "route-csrf", "email": "new@example.invalid",
+            })
+            assert refused.status_code == 409
+            assert admin.INVITATION_CAPACITY_NOTICE in refused.text
+            assert "STORAGE_INSTANCE_BUDGET_BYTES" in refused.text
+            assert 'id="admin-invitation-token"' not in refused.text
+            async with owner.connection() as conn:
+                assert await (await conn.execute(
+                    "SELECT count(*) FROM invitations")).fetchone() == (0,)
+
+            await fund_account_grants(owner, 2)
+            issued = await client.post("/admin/invitations", data={
+                "csrf_token": "route-csrf", "email": "new@example.invalid",
+            })
+            assert issued.status_code == 200
+            assert 'id="admin-invitation-token"' in issued.text
+            async with owner.connection() as conn:
+                assert await (await conn.execute(
+                    "SELECT count(*) FROM invitations")).fetchone() == (1,)
+    asyncio.run(_scenario(check))
+
+
 def test_admin_resend_uses_atomic_rotation_and_rejects_a_stale_invitation():
     async def check(owner, pools, account):
-        async with owner.connection() as conn:
-            await conn.execute("DROP INDEX accounts_singleton_idx")
-            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
         app = _app(pools)
         async with await _client(app) as client:
             await client.post(f"/test/session/{account['id']}/1")
@@ -388,8 +402,6 @@ def test_admin_resend_uses_atomic_rotation_and_rejects_a_stale_invitation():
 def test_admin_recovery_queues_only_a_verified_target_and_binds_actor_identity():
     async def check(owner, pools, account):
         async with owner.connection() as conn:
-            await conn.execute("DROP INDEX accounts_singleton_idx")
-            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
             member_id = (await (await conn.execute(
                 "INSERT INTO accounts(email,password_hash,is_admin,email_verified_at) "
                 "VALUES ('verified-member@example.invalid','member-hash',false,now()) RETURNING id"
@@ -440,8 +452,6 @@ def test_committed_admin_outcome_survives_saturated_identity_refresh(monkeypatch
 
     async def check(owner, raw_pools, account):
         async with owner.connection() as conn:
-            await conn.execute("DROP INDEX accounts_singleton_idx")
-            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
             await conn.execute("INSERT INTO accounts(id,email,password_hash,is_admin) VALUES (42,'member@example.invalid','unused',false)")
         cfg = replace(auth_config(TEST_DB), capacity_identity_pending=0)
         manager = AdmissionManager(cfg)

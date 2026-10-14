@@ -41,8 +41,6 @@ async def _seed_source(database_url):
             async with roles.control.connection() as conn:
                 first = await create_admin(conn, "first@example.invalid", "first-hash")
             async with pool.connection() as conn:
-                await conn.execute("DROP INDEX accounts_singleton_idx")
-                await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
                 ids = {}
                 for email, password, admin in (
                     ("oidc@example.invalid", None, True),

@@ -27,7 +27,6 @@ async def _seed(owner, pools):
     async with pools.control.connection() as conn:
         first = await create_admin(conn, "storage@example.invalid", "unused-test-hash")
     async with owner.connection() as conn:
-        await conn.execute("DROP INDEX accounts_singleton_idx")
         await conn.execute("INSERT INTO accounts(id,email,password_hash,is_admin) "
                            "VALUES(73,'other@example.invalid','unused-test-hash',true)")
     bound = AccountPool(pools.runtime, AccountPrincipal(first["id"], True, 1))

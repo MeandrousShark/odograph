@@ -25,8 +25,6 @@ pytestmark = pytest.mark.skipif(not os.environ.get("TEST_DATABASE_URL"), reason=
 
 async def _activate(owner, *, email="member@example.invalid", admin=False, password="member-hash"):
     async with owner.connection() as conn:
-        await conn.execute("DROP INDEX IF EXISTS accounts_singleton_idx")
-        await conn.execute("ALTER TABLE accounts DROP CONSTRAINT IF EXISTS accounts_is_admin_check")
         target = (await (await conn.execute(
             "INSERT INTO accounts(email,password_hash,is_admin) VALUES (%s,%s,%s) RETURNING id",
             (email, password, admin),

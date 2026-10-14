@@ -1,6 +1,7 @@
 # Contributor instructions
 
-Odograph is a self-hosted, single-user mileage tracker. This public repository
+Odograph is a self-hosted mileage tracker for an administrator
+and the members they invite. This public repository
 is the source for application changes. Internal planning and private operating
 procedures are outside this checkout.
 

@@ -29,20 +29,18 @@ async def _scenario(callback):
         await owner.close()
 
 
-def test_lifecycle_routes_require_live_admin_csrf_and_activated_accounts():
+def test_lifecycle_routes_require_live_admin_csrf_and_an_existing_target():
     async def check(owner, pools, admin):
         app = _app(pools)
         async with await _client(app) as first, await _client(app) as member_client:
             await first.post(f"/test/session/{admin['id']}/1")
-            unavailable = await first.post(
-                "/admin/accounts/2/disable", data={"csrf_token": "route-csrf"},
+            missing = await first.post(
+                "/admin/accounts/999/disable", data={"csrf_token": "route-csrf"},
             )
-            assert unavailable.status_code == 409
-            assert "multi-account mode" in unavailable.text
+            assert missing.status_code == 409
+            assert "Account access could not be changed." in missing.text
 
             async with owner.connection() as conn:
-                await conn.execute("DROP INDEX accounts_singleton_idx")
-                await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
                 member_id = (await (await conn.execute(
                     "INSERT INTO accounts(email,password_hash,is_admin) "
                     "VALUES ('member@example.invalid','member-hash',false) RETURNING id"
@@ -130,8 +128,6 @@ def test_lifecycle_routes_require_live_admin_csrf_and_activated_accounts():
 def test_second_admin_transition_invalidates_the_target_and_rejects_stale_calls():
     async def check(owner, pools, admin):
         async with owner.connection() as conn:
-            await conn.execute("DROP INDEX accounts_singleton_idx")
-            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
             second_id = (await (await conn.execute(
                 "INSERT INTO accounts(email,password_hash,is_admin) "
                 "VALUES ('second@example.invalid','second-hash',true) RETURNING id"
@@ -175,8 +171,6 @@ def test_second_admin_transition_invalidates_the_target_and_rejects_stale_calls(
 def test_disable_returns_when_target_row_is_locked_without_changing_state():
     async def check(owner, pools, admin):
         async with owner.connection() as conn:
-            await conn.execute("DROP INDEX accounts_singleton_idx")
-            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
             member_id = (await (await conn.execute(
                 "INSERT INTO accounts(email,password_hash,is_admin) "
                 "VALUES ('locked@example.invalid','member-hash',false) RETURNING id"

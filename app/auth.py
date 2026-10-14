@@ -63,7 +63,7 @@ from app.email_challenges import (
 )
 from app.ingest import FailedAuthLimiter, _AuthSaturated, client_ip
 from app.ingest import _read_capped_body
-from app.invitations import InvitationUnavailable, redeem_invitation
+from app.invitations import InvitationCapacityExceeded, InvitationUnavailable, redeem_invitation
 from app.local_auth import hash_password, verify_password
 from app.mailer import Mailer
 from app.security_mail_preparation import SecurityMailSpec
@@ -98,6 +98,10 @@ GENERIC_LINK_ERROR = "Unable to link sign-in provider."
 GENERIC_UNLINK_ERROR = "Unable to unlink sign-in provider."
 GENERIC_OIDC_ERROR = "Sign-in failed. Please try again."
 GENERIC_INVITE_ERROR = "Unable to accept invitation. Check the link or ask for a new one."
+INVITE_CAPACITY_ERROR = (
+    "This Odograph instance has no room for another account right now. "
+    "Your invitation was not used. Ask the administrator to make room, then try again."
+)
 OIDC_REAUTH_NOTICE = "Provider authentication confirmed. Complete the action within 10 minutes."
 PASSWORD_SAVED_NOTICE = "Password saved. Other sessions have been signed out."
 MAX_INVITE_FORM_BYTES = 8192
@@ -1078,6 +1082,8 @@ def make_router() -> APIRouter:
             account = await limiter.run_bounded(provision)
         except _AuthSaturated:
             return await _render_invite(request, error=GENERIC_INVITE_ERROR, status_code=429)
+        except InvitationCapacityExceeded:
+            return await _render_invite(request, error=INVITE_CAPACITY_ERROR, status_code=409)
         except InvitationUnavailable:
             return await _render_invite(request, error=GENERIC_INVITE_ERROR, status_code=400)
 
@@ -1369,6 +1375,9 @@ def make_router() -> APIRouter:
                         account = await get_account(conn, account_id)
                         if account is None or not account["is_enabled"]:
                             raise InvitationUnavailable()
+            except InvitationCapacityExceeded:
+                limiter.record_failure(ip)
+                raise HTTPException(status_code=409, detail=INVITE_CAPACITY_ERROR)
             except InvitationUnavailable:
                 limiter.record_failure(ip)
                 raise HTTPException(status_code=401, detail=GENERIC_INVITE_ERROR)

@@ -12,9 +12,10 @@ from psycopg import errors
 from app import application_roles, db as db_module
 from app import auth
 from app.account_context import AccountPool, AccountPrincipal
-from app.accounts import get_account_by_email
+from app.accounts import get_account, get_account_by_email
 from app.application_roles import application_role_pools, prepare_application_roles
 from app.db import MIGRATIONS_DIR, make_pool, run_migrations
+from app.invitations import issue_invitation, redeem_invitation
 from app.email_challenges import (
     PURPOSE_CHANGE,
     PURPOSE_CURRENT,
@@ -44,6 +45,27 @@ def _migrations_through(tmp_path: Path, version: int) -> Path:
         if int(path.name.split("_", 1)[0]) <= version:
             shutil.copy(path, target / path.name)
     return target
+
+
+GUARD_STATE_SQL = (
+    "SELECT to_regclass('public.accounts_singleton_idx'), "
+    "EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.accounts'::regclass "
+    "AND conname='accounts_is_admin_check')"
+)
+
+
+async def _invite_member_after_upgrade(owner, pools, admin_id: int, email: str) -> None:
+    """The upgraded administrator invites a member who redeems as a non-admin."""
+    async with pools.control.connection() as conn:
+        admin = await get_account(conn, admin_id)
+        token = await issue_invitation(conn, admin, email)
+        member_id = await redeem_invitation(conn, token, "member password", display_timezone="UTC")
+    async with owner.connection() as conn:
+        assert await (await conn.execute(
+            "SELECT email,is_admin FROM accounts WHERE id=%s", (member_id,),
+        )).fetchone() == (email, False)
+        assert await (await conn.execute(
+            "SELECT id FROM accounts WHERE is_admin")).fetchall() == [(admin_id,)]
 
 
 async def _provision_schema_29_roles() -> None:
@@ -143,23 +165,7 @@ async def _schema_29_upgrade_and_email_change(tmp_path):
                 "SELECT display_tz,email_to FROM account_settings WHERE account_id=%s",
                 (ADMIN_ID,),
             )).fetchone() == ("America/Los_Angeles", "notification@example.invalid")
-            assert await (await conn.execute(
-                "SELECT to_regclass('public.accounts_singleton_idx'), "
-                "EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.accounts'::regclass "
-                "AND conname='accounts_is_admin_check')"
-            )).fetchone() == ("accounts_singleton_idx", True)
-
-            with pytest.raises(errors.UniqueViolation):
-                async with conn.transaction():
-                    await conn.execute(
-                        "INSERT INTO accounts (email,password_hash,is_admin) "
-                        "VALUES ('second@example.invalid','other-hash',true)"
-                    )
-            with pytest.raises(errors.CheckViolation):
-                async with conn.transaction():
-                    await conn.execute(
-                        "UPDATE accounts SET is_admin=false WHERE id=%s", (ADMIN_ID,)
-                    )
+            assert await (await conn.execute(GUARD_STATE_SQL)).fetchone() == (None, False)
 
         async with application_role_pools(TEST_DB) as pools:
             async with pools.control.connection() as conn:
@@ -228,12 +234,13 @@ async def _schema_29_upgrade_and_email_change(tmp_path):
                     "SELECT email_to FROM account_settings WHERE account_id=%s",
                     (ADMIN_ID,),
                 )).fetchone() == ("notification@example.invalid",)
+            await _invite_member_after_upgrade(owner, pools, ADMIN_ID, "invited-member@example.invalid")
     finally:
         db_module.MIGRATIONS_DIR = original_migrations_dir
         await owner.close()
 
 
-def test_schema_29_upgrade_preserves_admin_and_email_change_switches_login(tmp_path):
+def test_schema_29_upgrade_preserves_admin_email_change_and_admits_invited_member(tmp_path):
     asyncio.run(_schema_29_upgrade_and_email_change(tmp_path))
 
 
@@ -329,22 +336,7 @@ async def _schema_29_populated_upgrade(tmp_path):
             assert await (await conn.execute(
                 "SELECT account_id,vehicle_id,amount::text,notes FROM expenses WHERE id=%s", (expense_id,),
             )).fetchone() == (account_id, vehicle_id, "45.67", "schema-29-expense")
-            assert await (await conn.execute(
-                "SELECT to_regclass('public.accounts_singleton_idx'), "
-                "EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.accounts'::regclass "
-                "AND conname='accounts_is_admin_check')",
-            )).fetchone() == ("accounts_singleton_idx", True)
-            with pytest.raises(errors.UniqueViolation):
-                async with conn.transaction():
-                    await conn.execute(
-                        "INSERT INTO accounts(email,password_hash,is_admin) "
-                        "VALUES ('upgrade-second@example.invalid','other-hash',true)"
-                    )
-            with pytest.raises(errors.CheckViolation):
-                async with conn.transaction():
-                    await conn.execute(
-                        "UPDATE accounts SET is_admin=false WHERE id=%s", (account_id,)
-                    )
+            assert await (await conn.execute(GUARD_STATE_SQL)).fetchone() == (None, False)
 
         async with application_role_pools(TEST_DB) as pools:
             async with pools.control.connection() as conn:
@@ -366,11 +358,12 @@ async def _schema_29_populated_upgrade(tmp_path):
                 response = await client.get("/settings/account")
                 assert response.status_code == 200
                 assert OLD_EMAIL in response.text
+            await _invite_member_after_upgrade(owner, pools, account_id, "upgrade-member@example.invalid")
 
     finally:
         db_module.MIGRATIONS_DIR = original_migrations_dir
         await owner.close()
 
 
-def test_populated_schema_29_upgrade_preserves_oidc_device_ledger_settings_session_and_singleton(tmp_path):
+def test_populated_schema_29_upgrade_preserves_oidc_device_ledger_settings_session_and_admits_member(tmp_path):
     asyncio.run(_schema_29_populated_upgrade(tmp_path))

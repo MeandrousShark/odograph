@@ -46,8 +46,7 @@ async def _seed_trip_points(raw, owner, stream, started_at, ended_at):
 
 
 async def _seed(raw):
-    # Test-only second account; reset_db() recreates the singleton guard.
-    await raw.execute("DROP INDEX accounts_singleton_idx")
+    # Two synthetic accounts inserted directly by the owner role.
     for owner, name in ((41, "Alpha"), (73, "Beta")):
         await raw.execute(
             "INSERT INTO accounts (id, email, password_hash) VALUES (%s, %s, 'test-only')",

@@ -52,7 +52,7 @@ def test_signup_form_collects_local_credentials_and_csrf_without_secrets():
     assert '<div class="card auth-card">' in body
     assert '<div class="page-title auth-page-title">' in body
     assert '<h2 class="page-title-heading">Create administrator account</h2>' in body
-    assert 'class="page-title-subtitle">This creates the sole administrator' in body
+    assert 'class="page-title-subtitle">This creates the first administrator account' in body
     assert 'class="control control-primary auth-submit">Create administrator</button>' in body
 
 

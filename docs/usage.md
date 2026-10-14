@@ -2,9 +2,10 @@
 
 This guide covers everyday use after sign-in. For installation, see the
 [installation instructions](../README.md). For phone setup, use
-[Connecting OwnTracks](owntracks.md). Odograph is a single-administrator,
-self-hosted application. Multiple devices and vehicles can feed that account,
-but the app does not provide separate user accounts.
+[Connecting OwnTracks](owntracks.md). Odograph is a self-hosted application
+with one administrator and optional invited members. Each account has its own
+devices, vehicles, trips and settings; see
+[Account management](accounts.md#administrator-account-management).
 
 On a desktop browser, the main navigation shows **Dashboard**, **Trips**,
 **Review**, **Report**, **Expenses**, and **Stats**, with a **Settings** link in
@@ -425,11 +426,10 @@ message, the retry needs capacity as new raw data. Changed messages also need
 capacity. A full allowance returns retryable HTTP 503, preserving the existing
 queued-fix response contract for supported tracking clients.
 
-In controlled activated fixtures, scheduling deletion disables the account
-immediately. Its owner can download this bundle before the account is disabled
-or after an administrator cancels during the 30-day grace period.
-The bundle omits notification destinations and schedules. Normal installations
-do not yet support multi-account activation.
+When an administrator schedules an account for deletion, the account is
+disabled immediately. Its owner can download this bundle before the account is
+disabled or after an administrator cancels during the 30-day grace period.
+The bundle omits notification destinations and schedules.
 
 None of these exports is a complete database backup. For recovery, use the
 [backup and disaster recovery guide](backups.md), which covers the database

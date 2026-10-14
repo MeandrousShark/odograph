@@ -5,6 +5,7 @@ import pytest
 from fastapi import FastAPI
 from psycopg import errors
 
+from app.storage import is_account_grant_refusal
 from app.storage_errors import register_storage_errors
 
 
@@ -46,3 +47,13 @@ def test_unrelated_database_failure_is_not_misrepresented_as_quota_pressure(mess
     response = asyncio.run(run())
     assert response.status_code == 500
     assert "Retry-After" not in response.headers
+
+
+@pytest.mark.parametrize("exc, expected", [
+    (errors.RaiseException("storage capacity exceeded: no funded account grant available"), True),
+    (errors.RaiseException("storage capacity exceeded: account allowance"), False),
+    (errors.RaiseException("invitation unavailable"), False),
+    (errors.UniqueViolation("storage capacity exceeded: no funded account grant available"), False),
+])
+def test_account_grant_refusal_is_recognized_only_for_the_new_account_trigger(exc, expected):
+    assert is_account_grant_refusal(exc) is expected

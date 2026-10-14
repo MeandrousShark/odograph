@@ -67,7 +67,7 @@
     </tr></thead>
     <tbody role="rowgroup">
     {% for account in accounts %}
-      <tr role="row" class="admin-account-row{% if multiuser_available and account.id != user.id %} admin-account-row-with-deletion{% endif %}">
+      <tr role="row" class="admin-account-row{% if account.id != user.id %} admin-account-row-with-deletion{% endif %}">
         <td role="cell" class="num" data-label="ID">{{ account.id }}</td>
         <td role="cell" data-label="Display name">{{ account.display_name or "" }}</td>
         <td role="cell" data-label="Login email">{{ account.email }}</td>
@@ -75,7 +75,7 @@
         <td role="cell" data-label="Role">{{ "Administrator" if account.is_admin else "Member" }}</td>
         <td role="cell" data-label="Access">
           {{ "Enabled" if account.is_enabled else "Disabled" }}
-          {% if multiuser_available and account.id != user.id %}
+          {% if account.id != user.id %}
           {% if account.is_enabled %}
           <form method="post" action="/admin/accounts/{{ account.id }}/disable">
             <input type="hidden" name="csrf_token" value="{{ csrf }}">
@@ -103,7 +103,7 @@
           {% else %}<span class="muted">Account disabled</span>{% endif %}
         </td>
       </tr>
-      {% if multiuser_available and account.id != user.id %}
+      {% if account.id != user.id %}
       <tr role="row" class="admin-account-deletion-row">
         <td role="cell" colspan="9">
           {% if not account.deletion_deadline %}
@@ -196,7 +196,6 @@
 
 <section class="settings-section" aria-labelledby="invitations-heading">
   <h3 id="invitations-heading">Invitations</h3>
-  {% if multiuser_available %}
   <form method="post" action="/admin/invitations" class="admin-invitation-form">
     <input type="hidden" name="csrf_token" value="{{ csrf }}">
     <label>Invitee email
@@ -205,9 +204,6 @@
     <label class="admin-send-checkbox"><input type="checkbox" name="send_email" value="1"> Send email</label>
     <button type="submit" class="control control-primary">Create invitation</button>
   </form>
-  {% else %}
-  <p class="muted">Invitations are unavailable until multi-account mode is activated.</p>
-  {% endif %}
   <p class="muted">Invitation email does not verify the recipient's login email. Open invitations expire after 48 hours.</p>
   <div class="table-wrapper">
   <table class="admin-card-table" role="table" aria-labelledby="invitations-heading">
@@ -219,7 +215,7 @@
         <td role="cell" data-label="Status">{{ invitation.status }}</td>
         <td role="cell" data-label="Expires">{{ invitation.expires_at|local_dt }}</td>
         <td role="cell" data-label="Actions">
-          {% if multiuser_available and invitation.status == "Open" %}
+          {% if invitation.status == "Open" %}
           <form method="post" action="/admin/invitations/{{ invitation.id }}/resend">
             <input type="hidden" name="csrf_token" value="{{ csrf }}">
             <label><input type="checkbox" name="send_email" value="1"> Send email</label>

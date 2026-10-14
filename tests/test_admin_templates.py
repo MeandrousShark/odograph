@@ -48,7 +48,6 @@ def _app(accounts=None):
                     "expires_at": expires_at,
                 }] if page in ("expired", "open") else [],
                 "audit_events": [],
-                "multiuser_available": True,
                 "actor_account": {"has_password": True, "has_oidc": True},
                 "oidc_purge_available": True,
                 "notice": "", "deletion_deadline_label": "Not scheduled",

@@ -20,8 +20,6 @@ async def _scenario(check):
         await reset_db(owner)
         async with provisioned_role_pools(owner) as pools:
             async with owner.connection() as conn:
-                await conn.execute("DROP INDEX accounts_singleton_idx")
-                await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
                 await conn.execute(
                     "INSERT INTO accounts(email,password_hash,is_admin) VALUES "
                     "('actor@example.invalid','hash',true),"

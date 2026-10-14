@@ -89,8 +89,6 @@ def test_reset_ends_only_the_target_accounts_sessions(monkeypatch, caplog):
                         # Test-only second account with the same password.
                         b_hash = (await (await conn.execute(
                             "SELECT password_hash FROM accounts WHERE id=%s", (a_id,))).fetchone())[0]
-                        await conn.execute("DROP INDEX accounts_singleton_idx")
-                        await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
                         b_id = (await (await conn.execute(
                             "INSERT INTO accounts(email,password_hash,is_admin) VALUES (%s,%s,false) "
                             "RETURNING id", (B_EMAIL, b_hash))).fetchone())[0]

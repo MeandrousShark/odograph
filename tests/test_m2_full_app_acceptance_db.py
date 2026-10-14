@@ -248,27 +248,13 @@ async def _scenario(owner, secrets_seen: list[str], unverified_processed: asynci
                 "SELECT session_user, r.rolsuper OR r.rolbypassrls "
                 "FROM pg_roles r WHERE r.rolname = session_user")).fetchone()) == ("odograph_runtime", False)
         async with owner.connection() as conn:
-            for is_admin, error in ((True, psycopg.errors.UniqueViolation),
-                                    (False, psycopg.errors.CheckViolation)):
-                with pytest.raises(error):
-                    async with conn.transaction():
-                        await conn.execute(
-                            "INSERT INTO accounts(email,password_hash,is_admin) "
-                            "VALUES ('second@example.invalid','x',%s)", (is_admin,))
+            # The normal schema carries no single-account guard.
+            assert await (await conn.execute(
+                "SELECT to_regclass('public.accounts_singleton_idx'), "
+                "EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.accounts'::regclass "
+                "AND conname='accounts_is_admin_check')")).fetchone() == (None, False)
         assert (await _login(admin2, ADMIN_EMAIL, ADMIN_PASSWORD)).status_code == 303
-
-        # The singleton refuses invitations until the separate activation gate.
         admin_csrf = _form_csrf(await admin1.get("/settings/account"))
-        gated = await admin1.post("/admin/invitations", data={
-            "csrf_token": admin_csrf, "email": VERIFIED_EMAIL, "send_email": "1"})
-        assert gated.status_code == 409
-        assert not _CaptureTransport.sent
-
-        # Test-only stand-in for the activation gate, as in the other
-        # acceptance tests: remove the singleton guards on this disposable DB.
-        async with owner.connection() as conn:
-            await conn.execute("DROP INDEX accounts_singleton_idx")
-            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
 
         # One invitation is emailed, the other is handed over manually.
         emailed = await admin1.post("/admin/invitations", data={

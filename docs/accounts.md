@@ -2,7 +2,7 @@
 
 This guide covers changing and recovering your password, signing out, and
 managing your login email. The last section describes administrator account
-management, which is available only in controlled activation fixtures. For
+management: inviting members, disabling accounts and deleting them. For
 linking an identity provider, see [OIDC sign-in](oidc.md).
 
 ## Change your password
@@ -19,7 +19,7 @@ email and expires in 30 minutes. Completing a reset signs that account out of
 every Odograph session, including the browser that used the link, and returns
 you to sign-in.
 
-In a controlled multi-account fixture, an enabled administrator can request a
+An enabled administrator can request a
 reset for another account in **Admin > Accounts**. The link goes only to that
 account's stored, verified login email; the administrator never sees it or
 chooses a password. Without a verified address, use the trusted host-local
@@ -54,10 +54,9 @@ devices.
 session for your account, including the one you are using. It does not end a
 sign-in provider session or revoke tracking-device credentials.
 
-Establishing a password for an OIDC-only account and managing its sign-in
-methods are currently limited to controlled activation fixtures. They will be
-available for normal installations only after supported account activation is
-released.
+An account created by accepting an invitation with the identity provider has
+no password at first. It can add one in Account Settings after
+reauthenticating with that provider.
 
 ## Login email
 
@@ -71,24 +70,33 @@ destinations. Email verification is not a password reset flow.
 Changing your login email is separate from password recovery. The new address
 becomes the login only after you confirm the emailed challenge.
 
-## Administrator account management (controlled activation only)
+## Administrator account management
 
-The flows in this section are implemented for controlled activation fixtures.
-Normal installations stay single-account and cannot use them until
-multi-account activation is separately released.
+An installation has one administrator, the first account. Everyone else joins
+as a member by invitation; there is no open signup. Each account's trips,
+places, vehicles and settings are private to it, including from the
+administrator.
 
 ### Member invitations
 
-In controlled activation fixtures, an enabled administrator can issue, resend,
-and revoke member invitations in **Admin > Accounts**. The new invitation link
-and manual token are shown once; optional email sends that same invitation.
-Resending creates a fresh token and invalidates the old one. The normal
-single-account installation cannot use invitations to add accounts until
-multi-account activation is separately released.
+An enabled administrator can issue, resend, and revoke member invitations in
+**Admin > Accounts**. The new invitation link and manual token are shown once;
+optional email sends that same invitation. Resending creates a fresh token and
+invalidates the old one.
+
+### Account limit
+
+Every account, the administrator included, receives a storage allowance funded
+from the instance budget. On the defaults that funds five accounts. When no
+allowance is left, creating an invitation is refused with a message naming
+`STORAGE_INSTANCE_BUDGET_BYTES`, and an invitation accepted after the budget
+ran out is refused without being used up. To admit more accounts, raise
+`STORAGE_INSTANCE_BUDGET_BYTES` and restart, or purge an account that is no
+longer needed. See [Logical storage accounting](configuration.md#logical-storage-accounting).
 
 ### Disable and re-enable an account
 
-In those fixtures, an administrator can also disable or re-enable another
+An administrator can also disable or re-enable another
 account. Disabling ends its app sessions and revokes its pending security
 proofs, invitations it issued, and tracking credentials. Re-enabling allows
 a fresh sign-in with a retained login method, but does not restore old sessions,
@@ -96,8 +104,8 @@ links or tracking credentials. At least one usable administrator must remain.
 
 ### Scheduled deletion and purge
 
-An administrator can also schedule another account for deletion in those
-fixtures by typing its login email and acknowledging the export and backup
+An administrator can also schedule another account for deletion by typing its
+login email and acknowledging the export and backup
 effects. Scheduling immediately disables the account and starts a 30-day
 grace period. An enabled administrator can cancel during that period; there is
 no automatic purge. After the grace period, permanent purge requires fresh
@@ -108,5 +116,4 @@ owner can download a portable export before disablement or after cancellation.
 It includes the ledger, rates and basic preferences, but omits notification
 destinations, schedules and raw points. Purge removes data from the live
 database only; retained backups may still contain it. Restoring an older
-backup can reintroduce the account and its data. These flows remain unavailable
-in normal installations until multi-account activation is separately released.
+backup can reintroduce the account and its data.

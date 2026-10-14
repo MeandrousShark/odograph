@@ -45,8 +45,6 @@ async def _scenario(callback):
             async with pools.control.connection() as conn:
                 actor = await create_admin(conn, "actor@example.invalid", "actor-hash")
             async with owner.connection() as conn:
-                await conn.execute("DROP INDEX accounts_singleton_idx")
-                await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
                 row = await (await conn.execute(
                     "INSERT INTO accounts(email,password_hash,is_admin,email_verified_at) "
                     "VALUES ('target@example.invalid','target-hash',true,now()) "

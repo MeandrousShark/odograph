@@ -184,8 +184,6 @@ def test_maintenance_reconciliation_preserves_existing_overbudget_data(repair_dr
 def test_grant_budget_creation_disable_and_purge_release():
     async def body(raw, pool):
         async with raw.connection() as conn:
-            await conn.execute("DROP INDEX accounts_singleton_idx")
-            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
             await conn.execute("UPDATE storage_policy SET instance_budget_bytes=3*2147483648,"
                                "instance_reserve_bytes=2147483648 WHERE id=1")
             cur = await conn.execute("SELECT COUNT(*) FROM storage_grants")

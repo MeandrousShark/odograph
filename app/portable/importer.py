@@ -37,7 +37,8 @@ log = logging.getLogger(__name__)
 # geocode retry and discovery state; 42 adds protected storage limits and raw
 # replay receipts. Schema 43 adds accounts.display_name, a column of a table
 # the bundle never carries. Schema 44 adds trip warning acknowledgements,
-# which the bundle deliberately omits.
+# which the bundle deliberately omits. Schema 45 only removes the
+# single-account guard on accounts.
 # None changes the portable bundle.
 # Keep the tuples explicit so a future migration never becomes cross-schema
 # compatible merely because its version is adjacent.
@@ -100,6 +101,11 @@ _COMPATIBLE_SCHEMA_TRANSITIONS = {
     (3, 31, 44), (3, 32, 44), (3, 33, 44), (3, 34, 44), (3, 35, 44),
     (3, 36, 44), (3, 37, 44), (3, 38, 44), (3, 39, 44), (3, 40, 44),
     (3, 41, 44), (3, 42, 44), (3, 43, 44), (3, 44, 44),
+    (1, 21, 45), (2, 22, 45), (2, 23, 45), (2, 24, 45), (2, 25, 45),
+    (3, 26, 45), (3, 27, 45), (3, 28, 45), (3, 29, 45), (3, 30, 45),
+    (3, 31, 45), (3, 32, 45), (3, 33, 45), (3, 34, 45), (3, 35, 45),
+    (3, 36, 45), (3, 37, 45), (3, 38, 45), (3, 39, 45), (3, 40, 45),
+    (3, 41, 45), (3, 42, 45), (3, 43, 45), (3, 44, 45), (3, 45, 45),
 }
 
 

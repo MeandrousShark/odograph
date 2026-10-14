@@ -18,7 +18,7 @@ from app.accounts import create_admin
 from app.auth import _account_user
 from app.db import make_pool
 from app.invitations import (
-    InvitationUnavailable, invitation_mail_admission, issue_invitation,
+    InvitationCapacityExceeded, InvitationUnavailable, invitation_mail_admission, issue_invitation,
     issue_invitation_record, list_invitations, redeem_invitation,
     resend_invitation_record, revoke_invitation,
 )
@@ -26,7 +26,7 @@ from app.local_auth import verify_password
 from app.local_auth import hash_password
 from app.ingest import FailedAuthLimiter
 from app.main import SecurityHeadersMiddleware, make_templates
-from tests.auth_db_fixtures import auth_config
+from tests.auth_db_fixtures import auth_config, fund_account_grants
 from conftest import provisioned_role_pools, reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -81,7 +81,7 @@ def _invite_route_app(pools):
     return app
 
 
-def test_restricted_invite_route_respects_singleton_and_switches_session_in_future_fixture():
+def test_restricted_invite_route_redeems_member_and_switches_session():
     async def check(owner, pools, admin_user):
         async with owner.connection() as conn:
             await conn.execute(
@@ -100,15 +100,6 @@ def test_restricted_invite_route_respects_singleton_and_switches_session_in_futu
             csrf = (await client.get("/session")).json()["csrf"]
             form = {"csrf_token": csrf, "token": token, "password": "member-password",
                     "password_confirm": "member-password", "display_timezone": "UTC"}
-            refused = await client.post("/invite", data=form)
-            assert refused.status_code == 400
-            assert auth.GENERIC_INVITE_ERROR in refused.text
-            assert token not in refused.text
-            async with owner.connection() as conn:
-                assert await (await conn.execute("SELECT consumed_at FROM invitations")).fetchone() == (None,)
-                await conn.execute("DROP INDEX accounts_singleton_idx")
-                await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
-
             signed_in = await client.post(
                 "/login/local", data={"email": "admin@example.invalid",
                                       "password": "admin-password", "csrf_token": csrf},
@@ -155,9 +146,6 @@ def test_restricted_invite_route_respects_singleton_and_switches_session_in_futu
 
 def test_restricted_invite_route_handles_expiry_revoke_disabled_issuer_rollback_and_race(monkeypatch):
     async def check(owner, pools, admin_user):
-        async with owner.connection() as conn:
-            await conn.execute("DROP INDEX accounts_singleton_idx")
-            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
         async with pools.control.connection() as conn:
             tokens = {
                 name: await issue_invitation(conn, admin_user, f"{name}@example.invalid")
@@ -457,8 +445,6 @@ def test_resend_race_with_revoke_rejects_terminal_id():
 def test_admin_invitation_budgets_and_cross_admin_revoke():
     async def check(owner, pools, admin_user):
         async with owner.connection() as conn:
-            await conn.execute("DROP INDEX accounts_singleton_idx")
-            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
             other = await (await conn.execute(
                 "INSERT INTO accounts(email,password_hash,is_admin) "
                 "VALUES('admin2@example.invalid','existing-hash',true) "
@@ -537,29 +523,114 @@ def test_invitation_target_and_admin_rolling_budgets():
     asyncio.run(_scenario(check))
 
 
-def test_normal_singleton_refuses_member_and_rolls_back_token_use():
+def test_normal_schema_admits_member_and_consumes_token():
     async def check(owner, pools, admin_user):
         admin_id = admin_user["id"]
         async with pools.control.connection() as conn:
             token = await issue_invitation(conn, admin_user, "guest@example.invalid")
         async with pools.control.connection() as conn:
-            with pytest.raises(InvitationUnavailable):
-                async with conn.transaction():
-                    await redeem_invitation(conn, token, "good-password")
+            async with conn.transaction():
+                member_id = await redeem_invitation(conn, token, "good-password")
         async with owner.connection() as conn:
-            assert await (await conn.execute("SELECT count(*) FROM accounts")).fetchone() == (1,)
             assert await (await conn.execute(
-                "SELECT consumed_at IS NULL FROM invitations WHERE token_digest=%s",
+                "SELECT id,is_admin FROM accounts ORDER BY id")).fetchall() == [
+                (admin_id, True), (member_id, False)]
+            assert await (await conn.execute(
+                "SELECT consumed_at IS NOT NULL FROM invitations WHERE token_digest=%s",
                 (hashlib.sha256(token.encode()).hexdigest(),))).fetchone() == (True,)
+    asyncio.run(_scenario(check))
+
+
+async def _assert_capacity_refusal_left_no_state(owner, token, email, accounts):
+    async with owner.connection() as conn:
+        assert await (await conn.execute("SELECT count(*) FROM accounts")).fetchone() == (accounts,)
+        assert await (await conn.execute(
+            "SELECT count(*) FROM accounts WHERE email=%s", (email,))).fetchone() == (0,)
+        assert await (await conn.execute(
+            "SELECT count(*) FROM storage_grants")).fetchone() == (accounts,)
+        assert await (await conn.execute(
+            "SELECT consumed_at IS NULL FROM invitations WHERE token_digest=%s",
+            (hashlib.sha256(token.encode()).hexdigest(),))).fetchone() == (True,)
+
+
+def test_redemption_beyond_funded_grants_is_a_capacity_refusal_without_partial_state():
+    async def check(owner, pools, admin_user):
+        await fund_account_grants(owner, 2)
+        async with pools.control.connection() as conn:
+            first = await issue_invitation(conn, admin_user, "first@example.invalid")
+            second = await issue_invitation(conn, admin_user, "second@example.invalid")
+            member_id = await redeem_invitation(conn, first, "good-password")
+            with pytest.raises(InvitationCapacityExceeded):
+                async with conn.transaction():
+                    await redeem_invitation(conn, second, "good-password")
+        await _assert_capacity_refusal_left_no_state(owner, second, "second@example.invalid", 2)
+        async with owner.connection() as conn:
+            assert await (await conn.execute(
+                "SELECT is_admin FROM accounts WHERE id=%s", (member_id,))).fetchone() == (False,)
+        # Other refusals keep the generic error.
+        async with pools.control.connection() as conn:
+            with pytest.raises(InvitationUnavailable) as replay:
+                await redeem_invitation(conn, first, "good-password")
+            assert not isinstance(replay.value, InvitationCapacityExceeded)
+        await fund_account_grants(owner, 3)
+        async with pools.control.connection() as conn:
+            assert await redeem_invitation(conn, second, "good-password")
+    asyncio.run(_scenario(check))
+
+
+def test_only_bootstrap_creates_an_administrator():
+    async def check(owner, pools, admin_user):
+        admin_id = admin_user["id"]
+        async with pools.control.connection() as conn:
+            token = await issue_invitation(conn, admin_user, "member@example.invalid")
+            member_id = await redeem_invitation(conn, token, "good-password")
+            with pytest.raises(errors.UniqueViolation):
+                async with conn.transaction():
+                    await create_admin(conn, "second-admin@example.invalid", "hash")
+            for statement, params in (
+                ("UPDATE accounts SET is_admin=true WHERE id=%s", (member_id,)),
+                ("INSERT INTO accounts(email,is_admin) VALUES ('forged@example.invalid',true)", ()),
+            ):
+                with pytest.raises(errors.InsufficientPrivilege):
+                    async with conn.transaction():
+                        await conn.execute(statement, params)
+        async with pools.runtime.connection() as conn:
+            with pytest.raises(errors.InsufficientPrivilege):
+                async with conn.transaction():
+                    await conn.execute("UPDATE accounts SET is_admin=true WHERE id=%s", (member_id,))
+        async with owner.connection() as conn:
+            assert await (await conn.execute(
+                "SELECT id,is_admin FROM accounts ORDER BY id")).fetchall() == [
+                (admin_id, True), (member_id, False)]
+    asyncio.run(_scenario(check))
+
+
+def test_invite_route_shows_capacity_message_and_keeps_the_token():
+    async def check(owner, pools, admin_user):
+        await fund_account_grants(owner, 1)
+        async with pools.control.connection() as conn:
+            token = await issue_invitation(conn, admin_user, "member@example.invalid")
+        app = _invite_route_app(pools)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            await client.get("/invite")
+            csrf = (await client.get("/session")).json()["csrf"]
+            refused = await client.post("/invite", data={
+                "csrf_token": csrf, "token": token, "password": "member-password",
+                "password_confirm": "member-password", "display_timezone": "UTC"})
+            assert refused.status_code == 409
+            assert auth.INVITE_CAPACITY_ERROR in refused.text
+            assert auth.GENERIC_INVITE_ERROR not in refused.text
+            assert token not in refused.text
+            assert "account_id" not in (await client.get("/session")).json()
+        await _assert_capacity_refusal_left_no_state(owner, token, "member@example.invalid", 1)
     asyncio.run(_scenario(check))
 
 
 def test_member_defaults_atomicity_replay_expiry_and_restricted_roles():
     async def check(owner, pools, admin_user):
         admin_id = admin_user["id"]
-        async with owner.connection() as conn:
-            await conn.execute("DROP INDEX accounts_singleton_idx")
-            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
         async with pools.control.connection() as conn:
             token = await issue_invitation(conn, admin_user, "guest@example.invalid")
         async with owner.connection() as conn:
@@ -611,9 +682,6 @@ def test_member_defaults_atomicity_replay_expiry_and_restricted_roles():
 
 def test_expired_revoked_and_concurrent_redemption():
     async def check(owner, pools, admin_user):
-        async with owner.connection() as conn:
-            await conn.execute("DROP INDEX accounts_singleton_idx")
-            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
         async with pools.control.connection() as conn:
             expired = await issue_invitation(conn, admin_user, "expired@example.invalid")
             revoked = await issue_invitation(conn, admin_user, "revoked@example.invalid")
@@ -643,9 +711,6 @@ def test_expired_revoked_and_concurrent_redemption():
 def test_issuer_disable_serializes_with_issue_and_redeem():
     async def check(owner, pools, admin_user):
         admin_id = admin_user["id"]
-        async with owner.connection() as conn:
-            await conn.execute("DROP INDEX accounts_singleton_idx")
-            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
         async with pools.control.connection() as conn:
             token = await issue_invitation(conn, admin_user, "member@example.invalid")
 
@@ -672,10 +737,6 @@ def test_issuer_disable_serializes_with_issue_and_redeem():
 
 def test_issue_and_redeem_serialize_per_email_in_both_orders():
     async def check(owner, pools, admin_user):
-        async with owner.connection() as conn:
-            await conn.execute("DROP INDEX accounts_singleton_idx")
-            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
-
         async with pools.control.connection() as conn:
             old_token = await issue_invitation(conn, admin_user, "race@example.invalid")
 
@@ -720,9 +781,6 @@ def test_issue_and_redeem_serialize_per_email_in_both_orders():
 
 def test_expiry_while_waiting_for_email_lock_refuses_redemption():
     async def check(owner, pools, admin_user):
-        async with owner.connection() as conn:
-            await conn.execute("DROP INDEX accounts_singleton_idx")
-            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
         async with pools.control.connection() as conn:
             token = await issue_invitation(conn, admin_user, "soon@example.invalid")
         async with owner.connection() as conn:

@@ -28,9 +28,9 @@ handled on a best-effort basis by a single maintainer. See the
 
 ## Scope
 
-This is a self-hosted, single-user application. The threat model assumes
-the operator running the instance is trusted and controls the host and
-database.
+This is a self-hosted application for one administrator and the members
+they invite. The threat model assumes the operator running the instance is
+trusted and controls the host and database.
 
 **In scope** (please report):
 
