@@ -122,8 +122,11 @@ reproduced here.
 
 ### Supported upgrade path
 
-- Any `v0.10.x` or `v0.11.x` release may upgrade directly to 1.0. Older
-  releases should first follow the supported upgrade path to `v0.11.3`.
+- Any published `v0.10.x` or `v0.11.x` release may upgrade directly to 1.0.
+  Older releases should first follow the supported upgrade path to `v0.11.3`.
+  An installation from `v0.11.0` or earlier must first apply the v0.11.1
+  road-snap correction if it has not; see
+  [Upgrading to 1.0](docs/upgrading.md#supported-starting-versions).
 
 ### Breaking changes
 

@@ -116,9 +116,38 @@ they can contain manual steps.
 
 ### Supported starting versions
 
-Any v0.10.x or v0.11.x release upgrades directly to 1.0. An older
-installation first upgrades to v0.11.3, following that release's documented
-upgrade path, and then upgrades to 1.0.
+Any published v0.10.x or v0.11.x release upgrades directly to 1.0. (v0.10.1
+was never published.) An older installation first upgrades to v0.11.3,
+following that release's documented upgrade path, and then upgrades to 1.0.
+
+An installation upgrading from v0.11.0 or earlier that has not applied the
+v0.11.1 road-snap correction must apply it. Take and verify the pre-upgrade
+backup first, then apply the correction while the database is still at
+schema 25, before the first 1.0 start. The statements below save the values it
+changes first, so the correction can be reversed without restoring a backup. In `psql`, run as
+the `DATABASE_URL` role (`\copy` writes the file on the machine where `psql`
+runs):
+
+```sql
+\copy (SELECT id, distance_snapped_m FROM trips WHERE distance_snapped_m IS NOT NULL AND distance_m > 0 AND distance_snapped_m / distance_m < 0.85) TO 'snap-correction.csv' CSV HEADER
+
+UPDATE trips SET distance_snapped_m = NULL
+WHERE distance_snapped_m IS NOT NULL
+  AND distance_m > 0
+  AND distance_snapped_m / distance_m < 0.85;
+```
+
+Keep `snap-correction.csv` with your backups. The saved file lives outside
+the database, so it adds no table that a later upgrade would have to account
+for (see the `public` schema item below).
+
+If you restore the pre-upgrade backup to recover, the correction is not in
+it, so apply it again afterward. With the database image migration, the old
+database is stopped after the backup, so apply the correction to the restored
+target database after `scripts/restore_database.sh` and before
+`docker compose up -d app`. The same statements are valid on a database that
+has already reached schema 44, run as a superuser or `BYPASSRLS` role, if you
+find you skipped them.
 
 ### Operator impact
 
@@ -359,7 +388,7 @@ A failed security-contract check blocks startup and must be investigated,
 not repaired by granting runtime access to the database owner. If rollback is
 needed after migration commits, restore the verified pre-upgrade archive into
 a fresh database using the previous exact image. Starting that old image
-against the migrated database is unsupported.
+against the migrated database is unsupported for 0.x to 1.0.
 
 ## Detector version changes
 
@@ -398,7 +427,10 @@ follow [Rollback](#rollback) below.
 Rollback means restoring the pre-upgrade backup with the previous release's
 code, into a fresh volume, not running old code against the migrated database,
 and not attempting to undo a migration in place. A database-image migration
-also requires a fresh old-image project.
+also requires a fresh old-image project. Running the previous exact image
+against the migrated database is supported only where a release's notes
+document that release pair as drilled; see [Support policy](#support-policy).
+None exists for 0.x to 1.0.
 
 Odograph 1.0 and later refuse to start against a database migrated by a newer
 release. Startup, and the maintenance commands for account management,
