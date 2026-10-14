@@ -97,10 +97,9 @@ Every network-reachable route, and what actually guards it:
   (fixation defense) and issues a fresh CSRF token.
 - **`/signup`**: reachable only when `INITIAL_ADMIN_SIGNUP=1`, no account
   exists, and development auth bypass is off. The first successful transaction
-  creates the administrator. The durable account row closes public signup and
-  the normal database schema rejects additional accounts. The invitation
-  redemption routes below are not a supported way to add users to a normal
-  installation.
+  creates the administrator. A durable bootstrap marker then closes public
+  signup for good, even if that account is later purged. Further accounts join
+  only as members through the invitation redemption routes below.
 - **`/invite`, `/invite/oidc`**: invited account redemption. The invitee can set a local password or use the
   configured provider without setting one. OIDC redemption consumes the
   invitation only after callback state and nonce checks, and the invitation's

@@ -1,6 +1,7 @@
 # Contributing
 
-Odograph is a self-hosted, single-user mileage tracker. Contributions are
+Odograph is a self-hosted mileage tracker for an administrator and
+the members they invite. Contributions are
 welcome through pull requests. Keep changes focused, explain behavior changes,
 and add regression coverage where practical.
 
