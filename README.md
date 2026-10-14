@@ -393,9 +393,12 @@ installations. Want to run the test suite or work on the code? See
 
 ## Support
 
-Odograph is self-hosted open-source software, not a hosted service. Only the
-latest release is supported, by one maintainer, on a best-effort basis. There
-is no service-level agreement or guaranteed response time.
+Odograph is self-hosted open-source software, not a hosted service. The
+latest 1.x release is supported, by one maintainer, on a best-effort basis.
+There is no service-level agreement or guaranteed response time. After v2.0.0
+ships, v1 receives critical security fixes for 6 months, and 0.x releases are
+unsupported once 1.0 ships. See the
+[support policy](docs/upgrading.md#support-policy).
 
 Check [Known issues](docs/known-issues.md) for confirmed problems in
 published releases and their workarounds. Open a GitHub issue for bugs and
