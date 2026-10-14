@@ -374,15 +374,21 @@ after sign-in.
 ## Updating
 
 When a new release comes out, follow the [upgrading guide](docs/upgrading.md).
-Take a fresh backup and verify it first, then move from one exact release tag
-to the next. Watch the GitHub Releases page to hear about new versions.
+Take a fresh backup and verify it first, then move to the exact release tag you
+want. Any 1.x release upgrades directly to any later 1.x release. Moving from
+0.x is covered in [Upgrading to 1.0](docs/upgrading.md#upgrading-to-10).
+Watch the GitHub Releases page to hear about new versions.
 
-The registry also publishes a floating tag for each minor version, such as
-`v0.8`, which points at the newest patch within that minor release. Use a
-floating tag only when you have chosen that update policy deliberately and
-have read the release notes. There is no `latest` tag. Minor releases can add
-one-way database migrations, so moving back means restoring a backup rather
-than switching the image.
+The registry also publishes floating tags: one for each minor version, such as
+`v1.0`, which points at the newest patch within that minor release, and `v1`,
+which points at the newest verified stable 1.x release. Use a floating tag only
+when you have chosen that update policy deliberately and have read the release
+notes. There is no `latest` tag. Pulling a floating tag again selects the
+current release, not the one you ran before, so record the installed image
+digest first; see
+[Floating image aliases](docs/upgrading.md#floating-image-aliases). Releases
+can add one-way database migrations, so moving back means restoring a backup
+rather than switching the image.
 
 ## Contributing
 
