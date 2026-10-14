@@ -12,6 +12,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "check_release_preflight.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "release-preflight.yml"
+DRILL_BASES = ROOT / "scripts" / "upgrade_drill_bases.json"
 sys.path.insert(0, str(ROOT / "scripts"))
 SPEC = importlib.util.spec_from_file_location("check_release_preflight", SCRIPT)
 assert SPEC and SPEC.loader
@@ -247,31 +248,121 @@ def test_preflight_runs_full_policy_and_native_local_image_matrix():
     assert '"linux/${ARCHITECTURE}"' in smoke["run"]
 
 
-def test_preflight_and_published_drills_use_supported_base_and_exact_candidate():
+def load_drill_workflow(uses: str) -> dict:
+    assert uses.startswith("./.github/workflows/")
+    return yaml.load((ROOT / uses).read_text(), Loader=yaml.BaseLoader)
+
+
+def test_drill_bases_are_the_supported_releases():
+    assert json.loads(DRILL_BASES.read_text()) == ["v0.10.2", "v0.11.0", "v0.11.1", "v0.11.3"]
+
+
+def test_preflight_and_published_drills_call_the_base_matrix_with_exact_candidate():
     jobs = load_workflow()["jobs"]
-    for job_name in ("source-upgrade-drill", "published-upgrade-drill"):
-        job = jobs[job_name]
-        python_setup = next(
-            step for step in job["steps"]
-            if step.get("uses") == "actions/setup-python@v6"
-        )
-        assert python_setup["with"]["python-version"] == "3.13"
-        assert steps_by_name(job)["Install locked upgrade drill dependencies"]["run"] == (
-            "python -m pip install -r requirements-dev.lock"
-        )
+    source = jobs["source-upgrade-drill"]
+    published = jobs["published-upgrade-drill"]
 
-    source_drill = steps_by_name(jobs["source-upgrade-drill"])[
-        "Run v0.10.2 source upgrade and rollback drill"
-    ]["run"]
-    assert '--base v0.10.2 --candidate "$REVISION"' in source_drill
-    assert "--database-image-migration" in source_drill
+    assert source["needs"] == ["prepare", "quality"]
+    assert source["if"] == (
+        "needs.prepare.outputs.run-preflight == 'true' && needs.prepare.outputs.mode == 'preflight'"
+    )
+    assert source["with"] == {
+        "revision": "${{ needs.prepare.outputs.revision }}",
+        "evidence-name": "release-preflight-source-upgrade",
+        "retention-days": "14",
+    }
+    assert published["needs"] == ["prepare", "resolve-published"]
+    assert published["if"] == (
+        "needs.prepare.outputs.run-preflight == 'true' && needs.prepare.outputs.mode == 'verify-published'"
+    )
+    assert published["with"] == {
+        "revision": "${{ needs.prepare.outputs.revision }}",
+        "candidate-image": (
+            "${{ needs.prepare.outputs.image }}@${{ needs.resolve-published.outputs.index-digest }}"
+        ),
+        "evidence-name": "release-published-upgrade",
+        "retention-days": "30",
+    }
+    for job in (source, published):
+        assert job["uses"] == "./.github/workflows/upgrade-drill.yml"
+        assert "steps" not in job
+    assert not any(
+        "source-upgrade-drill" in str(job.get("needs", ""))
+        or "published-upgrade-drill" in str(job.get("needs", ""))
+        for job in jobs.values()
+    )
 
-    published_drill = steps_by_name(jobs["published-upgrade-drill"])[
-        "Run immutable-index upgrade and rollback drill"
-    ]["run"]
-    assert '--base v0.10.2 --candidate "$REVISION"' in published_drill
-    assert '--candidate-image "$IMAGE@$INDEX_DIGEST"' in published_drill
-    assert "--database-image-migration" in published_drill
+
+def test_upgrade_drill_workflow_runs_every_base_with_database_image_migration():
+    drill_workflow = load_drill_workflow(load_workflow()["jobs"]["source-upgrade-drill"]["uses"])
+    triggers = drill_workflow["on"]
+
+    assert drill_workflow["permissions"] == {"contents": "read"}
+    assert drill_workflow["concurrency"]["group"].startswith("upgrade-drill-")
+    assert set(triggers["workflow_call"]["inputs"]) == {
+        "revision", "candidate-image", "evidence-name", "retention-days",
+    }
+    assert triggers["workflow_call"]["inputs"]["revision"]["required"] == "true"
+    assert "workflow_dispatch" in triggers
+    paths = triggers["pull_request"]["paths"]
+    assert paths == [
+        "migrations/**",
+        "scripts/upgrade_check.sh",
+        "scripts/upgrade_drill_bases.json",
+        "scripts/backup_database.sh",
+        "scripts/restore_database.sh",
+        ".github/workflows/upgrade-drill.yml",
+    ]
+    assert "compose.yaml" not in paths
+
+    bases = drill_workflow["jobs"]["bases"]
+    read = steps_by_name(bases)["Read drill bases"]["run"]
+    assert "scripts/upgrade_drill_bases.json" in read
+    assert bases["outputs"]["bases"] == "${{ steps.read.outputs.bases }}"
+
+    drill = drill_workflow["jobs"]["drill"]
+    assert drill["needs"] == "bases"
+    assert drill["runs-on"] == "ubuntu-24.04"
+    assert drill["strategy"]["fail-fast"] == "false"
+    assert drill["strategy"]["matrix"] == {"base": "${{ fromJSON(needs.bases.outputs.bases) }}"}
+    checkout = drill["steps"][0]
+    assert checkout["uses"] == "actions/checkout@v6"
+    assert checkout["with"] == {
+        "fetch-depth": "0",
+        "ref": "${{ inputs.revision || github.sha }}",
+        "persist-credentials": "false",
+    }
+    python_setup = next(
+        step for step in drill["steps"] if step.get("uses") == "actions/setup-python@v6"
+    )
+    assert python_setup["with"]["python-version"] == "3.13"
+    steps = steps_by_name(drill)
+    assert steps["Install locked upgrade drill dependencies"]["run"] == (
+        "python -m pip install -r requirements-dev.lock"
+    )
+    assert steps["Verify native amd64 runner"]["run"] == (
+        'test "$RUNNER_ARCH" = X64 && test "$(uname -m)" = x86_64'
+    )
+
+    run_step = steps["Run upgrade and rollback drill"]
+    assert run_step["env"] == {
+        "BASE": "${{ matrix.base }}",
+        "CANDIDATE_IMAGE": "${{ inputs.candidate-image }}",
+        "REVISION": "${{ inputs.revision || github.sha }}",
+    }
+    run = run_step["run"]
+    assert "set -euo pipefail" in run
+    assert 'args=(--base "$BASE" --candidate "$REVISION")' in run
+    assert 'args+=(--candidate-image "$CANDIDATE_IMAGE")' in run
+    assert '"${args[@]}" --database-image-migration' in run
+    assert 'COMPOSE_CMD="docker compose" scripts/upgrade_check.sh' in run
+    assert 'tee "evidence/upgrade-drill-${BASE}.txt"' in run
+
+    upload = steps["Upload upgrade drill evidence"]
+    assert upload["if"] == "always()"
+    assert upload["with"]["name"] == (
+        "${{ inputs.evidence-name || 'upgrade-drill' }}-${{ matrix.base }}"
+    )
 
 
 def test_published_mode_verifies_exact_signing_identity_and_native_children():

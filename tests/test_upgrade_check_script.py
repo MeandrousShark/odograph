@@ -1007,6 +1007,23 @@ def test_every_later_not_null_defaulted_exact_row_addition_is_listed():
     )
 
 
+def test_defaulted_addition_floor_is_shared_by_every_drill_base():
+    floor, _entries = _defaulted_additions()
+    bases = json.loads((REPO_ROOT / "scripts" / "upgrade_drill_bases.json").read_text())
+    schemas = {}
+    for base in bases:
+        listing = subprocess.run(
+            ["git", "ls-tree", "--name-only", f"{base}^{{commit}}", "migrations/"],
+            cwd=REPO_ROOT, capture_output=True, text=True,
+        )
+        if listing.returncode != 0:
+            pytest.skip(f"release tag {base} is not available in this checkout")
+        schemas[base] = sum(name.endswith(".sql") for name in listing.stdout.splitlines())
+
+    # A base older than the floor could miss columns added in between.
+    assert all(schema >= floor for schema in schemas.values()), (floor, schemas)
+
+
 def test_current_defaulted_additions_are_the_trip_geocode_and_snap_columns():
     _floor, entries = _defaulted_additions()
 

@@ -375,40 +375,11 @@ jobs:
   source-upgrade-drill:
     needs: [prepare, quality]
     if: needs.prepare.outputs.run-preflight == 'true' && needs.prepare.outputs.mode == 'preflight'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 35
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.prepare.outputs.revision }}
-          persist-credentials: false
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-          cache: pip
-          cache-dependency-path: requirements-dev.lock
-      - name: Install locked upgrade drill dependencies
-        run: python -m pip install -r requirements-dev.lock
-      - name: Verify native amd64 runner
-        run: test "$RUNNER_ARCH" = X64 && test "$(uname -m)" = x86_64
-      - name: Run v0.10.2 source upgrade and rollback drill
-        env:
-          REVISION: ${{ needs.prepare.outputs.revision }}
-        run: |
-          set -euo pipefail
-          mkdir -p evidence
-          COMPOSE_CMD="docker compose" scripts/upgrade_check.sh \
-            --base v0.10.2 --candidate "$REVISION" \
-            --database-image-migration | tee evidence/source-upgrade-drill.txt
-      - name: Upload source upgrade evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-preflight-source-upgrade
-          path: evidence/
-          if-no-files-found: warn
-          retention-days: 14
+    uses: ./.github/workflows/upgrade-drill.yml
+    with:
+      revision: ${{ needs.prepare.outputs.revision }}
+      evidence-name: release-preflight-source-upgrade
+      retention-days: 14
 
   resolve-published:
     needs: prepare
@@ -568,41 +539,9 @@ jobs:
   published-upgrade-drill:
     needs: [prepare, resolve-published]
     if: needs.prepare.outputs.run-preflight == 'true' && needs.prepare.outputs.mode == 'verify-published'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 35
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.prepare.outputs.revision }}
-          persist-credentials: false
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-          cache: pip
-          cache-dependency-path: requirements-dev.lock
-      - name: Install locked upgrade drill dependencies
-        run: python -m pip install -r requirements-dev.lock
-      - name: Run immutable-index upgrade and rollback drill
-        env:
-          IMAGE: ${{ needs.prepare.outputs.image }}
-          INDEX_DIGEST: ${{ needs.resolve-published.outputs.index-digest }}
-          REVISION: ${{ needs.prepare.outputs.revision }}
-        run: |
-          set -euo pipefail
-          mkdir -p evidence
-          test "$RUNNER_ARCH" = X64
-          test "$(uname -m)" = x86_64
-          COMPOSE_CMD="docker compose" scripts/upgrade_check.sh \
-            --base v0.10.2 --candidate "$REVISION" \
-            --candidate-image "$IMAGE@$INDEX_DIGEST" \
-            --database-image-migration | \
-            tee evidence/published-upgrade-drill.txt
-      - name: Upload published upgrade evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-published-upgrade
-          path: evidence/
-          if-no-files-found: warn
-          retention-days: 30
+    uses: ./.github/workflows/upgrade-drill.yml
+    with:
+      revision: ${{ needs.prepare.outputs.revision }}
+      candidate-image: ${{ needs.prepare.outputs.image }}@${{ needs.resolve-published.outputs.index-digest }}
+      evidence-name: release-published-upgrade
+      retention-days: 30
