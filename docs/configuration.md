@@ -492,7 +492,8 @@ most one public reset request a minute and five a day, and a repeat request
 within 10 minutes of a delivered link does not replace it. Delivery failures
 are logged without the address or link. Save digest recipients and delivery choices in
 Settings. The personal values below are legacy one-time upgrade inputs, not
-live overrides.
+live overrides. [Account management](accounts.md) describes the password reset
+and login email flows that use this mail.
 
 Every admitted email send runs in a fresh helper process with a fixed
 30-second transport deadline, including DNS, connection, TLS, authentication,
