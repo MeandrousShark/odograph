@@ -35,7 +35,7 @@ management are implemented for controlled activation fixtures. Normal
 installations retain the single-account database guard; these flows are not
 available for regular use until a separately reviewed activation migration is
 released. Establishing a password for an OIDC-only account is limited the same
-way.
+way; see [Account management](accounts.md).
 
 ## Signing out
 

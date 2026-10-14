@@ -20,6 +20,7 @@ PUBLIC_MARKDOWN = (
     "CONTRIBUTING.md",
     "THIRD_PARTY_NOTICES.md",
     "CHANGELOG.md",
+    "docs/accounts.md",
     "docs/backups.md",
     "docs/configuration.md",
     "docs/install-compose.md",
