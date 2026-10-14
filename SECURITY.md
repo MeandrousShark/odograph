@@ -19,9 +19,12 @@ issue.
 
 ## Supported versions
 
-Only the latest release is supported. Fixes ship as a new release, not as
-backports to older tags. There is no SLA and no guaranteed response time;
-reports are handled on a best-effort basis by a single maintainer.
+The latest 1.x release is supported. After v2.0.0 ships, v1 receives critical
+security fixes for 6 months, then is unsupported. 0.x releases are unsupported
+once 1.0 ships. Otherwise fixes ship as a new release, not as backports to
+older tags. There is no SLA and no guaranteed response time; reports are
+handled on a best-effort basis by a single maintainer. See the
+[support policy](docs/upgrading.md#support-policy).
 
 ## Scope
 

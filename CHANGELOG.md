@@ -113,6 +113,36 @@ reproduced here.
   rows of the account bound to its transaction, and none without one. Startup
   and restore validate the `ownership-activated-v1` contract.
 
+### Migrations
+
+- Migrations 026 to 044 predate migration classes and carry no
+  `-- migration-class:` header, so they have no per-migration label. The
+  [Upgrading to 1.0](docs/upgrading.md#upgrading-to-10) section summarizes
+  their operator impact, including a long first startup.
+
+### Supported upgrade path
+
+- Any published `v0.10.x` or `v0.11.x` release may upgrade directly to 1.0.
+  Older releases should first follow the supported upgrade path to `v0.11.3`.
+  An installation from `v0.11.0` or earlier must first apply the v0.11.1
+  road-snap correction if it has not; see
+  [Upgrading to 1.0](docs/upgrading.md#supported-starting-versions).
+
+### Breaking changes
+
+- The `DATABASE_URL` role must be a superuser or have `BYPASSRLS`.
+- An installation on the older `postgis/postgis:16-3.4` database image must
+  follow the fresh-target database image migration procedure.
+- Schema 27 permanently deletes stored OwnTracks `dump` and `configuration`
+  messages.
+- Startup refuses a `public` schema whose relations do not match the
+  application's table list exactly, so move any added table to another
+  schema first.
+- No exact-image rollback is supported from 1.0 to a 0.x release. Recovery
+  restores the verified pre-upgrade backup into a fresh volume under the old
+  image and loses every write made after that backup. See
+  [Upgrading to 1.0](docs/upgrading.md#upgrading-to-10).
+
 ## [0.11.3] - 2026-10-12
 
 ### Security

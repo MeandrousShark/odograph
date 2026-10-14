@@ -225,6 +225,12 @@ gh workflow run upgrade-drill.yml --ref "$REF"
 
 When the supported base releases change, update the bases file.
 
+The v1.0.0 release itself drills from the supported 0.x bases in the bases
+file. From the first release after v1.0.0, the bases are v1.0.0 and the
+previous release, and the 0.x bases are removed. At each release prep, update
+`scripts/upgrade_drill_bases.json` and its exact-list test in
+`tests/test_release_preflight.py` to match.
+
 After an immutable release has been published, dispatch the verification mode
 from a ref that resolves to the published tag's exact commit. The tag ref is
 the recommended target. The helper compares the checked-out revision with the
@@ -538,8 +544,9 @@ Alongside every immutable `vX.Y.Z` tag, the registry carries a floating `vX.Y`
 tag that points at the newest patch within that minor version. Operators who
 would otherwise reach for `latest` pin `vX.Y` instead: they pick up patch fixes
 without silently crossing a minor boundary, which is where migrations and, before
-1.0, breaking changes are allowed to land. There is deliberately no `latest` tag
-and no floating major tag.
+1.0, breaking changes are allowed to land. There is deliberately no `latest` tag.
+From 1.0 a floating major tag, `v1`, is also published; see
+[Move the floating major tag](#move-the-floating-major-tag).
 
 **This step is mandatory for every patch release.** A floating tag that stops
 moving is worse than no floating tag, because operators believe it is current
@@ -579,6 +586,43 @@ floating tag. The signing certificate identity still names the immutable
 version, which is correct: it records which release the artifact came from.
 
 A prerelease never moves a floating tag.
+
+## Move the floating major tag
+
+From 1.0, the registry also carries a floating `v1` tag that points at the
+newest verified stable 1.x release. It is an alias, like the floating minor
+tag, and it exists for operators who deliberately choose to follow every 1.x
+release.
+
+Move `v1` only to a verified stable 1.x release, and only after the published
+artifact, its signature, its SBOM and the forward-upgrade checks all pass.
+Never move it for a prerelease or for a 2.x release. Exact version tags stay
+immutable, and minor tags such as `v1.0` continue to move as described above.
+
+Retag by digest, exactly as for the minor tag, so `v1` is an alias for the
+index that was already signed:
+
+```sh
+crane tag "$IMAGE:$VERSION" "${VERSION%%.*}"
+```
+
+Then confirm the alias is the same artifact and still verifies:
+
+```sh
+crane digest "$IMAGE:$VERSION"
+crane digest "$IMAGE:${VERSION%%.*}"
+cosign verify \
+  --certificate-identity-regexp "^https://github.com/MeandrousShark/odograph/.github/workflows/.*@refs/tags/$VERSION$" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  "$IMAGE:${VERSION%%.*}"
+```
+
+Both digests must be identical and the signature must verify through `v1`.
+
+Pulling `v1` again selects the current release, not the one an operator ran
+before, so the operator documentation tells them to record the installed
+digest before upgrading. See
+[Floating image aliases](upgrading.md#floating-image-aliases).
 
 ## Complete the release
 
