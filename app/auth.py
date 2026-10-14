@@ -1200,7 +1200,7 @@ def make_router() -> APIRouter:
         except HTTPException as exc:
             # A browser lands here, so show the failure on a page with a way
             # back instead of raw JSON. Status and message are unchanged.
-            if not isinstance(exc.detail, str) or not exc.detail:
+            if not isinstance(exc.detail, str):
                 raise
             if is_invite_callback:
                 return await _render_invite(
