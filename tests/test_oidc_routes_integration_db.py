@@ -11,7 +11,6 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 import pytest
 from authlib.integrations.base_client import OAuthError
-from fastapi import HTTPException
 from starlette.responses import RedirectResponse
 
 import app.auth as auth
@@ -140,17 +139,19 @@ async def _run_route_scenario(monkeypatch):
 
             await begin_invite()
             provider.cancel = True
-            with pytest.raises(HTTPException) as canceled:
-                await _endpoint("/auth/callback", "GET")(request)
-            assert canceled.value.status_code == 401
+            canceled = await _endpoint("/auth/callback", "GET")(request)
+            assert canceled.status_code == 401
+            assert auth.GENERIC_OIDC_ERROR.encode() in canceled.body
+            assert b'action="/invite"' in canceled.body
             await invite_unconsumed()
 
             await begin_invite()
             provider.cancel = False
             provider.userinfo = {"sub": "claimed-subject", "email": "invitee@example.invalid"}
-            with pytest.raises(HTTPException) as collision:
-                await _endpoint("/auth/callback", "GET")(request)
-            assert collision.value.status_code == 401
+            collision = await _endpoint("/auth/callback", "GET")(request)
+            assert collision.status_code == 401
+            assert auth.GENERIC_INVITE_ERROR.encode() in collision.body
+            assert b'action="/invite"' in collision.body
             await invite_unconsumed()
 
             await begin_invite()
@@ -355,11 +356,14 @@ async def _run_capacity_scenario(monkeypatch):
             params = parse_qs(urlsplit(oidc_authorization_url(response)).query)
             request.query_params = {"state": params["state"][0], "code": "valid"}
             provider.userinfo = {"sub": "fresh-subject", "email": "invitee@example.invalid"}
-            with pytest.raises(HTTPException) as refused:
-                await _endpoint("/auth/callback", "GET")(request)
-            assert refused.value.status_code == 409
-            assert refused.value.detail == auth.INVITE_CAPACITY_ERROR
-            assert token not in refused.value.detail
+            refused = await _endpoint("/auth/callback", "GET")(request)
+            assert refused.status_code == 409
+            assert refused.headers["content-type"].startswith("text/html")
+            body = refused.body.decode("utf-8")
+            assert auth.INVITE_CAPACITY_ERROR in body
+            assert 'action="/invite"' in body
+            assert '<a href="/login">' in body
+            assert token not in body
             assert "account_id" not in request.session
             async with owner.connection() as conn:
                 assert await (await conn.execute(

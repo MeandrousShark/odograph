@@ -12,7 +12,9 @@ from psycopg.rows import dict_row
 from starlette.responses import RedirectResponse
 
 import app.auth as auth_module
-from app.auth import AuthRedirect, make_router, require_user, require_legacy_establishment
+from app.auth import (
+    GENERIC_OIDC_ERROR, AuthRedirect, make_router, require_user, require_legacy_establishment,
+)
 from tests.auth_db_fixtures import auth_config, bind_auth_test_roles, seed_auth_account
 from app.db import make_pool
 from app.ingest import FailedAuthLimiter
@@ -84,6 +86,7 @@ def _request(
                     cfg
                 ),
                 login_limiter=FailedAuthLimiter(5, 900.0),
+                security_link_base=auth_module.security_link_base(cfg.app_url),
             )
         ),
         session=session if session is not None else {},
@@ -183,9 +186,10 @@ async def _link_and_exact_login_scenario():
         assert b"Provider User" in account_page.body
         assert b"stable-subject" not in account_page.body
 
-        with pytest.raises(Exception) as replay:
-            await _endpoint("/auth/callback", "GET")(request)
-        assert replay.value.status_code == 401
+        replay = await _endpoint("/auth/callback", "GET")(request)
+        assert replay.status_code == 401
+        assert replay.headers["content-type"].startswith("text/html")
+        assert GENERIC_OIDC_ERROR.encode() in replay.body
         assert oauth_client.token_calls == 1
         assert (await _identity(pool))["subject"] == "stable-subject"
 
@@ -406,9 +410,11 @@ async def _legacy_establishment_and_email_fallback_scenario():
             oauth_client,
             query_params={"state": "login.unlinked", "code": "valid"},
         )
-        with pytest.raises(Exception) as rejected:
-            await _endpoint("/auth/callback", "GET")(unlinked)
-        assert rejected.value.status_code == 401
+        rejected = await _endpoint("/auth/callback", "GET")(unlinked)
+        assert rejected.status_code == 401
+        assert rejected.headers["content-type"].startswith("text/html")
+        assert GENERIC_OIDC_ERROR.encode() in rejected.body
+        assert b'action="/login/local"' in rejected.body
         assert "account_id" not in unlinked.session
         assert (await _identity(pool))["subject"] == "legacy-subject"
     finally:

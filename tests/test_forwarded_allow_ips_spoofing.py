@@ -302,6 +302,8 @@ def _callback_app(*, trusted_hosts):
         oidc_issuer="https://idp.example.com",
     )
     app.state.oauth = SimpleNamespace(pocketid=_RejectingOAuthClient())
+    app.state.security_link_base = ""
+    app.state.templates = _CapturingTemplates()
     app.state.control_pool = _FakePool(None)
     app.state.login_limiter = FailedAuthLimiter(max_failures=MAX_FAILURES, window_s=900)
     app.include_router(make_auth_router())
