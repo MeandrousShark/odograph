@@ -885,3 +885,14 @@ def test_summary_never_contains_seeded_values(tmp_path, fault):
     assert "app INFO" not in summary
     assert str(tmp_path / "archive") not in summary
     assert "legacy.env" not in summary
+
+
+def test_tracked_shell_scripts_are_executable():
+    # The documented commands run scripts directly, so git must record +x.
+    listing = subprocess.run(
+        ["git", "ls-files", "-s", "--", "scripts/*.sh"],
+        cwd=REPO_ROOT, check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    assert listing
+    not_executable = [line.split("\t", 1)[1] for line in listing if not line.startswith("100755 ")]
+    assert not not_executable, f"run git update-index --chmod=+x on: {not_executable}"
