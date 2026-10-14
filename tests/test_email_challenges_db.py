@@ -239,10 +239,9 @@ def test_change_collision_preserves_old_login_and_verification():
         account_id = account["id"]
         async with owner.connection() as conn:
             async with conn.transaction(force_rollback=True):
-                await conn.execute("DROP INDEX accounts_singleton_idx")
                 await conn.execute(
                     "INSERT INTO accounts(email,password_hash,is_admin) "
-                    "VALUES ('taken@example.invalid','test-hash',true)"
+                    "VALUES ('taken@example.invalid','test-hash',false)"
                 )
                 await conn.execute(
                     "UPDATE accounts SET email_verified_at=now() WHERE id=%s", (account_id,)
@@ -258,10 +257,8 @@ def test_change_collision_preserves_old_login_and_verification():
                 )).fetchone()
                 assert row[0] == "old@example.invalid" and row[1] is not None and row[2] == 1
         async with owner.connection() as conn:
-            row = await (await conn.execute(
-                "SELECT indexname FROM pg_indexes WHERE indexname='accounts_singleton_idx'"
-            )).fetchone()
-            assert row is not None
+            assert await (await conn.execute(
+                "SELECT email FROM accounts ORDER BY id")).fetchall() == [("old@example.invalid",)]
     asyncio.run(_scenario(check))
 
 

@@ -50,8 +50,6 @@ async def _scenario(callback):
                 a = await create_admin(conn, A_EMAIL, "hash-a")
             # Test-only second account; reset_db restores the guards.
             async with owner.connection() as conn:
-                await conn.execute("DROP INDEX accounts_singleton_idx")
-                await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
                 cur = await conn.execute(
                     "INSERT INTO accounts(email,password_hash,is_admin,email_verified_at) "
                     "VALUES (%s,'hash-b',false,now()) RETURNING id", (B_EMAIL,))

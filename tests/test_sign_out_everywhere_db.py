@@ -191,8 +191,6 @@ def test_ordinary_logout_discards_protected_browser_state_before_callback():
 def test_sign_out_everywhere_ends_only_current_account_sessions_including_oidc_only():
     async def check(owner, pools, account):
         async with owner.connection() as conn:
-            await conn.execute("DROP INDEX accounts_singleton_idx")
-            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
             row = await (await conn.execute(
                 "INSERT INTO accounts(email,password_hash,is_admin) "
                 "VALUES ('b@example.invalid','hash-b',false) RETURNING id")).fetchone()

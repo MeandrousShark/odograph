@@ -46,11 +46,8 @@ async def _fixture():
         async with provisioned_role_pools(owner) as pools:
             async with pools.control.connection() as conn:
                 first = await create_admin(conn, "a@example.invalid", "unused-test-hash")
-            # Synthetic second account is test-only. Production keeps both
-            # singleton enforcement and the permanent first-account guard.
+            # Synthetic second account inserted directly by the owner role.
             async with owner.connection() as conn:
-                await conn.execute("DROP INDEX accounts_singleton_idx")
-                await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
                 await conn.execute(
                     "INSERT INTO accounts(id,email,password_hash,is_admin) VALUES (84,'b@example.invalid','unused',false)"
                 )

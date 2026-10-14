@@ -213,10 +213,6 @@ async def _run_matrix(method_shape: str):
     try:
         await reset_db(owner)
 
-        async with owner.connection() as conn:
-            await conn.execute("DROP INDEX accounts_singleton_idx")
-            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
-
         async with provisioned_role_pools(owner) as pools:
             async with pools.control.connection() as conn:
                 admin_password = "matrix administrator password"

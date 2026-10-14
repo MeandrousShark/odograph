@@ -118,7 +118,7 @@ case "${1-}" in
                 echo "compose frontend noise"
                 for table in $FAKE_TABLES; do echo "REHEARSAL table $table"; done
                 lines_of "${FAKE_DROPS:-}" | while IFS= read -r drop; do echo "REHEARSAL drop $drop"; done
-                echo "REHEARSAL latest ${FAKE_LATEST:-44}"
+                echo "REHEARSAL latest ${FAKE_LATEST:-45}"
                 exit 0
                 ;;
         esac
@@ -137,7 +137,7 @@ case "${1-}" in
                 ;;
             *"to_regclass('public.schema_migrations')"*) echo t; exit 0 ;;
             *"max(version)"*)
-                if after_state; then echo "${FAKE_SCHEMA_AFTER:-44}"; else echo "${FAKE_SCHEMA_BEFORE:-25}"; fi
+                if after_state; then echo "${FAKE_SCHEMA_AFTER:-45}"; else echo "${FAKE_SCHEMA_BEFORE:-25}"; fi
                 exit 0
                 ;;
             *query_to_xml*)
@@ -349,7 +349,7 @@ def _run(
         "FAKE_RELATIONS_BEFORE": "accounts\\npoints\\nschema_migrations\\ntrips\\n",
         "FAKE_RELATIONS_AFTER": "accounts\\npoints\\nschema_migrations\\ntrips\\n",
         "FAKE_COUNTS_BEFORE": "accounts\\t1\\npoints\\t1200\\nschema_migrations\\t25\\ntrips\\t40\\n",
-        "FAKE_COUNTS_AFTER": "accounts\\t1\\npoints\\t1200\\nschema_migrations\\t44\\ntrips\\t40\\n",
+        "FAKE_COUNTS_AFTER": "accounts\\t1\\npoints\\t1200\\nschema_migrations\\t45\\ntrips\\t40\\n",
         **fake,
     }
     for key in ("COMPOSE_PROJECT_NAME", "COMPOSE_FILE", "POSTGRES_PASSWORD"):
@@ -712,8 +712,8 @@ def test_successful_rehearsal_reports_counts_timings_and_identities(tmp_path):
     summary = run.summary
     assert "result: PASS\n" in summary
     assert "schema before: 25\n" in summary
-    assert "schema after: 44\n" in summary
-    assert "candidate latest migration: 44\n" in summary
+    assert "schema after: 45\n" in summary
+    assert "candidate latest migration: 45\n" in summary
     assert "startup: healthy\n" in summary
     assert "role contract verify: pass\n" in summary
     assert "candidate app image: source build of the candidate commit\n" in summary
@@ -724,7 +724,7 @@ def test_successful_rehearsal_reports_counts_timings_and_identities(tmp_path):
     assert "  026_account_ownership.sql 12.500\n" in summary
     assert "  027_device_labels.sql 0.750\n" in summary
     assert re.search(r"^  points +1200 +1200 +0$", summary, re.M)
-    assert re.search(r"^  schema_migrations +25 +44 +\+19$", summary, re.M)
+    assert re.search(r"^  schema_migrations +25 +45 +\+20$", summary, re.M)
     assert "ingest_credentials grows by one by design" in summary
     # Counts after are taken with the app stopped.
     stop = next(i for i, line in enumerate(run.compose_lines) if line.endswith(" stop app"))

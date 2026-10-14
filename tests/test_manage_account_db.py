@@ -115,8 +115,6 @@ def _two_accounts(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", TEST_DB)
     asyncio.run(_owner("SELECT setval(pg_get_serial_sequence('accounts','id'), 5, false)"))
     target = _create_admin(monkeypatch)
-    asyncio.run(_owner("DROP INDEX accounts_singleton_idx"))
-    asyncio.run(_owner("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check"))
     asyncio.run(_owner(
         "INSERT INTO accounts (id,email,password_hash,is_admin,email_verified_at) "
         "VALUES (2,'member@example.com','member-hash',false,now())"))

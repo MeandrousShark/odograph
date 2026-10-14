@@ -58,10 +58,8 @@ async def _seed(database_url):
         async with application_role_pools(database_url) as roles:
             async with roles.control.connection() as conn:
                 first = await create_admin(conn, "a@example.invalid", "synthetic-hash")
-            # Test-only multi-account fixture. Shipping migrations retain both
-            # the singleton and admin-only constraints.
+            # Test-only second account inserted directly by the owner role.
             async with pool.connection() as conn:
-                await conn.execute("DROP INDEX accounts_singleton_idx")
                 await conn.execute("INSERT INTO accounts(id,email,password_hash,is_admin) VALUES(73,'b@example.invalid','synthetic-hash',true)")
                 await conn.execute("INSERT INTO account_settings(account_id) VALUES(73)")
             for owner in (first["id"], 73):

@@ -36,12 +36,6 @@ async def _scenario(callback):
         await owner.close()
 
 
-async def _allow_member_accounts(owner):
-    async with owner.connection() as conn:
-        await conn.execute("DROP INDEX accounts_singleton_idx")
-        await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
-
-
 def test_oidc_invitation_is_atomic_and_restricted():
     async def check(owner, pools, admin):
         async with pools.control.connection() as conn:
@@ -60,14 +54,6 @@ def test_oidc_invitation_is_atomic_and_restricted():
                 conn, action="invite", state="state-1", nonce="nonce-1",
                 browser_nonce="browser-1",
             ) is None
-            with pytest.raises(InvitationUnavailable):
-                await redeem_oidc_invitation_by_digest(
-                    conn, pending["invitation_digest"], "https://id.example", "subject-1",
-                )
-        async with owner.connection() as conn:
-            assert (await (await conn.execute(
-                "SELECT consumed_at FROM invitations")).fetchone()) == (None,)
-        await _allow_member_accounts(owner)
         async with pools.control.connection() as conn:
             member_id = await redeem_oidc_invitation_by_digest(
                 conn, pending["invitation_digest"], "https://id.example/", "subject-1",
@@ -144,7 +130,6 @@ def test_oidc_invitation_expiry_and_revocation_are_rechecked():
 
 def test_oidc_invitation_concurrent_redemption_creates_one_account():
     async def check(owner, pools, admin):
-        await _allow_member_accounts(owner)
         async with pools.control.connection() as conn:
             token = await issue_invitation(conn, dict(admin, is_admin=True), "race@example.invalid")
         digest = hashlib.sha256(token.encode()).hexdigest()
@@ -175,7 +160,6 @@ def test_oidc_invitation_concurrent_redemption_creates_one_account():
 
 def test_oidc_invitation_rolls_back_all_provisioning_after_failure():
     async def check(owner, pools, admin):
-        await _allow_member_accounts(owner)
         async with pools.control.connection() as conn:
             token = await issue_invitation(conn, dict(admin, is_admin=True), "rollback@example.invalid")
         digest = hashlib.sha256(token.encode()).hexdigest()
@@ -232,7 +216,6 @@ def test_oidc_invitation_rolls_back_all_provisioning_after_failure():
 
 def test_oidc_attempt_restart_expiry_and_account_switch():
     async def check(owner, pools, admin):
-        await _allow_member_accounts(owner)
         async with pools.control.connection() as conn:
             token = await issue_invitation(conn, dict(admin, is_admin=True), "switch@example.invalid")
             member_id = await redeem_oidc_invitation_by_digest(
@@ -344,9 +327,6 @@ def test_oidc_attempts_and_reauth_proofs_are_one_use():
 
 def test_oidc_invitation_rechecks_issuer_and_exact_identity():
     async def check(owner, pools, admin):
-        async with owner.connection() as conn:
-            await conn.execute("DROP INDEX accounts_singleton_idx")
-            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
         async with pools.control.connection() as conn:
             assert await create_identity_link(conn, admin["id"], "https://id.example", "used-subject")
             token = await issue_invitation(conn, dict(admin, is_admin=True), "member@example.invalid")
@@ -384,7 +364,6 @@ def test_oidc_invitation_rechecks_issuer_and_exact_identity():
 
 def test_host_recovery_establishes_password_without_removing_oidc_identity():
     async def check(owner, pools, admin):
-        await _allow_member_accounts(owner)
         async with pools.control.connection() as conn:
             token = await issue_invitation(
                 conn, dict(admin, is_admin=True), "recovery@example.invalid",

@@ -75,26 +75,33 @@ async def _migration_shape_scenario():
     try:
         await reset_db(pool)
         async with pool.connection() as conn:
+            assert await (await conn.execute(
+                "SELECT to_regclass('public.accounts_singleton_idx'), "
+                "EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.accounts'::regclass "
+                "AND conname='accounts_is_admin_check'), "
+                "(SELECT column_default FROM information_schema.columns "
+                "WHERE table_schema='public' AND table_name='accounts' AND column_name='is_admin')"
+            )).fetchone() == (None, False, "false")
             await conn.execute(
                 "INSERT INTO accounts (email, password_hash) VALUES ('a@example.com', 'hash')"
             )
-        async with pool.connection() as conn:
-            with pytest.raises(errors.UniqueViolation):
-                await conn.execute(
-                    "INSERT INTO accounts (email, password_hash) "
-                    "VALUES ('b@example.com', 'hash')"
-                )
-        async with pool.connection() as conn:
-            with pytest.raises(errors.CheckViolation):
-                await conn.execute(
-                    "INSERT INTO accounts (email, password_hash, is_admin) "
-                    "VALUES ('c@example.com', 'hash', false)"
-                )
+            await conn.execute(
+                "INSERT INTO accounts (email, password_hash) VALUES ('b@example.com', 'hash')"
+            )
+            await conn.execute(
+                "INSERT INTO accounts (email, password_hash, is_admin) "
+                "VALUES ('c@example.com', 'hash', false)"
+            )
+            assert await (await conn.execute(
+                "SELECT email, is_admin FROM accounts ORDER BY email"
+            )).fetchall() == [
+                ("a@example.com", False), ("b@example.com", False), ("c@example.com", False),
+            ]
     finally:
         await pool.close()
 
 
-def test_accounts_schema_enforces_single_administrator():
+def test_accounts_schema_admits_several_accounts_and_defaults_to_member():
     asyncio.run(_migration_shape_scenario())
 
 

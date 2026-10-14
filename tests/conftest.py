@@ -259,18 +259,6 @@ async def _is_provisioned(conn) -> bool:
     return (await cur.fetchone())[0]
 
 
-async def _restore_single_account_guards(conn) -> None:
-    """Recreate the production singleton guards a two-account fixture dropped."""
-    cur = await conn.execute("SELECT to_regclass('public.accounts_singleton_idx') IS NULL")
-    if (await cur.fetchone())[0]:
-        await conn.execute("CREATE UNIQUE INDEX accounts_singleton_idx ON accounts ((true))")
-    cur = await conn.execute(
-        "SELECT NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.accounts'::regclass "
-        "AND conname='accounts_is_admin_check')")
-    if (await cur.fetchone())[0]:
-        await conn.execute("ALTER TABLE accounts ADD CONSTRAINT accounts_is_admin_check CHECK (is_admin)")
-
-
 async def reset_db(pool) -> None:
     """Truncate every table in schema public except spatial_ref_sys and
     schema_migrations, then restore the rows a fresh migration run seeds.
@@ -295,7 +283,6 @@ async def reset_db(pool) -> None:
     async with pool.connection() as conn:
         await _check_no_leaked_schema_objects(conn)
         await _truncate_all(conn)
-        await _restore_single_account_guards(conn)
         await _restore_seed_snapshot(conn, _seed_snapshot)
 
 
@@ -504,14 +491,8 @@ async def account_pool(pool, owner: int, enabled: bool = True, auth_version: int
 
 
 async def add_test_account(pool, owner: int, *, email: str | None = None, admin: bool = False) -> FixtureAccountPool:
-    """Add a second account with the production defaults, for isolation tests.
-
-    Test-only: production keeps both the singleton guard and the admin-only
-    check. reset_db() recreates both guards once the accounts are gone.
-    """
+    """Add another account with the production defaults, for isolation tests."""
     async with pool.connection() as conn:
-        await conn.execute("DROP INDEX IF EXISTS accounts_singleton_idx")
-        await conn.execute("ALTER TABLE accounts DROP CONSTRAINT IF EXISTS accounts_is_admin_check")
         await conn.execute(
             "INSERT INTO accounts(id,email,password_hash,is_admin) VALUES (%s,%s,'unused',%s)",
             (owner, email or f"account-{owner}@example.invalid", admin))

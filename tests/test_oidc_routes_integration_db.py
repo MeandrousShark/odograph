@@ -99,9 +99,6 @@ async def _run_route_scenario(monkeypatch):
     await owner.open(wait=True)
     try:
         await reset_db(owner)
-        async with owner.connection() as conn:
-            await conn.execute("DROP INDEX accounts_singleton_idx")
-            await conn.execute("ALTER TABLE accounts DROP CONSTRAINT accounts_is_admin_check")
         async with provisioned_role_pools(owner) as pools:
             async with pools.control.connection() as conn:
                 admin = await create_admin(conn, "admin@example.invalid", "existing-hash")

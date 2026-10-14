@@ -51,7 +51,6 @@ async def _fixture():
                 if (await cur.fetchone())[0] is None:
                     await conn.execute((SQL_DIR / f"{name}.sql").read_text())
                     installed.append(signature)
-            await conn.execute("DROP INDEX accounts_singleton_idx")
             for owner in (42, 84):
                 await conn.execute(
                     "INSERT INTO accounts (id, email, password_hash) VALUES (%s, %s, 'test-only')",
@@ -64,8 +63,6 @@ async def _fixture():
             for signature in reversed(installed):
                 await conn.execute(f"DROP FUNCTION {signature}")
         await reset_db(pool)
-        async with pool.connection() as conn:
-            await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS accounts_singleton_idx ON accounts ((true))")
         await pool.close()
 
 

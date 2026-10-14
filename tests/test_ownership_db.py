@@ -13,11 +13,12 @@ import pytest
 from psycopg import errors
 
 from app.account_settings import AccountSettings, CONFIG_PREFERENCE_COLUMNS
-from app.accounts import create_admin
+from app.accounts import create_admin, get_account
 from app.db import MIGRATIONS_DIR, make_pool, run_migrations
+from app.invitations import issue_invitation, redeem_invitation
 from app.local_auth import verify_password
 from app.ownership import OwnershipMigrationError, import_legacy_configuration
-from conftest import drop_and_recreate_schema
+from conftest import LATEST_SCHEMA_VERSION, drop_and_recreate_schema, provisioned_role_pools
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = [pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL for disposable DB tests"),
@@ -74,13 +75,43 @@ async def _fresh_bootstrap():
         with pytest.raises(errors.UniqueViolation):
             async with pool.connection() as conn:
                 await create_admin(conn, "second@example.test", "hash")
-        with pytest.raises(errors.CheckViolation):
-            async with pool.connection() as conn:
-                await conn.execute("UPDATE accounts SET is_admin=false")
+        async with pool.connection() as conn:
+            member = (await (await conn.execute(
+                "INSERT INTO accounts(email,password_hash) VALUES('member@example.test','hash') "
+                "RETURNING is_admin")).fetchone())[0]
+        assert member is False
+        assert await _fetch(pool, "SELECT email FROM accounts WHERE is_admin") == [("first@example.test",)]
 
 
 def test_fresh_migration_and_guarded_bootstrap_create_only_owned_neutral_defaults():
     asyncio.run(_fresh_bootstrap())
+
+
+async def _legacy_upgrade_admits_member():
+    async with _legacy_database() as pool:
+        async with pool.connection() as conn:
+            await conn.execute(
+                "INSERT INTO accounts(id,email,password_hash) VALUES(42,'legacy@example.test','hash')")
+        await run_migrations(pool, _legacy_config())
+        assert await _fetch(pool, "SELECT max(version) FROM schema_migrations") == [(LATEST_SCHEMA_VERSION,)]
+        assert await _fetch(
+            pool,
+            "SELECT to_regclass('public.accounts_singleton_idx'), "
+            "EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.accounts'::regclass "
+            "AND conname='accounts_is_admin_check')",
+        ) == [(None, False)]
+        async with provisioned_role_pools(pool) as pools:
+            async with pools.control.connection() as conn:
+                admin = await get_account(conn, 42)
+                token = await issue_invitation(conn, admin, "member@example.test")
+                member_id = await redeem_invitation(conn, token, "member password")
+        assert await _fetch(pool, "SELECT email,is_admin FROM accounts WHERE id=%s", (member_id,)) == [
+            ("member@example.test", False)]
+        assert await _fetch(pool, "SELECT id FROM accounts WHERE is_admin") == [(42,)]
+
+
+def test_schema_25_upgrade_keeps_the_administrator_and_admits_an_invited_member():
+    asyncio.run(_legacy_upgrade_admits_member())
 
 
 async def _valued_without_account(table, insert):
@@ -202,7 +233,6 @@ async def _owned_constraints():
         async with pool.connection() as conn:
             await conn.execute(BOOTSTRAP_SQL.read_text())
             first = (await create_admin(conn, "a@example.test", "hash"))["id"]
-            await conn.execute("DROP INDEX accounts_singleton_idx")
             await conn.execute("INSERT INTO accounts(id,email,password_hash) VALUES(99,'b@example.test','hash')")
             a_device = (await (await conn.execute("INSERT INTO tracking_devices(account_id,label) VALUES(%s,'same') RETURNING id", (first,))).fetchone())[0]
             b_device = (await (await conn.execute("INSERT INTO tracking_devices(account_id,label) VALUES(99,'same') RETURNING id")).fetchone())[0]
