@@ -20,6 +20,7 @@ from app.account_work import external_account_work
 from app.application_roles import application_role_pools
 from app.capacity import AdmissionManager
 from app.config import Config
+from app.db import SchemaTooNewError
 from app.detector.runner import DetectorRunner, DeviceNotAdmitted
 from app.storage import is_storage_capacity_error
 
@@ -140,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     try:
         ok = asyncio.run(_reprocess(cfg, args.account, args.device))
-    except ValueError as exc:
+    except (ValueError, SchemaTooNewError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except Exception as exc:

@@ -18,7 +18,7 @@ from psycopg import sql
 from psycopg_pool import AsyncConnectionPool
 
 from app.account_context import CONTROL_ROLE, MIGRATE_ROLE, RUNTIME_ROLE, check_runtime_privileges
-from app.db import ROLE_SETUP_ADVISORY_LOCK_KEY
+from app.db import ROLE_SETUP_ADVISORY_LOCK_KEY, SchemaTooNewError, check_schema_ceiling
 from app.role_setup import (
     ALL_ROLES, BOOTSTRAP_ROLE, ManagedRoleState, RolePools, RoleSetupError,
     _SafeConnection, _identities, _policy_expression, role_conninfo,
@@ -1072,9 +1072,12 @@ async def prepare_application_roles(database_url: str, *, restoring: bool = Fals
     try:
         async with await _SafeConnection.connect(database_url) as conn:
             await conn.execute("SELECT pg_advisory_xact_lock(%s)", (ROLE_SETUP_ADVISORY_LOCK_KEY,))
+            # Before any contract check or write: a newer release may have
+            # changed what those checks expect.
+            schema_version = await _installed_schema_version(conn)
+            check_schema_ceiling(schema_version)
             cur = await conn.execute("SELECT security_contract_version FROM public.instance_state WHERE id=1")
             _require_contract(await cur.fetchone() == (CONTRACT_VERSION,), "security contract version")
-            schema_version = await _installed_schema_version(conn)
             cur = await conn.execute("SELECT to_regclass('odograph_service.managed_role_state')")
             new = (await cur.fetchone())[0] is None
             if new or restoring:
@@ -1140,6 +1143,8 @@ async def prepare_application_roles(database_url: str, *, restoring: bool = Fals
     except _RolesUsedElsewhere:
         raise
     except _ContractMismatch:
+        raise
+    except SchemaTooNewError:
         raise
     except Exception:
         raise RoleSetupError("application database setup failed") from None
@@ -1211,7 +1216,7 @@ def main():
                 pass
     try:
         asyncio.run(run())
-    except RoleSetupError as exc:
+    except (RoleSetupError, SchemaTooNewError) as exc:
         parser.exit(1, str(exc) + "\n")
 
 

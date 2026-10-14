@@ -18,6 +18,7 @@ from app.accounts import (
 )
 from app.auth import MIN_LOCAL_PASSWORD_LENGTH
 from app.application_roles import application_role_pools
+from app.db import SchemaTooNewError
 from app.account_context import control_connection
 from app.local_auth import hash_password
 from app.password_reset import host_reset_password
@@ -155,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         else:
             asyncio.run(_reset_password(database_url, args.account_id))
-    except ValueError as exc:
+    except (ValueError, SchemaTooNewError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except Exception:

@@ -80,6 +80,14 @@ def newest_migration_version(paths) -> int:
     return max((_migration_version(path) for path in paths), default=0)
 
 
+def check_schema_ceiling(stored: int, newest: int | None = None) -> None:
+    """Raise SchemaTooNewError if `stored` is above the newest shipped migration."""
+    if newest is None:
+        newest = newest_migration_version(MIGRATIONS_DIR.glob("*.sql"))
+    if stored > newest:
+        raise SchemaTooNewError(stored, newest)
+
+
 async def _fetch_schema_version(conn) -> int:
     cur = await conn.execute("SELECT COALESCE(max(version), 0) FROM schema_migrations")
     row = await cur.fetchone()
@@ -119,9 +127,7 @@ async def run_migrations(pool: AsyncConnectionPool, config=None) -> None:
         applied = {row[0] for row in await cur.fetchall()}
         # Refuse before applying anything: an older image cannot know what a
         # newer release's migrations changed.
-        stored = max(applied, default=0)
-        if stored > newest:
-            raise SchemaTooNewError(stored, newest)
+        check_schema_ceiling(max(applied, default=0), newest)
         for path in paths:
             version = _migration_version(path)
             if version in applied:
