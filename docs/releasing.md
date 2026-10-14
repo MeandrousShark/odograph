@@ -225,9 +225,11 @@ gh workflow run upgrade-drill.yml --ref "$REF"
 
 When the supported base releases change, update the bases file.
 
-From 1.0, the drill bases are v1.0.0 and the previous release. At each release
-prep, update `scripts/upgrade_drill_bases.json` and its exact-list test in
-`tests/test_release_preflight.py` to match. The 0.x bases drop out after 1.0.
+The v1.0.0 release itself drills from the supported 0.x bases in the bases
+file. From the first release after v1.0.0, the bases are v1.0.0 and the
+previous release, and the 0.x bases are removed. At each release prep, update
+`scripts/upgrade_drill_bases.json` and its exact-list test in
+`tests/test_release_preflight.py` to match.
 
 After an immutable release has been published, dispatch the verification mode
 from a ref that resolves to the published tag's exact commit. The tag ref is
