@@ -1,0 +1,112 @@
+name: Upgrade drill
+
+on:
+  workflow_call:
+    inputs:
+      revision:
+        description: Exact candidate commit to check out and drill
+        required: true
+        type: string
+      candidate-image:
+        description: Immutable published candidate image; omitted to build the revision
+        required: false
+        default: ""
+        type: string
+      evidence-name:
+        description: Evidence artifact prefix, unique per caller; the base is appended
+        required: true
+        type: string
+      retention-days:
+        description: Evidence artifact retention
+        required: false
+        default: 14
+        type: number
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - migrations/**
+      - scripts/upgrade_check.sh
+      - scripts/upgrade_drill_bases.json
+      - scripts/backup_database.sh
+      - scripts/restore_database.sh
+      - .github/workflows/upgrade-drill.yml
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: upgrade-drill-${{ inputs.evidence-name || 'upgrade-drill' }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bases:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      bases: ${{ steps.read.outputs.bases }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.revision || github.sha }}
+          persist-credentials: false
+      - name: Read drill bases
+        id: read
+        run: |
+          set -euo pipefail
+          bases="$(jq -ce '
+            if type == "array" and length > 0 and all(.[]; type == "string")
+            then . else error("expected a nonempty list of base tags") end
+          ' scripts/upgrade_drill_bases.json)"
+          echo "bases=$bases" >> "$GITHUB_OUTPUT"
+
+  drill:
+    needs: bases
+    name: Drill from ${{ matrix.base }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        base: ${{ fromJSON(needs.bases.outputs.bases) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.revision || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+      - name: Install locked upgrade drill dependencies
+        run: python -m pip install -r requirements-dev.lock
+      - name: Verify native amd64 runner
+        run: test "$RUNNER_ARCH" = X64 && test "$(uname -m)" = x86_64
+      - name: Run upgrade and rollback drill
+        env:
+          BASE: ${{ matrix.base }}
+          CANDIDATE_IMAGE: ${{ inputs.candidate-image }}
+          REVISION: ${{ inputs.revision || github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          args=(--base "$BASE" --candidate "$REVISION")
+          if [ -n "$CANDIDATE_IMAGE" ]; then
+            args+=(--candidate-image "$CANDIDATE_IMAGE")
+          fi
+          COMPOSE_CMD="docker compose" scripts/upgrade_check.sh \
+            "${args[@]}" --database-image-migration | \
+            tee "evidence/upgrade-drill-${BASE}.txt"
+      - name: Upload upgrade drill evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.evidence-name || 'upgrade-drill' }}-${{ matrix.base }}
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: ${{ inputs.retention-days || 14 }}

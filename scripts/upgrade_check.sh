@@ -32,6 +32,21 @@ OIDC_CLIENT_ID="upgrade-drill-client"
 OIDC_SUBJECT="upgrade-drill-subject"
 OIDC_EMAIL="drill-oidc@example.test"
 
+# Exact-row manifest sections drop nulls, so a nullable column added by a
+# migration compares equal across an upgrade. A NOT NULL column with a default
+# is present only on the candidate, so each one added to an exact-row table is
+# listed here as "table column default since-schema". It is removed from both
+# sides when the base predates it, and the candidate must then hold the default
+# in every row. The list covers migrations after the schema below, which every
+# drill base already has; tests/test_upgrade_check_script.py fails when a later
+# migration adds such a column without a matching entry.
+# shellcheck disable=SC2034 # read by the migration scan test
+EXACT_ROW_ADDITIONS_AFTER_SCHEMA=25
+EXACT_ROW_DEFAULTED_ADDITIONS=(
+    "trips geocode_generation 1 41"
+    "trips snap_capacity_needed_bytes 0 42"
+)
+
 usage() {
     cat >&2 <<'EOF'
 usage: scripts/upgrade_check.sh --base REF --candidate REF [--base-image IMAGE] [--candidate-image IMAGE] [--database-image-migration] [--keep]
@@ -475,6 +490,20 @@ administrator_email() {
     fi
 }
 
+# Prints the SQL key array removed from one exact-row table's rows. A listed
+# column is dropped only when the base predates it; otherwise both sides have
+# it and it is compared like any other column.
+exact_row_dropped_keys() {
+    local table="$1" entry entry_table column since keys="'account_id', 'tracking_device_id'"
+    for entry in "${EXACT_ROW_DEFAULTED_ADDITIONS[@]}"; do
+        read -r entry_table column _ since <<< "$entry"
+        if [ "$entry_table" = "$table" ] && [ "$BASE_SCHEMA_VERSION" -lt "$since" ]; then
+            keys="$keys, '$column'"
+        fi
+    done
+    printf 'ARRAY[%s]' "$keys"
+}
+
 # schema_version is its own manifest section so a migration's expected
 # difference across an upgrade is trivial to isolate from the rest of the
 # diff (see strip_schema_version_section / assert_data_manifests_equal
@@ -536,11 +565,12 @@ capture_manifest() {
 
         # Exact synthetic rows catch geometry, IDs, foreign keys, exclusions,
         # labels and human edits that aggregate totals alone can conceal.
-        # New nullable columns and the ownership columns are expected additions.
+        # New nullable columns, the ownership columns and the listed defaulted
+        # columns (see EXACT_ROW_DEFAULTED_ADDITIONS) are expected additions.
         for table in trips points stays places tag_rules vehicles expenses odometer_readings trip_boundary_overrides; do
             echo "== exact_${table} =="
             db_query "$dir" \
-                "SELECT jsonb_strip_nulls(to_jsonb(t) - ARRAY['account_id', 'tracking_device_id']) FROM $table t ORDER BY id"
+                "SELECT jsonb_strip_nulls(to_jsonb(t) - $(exact_row_dropped_keys "$table")) FROM $table t ORDER BY id"
         done
         echo "== exact_mileage_rates =="
         db_query "$dir" \
@@ -568,6 +598,27 @@ verify_ownership_upgrade() {
     [ "$after" -eq "$((before + 1))" ] \
         || step_fail "step 7: migrated tracker did not accept a new point ($before -> $after)"
     step_pass "step 7: account security contract validated and original tracker credentials still ingest"
+}
+
+# The exact-row comparison cannot see the listed defaulted columns, so check
+# them directly. No candidate code path changes them on an untouched trip:
+# geocode_generation moves only with endpoint, place or device changes, and a
+# nonzero snap_capacity_needed_bytes is written together with
+# snap_attempted_at. Either would already fail the exact-row comparison.
+verify_defaulted_additions() {
+    local dir="$1" version="$2" entry table column default since mismatched checked=""
+    for entry in "${EXACT_ROW_DEFAULTED_ADDITIONS[@]}"; do
+        read -r table column default since <<< "$entry"
+        if [ "$BASE_SCHEMA_VERSION" -ge "$since" ] || [ "$version" -lt "$since" ]; then
+            continue
+        fi
+        mismatched="$(db_query "$dir" \
+            "SELECT count(*) FILTER (WHERE $column IS DISTINCT FROM $default) FROM $table")"
+        [ "$mismatched" = "0" ] \
+            || step_fail "step 7a: $mismatched $table row(s) do not hold the $column default ($default) after upgrade"
+        checked="$checked $table.$column"
+    done
+    [ -z "$checked" ] || step_pass "step 7a: upgraded rows hold the defaults of added columns:$checked"
 }
 
 assert_manifests_equal() {
@@ -1134,6 +1185,7 @@ step7_upgrade() {
     capture_manifest "$CAND_DIR" "$SCRATCH/manifest-after-upgrade.txt"
     assert_data_manifests_equal "$SCRATCH/manifest-after-ingest.txt" "$SCRATCH/manifest-after-upgrade.txt" \
         "step 7a: candidate healthy, schema_version=$v matches migration count, data unchanged"
+    verify_defaulted_additions "$CAND_DIR" "$v"
     verify_ownership_upgrade "$CAND_DIR" "$v"
 
     oidc_env_loaded "$CAND_DIR" \
