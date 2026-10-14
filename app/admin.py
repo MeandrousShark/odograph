@@ -89,23 +89,13 @@ async def _metadata_accounts(conn) -> list[dict]:
     return await cur.fetchall()
 
 
-async def _multiuser_available(conn) -> bool:
-    cur = await conn.execute(
-        "SELECT to_regclass('public.accounts_singleton_idx') IS NULL, "
-        "NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.accounts'::regclass "
-        "AND conname = 'accounts_is_admin_check')"
-    )
-    return all(await cur.fetchone())
-
-
 async def _load_page_data(
     request: Request, actor: dict,
-) -> tuple[list[dict], list[dict], list[dict], bool]:
+) -> tuple[list[dict], list[dict], list[dict]]:
     async with control_connection(request.app.state.control_pool) as conn:
         accounts = await _metadata_accounts(conn)
         invitations = await list_invitations(conn, actor)
         audit_events = await list_account_security_audit(conn, actor)
-        multiuser_available = await _multiuser_available(conn)
     checked_at = datetime.now(timezone.utc)
     for account in accounts:
         account["purge_available"] = bool(account["deletion_deadline"] and account["deletion_deadline"] <= checked_at)
@@ -118,7 +108,7 @@ async def _load_page_data(
             invitation["status"] = "Expired"
         else:
             invitation["status"] = "Open"
-    return accounts, invitations, audit_events, multiuser_available
+    return accounts, invitations, audit_events
 
 
 async def _render_accounts(
@@ -132,9 +122,7 @@ async def _render_accounts(
 ) -> Response:
     actor = _actor(user, request)
     try:
-        accounts, invitations, audit_events, multiuser_available = await _load_page_data(
-            request, actor,
-        )
+        accounts, invitations, audit_events = await _load_page_data(request, actor)
     except CapacityBusy:
         if not committed:
             raise
@@ -165,7 +153,6 @@ async def _render_accounts(
             "actor_account": next((account for account in accounts if account["id"] == actor["id"]), None),
             "invitations": invitations,
             "audit_events": audit_events,
-            "multiuser_available": multiuser_available,
             "notice": notice,
             "invite_result": invite_result,
             "oidc_purge_available": bool(getattr(request.app.state.config, "oidc_issuer", "") and getattr(request.app.state, "oauth", None)),
@@ -270,14 +257,6 @@ async def _set_account_enabled_route(
             notice="Administrators cannot change their own account access here.",
             status_code=409,
         )
-    async with control_connection(request.app.state.control_pool) as conn:
-        multiuser_available = await _multiuser_available(conn)
-    if not multiuser_available:
-        return await _render_accounts(
-            request, user,
-            notice="Account access controls are unavailable until multi-account mode is activated.",
-            status_code=409,
-        )
     try:
         async with control_connection(request.app.state.control_pool, lane="lifecycle") as conn:
             outcome = await set_account_enabled(conn, actor, account_id, enable=enable)
@@ -304,10 +283,8 @@ async def _deletion_route(request: Request, user: dict, account_id: int, action:
     if account_id < 1:
         raise HTTPException(status_code=404)
     actor = _actor(user, request)
-    async with control_connection(request.app.state.control_pool) as conn:
-        available = await _multiuser_available(conn)
-    if not available or actor["id"] == account_id:
-        return await _render_accounts(request, user, notice="Deletion requires activated multi-account mode and another target account.", status_code=409)
+    if actor["id"] == account_id:
+        return await _render_accounts(request, user, notice="Deletion requires another target account.", status_code=409)
     if action == "request" and form.get("acknowledge") != "1":
         return await _render_accounts(request, user, notice="Acknowledge the export and backup effects before starting deletion.", status_code=400)
     if action == "purge" and form.get("confirm_purge") != "1":
@@ -403,14 +380,6 @@ def make_router() -> APIRouter:
                 request, user, notice="Enter one valid email address.", status_code=400,
             )
         actor = _actor(user, request)
-        async with control_connection(request.app.state.control_pool) as conn:
-            multiuser_available = await _multiuser_available(conn)
-        if not multiuser_available:
-            return await _render_accounts(
-                request, user,
-                notice="Invitations are unavailable until multi-account mode is activated.",
-                status_code=409,
-            )
         try:
             async with control_connection(request.app.state.control_pool, lane="lifecycle") as conn:
                 invitation_id, token = await issue_invitation_record(conn, actor, email)
@@ -456,14 +425,6 @@ def make_router() -> APIRouter:
         if invitation_id < 1:
             raise HTTPException(status_code=404)
         actor = _actor(user, request)
-        async with control_connection(request.app.state.control_pool) as conn:
-            multiuser_available = await _multiuser_available(conn)
-        if not multiuser_available:
-            return await _render_accounts(
-                request, user,
-                notice="Invitations are unavailable until multi-account mode is activated.",
-                status_code=409,
-            )
         try:
             async with control_connection(request.app.state.control_pool, lane="lifecycle") as conn:
                 new_id, email, token = await resend_invitation_record(
