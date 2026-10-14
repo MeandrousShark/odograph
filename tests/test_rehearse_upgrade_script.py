@@ -896,3 +896,16 @@ def test_tracked_shell_scripts_are_executable():
     assert listing
     not_executable = [line.split("\t", 1)[1] for line in listing if not line.startswith("100755 ")]
     assert not not_executable, f"run git update-index --chmod=+x on: {not_executable}"
+
+
+def test_candidate_tree_stays_readable_for_the_image_user(tmp_path):
+    # The image runs as a non-root user and copies sources with their modes.
+    run = _run(tmp_path, ["--keep"])
+    assert run.result.returncode == 0, run.result.stderr
+    tracked = _git(tmp_path / "repo", "ls-files").splitlines()
+    cand_dirs = [path for path in run.scratch_root.glob("rehearse_upgrade.*/odorehearse*") if path.is_dir()]
+    assert len(cand_dirs) == 1
+    for name in tracked:
+        path = cand_dirs[0] / name
+        assert path.stat().st_mode & 0o004, f"{name} is not world-readable"
+    assert run.summary_path.stat().st_mode & 0o077 == 0

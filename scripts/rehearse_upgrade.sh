@@ -443,7 +443,11 @@ write_summary() {
         echo "schema after: $SCHEMA_AFTER"
         echo "candidate latest migration: $LATEST_MIGRATION"
         echo "startup: $STARTUP_RESULT"
-        echo "start to healthy or failure: ${STARTUP_SECONDS}s"
+        if [ "$STARTUP_SECONDS" = unknown ]; then
+            echo "start to healthy or failure: unknown"
+        else
+            echo "start to healthy or failure: ${STARTUP_SECONDS}s"
+        fi
         echo "role contract verify: $VERIFY_RESULT"
         echo
         echo "migrations (seconds, from container log timestamps):"
@@ -698,7 +702,9 @@ wait_for_pg_ready() {
 # --- rehearsal steps ---------------------------------------------------
 
 step_materialize() {
-    git -C "$REPO_ROOT" archive "$CANDIDATE_COMMIT" | tar -x -C "$CAND_DIR" \
+    # The image copies these files with their modes and runs as a non-root
+    # user, so the build context must stay readable despite the private umask.
+    (umask 022 && git -C "$REPO_ROOT" archive "$CANDIDATE_COMMIT" | tar -x -C "$CAND_DIR") \
         || step_fail "step 1: could not materialize the candidate tree"
     step_pass "step 1: materialized candidate $CANDIDATE_COMMIT"
 }
