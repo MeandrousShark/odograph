@@ -302,7 +302,9 @@ docker compose ps
 curl -fsS http://127.0.0.1:8077/healthz
 ```
 
-Migrations are forward-only. Rollback always restores the verified backup into
-a fresh target with the previous release, and writes made after that backup are
-lost. Never run `docker compose down -v` unless you intend to erase the
+Migrations are forward-only. Rollback restores the verified backup into a
+fresh target with the previous release, and writes made after that backup are
+lost. Running the previous image against a migrated database is supported only
+where a release's notes document that pair as drilled; none exists for 0.x to
+1.0. Never run `docker compose down -v` unless you intend to erase the
 database.
