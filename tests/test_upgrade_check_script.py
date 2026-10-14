@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import socket
@@ -903,6 +904,279 @@ def test_data_manifest_comparison_still_fails_on_data_drift(tmp_path):
     assert "manifest mismatch (data-diff)" in result.stderr
     assert "-car" in result.stderr
     assert "+truck" in result.stderr
+
+
+EXACT_ROW_TABLES = (
+    "trips", "points", "stays", "places", "tag_rules", "vehicles", "expenses",
+    "odometer_readings", "trip_boundary_overrides",
+)
+
+
+def _defaulted_additions_block(source: str) -> str:
+    match = re.search(
+        r"^EXACT_ROW_ADDITIONS_AFTER_SCHEMA=\d+\nEXACT_ROW_DEFAULTED_ADDITIONS=\(\n.*?^\)$",
+        source, re.MULTILINE | re.DOTALL,
+    )
+    assert match, "upgrade_check.sh must define the defaulted-addition list"
+    return match.group(0)
+
+
+def _defaulted_additions() -> tuple[int, list[tuple[str, str, str, int]]]:
+    block = _defaulted_additions_block(UPGRADE_SCRIPT.read_text())
+    floor = int(re.search(r"EXACT_ROW_ADDITIONS_AFTER_SCHEMA=(\d+)", block).group(1))
+    entries = [
+        (table, column, default, int(since))
+        for table, column, default, since in re.findall(
+            r'^\s+"(\w+) (\w+) (\S+) (\d+)"$', block, re.MULTILINE
+        )
+    ]
+    return floor, entries
+
+
+_ALTER_TABLE_STATEMENT = re.compile(
+    r"\bALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?(?:public\.)?\"?(\w+)\"?\s+(.*?);",
+    re.IGNORECASE | re.DOTALL,
+)
+_ADD_COLUMN_CLAUSE = re.compile(
+    r"\bADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?\"?(\w+)\"?(.*?)(?=,\s*(?:ADD|ALTER|DROP)\b|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+_TABLE_CONSTRAINT_WORDS = {"CONSTRAINT", "PRIMARY", "UNIQUE", "CHECK", "FOREIGN", "EXCLUDE"}
+
+
+def _not_null_defaulted_additions(sql: str) -> set[tuple[str, str]]:
+    sql = re.sub(r"--[^\n]*", "", sql)
+    found = set()
+    for table, body in _ALTER_TABLE_STATEMENT.findall(sql):
+        for column, definition in _ADD_COLUMN_CLAUSE.findall(body):
+            if column.upper() in _TABLE_CONSTRAINT_WORDS:
+                continue
+            if re.search(r"\bNOT\s+NULL\b", definition, re.IGNORECASE) and re.search(
+                r"\bDEFAULT\b", definition, re.IGNORECASE
+            ):
+                found.add((table.lower(), column.lower()))
+    return found
+
+
+@pytest.mark.parametrize(
+    "sql,expected",
+    [
+        ("ALTER TABLE public.trips ADD COLUMN a bigint NOT NULL DEFAULT 1;", {("trips", "a")}),
+        ("alter table trips\n    add column a boolean default false not null;", {("trips", "a")}),
+        ("ALTER TABLE trips ADD COLUMN a int NOT NULL DEFAULT 0\n    CHECK (a >= 0);", {("trips", "a")}),
+        (
+            "ALTER TABLE points ADD COLUMN IF NOT EXISTS a numeric(8,4) DEFAULT 0 NOT NULL,\n"
+            "    ADD COLUMN b text,\n    ADD c int NOT NULL DEFAULT 2;",
+            {("points", "a"), ("points", "c")},
+        ),
+        ("ALTER TABLE trips ADD COLUMN a text; -- NOT NULL DEFAULT later", set()),
+        ("ALTER TABLE trips ADD COLUMN a text NOT NULL;", set()),
+        ("ALTER TABLE trips ADD CONSTRAINT c CHECK (x IS NOT NULL);", set()),
+    ],
+)
+def test_migration_scan_recognizes_not_null_defaulted_additions(sql, expected):
+    assert _not_null_defaulted_additions(sql) == expected
+
+
+def test_defaulted_addition_list_names_real_later_migrations():
+    floor, entries = _defaulted_additions()
+
+    assert entries
+    for table, column, _default, since in entries:
+        assert table in EXACT_ROW_TABLES, table
+        assert since > floor, (table, column)
+        migration = next((REPO_ROOT / "migrations").glob(f"{since:03d}_*.sql"))
+        assert (table, column) in _not_null_defaulted_additions(migration.read_text())
+
+
+def test_every_later_not_null_defaulted_exact_row_addition_is_listed():
+    floor, entries = _defaulted_additions()
+    listed = {(table, column) for table, column, _default, _since in entries}
+    missing = []
+    for path in sorted((REPO_ROOT / "migrations").glob("*.sql")):
+        if int(path.name.split("_", 1)[0]) <= floor:
+            continue
+        for table, column in sorted(_not_null_defaulted_additions(path.read_text())):
+            if table in EXACT_ROW_TABLES and (table, column) not in listed:
+                missing.append(f"{path.name}: {table}.{column}")
+
+    assert not missing, (
+        "migrations add NOT NULL defaulted columns to upgrade drill exact-row tables; "
+        "add each to EXACT_ROW_DEFAULTED_ADDITIONS in scripts/upgrade_check.sh as "
+        f"'table column default since-schema': {missing}"
+    )
+
+
+def test_current_defaulted_additions_are_the_trip_geocode_and_snap_columns():
+    _floor, entries = _defaulted_additions()
+
+    assert entries == [
+        ("trips", "geocode_generation", "1", 41),
+        ("trips", "snap_capacity_needed_bytes", "0", 42),
+    ]
+
+
+def _bash_with_functions(tmp_path: Path, name: str, functions: tuple[str, ...], body: str) -> Path:
+    source = UPGRADE_SCRIPT.read_text()
+    script = tmp_path / name
+    script.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        f"{_defaulted_additions_block(source)}\n\n"
+        + "\n\n".join(_extract_function(source, function) for function in functions)
+        + f"\n\n{body}\n"
+    )
+    script.chmod(0o755)
+    return script
+
+
+@pytest.mark.parametrize(
+    "table,base_schema,expected",
+    [
+        ("trips", 25, "ARRAY['account_id', 'tracking_device_id', 'geocode_generation', 'snap_capacity_needed_bytes']"),
+        ("trips", 41, "ARRAY['account_id', 'tracking_device_id', 'snap_capacity_needed_bytes']"),
+        ("trips", 42, "ARRAY['account_id', 'tracking_device_id']"),
+        ("points", 25, "ARRAY['account_id', 'tracking_device_id']"),
+    ],
+)
+def test_exact_row_keys_drop_listed_columns_only_when_the_base_predates_them(
+    tmp_path, table, base_schema, expected,
+):
+    script = _bash_with_functions(
+        tmp_path, "keys.sh", ("exact_row_dropped_keys",),
+        'BASE_SCHEMA_VERSION="$1"\nexact_row_dropped_keys "$2"',
+    )
+
+    result = subprocess.run(
+        [str(script), str(base_schema), table], capture_output=True, text=True, timeout=10
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == expected
+
+
+# Emulates just enough of psql for capture_manifest: exact-row queries apply
+# the requested key removal and null stripping to fixture rows.
+_FAKE_EXACT_ROW_DB = r"""
+import json
+import re
+import sys
+
+side, sql = sys.argv[1], sys.argv[2]
+rows = json.loads(open(sys.argv[3]).read())[side]
+match = re.fullmatch(
+    r"SELECT jsonb_strip_nulls\(to_jsonb\(t\) - ARRAY\[(.*)\]\) FROM (\w+) t ORDER BY id", sql
+)
+if match:
+    dropped = set(re.findall(r"'(\w+)'", match.group(1)))
+    for row in rows.get(match.group(2), []):
+        kept = {k: v for k, v in row.items() if k not in dropped and v is not None}
+        print(json.dumps(kept, sort_keys=True))
+elif "schema_migrations" in sql:
+    print(25 if side == "base" else 44)
+else:
+    print("same")
+"""
+
+
+def _compare_exact_trip_rows(
+    tmp_path: Path, base_trip: dict, candidate_trip: dict
+) -> subprocess.CompletedProcess:
+    fixture = tmp_path / "rows.json"
+    fixture.write_text(json.dumps(
+        {"base": {"trips": [base_trip]}, "candidate": {"trips": [candidate_trip]}}
+    ))
+    fake_db = tmp_path / "fake_db.py"
+    fake_db.write_text(_FAKE_EXACT_ROW_DB)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    script = _bash_with_functions(
+        tmp_path,
+        "exact-rows.sh",
+        (
+            "step_pass", "step_fail", "schema_version", "administrator_email",
+            "exact_row_dropped_keys", "capture_manifest", "assert_manifests_equal",
+            "strip_schema_version_section", "assert_data_manifests_equal",
+        ),
+        'SCRATCH="$1"\nBASE_SCHEMA_VERSION=25\n'
+        f'db_query() {{ {sys.executable!r} {str(fake_db)!r} "$1" "$2" {str(fixture)!r}; }}\n'
+        'capture_manifest base "$SCRATCH/base.txt"\n'
+        'capture_manifest candidate "$SCRATCH/candidate.txt"\n'
+        'assert_data_manifests_equal "$SCRATCH/base.txt" "$SCRATCH/candidate.txt" exact-rows',
+    )
+    return subprocess.run(
+        [str(script), str(scratch)], capture_output=True, text=True, timeout=20
+    )
+
+
+_BASE_TRIP = {"id": 1, "distance_m": 1200.5, "start_place_id": 3, "notes": None}
+
+
+def test_exact_row_comparison_accepts_documented_defaulted_additions(tmp_path):
+    candidate = {
+        **_BASE_TRIP, "account_id": 7, "tracking_device_id": 2, "geocode_generation": 1,
+        "snap_capacity_needed_bytes": 0, "snap_attempted_at": None,
+    }
+
+    result = _compare_exact_trip_rows(tmp_path, _BASE_TRIP, candidate)
+
+    assert result.returncode == 0, result.stderr
+    assert "[PASS] exact-rows" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "change",
+    [{"distance_m": 1300.0}, {"start_place_id": 4}, {"imported": False}],
+    ids=["preserved-value", "preserved-reference", "unlisted-not-null-column"],
+)
+def test_exact_row_comparison_still_fails_on_preserved_or_unlisted_drift(tmp_path, change):
+    candidate = {
+        **_BASE_TRIP, "geocode_generation": 1, "snap_capacity_needed_bytes": 0, **change,
+    }
+
+    result = _compare_exact_trip_rows(tmp_path, _BASE_TRIP, candidate)
+
+    assert result.returncode != 0
+    assert "manifest mismatch (exact-rows)" in result.stderr
+    assert f'"{next(iter(change))}"' in result.stderr
+
+
+@pytest.mark.parametrize(
+    "base_schema,version,mismatched,success,checked",
+    [
+        (25, 44, "0", True, ["geocode_generation", "snap_capacity_needed_bytes"]),
+        (25, 41, "0", True, ["geocode_generation"]),
+        (41, 44, "0", True, ["snap_capacity_needed_bytes"]),
+        (25, 40, "3", True, []),
+        (42, 44, "3", True, []),
+        (25, 44, "3", False, ["geocode_generation"]),
+    ],
+)
+def test_upgraded_rows_must_hold_defaulted_addition_values(
+    tmp_path, base_schema, version, mismatched, success, checked,
+):
+    log = tmp_path / "queries.log"
+    script = _bash_with_functions(
+        tmp_path, "defaults.sh", ("step_pass", "step_fail", "verify_defaulted_additions"),
+        'BASE_SCHEMA_VERSION="$1"\n'
+        'db_query() { printf "%s|%s\\n" "$1" "$2" >> "$QUERY_LOG"; printf "%s\\n" "$MISMATCHED"; }\n'
+        'verify_defaulted_additions candidate "$2"',
+    )
+
+    result = subprocess.run(
+        [str(script), str(base_schema), str(version)], capture_output=True, text=True,
+        timeout=10, env={**os.environ, "QUERY_LOG": str(log), "MISMATCHED": mismatched},
+    )
+
+    assert (result.returncode == 0) is success, result.stderr
+    queries = log.read_text().splitlines() if log.exists() else []
+    assert all(q.startswith("candidate|SELECT count(*) FILTER (WHERE ") for q in queries)
+    assert [q.split(" IS DISTINCT FROM ")[0].rsplit(" ", 1)[1] for q in queries] == checked
+    if not success:
+        assert "3 trips row(s) do not hold the geocode_generation default (1)" in result.stderr
+    elif checked:
+        assert "[PASS] step 7a: upgraded rows hold the defaults of added columns" in result.stdout
+    else:
+        assert result.stdout == ""
 
 
 def test_keep_teardown_message_reports_project_patterns_without_unbound_variable(
