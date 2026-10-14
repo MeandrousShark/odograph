@@ -3,7 +3,9 @@
 The canonical installation runs the exact published image pinned by
 `compose.yaml`. Upgrading means taking and verifying a fresh backup, checking
 out the newer exact release tag, and pulling that tag's image. Do not edit the
-Compose pin to a moving alias such as `latest`.
+Compose pin to a moving alias such as `latest`. See
+[Floating image aliases](#floating-image-aliases) for the aliases that do
+exist.
 
 Read [Backups and disaster recovery](backups.md) first. Every upgrade here
 depends on having a verified backup and a protected `.env` copy before you
@@ -23,9 +25,11 @@ successfully applied migration in place.
 
 Because of that, running an older release's code against a database that a
 newer release has already migrated is not supported, even on the rare
-occasion an additive migration might happen to tolerate it. Treat "the
-migration succeeded" as a one-way door. The supported way back is restoring
-the pre-upgrade backup, described in [Rollback](#rollback) below.
+occasion an additive migration might happen to tolerate it. The one exception
+is a release pair whose notes explicitly document it as drilled; see
+[Support policy](#support-policy). Treat "the migration succeeded" as a
+one-way door. The supported way back is restoring the pre-upgrade backup,
+described in [Rollback](#rollback) below.
 
 ## Upgrading the PostGIS database image
 
@@ -103,13 +107,157 @@ For a Podman installation, replace each `docker compose` command with
 `podman-compose`. This procedure is also the model used by the release
 preflight database-image migration drill.
 
+## Upgrading to 1.0
+
+This section is for installations moving from a 0.x release to Odograph 1.0.
+It adds to, and does not replace, the [upgrade procedure](#upgrade-procedure)
+below. Read the release notes for every release between yours and 1.0, since
+they can contain manual steps.
+
+### Supported starting versions
+
+Any published v0.10.x or v0.11.x release upgrades directly to 1.0. (v0.10.1
+was never published.) An older installation first upgrades to v0.11.3,
+following that release's documented upgrade path, and then upgrades to 1.0.
+
+An installation upgrading from v0.11.0 or earlier that has not applied the
+v0.11.1 road-snap correction must apply it. Take and verify the pre-upgrade
+backup first, then apply the correction while the database is still at
+schema 25, before the first 1.0 start. The statements below save the values it
+changes first, so the correction can be reversed without restoring a backup. In `psql`, run as
+the `DATABASE_URL` role (`\copy` writes the file on the machine where `psql`
+runs):
+
+```sql
+\copy (SELECT id, distance_snapped_m FROM trips WHERE distance_snapped_m IS NOT NULL AND distance_m > 0 AND distance_snapped_m / distance_m < 0.85) TO 'snap-correction.csv' CSV HEADER
+
+UPDATE trips SET distance_snapped_m = NULL
+WHERE distance_snapped_m IS NOT NULL
+  AND distance_m > 0
+  AND distance_snapped_m / distance_m < 0.85;
+```
+
+Keep `snap-correction.csv` with your backups. The saved file lives outside
+the database, so it adds no table that a later upgrade would have to account
+for (see the `public` schema item below).
+
+If you restore the pre-upgrade backup to recover, the correction is not in
+it, so apply it again afterward. With the database image migration, the old
+database is stopped after the backup, so apply the correction to the restored
+target database after `scripts/restore_database.sh` and before
+`docker compose up -d app`. The same statements are valid on a database that
+has already reached schema 44, run as a superuser or `BYPASSRLS` role, if you
+find you skipped them.
+
+### Operator impact
+
+Migrations 026 to 044 predate migration classes, so they carry no per-migration
+label. Together they change the following for an operator.
+
+1. **The database role must be a superuser or have `BYPASSRLS`.** Every
+   startup checks this before it touches the database, and refuses to run
+   migrations as any other role. Row-level security is forced on account-owned
+   tables from schema 28, and a role that is subject to it would make a data
+   migration silently skip rows. The canonical Compose `mileage` role is the
+   database's bootstrap superuser, so it already qualifies. If you use an
+   external database with a restricted `DATABASE_URL` role, change the role
+   before upgrading. A refusal here happens before anything is applied.
+2. **The first startup is one long run.** It applies migrations 026 to 044 in
+   a single transaction under the migration advisory lock. The app is not
+   healthy until that run finishes, so the container can report unhealthy
+   meanwhile. Follow `docker compose logs -f app` rather than restarting it.
+   Do not interrupt the run: stopping it rolls the whole transaction back,
+   leaves the database as it was, and the next start repeats the work from the
+   beginning. Duration grows with the size of the history. Migration 026
+   rewrites every point, stay and trip row and builds new indexes, and the
+   storage accounting passes below scan every stored table. Keep comfortably
+   more free disk than the pre-upgrade archive's size.
+3. **Storage accounting is backfilled (migration 040).** The migration creates
+   the per-account and per-device usage tables and adds triggers to every
+   account-owned table, then runs one pass over all of those tables to compute
+   each row's logical storage charge and fill the counters. The pass reads
+   every row, so its time is driven mainly by the number of raw messages and
+   points, and by the size of stored payloads and trip path geometry.
+   Migration 042 does a second similar pass: it records a replay receipt with
+   a SHA-256 of each device-attributed raw message payload, then reconciles
+   the counters again. After the migrations commit, startup verifies the
+   counters against the stored data once more, on this and every later start.
+   These are logical charges, not disk bytes. See
+   [Logical storage accounting](configuration.md#logical-storage-accounting).
+4. **Migration 042 checks the storage budget.** It grants every existing
+   account the default 2 GiB allowance and stops if those grants together
+   exceed the funded budget (the default 12 GiB budget less the 2 GiB
+   reserve, so more than five accounts). It uses these built-in defaults, not
+   your `STORAGE_*` settings, which are applied after migrations commit. The
+   failure reads `storage capacity exceeded: existing account grants exceed
+   instance budget`. Installations on supported 0.x releases have a single
+   account, so this is not expected to fire. If it does, the transaction rolls
+   back and the database is unchanged on its previous schema, as described in
+   [Failure guidance](#failure-guidance). Changing `STORAGE_*` does not help.
+   Do not delete accounts or edit grants by hand: start the previous
+   release again, keep the verified backup, and report the problem with the
+   number of rows in `accounts`. Separately, if your `STORAGE_*` values leave less
+   grant room than your accounts need, startup fails after the migrations have
+   committed with `application database setup failed`. Correct the values in
+   `.env` and restart; no restore is needed, but the previous image can no
+   longer run against that database.
+5. **Migration 027 permanently deletes some raw messages.** It deletes every
+   `raw_messages` row whose OwnTracks payload type is `dump` or
+   `configuration`. Those messages carry the tracker's configuration,
+   including its username, password and URL, and nothing reads them. Earlier
+   releases stored every authenticated payload, so such rows may exist. The
+   deletion cannot be undone in the live database. Your pre-upgrade backup and
+   older backups still contain them; see
+   [Backups](backups.md#what-the-archive-covers-and-what-it-doesnt).
+6. **The database image changes.** Odograph 1.0 uses the pinned native
+   PostGIS image, so an installation on the older `postgis/postgis:16-3.4`
+   image must follow
+   [Upgrading the PostGIS database image](#upgrading-the-postgis-database-image).
+   A normal `docker compose up -d` against the existing project is not the
+   migration. The long first startup above happens when the app starts against
+   the restored target database.
+7. **The `public` schema must hold only Odograph's relations.** After the
+   migrations, startup requires the tables, views, materialized views and
+   foreign tables in `public` (apart from objects owned by an extension, such
+   as PostGIS's `spatial_ref_sys`) to match the application's list exactly.
+   Move any table you added to another schema, or drop it after backing it up,
+   before upgrading. To list the candidates:
+
+   ```sh
+   docker compose exec -T db psql -U mileage -d mileage -c "SELECT c.relname, c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p','v','m','f') AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = c.oid AND d.deptype = 'e') ORDER BY 1"
+   ```
+
+   Anything in that list that the migrations in [`migrations/`](../migrations)
+   do not create is extra. If you miss one, the first startup applies the
+   migrations and then refuses with `application database security contract
+   mismatch: relation set: unexpected [...]` naming it. The database is
+   already migrated at that point and the previous image can no longer run
+   against it. Move or drop the relation and restart; no restore is needed.
+8. **Existing data is assigned to the established account (schema 26).**
+   An installation with data but no account must establish one on the
+   previous release first. See
+   [Account ownership migration](#account-ownership-migration-schema-26).
+
+Rehearse the upgrade against a copy of your own backup before you upgrade the
+live installation, to learn the first-start duration and catch any refusal
+above. <!-- Link the rehearsal section here once it lands. -->
+
+### Recovery
+
+No exact-image rollback is supported across 0.x to 1.0. Recovery means
+restoring the verified pre-upgrade backup into a fresh volume under the old
+image. That loses every write made after the backup. The steps are in
+[Rollback](#rollback).
+
 ## Upgrade procedure
 
-1. **Confirm your current exact release and read every release note between
-   it and your target**, in order. If you're several releases behind, plan
-   to move through each intervening release rather than jumping straight to
-   the newest tag, unless a release's own notes say a direct jump is fine.
-   See [Support policy](#support-policy).
+1. **Confirm your current exact release and read the release notes for every
+   release between it and your target**, in order. Each release's notes state
+   its supported upgrade path and any manual steps. From 1.0, any 1.x release
+   upgrades directly to any later 1.x release, including skipped ones. To
+   move from 0.x to 1.0, read
+   [Upgrading to 1.0](#upgrading-to-10) first. See
+   [Support policy](#support-policy).
 
 2. **Confirm the host is ready, then take and verify a fresh backup:**
 
@@ -240,7 +388,7 @@ A failed security-contract check blocks startup and must be investigated,
 not repaired by granting runtime access to the database owner. If rollback is
 needed after migration commits, restore the verified pre-upgrade archive into
 a fresh database using the previous exact image. Starting that old image
-against the migrated database is unsupported.
+against the migrated database is unsupported for 0.x to 1.0.
 
 ## Detector version changes
 
@@ -270,15 +418,19 @@ committed.
 completed, but the app won't start cleanly, crashes under load, or otherwise
 misbehaves for reasons unrelated to the schema): don't downgrade the code
 and try to run it against the now-migrated database. That combination is
-unsupported. The reliable path is the same either way: follow
-[Rollback](#rollback) below.
+unsupported unless the release notes document that exact pair as drilled (see
+[Support policy](#support-policy)). The reliable path is the same either way:
+follow [Rollback](#rollback) below.
 
 ## Rollback
 
 Rollback means restoring the pre-upgrade backup with the previous release's
 code, into a fresh volume, not running old code against the migrated database,
 and not attempting to undo a migration in place. A database-image migration
-also requires a fresh old-image project.
+also requires a fresh old-image project. Running the previous exact image
+against the migrated database is supported only where a release's notes
+document that release pair as drilled; see [Support policy](#support-policy).
+None exists for 0.x to 1.0.
 
 Odograph 1.0 and later refuse to start against a database migrated by a newer
 release. Startup, and the maintenance commands for account management,
@@ -366,13 +518,44 @@ migration that was never designed to be undone.
 
 ## Support policy
 
-Only the latest release is supported, on a best-effort basis by one
+The latest 1.x release is supported, on a best-effort basis by one
 maintainer. See [SECURITY.md](../SECURITY.md) and
 [README.md](../README.md#support). Fixes ship as a new release, not as
-backports to older tags. For a release several versions behind the latest,
-the supported path is upgrading release-to-release in sequence, applying
-each one's migrations and release notes in turn, unless a specific release's
-notes explicitly document a supported direct jump.
+backports to older tags.
+
+- After v2.0.0 ships, v1 receives critical security fixes for 6 months, then
+  is unsupported.
+- 0.x releases are unsupported once 1.0 ships. To leave one, see
+  [Upgrading to 1.0](#upgrading-to-10).
+
+Within 1.x:
+
+- Any 1.x release upgrades directly to any later 1.x release, including
+  skipped releases. Read the notes of each release in between.
+- Each 1.x release is drilled from v1.0.0 and from the previous release.
+- Exact-image rollback, running the previous image against the upgraded
+  database, is supported only for a release pair that a release's notes
+  explicitly document as drilled. By default no pair is.
+- Otherwise, recovery is restoring the verified pre-upgrade backup as
+  described in [Rollback](#rollback), or a corrective forward release.
+
+## Floating image aliases
+
+Exact version tags such as `vX.Y.Z` are immutable. The registry also carries
+floating aliases for operators who choose them deliberately: `vX.Y` follows the
+newest patch of a minor release, and from 1.0 `v1` follows the newest verified
+stable 1.x release. `v1` never points at a prerelease or a 2.x release. The
+canonical Compose file pins an exact tag and does not use either.
+
+Pulling a floating alias again selects the current release, not the one you
+ran before. Record the installed image digest before upgrading so you can
+identify what you were running (replace `IMAGE` with the image reference you
+run):
+
+```sh
+docker image inspect --format '{{index .RepoDigests 0}}' IMAGE
+# or: podman image inspect --format '{{index .RepoDigests 0}}' IMAGE
+```
 
 ## Account migration for older installations
 

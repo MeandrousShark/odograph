@@ -1,9 +1,9 @@
 # Known issues
 
 This page lists confirmed problems in published releases that affect normal
-use, with any workaround and the release that fixes them. Only the latest
-release is supported; see [Support](../README.md#support). Report new problems
-as GitHub issues.
+use, with any workaround and the release that fixes them. See the
+[support policy](upgrading.md#support-policy) for which releases are
+supported. Report new problems as GitHub issues.
 
 ## Split trip does nothing
 
