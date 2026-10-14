@@ -25,6 +25,7 @@ from app.auth import (
 )
 from app.capacity_routes import AdmissionRoute, capacity_policy, release_authentication
 from app.capacity import CapacityBusy
+from app.config import DEFAULT_STORAGE_ACCOUNT_LIMIT_BYTES
 from app.invitations import (
     InvitationUnavailable,
     invitation_mail_admission,
@@ -35,9 +36,15 @@ from app.invitations import (
 )
 from app.mailer import Mailer
 from app.security_mail_preparation import SecurityMailConstructionError, SecurityMailSpec
+from app.storage import account_grant_fundable
 
 log = logging.getLogger(__name__)
 MAX_ADMIN_FORM_BYTES = 4096
+INVITATION_CAPACITY_NOTICE = (
+    "No invitation was created. The instance storage budget has no room for another "
+    "account. Raise STORAGE_INSTANCE_BUDGET_BYTES and restart Odograph, or purge an "
+    "account that is no longer needed, then try again."
+)
 
 
 async def _read_form(
@@ -380,6 +387,15 @@ def make_router() -> APIRouter:
                 request, user, notice="Enter one valid email address.", status_code=400,
             )
         actor = _actor(user, request)
+        async with control_connection(request.app.state.control_pool) as conn:
+            fundable = await account_grant_fundable(
+                conn, getattr(request.app.state.config, "storage_account_limit_bytes",
+                              DEFAULT_STORAGE_ACCOUNT_LIMIT_BYTES),
+            )
+        if not fundable:
+            return await _render_accounts(
+                request, user, notice=INVITATION_CAPACITY_NOTICE, status_code=409,
+            )
         try:
             async with control_connection(request.app.state.control_pool, lane="lifecycle") as conn:
                 invitation_id, token = await issue_invitation_record(conn, actor, email)

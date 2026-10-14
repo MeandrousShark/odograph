@@ -18,7 +18,7 @@ from app.accounts import create_admin
 from app.auth import _account_user
 from app.db import make_pool
 from app.invitations import (
-    InvitationUnavailable, invitation_mail_admission, issue_invitation,
+    InvitationCapacityExceeded, InvitationUnavailable, invitation_mail_admission, issue_invitation,
     issue_invitation_record, list_invitations, redeem_invitation,
     resend_invitation_record, revoke_invitation,
 )
@@ -26,7 +26,7 @@ from app.local_auth import verify_password
 from app.local_auth import hash_password
 from app.ingest import FailedAuthLimiter
 from app.main import SecurityHeadersMiddleware, make_templates
-from tests.auth_db_fixtures import auth_config
+from tests.auth_db_fixtures import auth_config, fund_account_grants
 from conftest import provisioned_role_pools, reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -541,6 +541,43 @@ def test_normal_schema_admits_member_and_consumes_token():
     asyncio.run(_scenario(check))
 
 
+async def _assert_capacity_refusal_left_no_state(owner, token, email, accounts):
+    async with owner.connection() as conn:
+        assert await (await conn.execute("SELECT count(*) FROM accounts")).fetchone() == (accounts,)
+        assert await (await conn.execute(
+            "SELECT count(*) FROM accounts WHERE email=%s", (email,))).fetchone() == (0,)
+        assert await (await conn.execute(
+            "SELECT count(*) FROM storage_grants")).fetchone() == (accounts,)
+        assert await (await conn.execute(
+            "SELECT consumed_at IS NULL FROM invitations WHERE token_digest=%s",
+            (hashlib.sha256(token.encode()).hexdigest(),))).fetchone() == (True,)
+
+
+def test_redemption_beyond_funded_grants_is_a_capacity_refusal_without_partial_state():
+    async def check(owner, pools, admin_user):
+        await fund_account_grants(owner, 2)
+        async with pools.control.connection() as conn:
+            first = await issue_invitation(conn, admin_user, "first@example.invalid")
+            second = await issue_invitation(conn, admin_user, "second@example.invalid")
+            member_id = await redeem_invitation(conn, first, "good-password")
+            with pytest.raises(InvitationCapacityExceeded):
+                async with conn.transaction():
+                    await redeem_invitation(conn, second, "good-password")
+        await _assert_capacity_refusal_left_no_state(owner, second, "second@example.invalid", 2)
+        async with owner.connection() as conn:
+            assert await (await conn.execute(
+                "SELECT is_admin FROM accounts WHERE id=%s", (member_id,))).fetchone() == (False,)
+        # Other refusals keep the generic error.
+        async with pools.control.connection() as conn:
+            with pytest.raises(InvitationUnavailable) as replay:
+                await redeem_invitation(conn, first, "good-password")
+            assert not isinstance(replay.value, InvitationCapacityExceeded)
+        await fund_account_grants(owner, 3)
+        async with pools.control.connection() as conn:
+            assert await redeem_invitation(conn, second, "good-password")
+    asyncio.run(_scenario(check))
+
+
 def test_only_bootstrap_creates_an_administrator():
     async def check(owner, pools, admin_user):
         admin_id = admin_user["id"]
@@ -565,6 +602,29 @@ def test_only_bootstrap_creates_an_administrator():
             assert await (await conn.execute(
                 "SELECT id,is_admin FROM accounts ORDER BY id")).fetchall() == [
                 (admin_id, True), (member_id, False)]
+    asyncio.run(_scenario(check))
+
+
+def test_invite_route_shows_capacity_message_and_keeps_the_token():
+    async def check(owner, pools, admin_user):
+        await fund_account_grants(owner, 1)
+        async with pools.control.connection() as conn:
+            token = await issue_invitation(conn, admin_user, "member@example.invalid")
+        app = _invite_route_app(pools)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            await client.get("/invite")
+            csrf = (await client.get("/session")).json()["csrf"]
+            refused = await client.post("/invite", data={
+                "csrf_token": csrf, "token": token, "password": "member-password",
+                "password_confirm": "member-password", "display_timezone": "UTC"})
+            assert refused.status_code == 409
+            assert auth.INVITE_CAPACITY_ERROR in refused.text
+            assert auth.GENERIC_INVITE_ERROR not in refused.text
+            assert token not in refused.text
+            assert "account_id" not in (await client.get("/session")).json()
+        await _assert_capacity_refusal_left_no_state(owner, token, "member@example.invalid", 1)
     asyncio.run(_scenario(check))
 
 

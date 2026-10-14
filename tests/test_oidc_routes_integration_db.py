@@ -24,7 +24,7 @@ from app.main import make_templates
 from app.oidc_identities import create_identity_link
 from app.oidc_attempts import consume_oidc_attempt
 from app.password_reset import SecurityMailAdmission
-from tests.auth_db_fixtures import auth_config
+from tests.auth_db_fixtures import auth_config, fund_account_grants
 from conftest import provisioned_role_pools, reset_db
 from tests.oidc_test_helpers import oidc_authorization_url
 
@@ -330,3 +330,49 @@ async def _run_route_scenario(monkeypatch):
 
 def test_restricted_oidc_invite_cancel_collision_and_fresh_add_password(monkeypatch):
     asyncio.run(_run_route_scenario(monkeypatch))
+
+
+async def _run_capacity_scenario(monkeypatch):
+    owner = make_pool(TEST_DB)
+    await owner.open(wait=True)
+    try:
+        await reset_db(owner)
+        async with provisioned_role_pools(owner) as pools:
+            async with pools.control.connection() as conn:
+                admin = await create_admin(conn, "admin@example.invalid", "existing-hash")
+                token = await issue_invitation(
+                    conn, dict(admin, is_admin=True), "invitee@example.invalid",
+                )
+            await fund_account_grants(owner, 1)
+            provider = _Provider()
+            request = _request(pools, provider)
+
+            async def invite_form(_request, fields):
+                return {"token": token, "display_timezone": "UTC", "csrf_token": "csrf"}
+
+            monkeypatch.setattr(auth, "_email_form", invite_form)
+            response = await _endpoint("/invite/oidc", "POST")(request)
+            params = parse_qs(urlsplit(oidc_authorization_url(response)).query)
+            request.query_params = {"state": params["state"][0], "code": "valid"}
+            provider.userinfo = {"sub": "fresh-subject", "email": "invitee@example.invalid"}
+            with pytest.raises(HTTPException) as refused:
+                await _endpoint("/auth/callback", "GET")(request)
+            assert refused.value.status_code == 409
+            assert refused.value.detail == auth.INVITE_CAPACITY_ERROR
+            assert token not in refused.value.detail
+            assert "account_id" not in request.session
+            async with owner.connection() as conn:
+                assert await (await conn.execute(
+                    "SELECT count(*) FROM accounts")).fetchone() == (1,)
+                assert await (await conn.execute(
+                    "SELECT count(*) FROM oidc_identities WHERE subject='fresh-subject'"
+                )).fetchone() == (0,)
+                assert await (await conn.execute(
+                    "SELECT consumed_at FROM invitations WHERE email='invitee@example.invalid'"
+                )).fetchone() == (None,)
+    finally:
+        await owner.close()
+
+
+def test_restricted_oidc_invite_beyond_funded_grants_shows_capacity_message(monkeypatch):
+    asyncio.run(_run_capacity_scenario(monkeypatch))

@@ -11,6 +11,7 @@ from psycopg import Error
 
 from app.accounts import normalize_email, valid_email
 from app.local_auth import hash_password
+from app.storage import is_account_grant_refusal
 
 MIN_LOCAL_PASSWORD_LENGTH = 8
 
@@ -18,6 +19,16 @@ MIN_LOCAL_PASSWORD_LENGTH = 8
 class InvitationUnavailable(ValueError):
     def __init__(self):
         super().__init__("Invitation unavailable.")
+
+
+class InvitationCapacityExceeded(InvitationUnavailable):
+    """The invitation is valid but the instance cannot fund another account."""
+
+
+def _redemption_refusal(exc: Error) -> InvitationUnavailable:
+    if is_account_grant_refusal(exc):
+        return InvitationCapacityExceeded()
+    return InvitationUnavailable()
 
 
 def _digest(token: str) -> str:
@@ -143,8 +154,8 @@ async def redeem_invitation(conn, token: str, password: str, *, display_timezone
                 (_digest(token), password_hash, display_timezone),
             )
             return (await cur.fetchone())[0]
-    except Error:
-        raise InvitationUnavailable() from None
+    except Error as exc:
+        raise _redemption_refusal(exc) from None
 
 
 async def redeem_oidc_invitation_by_digest(
@@ -167,5 +178,5 @@ async def redeem_oidc_invitation_by_digest(
                  provider_display_name, display_timezone),
             )
             return (await cur.fetchone())[0]
-    except Error:
-        raise InvitationUnavailable() from None
+    except Error as exc:
+        raise _redemption_refusal(exc) from None

@@ -5,13 +5,42 @@ from app.account_context import account_id
 
 
 CAPACITY_PREFIX = "storage capacity exceeded:"
+ACCOUNT_GRANT_REFUSAL = CAPACITY_PREFIX + " no funded account grant available"
+
+
+def _capacity_message(exc: BaseException) -> str | None:
+    if getattr(exc, "sqlstate", None) != "P0001":
+        return None
+    diag = getattr(exc, "diag", None)
+    return getattr(diag, "message_primary", None) or str(exc)
 
 
 def is_storage_capacity_error(exc: BaseException) -> bool:
     """Recognize only the protected quota/grant refusal, not other SQL errors."""
-    diag = getattr(exc, "diag", None)
-    message = getattr(diag, "message_primary", None) or str(exc)
-    return getattr(exc, "sqlstate", None) == "P0001" and message.startswith(CAPACITY_PREFIX)
+    message = _capacity_message(exc)
+    return message is not None and message.startswith(CAPACITY_PREFIX)
+
+
+def is_account_grant_refusal(exc: BaseException) -> bool:
+    """Recognize the refusal of a new account when no storage grant is fundable."""
+    return _capacity_message(exc) == ACCOUNT_GRANT_REFUSAL
+
+
+async def account_grant_fundable(conn, account_default_bytes: int) -> bool:
+    """Whether the instance budget could fund one more default account grant.
+
+    Advisory only: it mirrors the account insert trigger but reserves nothing,
+    so account creation still enforces the limit itself.
+    """
+    cur = await conn.execute(
+        "SELECT instance_budget_bytes, instance_reserve_bytes, total_grants_bytes "
+        "FROM public.storage_instance_status()"
+    )
+    row = await cur.fetchone()
+    if row is None:
+        return False
+    budget, reserve, total_grants = row
+    return total_grants + account_default_bytes <= budget - reserve
 
 
 async def storage_status(conn) -> dict[str, int | bool | str]:

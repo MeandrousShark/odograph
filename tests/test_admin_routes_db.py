@@ -21,7 +21,7 @@ from app.db import make_pool
 from app.ingest import FailedAuthLimiter
 from app.main import SecurityHeadersMiddleware, make_templates
 from app.password_reset import SecurityMailAdmission
-from tests.auth_db_fixtures import auth_config
+from tests.auth_db_fixtures import auth_config, fund_account_grants
 from conftest import provisioned_role_pools, reset_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -319,6 +319,35 @@ def test_cancelled_invitation_send_owns_its_real_pool_connection(monkeypatch, ba
             )).fetchone()
             assert row == (None, None)
 
+    asyncio.run(_scenario(check))
+
+
+def test_admin_invitation_issuance_is_refused_when_no_account_grant_is_fundable():
+    async def check(owner, pools, account):
+        await fund_account_grants(owner, 1)
+        app = _app(pools)
+        async with await _client(app) as client:
+            await client.post(f"/test/session/{account['id']}/1")
+            refused = await client.post("/admin/invitations", data={
+                "csrf_token": "route-csrf", "email": "new@example.invalid",
+            })
+            assert refused.status_code == 409
+            assert admin.INVITATION_CAPACITY_NOTICE in refused.text
+            assert "STORAGE_INSTANCE_BUDGET_BYTES" in refused.text
+            assert 'id="admin-invitation-token"' not in refused.text
+            async with owner.connection() as conn:
+                assert await (await conn.execute(
+                    "SELECT count(*) FROM invitations")).fetchone() == (0,)
+
+            await fund_account_grants(owner, 2)
+            issued = await client.post("/admin/invitations", data={
+                "csrf_token": "route-csrf", "email": "new@example.invalid",
+            })
+            assert issued.status_code == 200
+            assert 'id="admin-invitation-token"' in issued.text
+            async with owner.connection() as conn:
+                assert await (await conn.execute(
+                    "SELECT count(*) FROM invitations")).fetchone() == (1,)
     asyncio.run(_scenario(check))
 
 
