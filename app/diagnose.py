@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import smtplib
 import ssl
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -32,7 +33,7 @@ from psycopg_pool import AsyncConnectionPool
 from app.config import Config
 from app.capacity import CapacityBusy, owned_thread
 from app.account_context import AccountPool, control_connection
-from app.db import MIGRATIONS_DIR, MIGRATION_FILENAME_RE
+from app.db import MIGRATIONS_DIR, MIGRATION_FILENAME_RE, SchemaTooNewError
 from app.application_roles import application_role_pools
 from app.detector.runner import DETECTOR_VERSION
 from app.snap import route_distance_m
@@ -513,10 +514,14 @@ def render_report_text(
 
 async def _main() -> None:
     cfg = Config.from_env()
+    finding = None
     try:
         async with application_role_pools(cfg.database_url) as pools:
             report = await build_report(cfg, pools.runtime, state=None, control_pool=pools.control)
     except Exception as exc:
+        # This message names only schema versions, never connection details.
+        if isinstance(exc, SchemaTooNewError):
+            finding = str(exc)
         report = DiagnosticsReport(
             app_version=cfg.app_version, git_revision=cfg.app_git_revision,
             detector_version=DETECTOR_VERSION,
@@ -526,6 +531,8 @@ async def _main() -> None:
         )
     connectivity = await run_connectivity_checks(cfg, serving=False)
     print(render_report_text(report, connectivity))
+    if finding is not None:
+        print(f"error: {finding}", file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -11,6 +11,11 @@ reproduced here.
 
 ### Added
 
+- Startup and the account management, detector reprocessing, role
+  verification and restore commands refuse a database migrated by a newer
+  release, naming the database's schema version and the image's newest
+  migration, instead of running against a schema they do not know. See
+  [Rollback](docs/upgrading.md#rollback).
 - Trip warnings can be acknowledged. **Acknowledge warnings** in a Trips or
   Dashboard row's More menu hides that row's **Recording gap** and **Possible
   missing trip** badges and removes an acknowledged missing trip from the
