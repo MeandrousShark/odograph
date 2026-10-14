@@ -18,6 +18,7 @@ PUBLIC_MARKDOWN = (
     "README.md",
     "SECURITY.md",
     "CONTRIBUTING.md",
+    "ai-contribution.md",
     "THIRD_PARTY_NOTICES.md",
     "CHANGELOG.md",
     "docs/accounts.md",

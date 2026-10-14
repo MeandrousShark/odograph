@@ -7,6 +7,7 @@ SHIPPING_DIRECTORIES = (".github/", "app/", "tests/", "static/", "migrations/", 
 SHIPPING_TOP_LEVEL_FILES = {
     "AGENTS.md",
     "CLAUDE.md",
+    "ai-contribution.md",
     ".dockerignore",
     ".env.example",
     ".gitignore",

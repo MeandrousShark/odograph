@@ -310,6 +310,8 @@ Development happens in this repository through pull requests. Its `main`
 branch may contain unreleased work, so use an immutable release tag for
 installations. Want to run the test suite or work on the code? See
 [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and local instructions.
+AI-assisted contributions are welcome under the same standard as any other; see
+[AI and contributions](ai-contribution.md).
 
 ## Support
 
@@ -324,16 +326,6 @@ Check [Known issues](docs/known-issues.md) for confirmed problems in
 published releases and their workarounds. Open a GitHub issue for bugs and
 feature requests. See [SECURITY.md](SECURITY.md) for security reporting and
 supported versions, and [CONTRIBUTING.md](CONTRIBUTING.md) for project scope.
-
-## AI assistance
-
-AI tools were used as development assistants on this project: implementation,
-debugging, testing, review, and documentation. I directed the product and
-design decisions, and I reviewed and tested the resulting work before release.
-
-Every release is signed and traceable to the exact source commit and CI run
-that built it. The verification commands are in
-[docs/releasing.md](docs/releasing.md).
 
 ## License
 
