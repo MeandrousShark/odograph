@@ -17,7 +17,3 @@ must understand every change you submit, have tested it, be able to explain it
 in review, and take responsibility for it.
 
 Pull requests that look like unreviewed bulk generated output are closed.
-
-You do not need to disclose that you used AI. Do not add generated-by
-attribution or AI co-author lines to commit messages or pull request
-descriptions. Keep both concise and limited to what changed and why.
