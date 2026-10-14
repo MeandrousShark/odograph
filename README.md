@@ -27,9 +27,8 @@ checklist.
 
 Start with [Install](#install), then see [Use Odograph](docs/usage.md).
 
-> **US users only:** Odograph's deduction reports use IRS standard mileage
-> rates. Trip tracking still works anywhere, but the tax figures are only
-> meaningful for US filers.
+> [!NOTE]
+> **US users only**: Odograph's deduction reports use IRS standard mileage rates. Trip tracking still works anywhere, but the tax figures are only meaningful for US filers.
 
 ## Install
 
