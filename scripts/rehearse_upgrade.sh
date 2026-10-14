@@ -155,7 +155,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Shell values that Compose would otherwise use to pick a project, extra
 # files or profiles, or to interpolate into the rendered services.
-unset COMPOSE_FILE COMPOSE_PROFILES COMPOSE_PATH_SEPARATOR POSTGRES_PASSWORD FORWARDED_ALLOW_IPS
+unset COMPOSE_FILE COMPOSE_ENV_FILES COMPOSE_PROFILES COMPOSE_PATH_SEPARATOR POSTGRES_PASSWORD FORWARDED_ALLOW_IPS
 
 detect_compose_cmd() {
     if [ -n "${COMPOSE_CMD:-}" ]; then
@@ -1035,8 +1035,9 @@ wait_for_app() {
 }
 
 # Reads timestamped container logs on stdin and prints one
-# "<migration file> <seconds>" line per "applying migration" entry. Only file
-# names matching the migration pattern and computed numbers are printed.
+# "<migration file> <seconds>" line per "applying migration" entry. A migration
+# ends where the next one starts; the last ends at the next logged line. Only
+# file names matching the migration pattern and computed numbers are printed.
 parse_migration_timings() {
     python3 -c '
 import datetime, re, sys
@@ -1063,7 +1064,10 @@ for line in sys.stdin:
 for index, (start, name) in enumerate(events):
     if name is None:
         continue
-    end = next((when for when, _ in events[index + 1:]), None)
+    later = events[index + 1:]
+    end = next((when for when, other in later if other is not None), None)
+    if end is None:
+        end = next((when for when, _ in later), None)
     seconds = "unknown" if end is None else "%.3f" % max(0.0, (end - start).total_seconds())
     print(name, seconds)
 '

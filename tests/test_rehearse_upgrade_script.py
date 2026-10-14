@@ -746,6 +746,14 @@ def test_successful_rehearsal_reports_counts_timings_and_identities(tmp_path):
             ["040_backfill.sql 1800.500"],
         ),
         (
+            "2026-10-13T10:00:00Z app.db INFO applying migration 026_account_ownership.sql\n"
+            "2026-10-13T10:00:02Z app INFO intermediate step\n"
+            "2026-10-13T10:00:09.25Z app.db INFO applying migration 027_device_labels.sql\n"
+            "2026-10-13T10:00:10Z app INFO later step\n"
+            "2026-10-13T10:00:12Z app INFO Application startup complete.\n",
+            ["026_account_ownership.sql 9.250", "027_device_labels.sql 0.750"],
+        ),
+        (
             "2026-10-13T10:00:00Z app.db INFO applying migration 044_trip_warning_acks.sql\n",
             ["044_trip_warning_acks.sql unknown"],
         ),
