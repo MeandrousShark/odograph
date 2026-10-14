@@ -45,6 +45,11 @@ before opening a pull request.
   policies in its own SQL, enable and force row-level security on an
   account-owned table, and update `app/application_roles.py` to match;
   `tests/test_upgrade_contract_db.py` enforces this.
+- A migration from 045 on starts with `-- migration-class: <class>`, one of
+  `additive` (adds objects or nullable/defaulted columns only), `rewrite`
+  (changes existing rows or constraints, keeps supported data) or
+  `destructive` (drops data or narrows its meaning; major versions only).
+  `tests/test_migration_class.py` enforces it.
 - Migrations run as a superuser or `BYPASSRLS` role; startup refuses any
   other. Under forced row-level security, data migrations must not rely on
   table ownership to see rows.
