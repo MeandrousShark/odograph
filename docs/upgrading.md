@@ -281,9 +281,12 @@ and not attempting to undo a migration in place. A database-image migration
 also requires a fresh old-image project.
 
 Odograph 1.0 and later refuse to start against a database migrated by a newer
-release. Startup stops before applying any migration and logs that the
-database schema version is newer than the image's newest migration, naming
-both numbers. Nothing in the database is changed. Either run the newer release
+release. Startup, and the maintenance commands for account management,
+detector reprocessing, role verification and restore finalization, stop
+before changing anything and report that the database schema version is newer
+than the image's newest migration, naming both numbers. A restore of a newer
+release's backup under an older image fails at finalization, leaving the
+restored data in a target that must not be used. Either run the newer release
 that migrated the database, or restore the verified pre-upgrade backup under
 this release as described below. Images before 1.0 do not have this check, so
 running an older 0.x image against a migrated database remains unsupported
