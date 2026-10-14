@@ -210,6 +210,21 @@ upgrade and rollback drill with Docker Compose, using the database-image
 migration mode because the rendered database image is part of the candidate
 release contract.
 
+The drill lives in the reusable `Upgrade drill` workflow
+(`.github/workflows/upgrade-drill.yml`). It reads its base releases from
+`scripts/upgrade_drill_bases.json` and drills from each one as a separate
+matrix job, with the exact revision as `--candidate` and
+`--database-image-migration`. Besides both preflight modes, it runs on pull
+requests that change migrations, the drill script, the bases file, the backup
+or restore scripts, or the workflow itself. To drill any branch or tag on
+demand:
+
+```sh
+gh workflow run upgrade-drill.yml --ref "$REF"
+```
+
+When the supported base releases change, update the bases file.
+
 After an immutable release has been published, dispatch the verification mode
 from a ref that resolves to the published tag's exact commit. The tag ref is
 the recommended target. The helper compares the checked-out revision with the
@@ -227,11 +242,9 @@ on the index and each child, verifies each child SPDX attestation, and checks
 that every attested in-toto subject names the child digest and contains a
 nonempty SPDX package list. Native AMD64 and ARM64 jobs pull their child by
 digest, check its platform and release identity, and run the same HTTPS smoke.
-The published upgrade and rollback drill uses Docker Compose with base
-`v0.10.2`, the exact checked-out revision as `--candidate`, the exact OCI
-index digest as `--candidate-image`, and `--database-image-migration`. The
-workflow retains `v0.10.2` as its supported base; later releases must cover
-their supported base release in the workflow and the manual drill.
+The published upgrade and rollback drill runs the same base matrix with Docker
+Compose, the exact checked-out revision as `--candidate`, the exact OCI index
+digest as `--candidate-image`, and `--database-image-migration`.
 
 The automated preflight and published verification use Docker Compose. Run the
 equivalent Podman Compose drill in the artifact upgrade section below before
