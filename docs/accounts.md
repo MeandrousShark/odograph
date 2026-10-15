@@ -13,14 +13,15 @@ While signed in, open **Settings**, then **Account Settings**, and use
 ## Reset a forgotten password
 
 If your login email is verified, choose **Forgot password?** on the sign-in
-page to reset a forgotten password. This needs SMTP and `APP_URL`; see
+page to reset a forgotten password. This needs `SMTP_HOST`, `EMAIL_FROM` and
+`APP_URL`; see
 [Email](configuration.md#email). The link goes only to your verified login
 email and expires in 30 minutes. Completing a reset signs that account out of
 every Odograph session, including the browser that used the link, and returns
 you to sign-in.
 
 An enabled administrator can request a
-reset for another account in **Admin > Accounts**. The link goes only to that
+reset for another account from **Accounts** in the header. The link goes only to that
 account's stored, verified login email; the administrator never sees it or
 chooses a password. Without a verified address, use the trusted host-local
 recovery command in [Recover from the server](#recover-from-the-server).
@@ -28,7 +29,8 @@ recovery command in [Recover from the server](#recover-from-the-server).
 ## Recover from the server
 
 Otherwise, reset it from the server. Find the account ID, then confirm the
-account shown and type the new password when prompted:
+account shown and type the new password when prompted. The command refuses a
+disabled account:
 
 ```sh
 docker compose exec app python -m app.manage_account list-accounts
@@ -45,6 +47,11 @@ post-bootstrap `create-admin` recovery path.
 
 ## Sessions and sign out everywhere
 
+Sessions are signed cookies that last 14 days. Logging out clears only this
+browser's cookie; a copied cookie stays valid until you use **Sign out
+everywhere**, your password changes, another change increments the account's
+authentication version (OIDC link or unlink, confirmed login-email change), or
+the operator rotates `SESSION_SECRET`.
 A password change signs out your other Odograph sessions; the browser that made
 the change stays signed in. An operator reset signs out every session for that
 account. Neither changes a linked sign-in provider, verified email or tracking
@@ -62,7 +69,8 @@ reauthenticating with that provider.
 
 In **Settings > Account Settings**, you can verify your current login email or
 change it after confirming the new address. These actions require your current
-password and configured email delivery. Until a new address is confirmed, the
+password, or provider reauthentication if the account has no password, and
+configured email delivery. Until a new address is confirmed, the
 current email remains the login. A confirmed change signs out other Odograph
 sessions; it does not change the linked OIDC identity or saved notification
 destinations. Email verification is not a password reset flow.
@@ -80,9 +88,12 @@ administrator.
 ### Member invitations
 
 An enabled administrator can issue, resend, and revoke member invitations in
-**Admin > Accounts**. The new invitation link and manual token are shown once;
-optional email sends that same invitation. Resending creates a fresh token and
-invalidates the old one.
+**Accounts** in the header. Invitations expire after 48 hours. The new
+invitation is shown once: a full link when `APP_URL` is set, otherwise the
+one-time token to paste on the invitation page. Optional email sends that same
+invitation. Resending creates a fresh token and invalidates the old one.
+Issuing and resending are rate limited: per address, 1 per minute and 5 per 24
+hours; per administrator, 10 per 15 minutes and 50 per 24 hours.
 
 ### Account limit
 
@@ -101,6 +112,7 @@ account. Disabling ends its app sessions and revokes its pending security
 proofs, invitations it issued, and tracking credentials. Re-enabling allows
 a fresh sign-in with a retained login method, but does not restore old sessions,
 links or tracking credentials. At least one usable administrator must remain.
+Re-enabling is blocked while a deletion deadline is set.
 
 ### Scheduled deletion and purge
 
@@ -108,12 +120,17 @@ An administrator can also schedule another account for deletion by typing its
 login email and acknowledging the export and backup
 effects. Scheduling immediately disables the account and starts a 30-day
 grace period. An enabled administrator can cancel during that period; there is
-no automatic purge. After the grace period, permanent purge requires fresh
+no automatic purge. After the grace period the account can only be purged: it
+can no longer be cancelled or re-enabled. Permanent purge requires fresh
 administrator authentication with a password or the exact linked OIDC
 identity, the target login email, and a separate confirmation. Administrators
 cannot delete themselves, and a usable administrator must remain. The account
 owner can download a portable export before disablement or after cancellation.
 It includes the ledger, rates and basic preferences, but omits notification
-destinations, schedules and raw points. Purge removes data from the live
-database only; retained backups may still contain it. Restoring an older
-backup can reintroduce the account and its data.
+destinations, schedules and raw points. Purge removes the account's live data,
+including the invitation addressed to its login email. Security audit rows
+(IDs, action, outcome and time) remain until the 365-day audit retention
+prunes them. If the member changed their login email after joining, the
+original invitation row keeps the old address. Retained backups may still
+contain purged data, and restoring an older backup can reintroduce the account
+and its data.

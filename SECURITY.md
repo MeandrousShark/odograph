@@ -38,6 +38,8 @@ trusted and controls the host and database.
   protection).
 - Abuse of the location-ingest endpoint (spoofing, injection, denial of
   service reachable without valid credentials).
+- Cross-account data access, or a row-level-security bypass, by an
+  authenticated member.
 - Anything that exposes location history, GPS coordinates, addresses, or
   credentials/API keys to a party who shouldn't have access.
 - Any other bug that lets an unauthenticated or unauthorized party read or

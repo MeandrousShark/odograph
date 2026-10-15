@@ -214,7 +214,10 @@ database.
 ## Security
 
 An installation has one administrator and any members the administrator
-invites; there is no open signup. Account ownership is explicit in queries,
+invites; there is no open signup. The administrator invites members from
+**Accounts**; see
+[Administrator account management](docs/accounts.md#administrator-account-management).
+Account ownership is explicit in queries,
 restricted database roles are active, and row-level security is enabled and
 forced on every account-owned table. The operator is trusted; do not run
 Odograph as a public multi-tenant service. See the
@@ -226,8 +229,8 @@ Before relying on your installation, work through the
 If you change the default networking, also review
 [reverse proxy trust](docs/reverse-proxy.md#trusting-forwarded-headers).
 
-The app container runs as a fixed non-root user, UID and GID `10001`, and
-writes nothing to disk. That only matters if you mount a host directory into
+The app container runs as a fixed non-root user, UID and GID `10001`, with a
+read-only root filesystem; only a `/tmp` tmpfs is writable. That only matters if you mount a host directory into
 it yourself, in which case that path has to be readable, and writable if it is
 written to, by `10001`.
 

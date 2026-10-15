@@ -10,7 +10,7 @@ supported. Report new problems as GitHub issues.
 **Affects:** v0.6.0 through v0.11.1.
 **Fixed in:** v0.11.2.
 
-On a detected trip, **Advanced trip tools** > **Split trip** lets you pick a
+On a detected trip, **Advanced trip tools** > **Split** lets you pick a
 point on the map, but **Confirm split** sends nothing: the page stays as it
 is, with no message. The button depends on script evaluation that Odograph's
 own Content Security Policy blocks, so the browser never submits the request.

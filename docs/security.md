@@ -91,9 +91,9 @@ Every network-reachable route, and what actually guards it:
 - **`/login`, `/login/local`**: the local-login form. `/login/local` checks
   the same per-IP limiter described in
   [Rate limiting](#rate-limiting-and-proxy-trust) before touching the
-  database, and reports an identical generic failure ("Invalid email or
-  password") whether the failure was no local administrator, a wrong email,
-  or a wrong password. A successful login clears and rebuilds the session
+  database. A missing, disabled or mismatched account, or a wrong password,
+  fails with the same message ("Invalid email or password."). The check is
+  not constant time. A successful login clears and rebuilds the session
   (fixation defense) and issues a fresh CSRF token.
 - **`/signup`**: reachable only when `INITIAL_ADMIN_SIGNUP=1`, no account
   exists, and development auth bypass is off. The first successful transaction
@@ -115,8 +115,11 @@ Every network-reachable route, and what actually guards it:
   and `/admin/accounts/{id}/purge`**:
   require the current enabled administrator; every mutation is POST with CSRF.
   The account list exposes login and security metadata, not another account's
-  ledger or notification destinations. Invitation issue and resend enforce
-  target and administrator budgets before rotating a token. The new fragment
+  ledger or notification destinations. Invitation issue and resend are rate limited
+  before a token is rotated: per address, 1 per minute and 5 per 24 hours; per
+  administrator, 10 per 15 minutes and 50 per 24 hours. Instance storage
+  capacity is checked when an invitation is issued and when it is redeemed,
+  not when it is resent. The new fragment
   link and manual token are shown only in the issuing response; later list and
   revoke actions expose no bearer secret. Optional SMTP sends the same token,
   and a delivery failure leaves it copyable and valid. Admin recovery only
@@ -142,19 +145,24 @@ Every network-reachable route, and what actually guards it:
   before disablement or after cancellation; administrators cannot download
   another account's bundle. It covers the ledger, rates and basic preferences,
   but omits notification destinations, schedules and raw points. Purge removes
-  data from the live database only. Backups may retain it until their retention
-  period expires, and restoring an older backup can reintroduce purged data.
+  the account's live data, including the invitation addressed to its login
+  email, from the live database. Security audit rows (IDs, action, outcome and
+  time) remain until the 365-day audit retention prunes them. If the member
+  changed their login email after joining, the original invitation row keeps
+  the old address. Backups may retain purged data until their retention
+  period expires, and restoring an older backup can reintroduce it.
   Restore finalization revokes sessions and pending proofs.
 - **`/settings/account`**: requires the caller's enabled account session.
   Password changes, OIDC linking and unlinking, and email verification or
   change require CSRF protection and reauthentication. Accounts with a password
   use that password. OIDC-only accounts must first complete a fresh provider authentication through
   `/settings/account/oidc/reauth`. Odograph requests
-  `max_age=0` and requires a validated `auth_time` within 60 seconds of the
-  fresh-authentication attempt, matched to the account's exact linked issuer
-  and subject. A missing, stale, or future timestamp fails closed. The one-use
-  proof is bound to the account, authentication version, action, and target,
-  and expires after 10 minutes. Providers that do not return the required
+  `max_age=0` and requires a validated `auth_time` no more than 60 seconds
+  before the attempt began and no more than 60 seconds in the future, matched
+  to the account's exact linked issuer and subject. A missing timestamp, or
+  one outside that window, fails closed. The one-use proof is bound to the account,
+  authentication version, action, and target, and lasts 10 minutes from the
+  start of the attempt. Providers that do not return the required
   evidence cannot authorize these actions; use an existing password, a
   verified-email password reset, or operator recovery instead.
 
@@ -194,8 +202,8 @@ Every network-reachable route, and what actually guards it:
   provider identity in one transaction. `ALLOWED_EMAIL`, when set, gates only
   entry into this one-time transition. The operator command is the safer
   alternative if the provider's trust boundary is too broad or unavailable.
-- **The OIDC callback (`/auth/callback`)**: handles distinct login and linking
-  login, invitation, and account-action flows protected by state and nonce
+- **The OIDC callback (`/auth/callback`)**: handles distinct login, invitation,
+  linking, and account-action flows protected by state and nonce
   checks. A linked login resolves the exact provider issuer and subject to its
   account. Email is metadata, not an account selector, and `ALLOWED_EMAIL` does
   not apply to linked login. Invitation tokens are not forwarded to the
@@ -220,7 +228,16 @@ Everything else in the application (the trip list, trip detail, review
 queue, settings, expenses, and every htmx partial and POST behind them)
 requires an authenticated session, plus a matching `X-CSRF-Token` header on
 every state-changing htmx request or a matching hidden field on the plain
-login, signup, and Account Settings forms that can't set custom headers.
+forms that can't set custom headers: login, signup, invitation, forgot and
+reset password, account establishment, Account Settings, administrator,
+tracking, and import forms.
+
+Sessions are signed cookies with a 14-day lifetime. Logging out clears this
+browser's cookie only. A copied cookie stays valid until **Sign out
+everywhere**, a password change or reset, another change that increments the
+account's authentication version (OIDC link or unlink, confirmed login-email
+change), or `SESSION_SECRET` rotation. Each request compares the
+cookie's authentication version with the account's current one.
 
 ## Database and browser isolation
 
@@ -248,12 +265,22 @@ to establishment and cannot reach personal data.
 
 ## Rate limiting and proxy trust
 
-Failure counters are per-IP and in-memory. There are two limiters:
-one dedicated to `/ingest`, and one shared by local credential checks,
-signup validation, and the OIDC callback, since they are the same shape of risk: an
+Counters are per-IP and in-memory, except that password-reset requests are
+also counted per submitted email. There are two failure limiters: one
+dedicated to `/ingest`, and one shared by local credential checks, signup
+validation, invitation redemption, password change, OIDC link and unlink,
+email-challenge request and confirmation, `/account/establish`, account purge,
+and the OIDC callback, since they are the same shape of risk: an
 unauthenticated caller feeding the application plausible-looking credentials.
 The local credential limiter counts failures only; a person typing their
 password right the first time is not throttled.
+
+Three further attempt limiters cover the password-reset routes. They count
+every attempt, not only failures, because a public request never learns
+whether an account exists: reset requests keyed by client IP, reset requests
+keyed by the submitted email, and reset-link validation keyed by client IP.
+They use the same threshold and window as the login limiter
+(`LOGIN_AUTH_MAX_FAILURES`, `LOGIN_AUTH_WINDOW_S`).
 
 Ingest checks the client's failure window before credential verification.
 A blocked IP receives `503` with `Retry-After` without reading the body, even
@@ -268,26 +295,27 @@ Ingest uses `503` for these temporary limits because the
 deletes a queued message after any `4xx` response, including `429`. Incorrect credentials
 still receive `401`; the separate local credential limiter still uses `429`.
 
-Both limiters key on `client_ip()`, which reads only the address Uvicorn's
+The IP-keyed limiters use `client_ip()`, which reads only the address Uvicorn's
 `--proxy-headers` handling has already normalized from a trusted proxy's
 `X-Forwarded-For`, never a header read directly by application code. That
 makes `FORWARDED_ALLOW_IPS` a security-relevant setting, not a cosmetic
 logging knob: if it's set too permissively, a client can spoof the address
-both limiters key on and dodge them entirely. The application logs a startup
+those limiters key on and dodge them entirely. The application logs a startup
 warning whenever `FORWARDED_ALLOW_IPS` is `*` or empty outside development
 mode, precisely because that combination is only safe under one specific
 topology. See the checklist below.
 
-Two things this scope deliberately does not cover: per-account limiting (the
-limiters key on client address, not on the account being attacked), and a
-background or IP-reputation-based ban list.
+Two things this scope deliberately does not cover: per-account limiting of
+sign-in attempts (those limiters key on client address, not on the account
+being attacked; only password-reset requests are also limited per email), and
+a background or IP-reputation-based ban list.
 A determined attacker who can present many source addresses is not stopped by
 this; that's a job for your reverse proxy or network edge, not this
 application.
 
 ## Diagnostics
 
-An authenticated Settings page, and `python -m app.diagnose` run inside the
+The administrator-only Diagnostics section of the Settings page, and `python -m app.diagnose` run inside the
 container, share one report: application/git/schema/detector versions,
 database connectivity and pool statistics, whether applied migrations match
 what the running code expects, per-worker state (enabled or not, last run,
@@ -297,7 +325,8 @@ never the values themselves. Neither surface ever contains a coordinate,
 an address, a secret, or a raw payload.
 
 Administrator storage diagnostics expose only instance budget, reserve,
-funded grant total, and counts of accounts approaching or at an allowance.
+funded grant total, the account count, and counts of accounts approaching or
+at an allowance.
 Each account's Settings page shows its own usage and recovery options.
 
 Reachability of OSRM, the geocoder, ntfy, and SMTP is checked only on an
@@ -335,8 +364,9 @@ configuration files.
    once sent, and this process has no way to know or undo a proxy-level TLS
    mistake underneath it. Prefer configuring the header at your proxy. If
    your proxy can't, set `HSTS_MAX_AGE` (seconds) in `.env`. The header is
-   then emitted, but only on a request the application already sees as
-   HTTPS via the forwarded scheme, never on a plain HTTP request. Leaving it
+   then emitted, but only on HTML responses to a request the application
+   already sees as HTTPS via the forwarded scheme, never on a plain HTTP
+   request. Leaving it
    unset (or `0`) sends no header at all.
 
 3. **Get `FORWARDED_ALLOW_IPS` right for your actual topology.** The shipped
@@ -453,7 +483,10 @@ configuration files.
       changing it against a live volume versus a fresh one.
 
 11. **Do not tighten `Referrer-Policy` at your proxy.** The application
-    sends `Referrer-Policy: strict-origin-when-cross-origin`, which gives
+    sends `Referrer-Policy: strict-origin-when-cross-origin` on HTML responses
+    (the Content-Security-Policy is sent on the same responses). Administrator
+    (`/admin/*`), invitation, password-reset and account-confirmation pages use
+    `no-referrer` instead. The general policy gives
     the map tile host your instance's origin and nothing more: no path, no
     query string, and nothing at all on an HTTPS to HTTP downgrade. A proxy
     that overrides this with `no-referrer` or `same-origin` sends no
@@ -570,11 +603,14 @@ deploying it, the same as you would for a mismatched digest.
 
 The released image runs as fixed, numeric UID/GID `10001:10001`, not root,
 and not a named user, so both rootful Docker and rootless Podman map the
-identity the same way. The application writes nothing to disk at runtime (no
-uploads, no cache directory, no file-based logging), so the shipped compose
-defaults run it with an empty Linux capability set (`cap_drop: [ALL]`),
-`no-new-privileges`, a read-only root filesystem, and a small `tmpfs` for
-`/tmp`. If you bind-mount a host directory into the container yourself,
+identity the same way. At runtime the application writes only temporary
+files: bounded preparation spool files (reports, exports and mail) under
+`PREPARATION_SPOOL_DIR`, by default below the system temporary directory, and
+temporary spool files for multipart uploads such as portable imports in the
+system temporary directory. It persists no uploads and has no cache
+directory or file-based logging, so the shipped compose defaults run it with
+an empty Linux capability set (`cap_drop: [ALL]`), `no-new-privileges`, a
+read-only root filesystem, and a `tmpfs` for `/tmp`, which holds the spool. If you bind-mount a host directory into the container yourself,
 make sure that path is readable (and writable, if applicable) by UID/GID
 `10001`. Nothing does that chown for you.
 
