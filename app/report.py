@@ -117,7 +117,9 @@ def sum_month_deductions(
     """Sum per-month business deductions for one year. Summing by month (not
     one flat total) is what lets a mid-year rate change price each half
     correctly -- IRS splits fall on a month boundary, so a month is always
-    within one rate period. None if no rate is on file for the year at all.
+    within one rate period. 0.0 when there are no business months but a rate
+    is on file for the year; None only if no rate is on file for the year at
+    all (decided by `rate_for`, as `deduction()` does).
     Shared by `app/ui/trips.py`'s YTD stat and `build_annual_report` below
     so the two can't independently drift on this rule.
     """
@@ -128,7 +130,9 @@ def sum_month_deductions(
         if d is not None:
             total += d
             any_rate = True
-    return total if any_rate else None
+    if any_rate:
+        return total
+    return 0.0 if rate_for(rates, year) is not None else None
 
 
 def format_rate_periods(rate_periods: list[tuple[float, int, int]]) -> str:
