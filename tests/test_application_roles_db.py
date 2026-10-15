@@ -194,6 +194,38 @@ def test_outsider_acl_and_missing_function_refuse_restore():
     asyncio.run(_scenario(check))
 
 
+LEGACY_ISSUE = "public.issue_member_invitation(bigint,text,text)"
+
+
+def test_restore_revokes_default_execute_on_the_superseded_invitation_function():
+    # A --no-privileges restore recreates the function migration 034
+    # superseded with no ACL, so PUBLIC gets PostgreSQL's default EXECUTE.
+    async def check(owner, pools, state):
+        async with owner.connection() as conn:
+            await conn.execute("CREATE ROLE contract_outsider NOLOGIN")
+            await conn.execute("UPDATE pg_catalog.pg_proc SET proacl=NULL WHERE oid=to_regprocedure(%s)",
+                               (LEGACY_ISSUE,))
+        try:
+            await application_roles.finalize_application_restore(TEST_DB)
+            async with owner.connection() as conn:
+                cur = await conn.execute(
+                    "SELECT r,has_function_privilege(r,to_regprocedure(%s),'EXECUTE') FROM unnest(%s::text[]) r",
+                    (LEGACY_ISSUE, ["odograph_control", "odograph_runtime", "contract_outsider"]))
+                assert dict(await cur.fetchall()) == {
+                    "odograph_control": False, "odograph_runtime": False, "contract_outsider": False}
+            for pool in (pools.control, pools.runtime):
+                async with pool.connection() as restricted:
+                    await validate_application_contract(restricted, state)
+            # Repeating the restore stays a no-op.
+            await application_roles.finalize_application_restore(TEST_DB)
+        finally:
+            async with owner.connection() as conn:
+                await conn.execute(sql.SQL("REVOKE ALL ON FUNCTION {} FROM PUBLIC,odograph_control,odograph_runtime")
+                                   .format(sql.SQL(LEGACY_ISSUE)))
+                await conn.execute("DROP ROLE contract_outsider")
+    asyncio.run(_scenario(check))
+
+
 @pytest.mark.usefixtures("restores_test_roles")
 def test_provisioning_failure_stays_generic_without_leaking_the_cause(monkeypatch):
     async def broken_provision(conn):

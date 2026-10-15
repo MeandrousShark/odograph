@@ -228,6 +228,9 @@ FUNCTION_SPECS = tuple(
 STORAGE_FUNCTIONS += WARNING_ACK_FUNCTIONS
 FUNCTIONS = {spec.signature: spec.caller for spec in FUNCTION_SPECS}
 FUNCTION_OWNERS = {spec.signature: spec.owner for spec in FUNCTION_SPECS}
+# Superseded by migration 034 but never dropped. A --no-privileges restore
+# recreates it with PostgreSQL's default PUBLIC EXECUTE.
+LEGACY_ISSUE_FUNCTION = "public.issue_member_invitation(bigint,text,text)"
 RESTORE_AUTH_VERSION_STEP = 1_000_000_000
 PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER")
 SEQUENCE_PRIVILEGES = ("USAGE", "SELECT", "UPDATE")
@@ -478,6 +481,10 @@ async def _provision(conn) -> None:
             revoked += ",odograph_bootstrap"
         await conn.execute(sql.SQL("REVOKE ALL ON FUNCTION {} FROM " + revoked).format(sql.SQL(function)))
         await conn.execute(sql.SQL("GRANT EXECUTE ON FUNCTION {} TO {}").format(sql.SQL(function), sql.Identifier(role)))
+    cur = await conn.execute("SELECT to_regprocedure(%s)", (LEGACY_ISSUE_FUNCTION,))
+    if (await cur.fetchone())[0] is not None:
+        await conn.execute(sql.SQL("REVOKE ALL ON FUNCTION {} FROM PUBLIC,{},{}").format(
+            sql.SQL(LEGACY_ISSUE_FUNCTION), sql.Identifier(CONTROL_ROLE), sql.Identifier(RUNTIME_ROLE)))
     for table in ("managed_role_state", "recovery_metadata"):
         ident = sql.Identifier(STATE_SCHEMA, table)
         await conn.execute(sql.SQL("ALTER TABLE {} OWNER TO odograph_migrate").format(ident))
@@ -550,7 +557,7 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
     )
     extra_functions = [row[0] for row in await cur.fetchall()]
     _require_contract(not extra_functions, f"extra security-definer function: {extra_functions}")
-    legacy_issue = "public.issue_member_invitation(bigint,text,text)"
+    legacy_issue = LEGACY_ISSUE_FUNCTION
     cur = await conn.execute(
         "SELECT r,has_function_privilege(r,to_regprocedure(%s),'EXECUTE') "
         "FROM unnest(%s::text[]) WITH ORDINALITY u(r,o) WHERE to_regprocedure(%s) IS NOT NULL ORDER BY o",
