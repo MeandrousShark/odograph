@@ -145,11 +145,11 @@ Every network-reachable route, and what actually guards it:
   before disablement or after cancellation; administrators cannot download
   another account's bundle. It covers the ledger, rates and basic preferences,
   but omits notification destinations, schedules and raw points. Purge removes
-  the account's live data, including the invitation addressed to its login
-  email, from the live database. Security audit rows (IDs, action, outcome and
-  time) remain until the 365-day audit retention prunes them. If the member
-  changed their login email after joining, the original invitation row keeps
-  the old address. Backups may retain purged data until their retention
+  the account's data from the live database, with two exceptions: the
+  invitation the member accepted stays in the administrator's invitation list
+  (invitee email, status and times), and security audit rows (IDs, action,
+  outcome and time) remain until the 365-day audit retention prunes them.
+  Backups may retain purged data until their retention
   period expires, and restoring an older backup can reintroduce it.
   Restore finalization revokes sessions and pending proofs.
 - **`/settings/account`**: requires the caller's enabled account session.

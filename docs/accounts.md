@@ -127,10 +127,10 @@ identity, the target login email, and a separate confirmation. Administrators
 cannot delete themselves, and a usable administrator must remain. The account
 owner can download a portable export before disablement or after cancellation.
 It includes the ledger, rates and basic preferences, but omits notification
-destinations, schedules and raw points. Purge removes the account's live data,
-including the invitation addressed to its login email. Security audit rows
+destinations, schedules and raw points. Purge removes the account's data from
+the live database, except that the invitation the member accepted stays in the
+invitation list (invitee email, status and times) and security audit rows
 (IDs, action, outcome and time) remain until the 365-day audit retention
-prunes them. If the member changed their login email after joining, the
-original invitation row keeps the old address. Retained backups may still
+prunes them. Retained backups may still
 contain purged data, and restoring an older backup can reintroduce the account
 and its data.
