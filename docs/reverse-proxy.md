@@ -51,7 +51,7 @@ server {
     listen 443 ssl;
     http2 on;
     server_name mileage.example.com;
-    client_max_body_size 50m;
+    client_max_body_size 51m;
 
     ssl_certificate     /etc/letsencrypt/live/mileage.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/mileage.example.com/privkey.pem;
@@ -68,8 +68,10 @@ server {
 
 `http2 on;` needs nginx 1.25.1 or newer; on older versions use
 `listen 443 ssl http2;` instead. Portable imports accept up to
-`PORTABLE_IMPORT_MAX_BYTES` (50 MiB by default), while nginx rejects request
-bodies over 1 MiB unless `client_max_body_size` is raised, as above. See the
+`PORTABLE_IMPORT_MAX_BYTES` (50 MiB by default) plus a small multipart
+allowance (`CAPACITY_MULTIPART_OVERHEAD_BYTES`, 64 KiB), while nginx limits
+the whole request body to 1 MiB unless `client_max_body_size` is raised. Set it
+at least 1 MiB above the import limit, as above. See the
 [configuration reference](configuration.md#ui-reports-and-imports).
 
 ## Trusting forwarded headers

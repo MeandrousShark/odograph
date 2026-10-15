@@ -97,7 +97,8 @@ ready.
    scripts/restore_database.sh backups/pre-upgrade.dump
    docker compose up -d app
    docker compose ps
-   for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8077/healthz && break; sleep 5; done
+   healthy=0; for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8077/healthz && { healthy=1; break; }; sleep 5; done
+   [ "$healthy" = 1 ] || echo "app did not become healthy; check: docker compose logs app" >&2
    ```
 
    The app needs a few seconds to start listening, and longer while the first
@@ -258,9 +259,10 @@ No exact-image rollback is supported across 0.x to 1.0. Recovery means
 restoring the verified pre-upgrade backup into a fresh volume under the old
 image. That loses every write made after the backup. The steps are in
 [Rollback](#rollback). While the stopped old project and its volume are
-untouched, you can instead restore `.env` from `.env.pre-upgrade`, check out
-the previous release and start that project again; it still holds the
-pre-upgrade data.
+untouched, you can instead stop the target project (`docker compose stop app
+db` while `.env` still names it), restore `.env` from `.env.pre-upgrade`,
+check out the previous release and start that project again; it still holds
+the pre-upgrade data.
 
 ## Rehearse an upgrade against your own backup
 
@@ -380,7 +382,8 @@ even after a passing rehearsal.
    docker compose up -d
    docker compose ps
    docker compose logs app
-   for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8077/healthz && break; sleep 5; done
+   healthy=0; for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8077/healthz && { healthy=1; break; }; sleep 5; done
+   [ "$healthy" = 1 ] || echo "app did not become healthy; check: docker compose logs app" >&2
    ```
 
    Wait for both services to report healthy and check the app logs for
@@ -495,9 +498,11 @@ release, pull its pinned image, and restart on the database that's still on
 the old schema, since nothing committed. After a database-image migration,
 including 0.x to 1.0, do not start the previous release on the target
 database: the new image initialized it, and the older PostGIS libraries do not
-match it. Restore `.env` from `.env.pre-upgrade`, check out the previous
-release and start the stopped old project again, which still holds the
-pre-upgrade data, or follow
+match it. Stop the target project first (`docker compose stop app db` while
+`.env` still names it, so it releases port 8077 and stops restarting), then
+restore `.env` from `.env.pre-upgrade`, check out the previous release and
+start the stopped old project again, which still holds the pre-upgrade data,
+or follow
 [Rollback after a database-image migration](#rollback-after-a-database-image-migration).
 
 **A successful migration followed by an application failure** (migrations
@@ -562,7 +567,8 @@ even if it appears to start.
    scripts/restore_database.sh backups/pre-upgrade.dump
    docker compose up -d app
    docker compose ps
-   for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8077/healthz && break; sleep 5; done
+   healthy=0; for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8077/healthz && { healthy=1; break; }; sleep 5; done
+   [ "$healthy" = 1 ] || echo "app did not become healthy; check: docker compose logs app" >&2
    ```
 
    Sign in and check representative data before switching traffic. Keep the
