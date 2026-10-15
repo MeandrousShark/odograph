@@ -13,17 +13,22 @@ changes what client_ip() sees.
 from __future__ import annotations
 
 import asyncio
+import re
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
+import pytest
 from authlib.integrations.base_client import OAuthError
 from fastapi import FastAPI
+from starlette.applications import Starlette
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import PlainTextResponse
+from starlette.routing import Route
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.auth import make_router as make_auth_router
-from app.ingest import FailedAuthLimiter
+from app.ingest import FailedAuthLimiter, client_ip
 from app.ingest import make_router as make_ingest_router
 
 MAX_FAILURES = 3
@@ -365,3 +370,110 @@ def test_callback_spoofed_xff_cannot_reset_attackers_own_block():
     blocked, still_blocked = asyncio.run(run())
     assert blocked.status_code == 429
     assert still_blocked.status_code == 429
+
+
+# --- documented reverse-proxy configuration, end to end -----------------------
+
+ROOT = Path(__file__).resolve().parents[1]
+REAL_CLIENT = "203.0.113.9"
+CLIENT_SUPPLIED = "6.6.6.6"
+
+
+def _fenced_block(language: str) -> str:
+    guide = (ROOT / "docs/reverse-proxy.md").read_text(encoding="utf-8")
+    return guide.split(f"```{language}\n", 1)[1].split("```", 1)[0]
+
+
+def _documented_nginx_directive(header: str) -> str:
+    block = _fenced_block("nginx")
+    match = re.search(rf"^\s*proxy_set_header\s+{header}\s+(.+?);\s*$", block, re.M)
+    assert match, f"docs/reverse-proxy.md nginx block has no {header} directive"
+    return match.group(1)
+
+
+def _shipped_forwarded_allow_ips() -> str:
+    text = (ROOT / ".env.example").read_text(encoding="utf-8")
+    match = re.search(r"^FORWARDED_ALLOW_IPS=(.*)$", text, re.M)
+    assert match, ".env.example has no uncommented FORWARDED_ALLOW_IPS line"
+    return match.group(1).strip()
+
+
+def _nginx_header_value(directive: str, *, remote_addr: str, incoming: str | None) -> str:
+    """Emulate the nginx variables the documented directives may use."""
+    if directive == "$remote_addr":
+        return remote_addr
+    if directive == "$proxy_add_x_forwarded_for":
+        return f"{incoming}, {remote_addr}" if incoming else remote_addr
+    if directive == "$scheme":
+        return "https"
+    pytest.fail(
+        f"unreviewed nginx value {directive!r} in docs/reverse-proxy.md; "
+        "extend this emulation after checking what it forwards"
+    )
+
+
+def _seen_by_app(*, directive, incoming, peer_host, trusted_hosts):
+    """Run the app's client_ip() behind uvicorn's proxy-headers middleware."""
+
+    async def whoami(request):
+        return PlainTextResponse(f"{client_ip(request)} {request.url.scheme}")
+
+    proxy_headers = {
+        "X-Forwarded-For": _nginx_header_value(
+            directive, remote_addr=REAL_CLIENT, incoming=incoming
+        ),
+        "X-Forwarded-Proto": _nginx_header_value(
+            _documented_nginx_directive("X-Forwarded-Proto"),
+            remote_addr=REAL_CLIENT,
+            incoming=None,
+        ),
+    }
+    app = ProxyHeadersMiddleware(
+        Starlette(routes=[Route("/", whoami)]), trusted_hosts=trusted_hosts
+    )
+
+    async def run():
+        transport = httpx.ASGITransport(app=app, client=(peer_host, 51000))
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
+            # Only the proxy-built headers reach the app.
+            return await client.get("/", headers=proxy_headers)
+
+    return asyncio.run(run()).text.split()
+
+
+INCOMING_VALUES = [None, CLIENT_SUPPLIED, f"{CLIENT_SUPPLIED}, 7.7.7.7", "2001:db8::1"]
+PROXY_PEERS = ["127.0.0.1", "10.88.0.1"]
+
+
+@pytest.mark.parametrize("peer_host", PROXY_PEERS)
+@pytest.mark.parametrize("incoming", INCOMING_VALUES)
+def test_documented_nginx_config_records_the_connecting_address(incoming, peer_host):
+    client, scheme = _seen_by_app(
+        directive=_documented_nginx_directive("X-Forwarded-For"),
+        incoming=incoming,
+        peer_host=peer_host,
+        trusted_hosts=_shipped_forwarded_allow_ips(),
+    )
+    assert client == REAL_CLIENT
+    assert scheme == "https"
+
+
+def test_appending_directive_would_let_the_client_supplied_value_be_recorded():
+    """Documents why the nginx example must replace the header, not append."""
+    client, _scheme = _seen_by_app(
+        directive="$proxy_add_x_forwarded_for",
+        incoming=CLIENT_SUPPLIED,
+        peer_host="127.0.0.1",
+        trusted_hosts=_shipped_forwarded_allow_ips(),
+    )
+    assert client == CLIENT_SUPPLIED
+
+
+def test_documented_caddy_block_leaves_forwarded_header_handling_to_caddy():
+    # Verified live (2026-10-15, Caddy 2.11.7): without trusted_proxies Caddy
+    # discards a client-supplied X-Forwarded-For. Keep the block in that shape.
+    block = _fenced_block("caddyfile").lower()
+    assert "trusted_proxies" not in block
+    assert not re.search(r"header_up\b[^\n]*x-forwarded-for", block)
