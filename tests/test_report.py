@@ -19,6 +19,7 @@ from app.report import (
     quarter_bounds,
     range_filename_slug,
     range_label,
+    sum_month_deductions,
 )
 
 TZ = ZoneInfo("America/Los_Angeles")
@@ -126,7 +127,7 @@ def test_empty_year_no_crash():
     assert report.months == []
     assert report.total_m == 0.0
     assert report.business_pct is None
-    assert report.total_deduction is None
+    assert report.total_deduction == 0.0
     assert report.caveats.any is False
 
 
@@ -227,7 +228,7 @@ def test_not_my_vehicle_trip_contributes_nothing_to_report_or_caveats():
 
     assert report.trip_count == 0
     assert report.total_m == 0
-    assert report.total_deduction is None
+    assert report.total_deduction == 0.0
     assert report.by_vehicle == []
     assert report.caveats == ReportCaveats()
 
@@ -242,7 +243,7 @@ def test_not_deductible_wins_before_business_category():
     assert report.trip_count == 1
     assert report.business_m == 0
     assert report.nondeductible_m == pytest.approx(10 * 1609.344)
-    assert report.total_deduction is None
+    assert report.total_deduction == 0.0
     assert report.caveats.business_missing_purpose == 0
     assert report.caveats.unclassified_trips == 0
 
@@ -265,7 +266,7 @@ def test_excluded_unclassified_trips_still_appear_in_classification_caveat():
     assert report.total_m == pytest.approx(3 * 1609.344)
     assert report.business_m == 0
     assert report.nondeductible_m == pytest.approx(3 * 1609.344)
-    assert report.total_deduction is None
+    assert report.total_deduction == 0.0
 
 
 def test_report_and_vehicle_total_identities_include_nondeductible():
@@ -467,3 +468,21 @@ def test_range_filename_slug_replaces_ascii_separator():
     assert range_filename_slug(date(2026, 5, 15), date(2026, 8, 15)) == (
         "2026-05-15_2026-08-15"
     )
+
+
+def test_sum_month_deductions_empty_with_rate_is_zero():
+    assert sum_month_deductions([], 2026, {2026: YearRate(0.70)}) == 0.0
+    # Falls back to the prior year's rate, as deduction() does.
+    assert sum_month_deductions([], 2026, {2025: YearRate(0.70)}) == 0.0
+
+
+def test_sum_month_deductions_empty_without_rate_is_none():
+    assert sum_month_deductions([], 2026, {}) is None
+    assert sum_month_deductions([], 2026, {2027: YearRate(0.75)}) is None
+
+
+def test_sum_month_deductions_prices_each_month_with_mid_year_split():
+    rates = {2026: YearRate(0.50, rate_h2_per_mi=0.60, h2_start_month=7)}
+    total = sum_month_deductions([(3, 1609.344), (8, 1609.344)], 2026, rates)
+    assert total == pytest.approx(1.10)
+    assert sum_month_deductions([(3, 1609.344)], 2026, {}) is None

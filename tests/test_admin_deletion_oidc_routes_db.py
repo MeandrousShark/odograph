@@ -48,7 +48,8 @@ def test_purge_reauthentication_has_exact_identity_freshness_and_admin_return(me
             rejected = await _endpoint("/auth/callback","GET")(request)
             assert rejected.status_code == 401
             assert auth.GENERIC_OIDC_ERROR.encode() in rejected.body
-            assert b'action="/login/local"' in rejected.body
+            assert b"Account Settings: Odograph" in rejected.body
+            assert b'action="/login/local"' not in rejected.body
             assert "oidc_action_proof_nonce" not in request.session
         response = await reauth(request,action="purge_account",target=str(target),target_confirm="",csrf_token="csrf",user=user)
         destination_params = parse_qs(urlsplit(oidc_authorization_url(response)).query)

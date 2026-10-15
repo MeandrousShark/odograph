@@ -38,7 +38,8 @@ can add a password later; see [Account management](accounts.md).
 Accepting an invitation this way makes the invited address the login email,
 unverified. The provider's email is not matched against it. Once any account
 exists, an OIDC sign-in that is not linked to an account or an invitation is
-refused. Failures show the sign-in or invitation page with the message.
+refused. Failures show the message on the invitation or sign-in page, or on
+Account Settings when a signed-in account's link or reauthentication fails.
 
 ## Signing out
 

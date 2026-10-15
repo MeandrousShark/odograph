@@ -1006,3 +1006,38 @@ async def _archive_list_depth_scenario():
 
 def test_partial_archive_keeps_validated_loaded_month_depth_and_next_offset():
     asyncio.run(_archive_list_depth_scenario())
+
+
+async def _ytd_banner_scenario(with_rate: bool):
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
+    try:
+        pool = await reset_account_db(raw_pool)
+        year = datetime.now(TZ).year
+        async with pool.connection() as conn:
+            await conn.execute("DELETE FROM mileage_rates WHERE account_id = %s", (account_id(conn),))
+            if with_rate:
+                await conn.execute(
+                    "INSERT INTO mileage_rates (account_id, year, rate_per_mi) VALUES (%s, %s, %s)",
+                    (account_id(conn), year, "0.7000"),
+                )
+        response = await _archive(pool)
+        assert response.context["ytd_year"] == year
+        return response
+    finally:
+        await raw_pool.close()
+
+
+def test_ytd_banner_shows_zero_dollars_with_rate_and_no_business_trips():
+    response = asyncio.run(_ytd_banner_scenario(True))
+    body = response.body.decode()
+    assert response.context["ytd_deduction"] == 0.0
+    assert "<strong>$0.00</strong>" in body
+    assert "No mileage rate on file" not in body
+
+
+def test_ytd_banner_shows_no_rate_message_when_year_has_no_rate():
+    response = asyncio.run(_ytd_banner_scenario(False))
+    body = response.body.decode()
+    assert response.context["ytd_deduction"] is None
+    assert "No mileage rate on file for" in body
