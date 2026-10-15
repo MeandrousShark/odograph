@@ -69,7 +69,9 @@ ready.
    ```
 
    The app stays stopped during the final logical backup. Keep the archive,
-   checksum, manifest, and `.env.pre-upgrade` protected.
+   checksum, manifest, and `.env.pre-upgrade` protected. `.env.pre-upgrade` is
+   a copy of your secrets: protect it like `.env`. The repository's
+   `.gitignore` ignores it, so it is never committed.
 
 2. **Check out the exact target release and create a fresh project name.** The
    target Compose file supplies the new immutable database image. Replace the
@@ -91,13 +93,16 @@ ready.
 
    ```sh
    docker compose up -d db
-   docker compose ps db
+   docker compose ps
    scripts/restore_database.sh backups/pre-upgrade.dump
    docker compose up -d app
    docker compose ps
-   curl -fsS http://127.0.0.1:8077/healthz
+   for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8077/healthz && break; sleep 5; done
    ```
 
+   The app needs a few seconds to start listening, and longer while the first
+   start applies migrations, so the loop polls for up to five minutes. For a
+   large database, follow `docker compose logs -f app` and repeat the check.
    Confirm the target database and app are healthy, then sign in and check a
    recent trip, a place, a vehicle, and an authenticated `/ingest` request.
    The restore script from the target release must run against the fresh
@@ -123,18 +128,22 @@ following that release's documented upgrade path, and then upgrades to 1.0.
 An installation upgrading from v0.11.0 or earlier that has not applied the
 v0.11.1 road-snap correction must apply it. Take and verify the pre-upgrade
 backup first, then apply the correction while the database is still at
-schema 25, before the first 1.0 start. The statements below save the values it
-changes first, so the correction can be reversed without restoring a backup. In `psql`, run as
-the `DATABASE_URL` role (`\copy` writes the file on the machine where `psql`
-runs):
+schema 25, before the first 1.0 start. With the database image migration, the
+old database is stopped after the backup, so run both commands against the
+restored target database, after `scripts/restore_database.sh` and before
+`docker compose up -d app`. The commands save the values the correction
+changes first, so it can be reversed without restoring a backup. The first
+streams the CSV to the host, so it lands in the current host directory (a
+`\copy` to a file would write inside the database container and be lost when
+it is recreated):
 
-```sql
-\copy (SELECT id, distance_snapped_m FROM trips WHERE distance_snapped_m IS NOT NULL AND distance_m > 0 AND distance_snapped_m / distance_m < 0.85) TO 'snap-correction.csv' CSV HEADER
+```sh
+docker compose exec -T db psql -U mileage -d mileage -c "\copy (SELECT id, distance_snapped_m FROM trips WHERE distance_snapped_m IS NOT NULL AND distance_m > 0 AND distance_snapped_m / distance_m < 0.85) TO STDOUT WITH CSV HEADER" > snap-correction.csv
 
-UPDATE trips SET distance_snapped_m = NULL
+docker compose exec -T db psql -U mileage -d mileage -c "UPDATE trips SET distance_snapped_m = NULL
 WHERE distance_snapped_m IS NOT NULL
   AND distance_m > 0
-  AND distance_snapped_m / distance_m < 0.85;
+  AND distance_snapped_m / distance_m < 0.85;"
 ```
 
 Keep `snap-correction.csv` with your backups. The saved file lives outside
@@ -142,12 +151,8 @@ the database, so it adds no table that a later upgrade would have to account
 for (see the `public` schema item below).
 
 If you restore the pre-upgrade backup to recover, the correction is not in
-it, so apply it again afterward. With the database image migration, the old
-database is stopped after the backup, so apply the correction to the restored
-target database after `scripts/restore_database.sh` and before
-`docker compose up -d app`. The same statements are valid on a database that
-has already reached schema 44, run as a superuser or `BYPASSRLS` role, if you
-find you skipped them.
+it, so apply it again afterward. The same statements are valid on a database
+that has already reached schema 45, if you find you skipped them.
 
 ### Operator impact
 
@@ -197,9 +202,9 @@ rows.
    account, so this is not expected to fire. If it does, the transaction rolls
    back and the database is unchanged on its previous schema, as described in
    [Failure guidance](#failure-guidance). Changing `STORAGE_*` does not help.
-   Do not delete accounts or edit grants by hand: start the previous
-   release again, keep the verified backup, and report the problem with the
-   number of rows in `accounts`. Separately, if your `STORAGE_*` values leave less
+   Do not delete accounts or edit grants by hand: return to the old project as
+   described under [Failure guidance](#failure-guidance), keep the verified
+   backup, and report the problem with the number of rows in `accounts`. Separately, if your `STORAGE_*` values leave less
    grant room than your accounts need, startup fails after the migrations have
    committed with `application database setup failed`. Correct the values in
    `.env` and restart; no restore is needed, but the previous image can no
@@ -231,7 +236,8 @@ rows.
    ```
 
    Anything in that list that the migrations in [`migrations/`](../migrations)
-   do not create is extra. If you miss one, the first startup applies the
+   do not create is extra, except `schema_migrations`, which startup creates
+   itself. If you miss one, the first startup applies the
    migrations and then refuses with `application database security contract
    mismatch: relation set: unexpected [...]` naming it. The database is
    already migrated at that point and the previous image can no longer run
@@ -251,7 +257,10 @@ above. See
 No exact-image rollback is supported across 0.x to 1.0. Recovery means
 restoring the verified pre-upgrade backup into a fresh volume under the old
 image. That loses every write made after the backup. The steps are in
-[Rollback](#rollback).
+[Rollback](#rollback). While the stopped old project and its volume are
+untouched, you can instead restore `.env` from `.env.pre-upgrade`, check out
+the previous release and start that project again; it still holds the
+pre-upgrade data.
 
 ## Rehearse an upgrade against your own backup
 
@@ -371,7 +380,7 @@ even after a passing rehearsal.
    docker compose up -d
    docker compose ps
    docker compose logs app
-   curl -fsS http://127.0.0.1:8077/healthz
+   for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8077/healthz && break; sleep 5; done
    ```
 
    Wait for both services to report healthy and check the app logs for
@@ -383,8 +392,8 @@ even after a passing rehearsal.
    cite a schema version:
 
    ```sh
-   scripts/backup_database.sh --output /tmp/schema-check.dump
-   grep schema_version /tmp/schema-check.dump.manifest
+   scripts/backup_database.sh --output backups/schema-check.dump
+   grep schema_version backups/schema-check.dump.manifest
    ```
 
    Then sign in and spot-check representative data (a recent trip, a place,
@@ -481,9 +490,15 @@ the app repeatedly hoping a transient failure resolves itself, since a
 migration failure is almost always deterministic (a data shape the migration
 didn't expect, insufficient privileges, disk space) and will fail the same
 way every time until the underlying cause is fixed. If you can't resolve it
-promptly, check out the previous exact release, pull its pinned image, and
-restart on the database that's still on the old schema, since nothing
-committed.
+promptly after an application-only upgrade, check out the previous exact
+release, pull its pinned image, and restart on the database that's still on
+the old schema, since nothing committed. After a database-image migration,
+including 0.x to 1.0, do not start the previous release on the target
+database: the new image initialized it, and the older PostGIS libraries do not
+match it. Restore `.env` from `.env.pre-upgrade`, check out the previous
+release and start the stopped old project again, which still holds the
+pre-upgrade data, or follow
+[Rollback after a database-image migration](#rollback-after-a-database-image-migration).
 
 **A successful migration followed by an application failure** (migrations
 completed, but the app won't start cleanly, crashes under load, or otherwise
@@ -547,7 +562,7 @@ even if it appears to start.
    scripts/restore_database.sh backups/pre-upgrade.dump
    docker compose up -d app
    docker compose ps
-   curl -fsS http://127.0.0.1:8077/healthz
+   for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8077/healthz && break; sleep 5; done
    ```
 
    Sign in and check representative data before switching traffic. Keep the
