@@ -495,16 +495,19 @@ export COMPOSE_FILE="$drill_compose"
 export COMPOSE_PROJECT_NAME="$DRILL_PROJECT"
 run_compose config >/dev/null
 wait_for_healthy() {
-  local service="$1" output=""
+  local service="$1" name status=""
   for ((attempt = 1; attempt <= 60; attempt++)); do
-    output="$(run_compose ps 2>&1 || true)"
-    if printf '%s\n' "$output" | grep -qiE "$service.*\\(healthy\\)"; then
-      return 0
-    fi
+    # Docker Compose names containers PROJECT-service-1, podman-compose PROJECT_service_1.
+    for name in "${DRILL_PROJECT}_${service}_1" "${DRILL_PROJECT}-${service}-1"; do
+      status="$("${runtime[@]}" inspect --format '{{.State.Health.Status}}' "$name" 2>/dev/null || true)"
+      if [ "$status" = healthy ]; then
+        return 0
+      fi
+    done
     sleep 2
   done
   echo "error: $service did not report healthy." >&2
-  printf '%s\n' "$output" >&2
+  run_compose ps >&2 || true
   return 1
 }
 started=1
