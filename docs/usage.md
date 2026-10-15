@@ -9,8 +9,11 @@ devices, vehicles, trips and settings; see
 
 On a desktop browser, the main navigation shows **Dashboard**, **Trips**,
 **Review**, **Report**, **Expenses**, and **Stats**, with a **Settings** link in
-the header. On a phone, **Week** opens the Dashboard, **More** contains
-Expenses and Stats, and Settings is under the avatar or initials menu.
+the header. The header also shows your display name (a link to **Account
+Settings**), **Accounts** for the administrator, and **Log out**. On a phone,
+**Week** opens the Dashboard, **More** contains Expenses and Stats, and the
+avatar or initials menu holds Settings, Account Settings, Accounts for the
+administrator, and Log out.
 
 The header shows your account's display name, or the part of your login email
 before the `@` when none is set. To change it, open **Account Settings** and
@@ -26,15 +29,15 @@ For passwords, login email and signing out, see
 1. **Add a vehicle.** Open **Settings**, expand **Add vehicle** under
    **Vehicles**, enter a name, and choose **Make default** if appropriate.
    Make, model, and plate are optional. Select **Add**. To assign this default
-   automatically to newly detected trips, turn on **Assign the default vehicle
+   automatically to newly detected trips, turn on **Assign my default vehicle
    to newly detected trips** under **Vehicles**.
 
 2. **Connect your phone.** Follow [Connecting OwnTracks](owntracks.md) to set
    up HTTP mode and the `/ingest` address. That guide also includes a
    synthetic test track if you want to check the pipeline without driving.
 
-3. **Confirm that data arrived.** In **Settings**, expand **Diagnostics** and
-   look at **Device status**. It shows the latest received fix, latest
+3. **Confirm that data arrived.** In **Settings**, scroll to **Device status**.
+   It shows the latest received fix, latest
    recorded time, and point count for each OwnTracks device. A point there
    proves that the phone reached Odograph. A completed trip is a separate
    result of the trip detector, so it can take longer after you stop. The
@@ -125,7 +128,8 @@ Category and Exclusion answer different questions. Category describes the
 trip. Exclusion describes whether the trip belongs in mileage totals.
 
 - **Normal trip:** no exclusion. Business, Personal, or Unclassified controls
-  the normal totals.
+  the normal totals. Unclassified appears as **Unset** in the edit card and the
+  Trip Detail category control.
 - **Not one of my vehicles:** removes the trip from Dashboard totals and trip
   counts, reports, Stats totals, vehicle totals, odometer reconciliation, and
   missing-trip attention. Use it when none of your vehicles was involved.
@@ -167,10 +171,11 @@ refreshes. Changing filters or navigating archive history clears it. You can
 deselect visible rows individually or choose **Clear selection**. Failed
 requests and actions keep the selection for retry.
 
-On desktop, the selection bar provides **Category** (Business, Personal, or
-Unclassified), **Purpose** (set or clear), **Vehicle** (assign or clear),
-**Exclusion** (Normal trip or either exclusion), **More**, then **Merge
-selected...**, **Delete selected**, and **Clear selection**. On phones, a
+On desktop, the selection bar provides **Business** and **Personal**,
+**Purpose** (set or clear), **Vehicle** (assign or clear), **Exclusion**
+(Normal trip or either exclusion), **More**, **Delete selected**, and
+**Clear selection**. **More** holds **Clear category** and **Merge
+selected...**, which needs at least two selected trips. On phones, a
 compact strip shows the selected count. Tap **Actions** to open a panel with
 the same controls. A successful **Delete selected**
 clears the selection. If any selected trip is missing, the whole bulk action
@@ -184,8 +189,9 @@ permanently deleted.
 
 Trip Detail shows route, date, time, duration, point count, distance, and
 whether the trip is Detected or Manual. A detected trip can show a road-snapped
-distance and raw GPS distance. If snapping is pending or failed, the page says
-it is showing raw GPS distance.
+distance and raw GPS distance. If snapping is pending, the page says **Not yet
+road-snapped**. If it failed or covered only part of the trip, the page shows
+the raw GPS distance with **Road-snap failed** or **Road-snap incomplete**.
 
 Change **Category**, **Vehicle**, **Exclusion**, **Purpose**, or **Notes** on
 the detail page; these controls save when changed. Detected trips with stored
@@ -204,8 +210,9 @@ a time. Only the tools that apply to the trip are shown:
 - **Name start** and **Name end** save an unnamed endpoint as a Place. While
   one is open, tapping or clicking the map moves its location to that point.
 
-A manual trip with **No route** can include **Name start location** and **Name
-end location**. These are per-trip labels, not saved Places.
+A manual trip without a saved place or coordinates for an endpoint shows
+**Start location name** or **End location name** under **Location names**.
+These are per-trip labels, not saved Places.
 
 The archive's **Merge selected...** action has the same rules: selected trips
 must be contiguous detected trips from one device, and all must be visible in
@@ -221,8 +228,8 @@ Two warnings appear on Trips and Dashboard rows: **Recording gap** and
 **Possible missing trip**. After you have checked one, choose **Acknowledge
 warnings** from the row's **More trip actions** menu. It applies to every
 warning the row shows. The badges leave the row, and an acknowledged missing
-trip no longer counts in the Dashboard **Needs attention** area. **Add missing
-trip** stays in the menu.
+trip no longer counts in the Dashboard **Needs attention** area. On Trips,
+**Add missing trip** stays in the menu.
 
 Acknowledging never changes the trip, its points, its distance, or its
 category. Review, reports, CSV exports, and notifications are unchanged.
@@ -257,7 +264,7 @@ Choose one Route mode:
   available, Odograph previews the road route and fills the distance.
 - **Pick on map:** click the map once for the start and once for the end. Use
   **Reset points** to choose them again.
-- **Search:** type an address or place in the Start and End search fields and
+- **Search:** type an address or place in **Start address** and **End address** and
   pick a result from each list. The text you type is sent to the configured
   geocoding service before the trip is saved, even for a place you never use.
   The trip stores the picked coordinates, not the address text, so its
@@ -271,8 +278,9 @@ you enter a distance; Trips shows a notice that the entered distance was used.
 A routed form with no distance and no available route cannot save. See the
 [OSRM guide](osrm.md) for the optional self-hosted routing service.
 
-When a trip row shows **Possible missing trip**, select **Add missing trip**
-from its More menu. The form pre-fills date, start time, and notes. With
+When a Trips row shows **Possible missing trip**, select **Add missing trip**
+from its More menu. On the Dashboard, use the possible-missing-trip link in
+**Needs attention**. The form pre-fills date, start time, and notes. With
 routing configured, it may also show a suggested road distance between the
 surrounding trip endpoints. Review every field before selecting **Add**.
 
@@ -281,7 +289,7 @@ surrounding trip endpoints. Review every field before selecting **Add**.
 ### Saved Places and automatic rules
 
 In **Settings**, under **Places**, select **Add place**. Enter a Name,
-choose **Home**, **Work**, or **Other**, provide latitude and longitude, and
+choose **Home**, **Work**, or **Other**, provide **Lat** and **Lon**, and
 set a positive **Radius (m)**. If a geocoder is configured, Address search can
 fill the coordinates. Saved places name trip endpoints and match automatic
 classification rules.
@@ -301,7 +309,7 @@ Unclassified.
 The **Vehicles** section stores names used in trip pickers, reports, and
 expenses. **Set default** changes the default vehicle. **Deactivate** removes
 a vehicle from pickers for new assignments but keeps it on existing trips.
-Turn on **Assign the default vehicle to newly detected trips** if appropriate.
+Turn on **Assign my default vehicle to newly detected trips** if appropriate.
 
 Open **Settings > Tracking** to create a device and copy its one-time
 username/password into OwnTracks. Each credential selects a stable device;
@@ -439,7 +447,7 @@ archive, `.env`, verification, restore, and off-host protection.
 
 ### A point arrived, but no trip appeared
 
-Check **Settings**, **Diagnostics**, **Device status**. A recent fix means
+Check **Settings**, **Device status**. A recent fix means
 ingestion is working and the detector may still be waiting for the trip to
 finish. Sparse reporting or queued offline data can delay completion. Check
 **Trips** for the date and the Dashboard **Needs attention** area for a
@@ -480,10 +488,11 @@ map. The [privacy guide](privacy.md) describes this boundary.
 
 ### Where are diagnostics and support options?
 
-Open **Settings** and expand **Diagnostics**. It shows app, Git, schema, and
-detector versions, database and migration status, worker state, configuration
-presence, optional connectivity checks, and device status. Connectivity checks
-run only after selecting **Check now**.
+Diagnostics is shown to administrators only; members ask their administrator.
+The administrator opens **Settings** and expands **Diagnostics**. It shows app,
+Git, schema, and detector versions, database and migration status, worker
+state, configuration presence, and optional connectivity checks. Connectivity
+checks run only after selecting **Check now**.
 
 When requesting help, share the app version, schema version, relevant error
 text, and steps to reproduce it. Do not include `.env` values, ingest
