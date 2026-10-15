@@ -70,7 +70,9 @@ This downloads the extract, then runs `osrm-extract` → `osrm-partition` →
 `compose.yaml`'s `osrm` service already uses, writing the result into the
 `osrmdata` compose volume. It works with either `docker compose` or
 `podman-compose` on `PATH` (override autodetection with `COMPOSE_CMD` if you
-have both installed). Run it from the directory containing `compose.yaml`.
+have both installed). Run it from the directory containing `compose.yaml`. The
+script comes with the full release checkout; the two-file installation does not
+include it.
 
 **Re-running it is safe, but replaces the current contents of the `osrmdata`
 volume**: the previous dataset is gone as soon as the new one starts
@@ -112,11 +114,23 @@ itself catches the empty value and exits with an explanation, rather than
 failing obscurely against an empty `/data`. The service is set to restart, so
 the container will exit and restart repeatedly until you either provision a
 dataset or stop the profile; run `docker compose logs osrm` to read the
-message. Then start (or restart) the service:
+message. The app reads `OSRM_URL` only at startup, so recreate it along with
+the `osrm` service; starting only `osrm` (as the provisioning script's printed
+hint does) leaves the running app without routing:
 
 ```sh
-docker compose --profile osrm up -d osrm      # or: podman-compose --profile osrm up -d osrm
+docker compose --profile osrm up -d
+# podman-compose:
+podman-compose --profile osrm up -d osrm
+podman-compose up -d --force-recreate app
 ```
+
+Compose recreates services whose environment changed, so the Docker command
+recreates the app. Snapped routes and saved addresses count against each
+account's storage allowance (Settings shows **Road matching and saved
+addresses**). When the allowance is exhausted, route enhancement pauses and
+Trip Detail shows "Route enhancement paused for storage capacity; showing raw
+GPS distance".
 
 `OSRM_MIN_CONFIDENCE`, `OSRM_MAX_COORDS`, `SNAP_DEBOUNCE_S`, and
 `SNAP_SWEEP_S` tune snapping behavior once it's running; none of them need

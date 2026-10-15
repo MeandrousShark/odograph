@@ -102,8 +102,10 @@ path.write_text(text)
 PYENV
 ```
 
-Then open `.env` in an editor and set a stable Compose project name and an
-explicit IANA timezone. Keep the generated secrets private. The relevant
+Then open `.env` in an editor. Add a `COMPOSE_PROJECT_NAME` line (the file
+does not include one) for a stable Compose project name, change
+`INITIAL_ADMIN_SIGNUP` from `1` to `0`, and set an explicit IANA timezone.
+Keep the generated secrets private. The relevant
 fields are shown below with placeholders, not values to copy over your file.
 `INGEST_PASSWORD` is retained for legacy-upgrade compatibility; after fresh
 setup, issue device credentials in Tracking. `DISPLAY_TZ` supplies the initial
@@ -178,7 +180,9 @@ docker compose exec app python -m app.manage_account create-admin
 The command prompts for the administrator email and password, and accepts no
 password argument. `INITIAL_ADMIN_SIGNUP=0` keeps browser signup disabled, so
 the public `/signup` route cannot let an unknown visitor create the first
-account. Run this command before configuring public proxy access.
+account. Run this command before configuring public proxy access. Further
+members join by invitation from **Accounts**; see [administrator account
+management](accounts.md#administrator-account-management).
 
 With Podman, replace each `docker compose` command above with
 `podman-compose`. The account command and its interactive prompts are the same.
