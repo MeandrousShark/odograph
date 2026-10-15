@@ -60,7 +60,7 @@ server {
         proxy_pass http://127.0.0.1:8077;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
@@ -94,6 +94,16 @@ proxy targets `127.0.0.1:8077`, but container port translation may make that
 connection appear to uvicorn as a runtime-specific bridge or gateway address
 rather than `127.0.0.1`; the wildcard handles both Docker and Podman without
 guessing a private subnet.
+
+The proxy in front of the application must set `X-Forwarded-For` to the
+address that connected to it, replacing any value the client sent rather than
+appending to it. With `FORWARDED_ALLOW_IPS=*` the application uses the first
+(leftmost) entry, so a header that kept the client's own value ahead of the
+proxy's would make that value the recorded client address. With an exact
+`FORWARDED_ALLOW_IPS`, uvicorn walks the list from the right and uses the
+first address it does not trust, which is the address the outermost trusted
+proxy saw. The Caddy example above already replaces the header; the nginx
+example does so with `$remote_addr`.
 
 Change the setting when the topology changes:
 

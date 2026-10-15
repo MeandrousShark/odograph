@@ -280,6 +280,14 @@ reproduced here.
 - The signature verification documentation uses the exact certificate
   identity. The looser regular-expression fallback and the wildcard identity
   patterns in the release procedure are removed.
+- The nginx example in [Reverse proxy and TLS](docs/reverse-proxy.md#nginx) now
+  sets `X-Forwarded-For` to the connecting address instead of appending to the
+  incoming header. The recorded client address and the address-based sign-in
+  limits depend on that value. If you copied the earlier example, change that
+  line to `proxy_set_header X-Forwarded-For $remote_addr;` and reload nginx,
+  or set `FORWARDED_ALLOW_IPS` to the proxy's exact address. The Caddy example
+  needs no change. See
+  [Trusting forwarded headers](docs/reverse-proxy.md#trusting-forwarded-headers).
 
 ### Migrations
 
