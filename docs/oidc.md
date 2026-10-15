@@ -1,7 +1,8 @@
 # OIDC sign-in
 
 OIDC can be linked as a second way to sign in to an existing account. The
-administrator configures one OIDC provider for the instance. OIDC is optional;
+operator configures one OIDC provider for the instance in the environment
+(`.env`); there is no provider setting in the web interface. OIDC is optional;
 Odograph works without it.
 
 ## Set up the provider
@@ -33,6 +34,11 @@ provider does not meet this, those actions fail closed.
 An invited member can accept the invitation with the configured provider
 instead of setting a local password. That creates an OIDC-only account, which
 can add a password later; see [Account management](accounts.md).
+
+Accepting an invitation this way makes the invited address the login email,
+unverified. The provider's email is not matched against it. Once any account
+exists, an OIDC sign-in that is not linked to an account or an invitation is
+refused. Failures show the sign-in or invitation page with the message.
 
 ## Signing out
 

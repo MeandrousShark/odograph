@@ -23,7 +23,7 @@ for disabled.
 |---|---:|---|
 | `POSTGRES_PASSWORD` | generated, required | URI-safe privileged setup and backup password used to initialize the Compose database and construct `DATABASE_URL`. Changing it does not change the role password in an existing database volume. |
 | `DATABASE_URL` | set by `compose.yaml` | Privileged PostgreSQL URL used for migrations, managed-role setup, backup, and recovery. Normal requests and workers use generated restricted connections. Set it directly only outside the canonical Compose stack. |
-| `DISPLAY_TZ` | `UTC` in the app | Initial IANA timezone suggestion for first-account setup, and the one-time timezone import for an upgraded account. After setup, change the account timezone in Settings. |
+| `DISPLAY_TZ` | `UTC` in the app | Initial IANA timezone suggestion for first-account setup, and the one-time timezone import for an upgraded account. After setup, change the account timezone in Settings. An invalid IANA name stops startup. |
 | `FORWARDED_ALLOW_IPS` | empty in the app, `*` in generated config | Immediate proxy IPs or CIDRs uvicorn may trust for forwarded client and scheme headers. The generated wildcard is safe only with the shipped loopback-bound port. See [Reverse proxy and TLS](reverse-proxy.md#trusting-forwarded-headers). |
 
 Compose fixes the database name and role to `mileage`. `COMPOSE_PROJECT_NAME`
@@ -353,8 +353,8 @@ points.
 | `WALK_MAX_SPEED_MS` | `2.0` | Maximum sustained speed treated as an on-foot stay. |
 | `MIN_TRIP_DISTANCE_M` | `300` | Rejects shorter movement between stays as jitter rather than a trip. |
 | `GAP_FLAG_THRESHOLD_S` | `600` | Marks a trip when consecutive kept points are farther apart than this many seconds. |
-| `FULL_REPROCESS_WARN_POINTS` | `500000` | Logs a warning before a full-device reprocess at or above this point count. `0` disables the warning. |
-| `DETECTOR_TURN_MAX_POINTS` | `0` | Largest rewind window, in points, that one background detector turn loads for a device. `0` means unlimited. See [Large detector windows](#large-detector-windows). |
+| `FULL_REPROCESS_WARN_POINTS` | `500000` | A full-device reprocess logs at WARNING when the device has at least this many points, otherwise at INFO. `0` makes every full reprocess a warning. |
+| `DETECTOR_TURN_MAX_POINTS` | `0` | Largest rewind window, in points, that one background detector turn loads for a device. `0` means unlimited. A negative or non-integer value stops startup. See [Large detector windows](#large-detector-windows). |
 
 ### Large detector windows
 
@@ -365,6 +365,12 @@ first counts that window. A device over the limit is deferred: the worker
 writes nothing for it, logs one warning naming the account and device IDs, and
 moves on to other devices and accounts. Ingest continues normally. Trip edits
 such as merge and split are not limited.
+
+A device that stays in one place for a long time keeps one growing stay, so
+each background turn reloads the whole stationary period from that stay's
+start. With the limit set, such a device is deferred once its window exceeds
+it, and stays deferred until `python -m app.reprocess_detector` runs for it or
+the limit is raised and the app restarted.
 
 A deferred device is counted again at most every five minutes, on the next
 ingest or periodic sweep (`DETECT_SWEEP_S`). Its checkpoint does not advance
@@ -448,6 +454,10 @@ the manual trip form's Search mode, may therefore wait behind an earlier
 lookup. This interval is operator configuration, not a
 claim about a hosted provider's usage policy.
 
+Outbound provider HTTP requests (OSRM, geocoding and ntfy) honor the standard
+`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY` variables and
+`SSL_CERT_FILE` / `SSL_CERT_DIR`. SMTP does not use them.
+
 Provider HTTP operations have a 15-second total network deadline through
 response completion, in addition to shorter socket timeouts. Decompressed
 responses are limited to 8 MiB for OSRM, 256 KiB for geocoding/autocomplete
@@ -517,14 +527,14 @@ reset or challenge can revoke a link in a message the relay already accepted.
 | `SMTP_PORT` | `587` | SMTP server port. |
 | `SMTP_USERNAME` | unset | Optional SMTP username. |
 | `SMTP_PASSWORD` | unset | Optional SMTP password. |
-| `SMTP_SECURITY` | `starttls` | `starttls`, `ssl`, or `none`. Use `none` only for a trusted local relay. |
+| `SMTP_SECURITY` | `starttls` | `starttls`, `ssl`, or `none`. Values are case-sensitive, and an unrecognized value fails at send time, not at startup. Use `none` only for a trusted local relay. |
 | `SMTP_TLS_INSECURE` | `0` | `1` disables certificate verification. Use only for a localhost bridge with a self-signed certificate. |
 | `EMAIL_FROM` | unset | Message sender address. |
 | `EMAIL_TO` | unset | Legacy one-time import of the email digest recipient; manage the saved recipient in Settings. |
-| `EMAIL_WEEKLY_NUDGE` | `0` | Sends the weekly unclassified-trip reminder by email. |
-| `EMAIL_MONTHLY_SUMMARY` | `1` | Sends monthly mileage summaries when email is enabled. |
-| `EMAIL_FILING_REMINDER` | `1` | Sends the annual filing reminder when email is enabled. |
-| `EMAIL_ODOMETER_REMINDER` | `0` | Sends quarterly odometer reminders by email. |
+| `EMAIL_WEEKLY_NUDGE` | `0` | Legacy one-time import of the weekly unclassified-trip email reminder switch; edit it in Settings afterwards. |
+| `EMAIL_MONTHLY_SUMMARY` | `1` | Legacy one-time import of the monthly mileage summary email switch; edit it in Settings afterwards. |
+| `EMAIL_FILING_REMINDER` | `1` | Legacy one-time import of the annual filing reminder email switch; edit it in Settings afterwards. |
+| `EMAIL_ODOMETER_REMINDER` | `0` | Legacy one-time import of the quarterly odometer reminder email switch; edit it in Settings afterwards. |
 
 ## Worker scheduling
 
@@ -541,11 +551,11 @@ and use seconds.
 | `SNAP_SWEEP_S` | `300` | Periodic road-snapping catch-up interval. |
 | `GEOCODE_DEBOUNCE_S` | `15` | Quiet period before pending endpoints are geocoded. |
 | `GEOCODE_SWEEP_S` | `300` | Periodic geocoding catch-up interval. |
-| `NUDGE_WEEKLY_HOUR` | `18` | Sunday hour for the weekly unclassified-trip reminder. |
-| `ODOMETER_REMINDER` | enabled when ntfy is enabled | Controls the quarterly ntfy odometer reminder independently. |
-| `ODOMETER_REMINDER_HOUR` | `9` | Local hour on the first day of a calendar quarter. |
-| `EMAIL_DIGEST_HOUR` | `9` | Local hour for monthly, annual filing, and enabled email reminder delivery. |
-| `EMAIL_FILING_REMINDER_MMDD` | `01-15` | Month and day for the annual filing reminder. |
+| `NUDGE_WEEKLY_HOUR` | `18` | Legacy one-time import of the Sunday hour for the weekly unclassified-trip reminder; edit it in Settings afterwards. |
+| `ODOMETER_REMINDER` | enabled when ntfy is enabled | Legacy one-time import of the quarterly ntfy odometer reminder switch; edit it in Settings afterwards. |
+| `ODOMETER_REMINDER_HOUR` | `9` | Legacy one-time import of the local hour on the first day of a calendar quarter; edit it in Settings afterwards. |
+| `EMAIL_DIGEST_HOUR` | `9` | Legacy one-time import of the local hour for monthly, annual filing, and enabled email reminder delivery; edit it in Settings afterwards. |
+| `EMAIL_FILING_REMINDER_MMDD` | `01-15` | Legacy one-time import of the month and day for the annual filing reminder; edit it in Settings afterwards. |
 
 ## Release-managed identity
 
