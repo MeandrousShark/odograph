@@ -218,7 +218,12 @@ reproduced here.
   card change, and reads trip distance with its unit.
 - OIDC callback failures, such as the invitation capacity refusal or a sign-in
   by an account that was never invited, now show the sign-in or invitation page
-  with the message instead of raw JSON. See [OIDC sign-in](docs/oidc.md).
+  with the message instead of raw JSON; a failed link or reauthentication for a
+  signed-in account returns to Account Settings. See
+  [OIDC sign-in](docs/oidc.md).
+- With a mileage rate on file but no business miles, the Trips year-to-date
+  figure, annual and range reports, digests and vehicle stats show a `$0.00`
+  deduction instead of reporting that no rate is on file.
 - Portable exports read one consistent snapshot, so references created or
   deleted during an export can no longer produce an inconsistent bundle.
 - Concurrent backups to the same output are refused instead of overwriting each
