@@ -24,13 +24,14 @@ here; see `requirements.lock` for the full resolved set.
 | itsdangerous | BSD-3-Clause | Package metadata only carries a generic "BSD License" classifier; confirmed the specific variant (3-clause, copyright Pallets) against the license text bundled in the installed package's dist-info. |
 | python-multipart | Apache-2.0 | Verified via package metadata (`License-Expression: Apache-2.0`). |
 | openpyxl | MIT | Verified via package metadata (`License: MIT`). |
+| lxml | BSD-3-Clause | Upstream project license; not re-verified against installed package metadata in this checkout. |
 
 ## Vendored frontend assets (`static/vendor/`)
 
 | Asset | Version | License | In-tree license text |
 | --- | --- | --- | --- |
 | Leaflet | 1.9.4 (from the file's own `@preserve` header comment) | BSD-2-Clause | `static/vendor/leaflet/LICENSE` (added; the vendored build did not ship its own license file, so the upstream text was copied in alongside it) |
-| htmx | 1.9.1 (from the file's embedded `version` string) | BSD-2-Clause | `static/vendor/htmx/LICENSE` (added; the vendored build did not ship its own license file, so the upstream text was copied in alongside it) |
+| htmx | 1.9.12 (from the file's embedded `version` string) | BSD-2-Clause | `static/vendor/htmx/LICENSE` (added; the vendored build did not ship its own license file, so the upstream text was copied in alongside it) |
 
 ## External software, data, and services
 

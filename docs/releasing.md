@@ -29,8 +29,7 @@ Before preparing a release:
   blocks. By then the tag exists and is immutable, so a finding there costs
   the version number rather than a few minutes: the release has to be
   abandoned and recut as the next patch. Resolve findings by upgrading the
-  affected dependency where possible, or record a narrowly scoped acceptance
-  as described below.
+  affected dependency; scan acceptances block release preflight.
 
   Changing a pin has its own precondition. The image installs
   `requirements.lock` on the `python:3.13-slim` base for both published
@@ -44,14 +43,18 @@ Before preparing a release:
   done
   ```
 
-- Review the scheduled image-scan results. Resolve blocking findings or record
-  a narrowly scoped acceptance as described below.
+- Review the scheduled image-scan results. Resolve blocking findings by
+  updating the affected dependency.
 - Read every release note since the previous supported release. Decide the
   supported upgrade path, identify breaking operational or data changes, and
   determine whether the standard artifact upgrade drill applies.
-- Have `git`, `gh`, Docker with Buildx, `jq`, and `pip-audit` available, the
-  last of these because the dependency scan above is required rather than
-  optional. Install Trivy when reproducing the image scans locally.
+- Have `git`, `gh`, Docker with Buildx, Podman with `podman-compose`,
+  `cosign`, `crane`, `jq`, and `pip-audit` available. `pip-audit` is required
+  because the dependency scan above is required rather than optional; `cosign`
+  and `crane` are used to verify signatures and move floating tags, and Podman
+  runs the second upgrade drill. Create the `.venv` described in
+  [AGENTS.md](../AGENTS.md#test-setup) first: the commands below call
+  `.venv/bin/python`. Install Trivy when reproducing the image scans locally.
   Authenticate `gh` and Docker to GitHub/GHCR with the repository and package
   permissions needed for the release.
 
@@ -96,7 +99,8 @@ Every release section must state:
   or an explicit statement that there are none;
 - each new migration in the release with its `-- migration-class:` header
   value, or an explicit statement that the release adds none; and
-- any security scan acceptance in the exact syntax described below.
+- no security scan acceptances (see
+  [Blocking dependency and image scans](#blocking-dependency-and-image-scans)).
 
 Migrations from 045 on declare `additive`, `rewrite` or `destructive` on their
 first line, and a test enforces it. List the class of every migration the
@@ -105,9 +109,8 @@ operator impact, such as a longer first startup, a backfill, or data that is
 removed. Destructive changes to supported existing data belong at a major
 version boundary.
 
-For the first public release, use the explicit statement "Prior-release
-artifact upgrade gate: not applicable. No prior public release exists." Do
-not imply that the gate ran.
+State which prior-release artifact upgrade gate ran, or why it did not apply.
+Do not imply that a gate ran when it did not.
 
 Validate that the Compose image, changelog section, documented exact-tag
 install path, and runtime-reported version contract all agree. Then confirm
@@ -179,16 +182,16 @@ the exact merge commit on `main`; the last one must pass before tagging.
 
 The workflow has `contents: read` permission only. It does not push images,
 create releases, create or push tags, or move the floating minor alias. Its
-preflight builds local image archives and uploads evidence only. It requires
-empty security scan acceptances, so this path does not weaken `pip-audit` or
-Trivy gates and does not accept a changelog scan exception.
+preflight builds local image archives and uploads evidence only. It always runs
+with `--require-empty-acceptances`, so any changelog scan acceptance fails it
+and this path does not weaken `pip-audit` or Trivy gates.
 
 To dispatch a preflight manually, choose the exact candidate branch or tag. The
 version input is optional and otherwise comes from the checked
 out Compose app image; when supplied, it must match that release contract:
 
 ```sh
-VERSION=v0.11.0
+VERSION=vX.Y.Z
 REF=release/$VERSION
 gh workflow run release-preflight.yml --ref "$REF" \
   --field mode=preflight
@@ -267,29 +270,13 @@ image without trusting the registry transport or the maintainer's word alone.
 
 `pip-audit` blocks every reported vulnerability in the locked Python
 dependencies. Trivy blocks fixable HIGH and CRITICAL findings in each container
-architecture. Prefer upgrading or removing the affected dependency. An
-acceptance is exceptional: review reachability and exposure, constrain it to
-the affected scanner and architecture, and record why shipping is safe enough
-until a fix is available.
+architecture. Upgrade or remove the affected dependency.
 
-Acceptances belong only in the exact release tag's changelog section. The
-reason after the separator must be nonempty and specific. The separator may be
-either a colon and a space, shown below and preferred for new entries, or a
-spaced em dash, which older entries use and which is still accepted. These are
-the accepted forms:
-
-```text
-- **Security scan acceptance (pip-audit):** `GHSA-xxxx-xxxx-xxxx`: reason
-- **Security scan acceptance (Trivy linux/amd64):** `CVE-YYYY-NNNN`: reason
-- **Security scan acceptance (Trivy linux/arm64):** `CVE-YYYY-NNNN`: reason
-- **Security scan acceptance (Trivy all):** `CVE-YYYY-NNNN`: reason
-```
-
-Use `all` only when the same finding and rationale apply to both published
-architectures. A marker in `Unreleased`, another version's section, or with an
-empty reason has no effect. Malformed markers fail the release rather than
-silently weakening a gate. The release-note extractor turns valid markers into
-the scanner-specific ignore files used only for that release run.
+Release preflight always runs with `--require-empty-acceptances`
+(`.github/workflows/release-preflight.yml`), so any scan acceptance in the
+release's changelog section fails the preflight and the publication
+verification, blocking tagging and verification. Do not use acceptances:
+resolve a finding by updating or removing the affected dependency.
 
 Maintainers can reproduce the dependency check locally with `pip-audit` and
 scan an already-built image with Trivy:
@@ -350,11 +337,15 @@ predicate rather than the whole statement:
 ```sh
 cosign verify-attestation --type spdxjson \
   --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" \
-  "$IMAGE@$AMD64_DIGEST" | jq -r '.payload' | base64 -d | jq '.predicate' > sbom-amd64.spdx.json
+  "$IMAGE@$AMD64_DIGEST" \
+  | jq -rs '[.[] | if type == "array" then .[] else . end][0].payload' \
+  | base64 -d | jq '.predicate' > sbom-amd64.spdx.json
 
 cosign verify-attestation --type spdxjson \
   --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" \
-  "$IMAGE@$ARM64_DIGEST" | jq -r '.payload' | base64 -d | jq '.predicate' > sbom-arm64.spdx.json
+  "$IMAGE@$ARM64_DIGEST" \
+  | jq -rs '[.[] | if type == "array" then .[] else . end][0].payload' \
+  | base64 -d | jq '.predicate' > sbom-arm64.spdx.json
 ```
 
 Each written file is then a standalone SPDX document rather than the statement
@@ -449,10 +440,19 @@ commit `17048177dfea29e07be81bbb719e0d1e79fe4017`.
 
 ## Run the artifact upgrade and rollback drill
 
-For every release after the first public release, run the disposable drill
-from the previous supported release tree to the exact candidate tree and
-published image. `--base` and `--candidate` are both required even when the
-candidate application comes from an image:
+Every release is drilled from each base tag in
+`scripts/upgrade_drill_bases.json` to the exact candidate. Release preflight
+runs this drill with Docker Compose for every base, through
+`.github/workflows/upgrade-drill.yml`: against the candidate source in
+`preflight` mode and against the published image in `verify-published` mode.
+For v1.0.0 the bases are v0.10.2, v0.11.0, v0.11.1 and v0.11.3; every
+published v0.10.x and v0.11.x release is schema 25, so v0.10.0 and v0.11.2
+share these upgrade paths. Later 1.x releases drill from v1.0.0 and the
+previous release. In addition, run the drill manually with Podman Compose from
+the newest base. For v1.0.0 that is v0.11.3, and because the database image
+also changes, use the [database image migration
+drill](#database-image-migration-drill) mode. `--base` and `--candidate` are
+both required even when the candidate application comes from an image:
 
 ```sh
 COMPOSE_CMD="docker compose" scripts/upgrade_check.sh \
@@ -504,9 +504,8 @@ then starts the candidate app. It rolls back by starting the original database
 image on a fresh volume and restoring the pre-upgrade backup; writes made after
 that backup must be lost. It never swaps `PGDATA` directories directly.
 
-For the first public release, record "Prior-release artifact upgrade gate: not
-applicable. No prior public release exists." A clean-install verification on
-both architectures is still required.
+A clean-install verification on both architectures is still required for every
+release.
 
 ## Build and publish the PostGIS image
 
@@ -546,7 +545,8 @@ would otherwise reach for `latest` pin `vX.Y` instead: they pick up patch fixes
 without silently crossing a minor boundary, which is where migrations and, before
 1.0, breaking changes are allowed to land. There is deliberately no `latest` tag.
 From 1.0 a floating major tag, `v1`, is also published; see
-[Move the floating major tag](#move-the-floating-major-tag).
+[Move the floating major tag](#move-the-floating-major-tag). The first 1.x
+release creates both the `v1.0` and `v1` floating tags.
 
 **This step is mandatory for every patch release.** A floating tag that stops
 moving is worse than no floating tag, because operators believe it is current
@@ -576,7 +576,7 @@ verifies:
 crane digest "$IMAGE:$VERSION"
 crane digest "$IMAGE:${VERSION%.*}"
 cosign verify \
-  --certificate-identity-regexp "^https://github.com/MeandrousShark/odograph/.github/workflows/.*@refs/tags/$VERSION$" \
+  --certificate-identity-regexp "^https://github.com/$REPOSITORY/.github/workflows/.*@refs/tags/$VERSION$" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   "$IMAGE:${VERSION%.*}"
 ```
@@ -590,7 +590,8 @@ A prerelease never moves a floating tag.
 ## Move the floating major tag
 
 From 1.0, the registry also carries a floating `v1` tag that points at the
-newest verified stable 1.x release. It is an alias, like the floating minor
+newest verified stable 1.x release. The first 1.x release creates both `v1.0`
+and `v1`; run both retag steps for it. It is an alias, like the floating minor
 tag, and it exists for operators who deliberately choose to follow every 1.x
 release.
 
@@ -612,7 +613,7 @@ Then confirm the alias is the same artifact and still verifies:
 crane digest "$IMAGE:$VERSION"
 crane digest "$IMAGE:${VERSION%%.*}"
 cosign verify \
-  --certificate-identity-regexp "^https://github.com/MeandrousShark/odograph/.github/workflows/.*@refs/tags/$VERSION$" \
+  --certificate-identity-regexp "^https://github.com/$REPOSITORY/.github/workflows/.*@refs/tags/$VERSION$" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   "$IMAGE:${VERSION%%.*}"
 ```

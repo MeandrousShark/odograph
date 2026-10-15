@@ -38,8 +38,9 @@ of a hosted service, and this project has no hosted service.
   Odograph stores the configured issuer and exact subject as the durable link,
   plus email and display name as non-authoritative metadata. It does not
   retain access, refresh, or ID tokens after the callback. Logging out of
-  Odograph ends only the application session; sign out at the provider
-  separately to end that session too. Accepting an OIDC invitation
+  Odograph clears only this browser's application session cookie; sign out at
+  the provider separately to end that session too. See
+  [Sessions](security.md#entry-points) for what ends other sessions. Accepting an OIDC invitation
   sends no invitation token to the provider; only its digest is held in
   short-lived server-side state. The invitation email becomes the login email,
   and provider email claims do not verify it. OIDC-only security actions
@@ -108,7 +109,9 @@ of a hosted service, and this project has no hosted service.
   miles, deduction amounts, and counts of unclassified trips. The
   quarterly odometer reminder email likewise names the vehicle(s) due for
   a reading, using your own vehicle labels. None of these messages contain
-  coordinates or street addresses.
+  coordinates or street addresses. SMTP also carries invitation,
+  password-reset and email-confirmation messages, which contain one-time
+  links.
 
 ## Account preferences and credentials
 
