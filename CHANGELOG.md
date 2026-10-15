@@ -11,19 +11,84 @@ reproduced here.
 
 ### Added
 
-- Multi-account operation. The administrator invites members from Admin >
-  Accounts; each member signs in with a password or the configured OIDC
+- Multi-account operation. The administrator invites members from
+  **Accounts**; each member signs in with a password or the configured OIDC
   provider and keeps private trips, places, vehicles and settings. The
   administrator can disable, re-enable, schedule deletion of and purge member
   accounts, and queue their password recovery. The first account stays the
   only administrator, and public signup still closes after it is created.
   Migration 045 removes the database guard that limited an installation to one
-  account. See [Account management](docs/accounts.md#administrator-account-management).
+  account. See [Account management](docs/accounts.md#administrator-account-management)
+  and [OIDC sign-in](docs/oidc.md).
 - The storage grant budget is the account limit: on the defaults, five
   accounts including the administrator. Creating an invitation while no grant
   is fundable is refused with a message naming `STORAGE_INSTANCE_BUDGET_BYTES`,
   and accepting an invitation after the budget ran out shows a distinct
   capacity message, creates no account and leaves the invitation unused.
+- **Forgot password?** on the sign-in page emails a 30-minute reset link to the
+  account's verified login email, and an administrator can queue the same link
+  for a member from **Accounts**. A reset ends every session for that
+  account. Delivery needs `SMTP_HOST`, `EMAIL_FROM` and `APP_URL`; see
+  [Reset a forgotten password](docs/accounts.md#reset-a-forgotten-password).
+  Schema 31 adds the reset challenges.
+- Account Settings can verify the current login email and change it after the
+  new address is confirmed from an emailed link. The change needs the current
+  password, and the old email stays the login until the new one is confirmed.
+  An OIDC-only account continues automatically after provider confirmation,
+  with one address entry and no second request form. See
+  [Login email](docs/accounts.md#login-email) and [OIDC sign-in](docs/oidc.md).
+  Schema 30 adds the challenges.
+- **Sign out everywhere** in Account Settings ends every browser session for
+  the account, including the current one. A stale tab left over from a
+  previous account or session returns to the app with a clean request instead
+  of replaying a form, and private pages are kept out of browser caches. See
+  [Sessions and sign out everywhere](docs/accounts.md#sessions-and-sign-out-everywhere).
+  Schema 33 adds the session version.
+- `python -m app.manage_account list-accounts` shows account IDs, and
+  `python -m app.manage_account reset-password ACCOUNT_ID` resets a password
+  from the server after a confirmation prompt. See
+  [Recover from the server](docs/accounts.md#recover-from-the-server).
+  Finishing a restore also ends all sessions and revokes outstanding
+  invitations and email challenges.
+- Per-account storage accounting and limits. Settings shows each account's
+  used and reserved storage, with warnings from 80%. At a limit, new growth is
+  refused with a message while existing data, reads, exports and sign-in keep
+  working, and optional road matching and address lookup pause and resume when
+  space returns. A tracking message resent after a lost response is recognized
+  and not stored or charged twice. Imports check net growth even in a dry run.
+  Schema 40 adds the counters and schema 42 the enforcement. Startup now scans
+  the counters once, which takes longer on large histories, and validates the
+  `STORAGE_*` settings. See
+  [Logical storage accounting](docs/configuration.md#logical-storage-accounting).
+- Bounded shared serving capacity. New `CAPACITY_*` settings reserve database
+  connections for tracker intake, small requests, the full-week Dashboard and
+  expensive operations such as reports and exports, so one account's heavy
+  work cannot starve another's. A request that finds its lane full waits
+  briefly, then receives `503` with `Retry-After`. XLSX exports are written
+  incrementally. See [Shared capacity](docs/configuration.md#shared-capacity).
+- Annual and date-range reports, generic trip exports, and digest, reminder
+  and security email are prepared in supervised helper processes using a disk
+  spool, with a 60-second preparation deadline, instead of in the web process.
+  An occupied spool returns `503` with `Retry-After` before a response starts.
+  New `PREPARATION_SPOOL_DIR` selects the spool root, which must be owned by
+  the application user with mode `0700`. Monthly summary and filing reminder
+  totals are streamed rather than loaded whole. See
+  [Shared capacity](docs/configuration.md#shared-capacity).
+- `DETECTOR_TURN_MAX_POINTS` (default `0`, unlimited) defers a device whose
+  detector window is too large for one background turn, so other devices and
+  accounts keep progressing. Deferred devices are listed under Workers in
+  admin Settings, and `python -m app.reprocess_detector --account ACCOUNT_ID
+  [--device DEVICE_ID]` processes them outside the scheduler without the
+  limit. See
+  [Large detector windows](docs/configuration.md#large-detector-windows).
+- The manual trip form adds a **Search** route mode when a geocoder is
+  configured. Search an address for each endpoint, pick a result, and the route
+  previews as in Pick on map. The typed text goes to the geocoder before any
+  trip exists; the trip stores coordinates only. See
+  [Add a manual trip](docs/usage.md#add-a-manual-trip).
+- Trips selection actions include direct **Business** and **Personal** buttons
+  that apply immediately, on desktop and in the phone Actions panel. **Clear
+  category** stays under More.
 - `scripts/rehearse_upgrade.sh` restores a verified backup into a disposable,
   network-isolated Compose project, starts a candidate release against the
   copy and writes a summary of migration timings, the startup result and
@@ -98,6 +163,45 @@ reproduced here.
   start, Name end) that opens one at a time. Merge uses one form with Merge
   with previous and Merge with next, and shows and announces Processing...
   while it runs.
+- `APP_URL` must be an absolute `http` or `https` URL with a host and no user
+  information, query or fragment to be used in emailed verification and
+  password reset links. Otherwise startup logs a warning and those links are
+  disabled, so check an existing value before relying on **Forgot password?**
+  or login-email changes. See [Email](docs/configuration.md#email).
+- The invitation and password reset pages check that the confirmation matches
+  the new password before submitting, and a rejected submission explains how to
+  recover the token.
+- Imports are admitted per account instead of locking shared tables, so a large
+  import no longer stalls tracker intake for other accounts. A competing
+  import for the same account receives `503` with `Retry-After`; wait and
+  submit it again. Detector runs and structural trip edits likewise lock per
+  account, so one account's long detector run no longer blocks another's
+  split, merge or import.
+- Background workers take bounded turns. Accounts and worker types rotate
+  after each device, trip, coordinate, email kind or retention batch (at most
+  1,000 expired raw messages), and ready backlogs continue without waiting for
+  the next sweep. Worker status reports completed, retryable and failed
+  attempts truthfully, and idle detector runs no longer wake downstream
+  workers.
+- Road-snap and reverse-geocode failures no longer starve later work. Snap
+  attempts are timestamped (schema 38) and retried oldest first, and geocode
+  retries persist per coordinate with exponential backoff from 60 to 3,600
+  seconds and resumable discovery in pages of 500 trips (schema 41), so both
+  survive a restart. Reverse lookup, address search and diagnostics share one
+  `GEOCODE_MIN_INTERVAL_S` pacer.
+- Every email send runs under a fixed 30-second transport deadline covering
+  DNS, connection, TLS, authentication and transfer. A timed-out digest is
+  left for the next-hour retry and can duplicate a message the relay already
+  accepted; a failed password-reset or confirmation send revokes its link. See
+  [Email](docs/configuration.md#email).
+- Annual and date-range reports no longer compute trip continuity badges they
+  do not show, which makes large report selections much faster. Report content
+  is unchanged.
+- Settings > Device status shows one row per tracking device, with the latest
+  payload `tid` as detail, so a `tid` change no longer splits a device into two
+  rows. A startup security-contract mismatch now names the offending relation,
+  role, privilege or policy, and startup rejects unexpected function and
+  sequence privileges.
 
 ### Fixed
 
@@ -112,9 +216,19 @@ reproduced here.
   before the trip list loads.
 - Review announces the remaining count from a persistent live region after each
   card change, and reads trip distance with its unit.
+- OIDC callback failures, such as the invitation capacity refusal or a sign-in
+  by an account that was never invited, now show the sign-in or invitation page
+  with the message instead of raw JSON. See [OIDC sign-in](docs/oidc.md).
+- Portable exports read one consistent snapshot, so references created or
+  deleted during an export can no longer produce an inconsistent bundle.
+- Concurrent backups to the same output are refused instead of overwriting each
+  other, and restore inspects the container state before it starts. See
+  [One-off backup](docs/backups.md#one-off-backup).
 
 ### Security
 
+- Uvicorn access logs no longer record query strings. Client, method, path,
+  HTTP version and status are still logged.
 - XLSX exports and report workbooks store text as text, so imported or
   user-entered values beginning with `=` are not evaluated as formulas. CSV
   output is unchanged.
@@ -156,6 +270,9 @@ reproduced here.
   follow the fresh-target database image migration procedure.
 - Schema 27 permanently deletes stored OwnTracks `dump` and `configuration`
   messages.
+- Startup refuses `WEB_CONCURRENCY` or `UVICORN_WORKERS` set to anything other
+  than one, because shared capacity limits are per process. Unset them or set
+  them to `1`. See [Shared capacity](docs/configuration.md#shared-capacity).
 - Startup refuses a `public` schema whose relations do not match the
   application's table list exactly, so move any added table to another
   schema first.
