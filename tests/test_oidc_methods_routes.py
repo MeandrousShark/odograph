@@ -91,6 +91,24 @@ def _login_page_lookups(monkeypatch):
     monkeypatch.setattr(auth, "identity_login_available", no_identity_login)
 
 
+@pytest.fixture(autouse=True)
+def _account_page_lookups(monkeypatch):
+    # A failed link or reauthentication for a signed-in member renders
+    # Account Settings, which reads the account, identity and email state.
+    async def account(_conn, account_id):
+        return {**_account(), "id": account_id}
+
+    async def no_identity(_conn, _account_id, _issuer):
+        return None
+
+    async def unverified(_conn, _account_id):
+        return False
+
+    monkeypatch.setattr(auth, "get_account", account)
+    monkeypatch.setattr(auth, "get_identity_for_account", no_identity)
+    monkeypatch.setattr(auth, "is_current_email_verified", unverified)
+
+
 def _assert_rejected(request, response, status_code, *, page="login.html",
                      error=auth.GENERIC_OIDC_ERROR):
     """A failed callback renders a page with the unchanged status and message."""
@@ -198,7 +216,7 @@ def test_email_reauth_callback_consumes_bound_proof_sends_and_redirects(
     assert "#purpose=" + purpose + "&token=secret-token" in sent[0][1]
     assert client.calls == 1
     response = asyncio.run(_endpoint("/auth/callback", "GET")(request))
-    _assert_rejected(request, response, 401)
+    _assert_rejected(request, response, 401, page="account_security.html")
     assert len(sent) == 1
 
 
@@ -249,7 +267,7 @@ def test_email_reauth_callback_rechecks_enabled_version_and_password_state(
     monkeypatch.setattr(auth, "issue_email_challenge", unexpected_issue)
 
     response = asyncio.run(_endpoint("/auth/callback", "GET")(request))
-    _assert_rejected(request, response, 401)
+    _assert_rejected(request, response, 401, page="account_security.html")
     assert events == ["consume"]
 
 
@@ -281,7 +299,7 @@ def test_email_reauth_identity_failure_never_consumes_or_issues(monkeypatch):
     monkeypatch.setattr(auth, "issue_email_challenge", unexpected)
 
     response = asyncio.run(_endpoint("/auth/callback", "GET")(request))
-    _assert_rejected(request, response, 401)
+    _assert_rejected(request, response, 401, page="account_security.html")
     assert events == []
 
 
@@ -313,7 +331,7 @@ def test_email_reauth_callback_rejects_another_signed_in_account(monkeypatch):
     monkeypatch.setattr(auth, "issue_email_challenge", unexpected)
 
     response = asyncio.run(_endpoint("/auth/callback", "GET")(request))
-    _assert_rejected(request, response, 401)
+    _assert_rejected(request, response, 401, page="account_security.html")
     assert client.calls == 0
     assert len(attempts) == 1
     assert attempts[0]["account_id"] == 7
@@ -490,7 +508,7 @@ def test_email_reauth_callback_never_issues_after_failed_proof_or_missing_smtp(
 
         monkeypatch.setattr(auth, "consume_action_proof", rejected_proof)
         response = asyncio.run(_endpoint("/auth/callback", "GET")(request))
-        _assert_rejected(request, response, 401)
+        _assert_rejected(request, response, 401, page="account_security.html")
         assert events == ["consume"]
     else:
         response = asyncio.run(_endpoint("/auth/callback", "GET")(request))
@@ -581,12 +599,17 @@ def test_callback_rejects_swapped_or_mismatched_state_before_token_exchange(
 ):
     request, client = _request(session=_protected_session())
     request.query_params = {"state": callback_state}
+
+    async def require_user(_request):
+        return {"id": 7}
+
+    monkeypatch.setattr(auth, "require_user", require_user)
     monkeypatch.setattr(auth, "control_connection", _connection)
 
     response = asyncio.run(_endpoint("/auth/callback", "GET")(request))
     _assert_rejected(
         request, response, 401,
-        page="invite.html" if callback_state.startswith("invite.") else "login.html",
+        page="invite.html" if callback_state.startswith("invite.") else "account_security.html",
     )
     assert client.calls == 0
 
@@ -619,7 +642,7 @@ def test_reauth_callback_rejects_absent_stale_or_future_auth_time(monkeypatch, a
     monkeypatch.setattr(auth, "finish_oidc_reauth", finish)
 
     response = asyncio.run(_endpoint("/auth/callback", "GET")(request))
-    _assert_rejected(request, response, 401)
+    _assert_rejected(request, response, 401, page="account_security.html")
     assert client.calls == 1
     assert "oidc_action_proof_nonce" not in request.session
     if auth_time is None:
@@ -646,7 +669,7 @@ def test_reauth_callback_rejects_wrong_nonce(monkeypatch):
     monkeypatch.setattr(auth, "finish_oidc_reauth", finish)
 
     response = asyncio.run(_endpoint("/auth/callback", "GET")(request))
-    _assert_rejected(request, response, 401)
+    _assert_rejected(request, response, 401, page="account_security.html")
     assert client.calls == 1
     assert "oidc_action_proof_nonce" not in request.session
 
@@ -953,3 +976,107 @@ def test_uninvited_oidc_login_renders_sign_in_page(monkeypatch):
     _assert_rejected(request, response, 401)
     assert "account_id" not in request.session
     assert request.app.state.login_limiter._failures
+
+
+def _signed_in(monkeypatch):
+    async def require_user(_request):
+        return {"id": 7}
+
+    monkeypatch.setattr(auth, "require_user", require_user)
+    monkeypatch.setattr(auth, "control_connection", _connection)
+
+
+@pytest.mark.parametrize("callback_state", ["reauth.missing", "link.missing"])
+def test_signed_in_link_or_reauth_failure_renders_account_settings(monkeypatch, callback_state):
+    request, client = _request(session={"account_id": 7, "auth_version": 2, "csrf": "csrf"})
+    request.query_params = {"state": callback_state}
+    _signed_in(monkeypatch)
+
+    response = asyncio.run(_endpoint("/auth/callback", "GET")(request))
+
+    _assert_rejected(request, response, 401, page="account_security.html")
+    context = request.app.state.rendered[-1][1]
+    assert context["user"] == {"id": 7}
+    assert context["account_email"] == "old@example.com"
+    assert client.calls == 0
+    assert request.session == {"account_id": 7, "auth_version": 2, "csrf": "csrf"}
+
+
+@pytest.mark.parametrize("callback_state", ["reauth.missing", "link.missing"])
+def test_link_or_reauth_failure_without_a_session_renders_sign_in_page(monkeypatch, callback_state):
+    monkeypatch.setattr(auth, "control_connection", _connection)
+    request, _ = _request(session={"csrf": "csrf"})
+    request.query_params = {"state": callback_state}
+
+    response = asyncio.run(_endpoint("/auth/callback", "GET")(request))
+
+    _assert_rejected(request, response, 401)
+    assert [name for name, _ in request.app.state.rendered] == ["login.html"]
+
+
+@pytest.mark.parametrize("session", [
+    {"account_id": 7, "csrf": "csrf"},
+    {"account_id": "7", "auth_version": 2, "csrf": "csrf"},
+])
+def test_link_or_reauth_failure_with_an_invalid_session_renders_sign_in_page(monkeypatch, session):
+    monkeypatch.setattr(auth, "control_connection", _connection)
+    request, _ = _request(session=session)
+    request.query_params = {"state": "reauth.missing"}
+
+    response = asyncio.run(_endpoint("/auth/callback", "GET")(request))
+
+    _assert_rejected(request, response, 401)
+    assert [name for name, _ in request.app.state.rendered] == ["login.html"]
+
+
+def test_signed_in_member_whose_account_vanished_gets_sign_in_page(monkeypatch):
+    request, _ = _request(session={"account_id": 7, "auth_version": 2, "csrf": "csrf"})
+    request.query_params = {"state": "link.missing"}
+    _signed_in(monkeypatch)
+
+    async def no_account(_conn, _account_id):
+        return None
+
+    monkeypatch.setattr(auth, "get_account", no_account)
+
+    response = asyncio.run(_endpoint("/auth/callback", "GET")(request))
+
+    _assert_rejected(request, response, 401)
+
+
+def test_signed_in_login_callback_failure_still_renders_sign_in_page(monkeypatch):
+    request, _ = _request(session={
+        "account_id": 7, "auth_version": 2, "csrf": "csrf",
+        auth.OIDC_PROTECTED_ATTEMPT_KEY: {"action": "reauth"},
+    })
+    request.query_params = {"state": "login.valid"}
+
+    async def login_available(_request):
+        return True
+
+    async def unexpected(_request):
+        raise AssertionError("a login failure must not resolve the signed-in user")
+
+    monkeypatch.setattr(auth, "control_connection", _connection)
+    monkeypatch.setattr(auth, "_oidc_login_available", login_available)
+    monkeypatch.setattr(auth, "require_user", unexpected)
+
+    response = asyncio.run(_endpoint("/auth/callback", "GET")(request))
+
+    _assert_rejected(request, response, 401)
+    assert [name for name, _ in request.app.state.rendered] == ["login.html"]
+
+
+def test_signed_in_invitation_callback_failure_still_renders_invitation_page(monkeypatch):
+    request, _ = _request(session={"account_id": 7, "auth_version": 2, "csrf": "csrf"})
+    request.query_params = {"state": "invite.missing"}
+
+    async def unexpected(_request):
+        raise AssertionError("an invitation failure must not resolve the signed-in user")
+
+    monkeypatch.setattr(auth, "control_connection", _connection)
+    monkeypatch.setattr(auth, "require_user", unexpected)
+
+    response = asyncio.run(_endpoint("/auth/callback", "GET")(request))
+
+    _assert_rejected(request, response, 401, page="invite.html")

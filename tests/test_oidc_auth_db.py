@@ -190,6 +190,10 @@ async def _link_and_exact_login_scenario():
         assert replay.status_code == 401
         assert replay.headers["content-type"].startswith("text/html")
         assert GENERIC_OIDC_ERROR.encode() in replay.body
+        # The member is still signed in, so the failure lands on Account
+        # Settings (with the linked provider), not the sign-in page.
+        assert b"Account Settings: Odograph" in replay.body
+        assert b'action="/login/local"' not in replay.body
         assert oauth_client.token_calls == 1
         assert (await _identity(pool))["subject"] == "stable-subject"
 

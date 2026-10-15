@@ -1206,9 +1206,33 @@ def make_router() -> APIRouter:
                 return await _render_invite(
                     request, error=exc.detail, status_code=exc.status_code
                 )
+            if is_link_callback or is_reauth_callback:
+                # A signed-in member started this from Account Settings, so
+                # send the failure back there rather than to the sign-in page.
+                settled = await _render_signed_in_callback_failure(request, exc)
+                if settled is not None:
+                    return settled
             return await _render_login(
                 request, error=exc.detail, status_code=exc.status_code
             )
+
+    async def _render_signed_in_callback_failure(
+        request: Request, exc: HTTPException
+    ):
+        """Account Settings with the callback's message and status when the
+        request carries a valid signed-in session, else None (sign-in page).
+        """
+        try:
+            user = await require_user(request)
+        except (AuthRedirect, HTTPException):
+            return None
+        async with control_connection(request.app.state.control_pool) as conn:
+            account = await get_account(conn, user["id"])
+        if account is None:
+            return None
+        return await _render_account(
+            request, account, user, error=exc.detail, status_code=exc.status_code
+        )
 
     async def _auth_callback_flow(
         request: Request, callback_state: str, is_link_callback: bool,
