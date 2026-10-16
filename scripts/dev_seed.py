@@ -41,11 +41,19 @@ Usage:
 
     .venv/bin/python scripts/dev_seed.py \\
         --database-url postgresql://mileage:pw@127.0.0.1:55432/mileage \\
-        --wipe
+        --wipe [--scenario week]
 
 Both `--database-url` and `--wipe` are required (no default URL, no
 `DATABASE_URL` environment fallback) so this can never run against whatever
 happens to be configured in the current shell by accident.
+
+`--scenario week` (opt-in; the default seed is unchanged without it) adds
+screenshot-ready data for the most recent complete Monday-to-Sunday week in
+Pacific time: detected driving on all seven days with varied daily mileage, a
+Business-majority mix of Business/Personal/Unclassified trips, expenses inside
+the week, and the display name "Sam Rivera" on the synthetic development
+account. The default dataset's history is kept, except that a default driving
+day landing inside that week is moved to the week before it.
 """
 from __future__ import annotations
 
@@ -66,10 +74,10 @@ from zoneinfo import ZoneInfo
 # import `app` without this bootstrap.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.dashboard import week_bounds
+from app.dashboard import WeekBounds, week_bounds
 from app.db import make_pool, run_migrations
 from app.account_context import AccountPool, AccountPrincipal, account_id, control_connection
-from app.accounts import create_admin, account_exists, get_account_by_email
+from app.accounts import create_admin, account_exists, get_account_by_email, set_account_display_name
 from app.application_roles import application_role_pools
 from app.capacity import AdmissionManager
 from app.local_auth import hash_password
@@ -80,6 +88,9 @@ from app.rates import METERS_PER_MILE
 SEED = 5150176  # fixed: reproducible jitter across runs (arbitrary constant)
 PACIFIC = ZoneInfo("America/Los_Angeles")
 DEVICE = "QA-IPHONE"
+DEV_EMAIL = "development@localhost.invalid"
+SCENARIOS = ("week",)
+SCENARIO_DISPLAY_NAME = "Sam Rivera"
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 # Delete only this synthetic account's rows, in foreign-key dependency order.
@@ -231,6 +242,7 @@ GYM = _travel(*HOME, 2500, 200)      # ~2.5km SSW of home: kind=other, no autota
 ERRAND = _travel(*HOME, 18000, 300)  # ~18km NW: unregistered destination
 AWAY = _travel(*WORK, 25000, 250)    # ~25km SW of WORK: the "untracked relocation" endpoint
 AWAY_2 = _travel(*AWAY, 6000, 80)    # a further, equally unregistered hop
+SITE = _travel(*HOME, 60000, 20)     # ~60km NNE: far unregistered job site (week scenario)
 
 
 def _block_segments():
@@ -308,13 +320,57 @@ def _block_segments():
     ]
 
 
-def build_all_points(now_utc: datetime) -> list[Point]:
+def target_week(now_utc: datetime) -> WeekBounds:
+    """The most recent complete Monday-to-Sunday Pacific week before the
+    current one, whatever weekday `now_utc` falls on."""
+    today = now_utc.astimezone(PACIFIC).date()
+    return week_bounds(today - timedelta(days=7), PACIFIC)
+
+
+def _week_scenario_days():
+    """Seven driving days, Monday first, as `(segments, tags)`. `tags` has one
+    entry per detected trip in order: `None` keeps whatever the detector and
+    tag rules produced (Personal for home<->work, Business for work<->work,
+    otherwise Unclassified), or `(category, purpose)` applies a human tag.
+    Daily mileage runs from a ~3 mi gym day to a ~75 mi site day, and every
+    day starts and ends at HOME.
+    """
+    client = ("business", "Client site review")
+    site = ("business", "Job site inspection")
+    return [
+        # Mon: client visit
+        ([Stationary(600), leg(HOME, CLIENT), Stationary(2400), leg(CLIENT, HOME), Stationary(600)],
+         [client, client]),
+        # Tue: light day, gym
+        ([Stationary(600), leg(HOME, GYM), Stationary(1800), leg(GYM, HOME), Stationary(600)],
+         [None, ("personal", "Gym")]),
+        # Wed: office day with a client hop
+        ([Stationary(600), leg(HOME, WORK), Stationary(1800), leg(WORK, CLIENT), Stationary(1800),
+          leg(CLIENT, WORK), Stationary(1800), leg(WORK, HOME), Stationary(600)],
+         [None, None, None, None]),
+        # Thu: heavy day, far job site
+        ([Stationary(600), leg(HOME, SITE, 75.0), Stationary(3600), leg(SITE, HOME, 75.0), Stationary(600)],
+         [site, site]),
+        # Fri: errand left for review
+        ([Stationary(600), leg(HOME, ERRAND), Stationary(1800), leg(ERRAND, HOME), Stationary(600)],
+         [None, None]),
+        # Sat: short weekend office visit (home<->work rule tags it Personal)
+        ([Stationary(600), leg(HOME, WORK), Stationary(3600), leg(WORK, HOME), Stationary(600)],
+         [None, None]),
+        # Sun: light day, gym
+        ([Stationary(600), leg(HOME, GYM), Stationary(1800), leg(GYM, HOME), Stationary(600)],
+         [("personal", "Gym"), ("personal", "Gym")]),
+    ]
+
+
+def build_all_points(now_utc: datetime, scenario: str | None = None) -> list[Point]:
     rng = random.Random(SEED)
     pacific_now = now_utc.astimezone(PACIFIC)
     today = pacific_now.date()
 
     week_start = week_bounds(today, PACIFIC).start
     current_anchor = max(week_start, pacific_now - timedelta(hours=6))
+    scenario_week = target_week(now_utc) if scenario == "week" else None
 
     points: list[Point] = []
     for days_ago, segments, _count in _block_segments():
@@ -322,8 +378,18 @@ def build_all_points(now_utc: datetime) -> list[Point]:
             t0 = current_anchor
         else:
             anchor_date = today - timedelta(days=days_ago)
+            if scenario_week is not None and scenario_week.monday <= anchor_date < scenario_week.monday + timedelta(days=7):
+                # Keep the scenario week free of default driving days.
+                anchor_date = scenario_week.monday - timedelta(days=3)
             t0 = datetime(anchor_date.year, anchor_date.month, anchor_date.day, 8, 0, tzinfo=PACIFIC)
         points.extend(build_track(segments, start=HOME, t0=t0, rng=rng))
+
+    if scenario_week is not None:
+        # Generated after the default blocks so their jitter is unchanged.
+        for offset, (segments, _tags) in enumerate(_week_scenario_days()):
+            d = scenario_week.monday + timedelta(days=offset)
+            t0 = datetime(d.year, d.month, d.day, 8, 0, tzinfo=PACIFIC)
+            points.extend(build_track(segments, start=HOME, t0=t0, rng=rng))
     return points
 
 
@@ -511,6 +577,41 @@ async def _apply_trip_overrides(conn, trips: list[dict], v1: int, v2: int) -> No
     )
 
 
+async def _apply_week_scenario_overrides(conn, trips: list[dict], v1: int) -> None:
+    """Vehicle and human tags for the scenario week's detected trips."""
+    tags = [tag for _segments, day_tags in _week_scenario_days() for tag in day_tags]
+    if len(tags) != len(trips):
+        raise RuntimeError(
+            f"expected {len(tags)} detected trips in the scenario week, got {len(trips)} "
+            "-- the synthetic trace no longer matches the scenario's trip plan"
+        )
+    for trip, tag in zip(trips, tags):
+        await conn.execute(
+            "UPDATE trips SET vehicle_id = %s WHERE account_id=%s AND id = %s",
+            (v1, account_id(conn), trip["id"]),
+        )
+        if tag is not None:
+            category, purpose = tag
+            await conn.execute(
+                "UPDATE trips SET category = %s, tag_source = 'human', purpose = %s, updated_at = now() "
+                "WHERE account_id=%s AND id = %s",
+                (category, purpose, account_id(conn), trip["id"]),
+            )
+
+
+async def _seed_week_scenario_expenses(conn, week: WeekBounds, v1: int) -> None:
+    expenses = [
+        (week.monday + timedelta(days=2), "fuel", "58.40", "business_use_allocated", "Weekly fill-up"),
+        (week.monday + timedelta(days=3), "parking", "18.00", "fully_business", "Job site parking"),
+    ]
+    for incurred_on, category, amount, treatment, notes in expenses:
+        await conn.execute(
+            "INSERT INTO expenses (account_id, vehicle_id, incurred_on, category, amount, treatment, notes) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (account_id(conn), v1, incurred_on, category, amount, treatment, notes),
+        )
+
+
 async def _seed_manual_trips(conn, now_utc: datetime, v1: int) -> None:
     pacific_now = now_utc.astimezone(PACIFIC)
     today = pacific_now.date()
@@ -605,10 +706,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--wipe", action="store_true", required=True,
         help="Required confirmation that this run will wipe and reseed the target database",
     )
+    parser.add_argument(
+        "--scenario", choices=SCENARIOS, default=None,
+        help="Optional extra dataset: 'week' seeds the most recent complete "
+             "Monday-to-Sunday week for screenshots and sets a display name",
+    )
     return parser.parse_args(argv)
 
 
-async def main_async(database_url: str) -> None:
+async def main_async(database_url: str, scenario: str | None = None) -> None:
     bootstrap_pool = make_pool(database_url)
     await bootstrap_pool.open(wait=True)
     try:
@@ -617,12 +723,14 @@ async def main_async(database_url: str) -> None:
         await bootstrap_pool.close()
     async with application_role_pools(database_url) as pools:
         async with control_connection(pools.control) as conn:
-            account = await get_account_by_email(conn, "development@localhost.invalid")
+            account = await get_account_by_email(conn, DEV_EMAIL)
             if account is None:
                 if await account_exists(conn):
                     raise RuntimeError("seeding requires the synthetic development account")
-                account = await create_admin(conn, "development@localhost.invalid",
+                account = await create_admin(conn, DEV_EMAIL,
                     hash_password(secrets.token_urlsafe(32)), display_timezone=str(PACIFIC))
+            if scenario == "week":
+                await set_account_display_name(conn, account["id"], SCENARIO_DISPLAY_NAME)
         principal = AccountPrincipal(account["id"], account["is_enabled"], account["auth_version"])
         pool = AccountPool(pools.runtime, principal)
         async with pool.connection() as conn:
@@ -640,7 +748,7 @@ async def main_async(database_url: str) -> None:
                 await conn.execute("INSERT INTO detector_state(account_id,tracking_device_id) VALUES(%s,%s)", (account_id(conn),device_id))
 
         now_utc = datetime.now(timezone.utc)
-        points = build_all_points(now_utc)
+        points = build_all_points(now_utc, scenario)
         years = {p.t.astimezone(PACIFIC).year for p in points}
 
         async with pool.connection() as conn:
@@ -657,9 +765,16 @@ async def main_async(database_url: str) -> None:
 
         async with pool.connection() as conn:
             trips = await _fetch_device_trips(conn, device_id)
+            if scenario == "week":
+                week = target_week(now_utc)
+                week_trips = [t for t in trips if week.start <= t["started_at"] < week.end]
+                trips = [t for t in trips if not week.start <= t["started_at"] < week.end]
+                await _apply_week_scenario_overrides(conn, week_trips, v1)
             await _apply_trip_overrides(conn, trips, v1, v2)
             await _seed_manual_trips(conn, now_utc, v1)
             await _seed_expenses_and_odometer(conn, now_utc, v1)
+            if scenario == "week":
+                await _seed_week_scenario_expenses(conn, target_week(now_utc), v1)
 
         async with pool.connection() as conn:
             cur = await conn.execute(
@@ -680,7 +795,7 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
-    asyncio.run(main_async(args.database_url))
+    asyncio.run(main_async(args.database_url, args.scenario))
     return 0
 
 

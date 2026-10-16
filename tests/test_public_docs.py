@@ -39,6 +39,8 @@ PUBLIC_MARKDOWN = (
 PUBLIC_IMAGES = (
     "docs/images/usage-dashboard.png",
     "docs/images/usage-review.png",
+    "docs/images/usage-trips.png",
+    "docs/images/usage-report.png",
 )
 PUBLIC_TOP_LEVEL_FILES = (
     "LICENSE",

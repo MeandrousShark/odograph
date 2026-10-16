@@ -26,6 +26,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "devsite.sh"
@@ -279,6 +281,65 @@ def test_migrate_and_reseed_refuse_without_an_env_file(tmp_path):
 
     # Neither action should touch podman before checking for the env file.
     assert not log.exists()
+
+
+def _reseed_env(tmp_path: Path) -> tuple[dict[str, str], Path]:
+    """A reseed environment whose Python is a stub that records its argv."""
+    bin_dir, log = _fake_podman(tmp_path)
+    args_file = tmp_path / "seed-args.txt"
+    stub = tmp_path / "fake-python"
+    stub.write_text(f"#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > {args_file}\n")
+    stub.chmod(0o755)
+    env = _base_env(
+        tmp_path, bin_dir, log,
+        DEVSITE_PYTHON=str(stub),
+        FAKE_PODMAN_CONTAINER_EXISTS="0",
+        FAKE_PODMAN_CONTAINER_RUNNING="true",
+    )
+    Path(env["DEVSITE_ENV_FILE"]).write_text(
+        "DATABASE_URL=postgresql://mileage:sentinel@127.0.0.1:15432/mileage_devsite\n"
+        "INGEST_PASSWORD=sentinel\nSESSION_SECRET=sentinel\nDEV_NO_AUTH=1\n"
+    )
+    return env, args_file
+
+
+_RESEED_BASE_ARGS = [
+    "scripts/dev_seed.py", "--database-url",
+    "postgresql://mileage:sentinel@127.0.0.1:15432/mileage_devsite", "--wipe",
+]
+
+
+def test_plain_reseed_passes_no_scenario(tmp_path):
+    env, args_file = _reseed_env(tmp_path)
+
+    result = _run_devsite(tmp_path, "reseed", env=env)
+
+    assert result.returncode == 0, result.stderr
+    assert args_file.read_text().splitlines() == _RESEED_BASE_ARGS
+
+
+def test_reseed_passes_the_week_scenario_through(tmp_path):
+    env, args_file = _reseed_env(tmp_path)
+
+    result = _run_devsite(tmp_path, "reseed", "--scenario", "week", env=env)
+
+    assert result.returncode == 0, result.stderr
+    assert args_file.read_text().splitlines() == [*_RESEED_BASE_ARGS, "--scenario", "week"]
+
+
+@pytest.mark.parametrize("extra", [
+    ("--scenario",),
+    ("--database-url", "postgresql://x@127.0.0.1/y"),
+    ("--scenario", "week", "--wipe"),
+])
+def test_reseed_rejects_arguments_other_than_a_scenario(tmp_path, extra):
+    env, args_file = _reseed_env(tmp_path)
+
+    result = _run_devsite(tmp_path, "reseed", *extra, env=env)
+
+    assert result.returncode == 1
+    assert "usage:" in result.stderr
+    assert not args_file.exists()
 
 
 def test_status_and_logs_before_anything_is_running(tmp_path):

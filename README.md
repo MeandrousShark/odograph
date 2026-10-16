@@ -1,5 +1,9 @@
 # Odograph
 
+[![License: AGPL-3.0](https://img.shields.io/github/license/MeandrousShark/odograph)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/MeandrousShark/odograph)](https://github.com/MeandrousShark/odograph/releases/latest)
+[![Test](https://github.com/MeandrousShark/odograph/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/MeandrousShark/odograph/actions/workflows/test.yml)
+
 Odograph is a self-hosted mileage tracker that uses
 [OwnTracks](https://owntracks.org/) to record your drives automatically.
 
@@ -29,6 +33,68 @@ Start with [Install](#install), then see [Use Odograph](docs/usage.md).
 
 > [!NOTE]
 > **US users only**: Odograph's deduction reports use IRS standard mileage rates. Trip tracking still works anywhere, but the tax figures are only meaningful for US filers.
+
+## Why Odograph
+
+- **Your location history stays with you.** Trips, points and reports live in
+  your own database, not in a vendor's account.
+- **No subscription.** Odograph is free, open source software under the
+  AGPL-3.0, with no per-user or per-vehicle fees.
+- **No custom tracking app.** Any phone running the free
+  [OwnTracks](https://owntracks.org/) app can feed it.
+- **Built for review, not data entry.** Trips are detected automatically, and
+  the review queue lets you mark each one business or personal in a few taps.
+- **Exports you can hand off.** Annual and date-range reports download as
+  XLSX workbooks, and the trip archive downloads as CSV or XLSX. See
+  [What the report looks like](#what-the-report-looks-like).
+
+The tradeoff is that you run the server: you keep it online, keep it updated
+and keep backups. Odograph is maintained by one person on a best-effort basis
+(see [Support](#support)).
+
+## A quick look
+
+New trips land in the review queue. Each card shows the route, and you set the
+category, vehicle and purpose, then move to the next trip:
+
+![Review card for a synthetic trip, with its route map, category, vehicle and purpose fields](docs/images/usage-review.png)
+
+The Trips archive lists every trip with search and filters, and exports
+whatever you have filtered:
+
+![Trips archive listing a week of synthetic personal and unclassified trips, with category controls](docs/images/usage-trips.png)
+
+## What the report looks like
+
+The annual report shows business and personal miles (and any non-deductible
+miles), your business share, the estimated deduction at your saved IRS
+standard mileage rates, and month and vehicle breakdowns. Quarter and custom
+date-range reports show the same totals for the dates you pick.
+
+![Annual mileage report for synthetic data, with summary totals, monthly deduction table and per-vehicle breakdown](docs/images/usage-report.png)
+
+**Export XLSX** downloads the report as a workbook:
+
+- **Summary:** business, personal, non-deductible and total miles, business
+  share, the rates applied, the total deduction and trip count, then a
+  month-by-month table (trips, business miles, rate, deduction), a per-vehicle
+  table, and any caveats to review before filing. The annual workbook adds
+  odometer reconciliation and a standard versus actual expense comparison
+  when you have entered the data for them.
+- **Trips:** one row per trip with date, start and end time, duration, start
+  and end location, distance in miles and kilometers, category, exclusion,
+  vehicle, purpose, notes, gap, source and deduction, ending in a total row.
+- **Expenses** (annual report only): date, vehicle, category, amount, tax
+  treatment and notes, ending in a total row.
+
+The Trips archive's **Export** menu downloads the trips you have filtered
+with the same columns, as CSV or XLSX. See
+[Taking data out](docs/usage.md#taking-data-out) for every export.
+
+Deduction figures are estimates for US filers, not tax advice. Odograph does
+not decide whether a trip is deductible or recommend a filing method; see
+[US deduction limits](docs/usage.md#us-deduction-limits) and review the
+report's caveats before you file.
 
 ## Install
 
@@ -196,6 +262,27 @@ test data afterward.
 Create a device in **Settings > Tracking**, then copy its issued username and
 one-time password into OwnTracks. Each credential identifies one device;
 `tid` is a label. Once that works, Odograph starts detecting trips on its own.
+
+### How your phone reaches the server
+
+OwnTracks runs in HTTP mode and posts each location update straight to your
+instance at `https://your-domain/ingest`. There is no third-party relay. Each
+request carries that device's username and password as HTTP Basic auth. For
+a device credential issued in Settings, the credential, not the `tid`,
+decides which account and device the points belong to.
+
+For that to work, the phone must be able to reach the same HTTPS address you
+use in the browser, and it must trust that address's certificate. The server
+does not need to be on the public internet: a private network or tunnel
+can work, as long as it ends in an HTTPS proxy that forwards to
+`127.0.0.1:8077`. Odograph does not test or document a specific VPN or
+tunnel product.
+
+If anything else sits in front of your reverse proxy, such as a tunnel, CDN or
+second proxy, read
+[Trusting forwarded headers](docs/reverse-proxy.md#trusting-forwarded-headers)
+and set `FORWARDED_ALLOW_IPS` to match. Set `APP_URL` to the same HTTPS
+address so reminder and email links point at it.
 
 ## Use Odograph
 
