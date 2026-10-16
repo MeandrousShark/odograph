@@ -454,6 +454,11 @@ def test_unknown_candidate_ref_is_refused(tmp_path):
         "registry.example.test/odograph",
         "registry.example.test/odograph:latest",
         "registry.example.test/odograph:LATEST",
+        "registry.example.test/odograph:v1",
+        "registry.example.test/odograph:v0.11",
+        "registry.example.test/odograph:1.2.3",
+        "registry.example.test/odograph:V1.2.3",
+        "registry.example.test/odograph:v1.2.3.4",
         "registry.example.test:5000/odograph",
         "registry.example.test/odograph@sha256:1234abcd",
     ],
@@ -465,7 +470,7 @@ def test_candidate_image_rejects_mutable_or_incomplete_references(tmp_path, imag
     )
 
     assert result.returncode != 0
-    assert "explicit non-latest tag or a full sha256 digest" in result.stderr
+    assert "exact release tag (vX.Y.Z) or a full sha256 digest" in result.stderr
 
 
 @pytest.mark.parametrize(

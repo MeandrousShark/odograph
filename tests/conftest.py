@@ -559,7 +559,9 @@ _OPS_MODULE_STEMS = {
     "test_stale_module_references",
     "test_test_db_script",
     "test_upgrade_check_script",
+    "test_verify_image_script",
     "test_version_identity",
+    "test_workflow_action_pins",
 }
 
 

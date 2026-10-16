@@ -2,8 +2,12 @@
 
 The canonical installation runs the exact published image pinned by
 `compose.yaml`. Upgrading means taking and verifying a fresh backup, checking
-out the newer exact release tag, and pulling that tag's image. Do not edit the
-Compose pin to a moving alias such as `latest`. See
+out the newer exact release tag, and pulling and verifying that tag's image
+with `scripts/verify_image.sh`, which needs
+[cosign](https://docs.sigstore.dev/cosign/system_config/installation/). The
+app service has `pull_policy: never`, so `docker compose up` starts only an
+image that is already present locally; run the verification script before it.
+Do not edit the Compose pin to a moving alias such as `latest`. See
 [Floating image aliases](#floating-image-aliases) for the aliases that do
 exist.
 
@@ -74,9 +78,10 @@ ready.
    `.gitignore` ignores it, so it is never committed.
 
 2. **Check out the exact target release and create a fresh project name.** The
-   target Compose file supplies the new immutable database image. Replace the
-   existing `COMPOSE_PROJECT_NAME` line in `.env` with a new unused value. Do
-   not regenerate `.env` and do not add a second project-name line:
+   target Compose file supplies the new digest-pinned database image. Replace
+   the existing `COMPOSE_PROJECT_NAME` line in `.env` with a new unused value.
+   Do not regenerate `.env` and do not add a second project-name line. Then
+   pull and verify the target app image, because Compose will not pull it:
 
    ```sh
    git fetch --tags
@@ -87,6 +92,7 @@ ready.
    unset COMPOSE_PROJECT_NAME
    # Do not use a `-p` override.
    docker compose config >/dev/null
+   scripts/verify_image.sh
    ```
 
 3. **Initialize and restore the fresh target database before starting the app:**
@@ -110,8 +116,9 @@ ready.
    target database. The old project and volume remain available for recovery.
 
 For a Podman installation, replace each `docker compose` command with
-`podman-compose`. This procedure is also the model used by the release
-preflight database-image migration drill.
+`podman-compose` and run `CONTAINER_RUNTIME=podman scripts/verify_image.sh`.
+This procedure is also the model used by the release preflight database-image
+migration drill.
 
 ## Upgrading to 1.0
 
@@ -371,17 +378,22 @@ even after a passing rehearsal.
 
    Checking out an exact tag, rather than a moving branch, gives you the
    matching Compose file, operational scripts, and release notes. Its app
-   service pins the corresponding immutable image tag.
+   service pins the corresponding exact release tag.
 
-4. **If the database image is unchanged, pull the pinned app image and restart,
-   then verify:**
+4. **If the database image is unchanged, pull and verify the pinned app image,
+   restart, then check health:**
 
    If the target Compose file changes the `db.image` value, stop here and use
    [Upgrading the PostGIS database image](#upgrading-the-postgis-database-image)
    above. Do not run `up -d` against the old project for that transition.
 
+   `scripts/verify_image.sh` pulls the exact release tag named in `compose.yaml`
+   and checks its cosign signature; it exits non-zero if the check fails, and
+   you must not continue. Compose never pulls the app image itself. With
+   Podman, run it as `CONTAINER_RUNTIME=podman scripts/verify_image.sh`.
+
    ```sh
-   docker compose pull app
+   scripts/verify_image.sh
    docker compose up -d
    docker compose ps
    docker compose logs app
@@ -497,8 +509,9 @@ migration failure is almost always deterministic (a data shape the migration
 didn't expect, insufficient privileges, disk space) and will fail the same
 way every time until the underlying cause is fixed. If you can't resolve it
 promptly after an application-only upgrade, check out the previous exact
-release, pull its pinned image, and restart on the database that's still on
-the old schema, since nothing committed. After a database-image migration,
+release, pull and verify its pinned image (`scripts/verify_image.sh`, or
+`docker compose pull app` if that release predates the script), and restart
+on the database that's still on the old schema, since nothing committed. After a database-image migration,
 including 0.x to 1.0, do not start the previous release on the target
 database: the new image initialized it, and the older PostGIS libraries do not
 match it. Stop the target project first (`docker compose stop app db` while
@@ -560,6 +573,7 @@ even if it appears to start.
    # Do not use a shell COMPOSE_PROJECT_NAME value or a `-p` override.
    unset COMPOSE_PROJECT_NAME
    docker compose config >/dev/null
+   scripts/verify_image.sh   # for a release that predates the script: docker compose pull app
    ```
 
 3. Start only the old-image database, restore the original pre-upgrade archive,
@@ -593,8 +607,12 @@ point-in-time logical backup.
 
    ```sh
    git checkout vPREVIOUS
-   docker compose pull app
+   scripts/verify_image.sh
    ```
+
+   A previous release that predates `scripts/verify_image.sh` has no such file
+   and does not set `pull_policy: never`; use `docker compose pull app` for
+   it.
 
 3. Restore the pre-upgrade dump into a **fresh** volume/Compose project, per
    [Disaster recovery](backups.md#disaster-recovery). The same
@@ -636,7 +654,9 @@ Within 1.x:
 
 ## Floating image aliases
 
-Exact version tags such as `vX.Y.Z` are immutable. The registry also carries
+An exact version tag such as `vX.Y.Z` names one release, and
+`scripts/verify_image.sh` verifies the pulled image by digest and signature.
+The registry also carries
 floating aliases for operators who choose them deliberately: `vX.Y` follows the
 newest patch of a minor release, and from 1.0 `v1` follows the newest verified
 stable 1.x release. `v1` never points at a prerelease or a 2.x release. The

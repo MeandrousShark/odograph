@@ -521,7 +521,7 @@ def _run(
         (["--base", "HEAD"], "--base and --candidate are both required"),
         (["--candidate", "HEAD"], "--base and --candidate are both required"),
         (
-            ["--base", "HEAD", "--candidate-image", "image:v1"],
+            ["--base", "HEAD", "--candidate-image", "image:v1.0.0"],
             "--base and --candidate are both required",
         ),
     ],
@@ -547,6 +547,11 @@ def test_argument_contract_requires_both_source_refs(
         "registry.example.test/odograph",
         "registry.example.test/odograph:latest",
         "registry.example.test/odograph:LATEST",
+        "registry.example.test/odograph:v1",
+        "registry.example.test/odograph:v0.11",
+        "registry.example.test/odograph:1.2.3",
+        "registry.example.test/odograph:V1.2.3",
+        "registry.example.test/odograph:v1.2.3.4",
         "registry.example.test:5000/odograph",
         "registry.example.test/odograph@sha256:1234abcd",
     ],
@@ -571,7 +576,7 @@ def test_candidate_image_rejects_mutable_or_incomplete_references(tmp_path, imag
     )
 
     assert result.returncode != 0
-    assert "explicit non-latest tag or a full sha256 digest" in result.stderr
+    assert "exact release tag (vX.Y.Z) or a full sha256 digest" in result.stderr
 
 
 def test_help_documents_candidate_tree_and_stable_db_constraint(tmp_path):
@@ -584,7 +589,7 @@ def test_help_documents_candidate_tree_and_stable_db_constraint(tmp_path):
     assert result.returncode == 0
     assert "--candidate-image IMAGE" in result.stderr
     assert "candidate tree supplies Compose and operational scripts" in result.stderr
-    assert "explicit non-latest" in result.stderr
+    assert "exact release" in result.stderr
     assert "rendered db" in result.stderr
     assert "service must be identical" in result.stderr
 
@@ -1453,8 +1458,8 @@ def test_backup_restore_children_use_the_parent_compose_file_set(tmp_path, front
     repo, base_ref, candidate_ref = _install_repo(tmp_path, candidate_db_image="db:native")
     args = ["--base", base_ref, "--candidate", candidate_ref, "--database-image-migration"]
     if published:
-        args += ["--base-image", "registry.example.test/base:v1",
-                 "--candidate-image", "registry.example.test/candidate:v2"]
+        args += ["--base-image", "registry.example.test/base:v1.0.0",
+                 "--candidate-image", "registry.example.test/candidate:v2.0.0"]
     result, log, _, _ = _run(repo, args, tmp_path, frontend=frontend, fail_up=False)
     assert result.returncode == 0, result.stderr
     lines = log.read_text().splitlines()

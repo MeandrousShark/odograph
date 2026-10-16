@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from workflow_actions import is_pinned
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -200,8 +201,9 @@ def test_preflight_runs_full_policy_and_native_local_image_matrix():
     )
     assert quality_steps["Install pinned Gitleaks"]["env"]["GITLEAKS_VERSION"] == "8.30.1"
     assert "python -m pytest -q" in quality_steps["Run full locked test suite"]["run"]
-    assert quality_steps["Audit locked Python dependencies"]["uses"] == (
-        "pypa/gh-action-pip-audit@v1.1.0"
+    assert is_pinned(
+        quality_steps["Audit locked Python dependencies"]["uses"],
+        "pypa/gh-action-pip-audit",
     )
 
     native = jobs["native-images"]
@@ -212,22 +214,22 @@ def test_preflight_runs_full_policy_and_native_local_image_matrix():
     ]
     steps = steps_by_name(native)
     build = steps["Build native local image archive"]
-    assert build["uses"] == "docker/build-push-action@v7"
+    assert is_pinned(build["uses"], "docker/build-push-action")
     assert build["with"]["outputs"].startswith("type=docker,dest=")
     assert "push" not in build["with"]
     scan = steps["Scan native image"]
-    assert scan["uses"] == "aquasecurity/trivy-action@v0.36.0"
+    assert is_pinned(scan["uses"], "aquasecurity/trivy-action")
     assert scan["with"]["ignore-unfixed"] == "true"
     assert scan["with"]["severity"] == "HIGH,CRITICAL"
     assert scan["with"]["vuln-type"] == "os,library"
-    assert steps["Generate native SPDX SBOM"]["uses"] == "anchore/sbom-action@v0.24.0"
+    assert is_pinned(steps["Generate native SPDX SBOM"]["uses"], "anchore/sbom-action")
     assert "release_preflight_smoke.sh" in steps["Smoke-test native application image"]["run"]
     assert not any(
         step.get("uses", "").startswith("docker/setup-qemu")
         for step in native["steps"]
     )
     postgis_scan = steps["Scan ${{ matrix.architecture }} PostGIS image"]
-    assert postgis_scan["uses"] == "aquasecurity/trivy-action@v0.36.0"
+    assert is_pinned(postgis_scan["uses"], "aquasecurity/trivy-action")
     assert postgis_scan["env"]["TRIVY_PLATFORM"] == "${{ matrix.platform }}"
     assert postgis_scan["with"] == {
         "image-ref": "ghcr.io/meandrousshark/odograph-postgis@sha256:c4c1184f0c4d899f65c3df9ea6d296c3a3a5f1b233090651ac49429b4e2100b4",
@@ -326,14 +328,14 @@ def test_upgrade_drill_workflow_runs_every_base_with_database_image_migration():
     assert drill["strategy"]["fail-fast"] == "false"
     assert drill["strategy"]["matrix"] == {"base": "${{ fromJSON(needs.bases.outputs.bases) }}"}
     checkout = drill["steps"][0]
-    assert checkout["uses"] == "actions/checkout@v6"
+    assert is_pinned(checkout["uses"], "actions/checkout")
     assert checkout["with"] == {
         "fetch-depth": "0",
         "ref": "${{ inputs.revision || github.sha }}",
         "persist-credentials": "false",
     }
     python_setup = next(
-        step for step in drill["steps"] if step.get("uses") == "actions/setup-python@v6"
+        step for step in drill["steps"] if is_pinned(step.get("uses"), "actions/setup-python")
     )
     assert python_setup["with"]["python-version"] == "3.13"
     steps = steps_by_name(drill)

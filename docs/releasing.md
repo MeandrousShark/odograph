@@ -309,6 +309,11 @@ the public Rekor transparency log, both without a key.
 
 ### Verifying a release's signature and SBOM
 
+Operators verify the app image with `scripts/verify_image.sh`, which pulls the
+tag named in `compose.yaml` and runs `cosign verify` with the exact identity
+below on the pulled digest. The commands in this section are the manual
+equivalent, and also cover the per-architecture digests and SBOMs.
+
 `cosign` (`brew install cosign` or see the
 [Sigstore install docs](https://docs.sigstore.dev/cosign/system_config/installation/))
 verifies against the workflow's OIDC issuer and its own identity string. The
@@ -466,7 +471,7 @@ COMPOSE_CMD=podman-compose scripts/upgrade_check.sh \
   --candidate-image "$IMAGE@$MANIFEST_DIGEST"
 ```
 
-`--candidate-image` must be an exact non-`latest` tag or full digest. The drill
+`--candidate-image` must be an exact release tag (`vX.Y.Z`) or full digest, not a floating alias. The drill
 creates a fresh backup, verifies it, restores into a fresh volume, upgrades,
 checks the candidate schema and data, then rolls back to the base release and
 pre-upgrade data. Run it with both supported Compose frontends. Base and
@@ -539,7 +544,7 @@ deployment.
 
 ## Move the floating minor tag
 
-Alongside every immutable `vX.Y.Z` tag, the registry carries a floating `vX.Y`
+Alongside every exact `vX.Y.Z` tag, the registry carries a floating `vX.Y`
 tag that points at the newest patch within that minor version. Operators who
 would otherwise reach for `latest` pin `vX.Y` instead: they pick up patch fixes
 without silently crossing a minor boundary, which is where migrations and, before
@@ -570,14 +575,15 @@ This needs a token with `write:packages`; the workflow's own token is not
 available here. `gh auth refresh -h github.com -s write:packages` followed by
 `gh auth token | crane auth login ghcr.io -u <user> --password-stdin` is
 sufficient. Then confirm the floating tag is the same artifact and still
-verifies:
+verifies, using `$IDENTITY` and `$ISSUER` from
+[Verifying a release's signature and SBOM](#verifying-a-releases-signature-and-sbom):
 
 ```sh
 crane digest "$IMAGE:$VERSION"
 crane digest "$IMAGE:${VERSION%.*}"
 cosign verify \
-  --certificate-identity-regexp "^https://github.com/$REPOSITORY/.github/workflows/.*@refs/tags/$VERSION$" \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity "$IDENTITY" \
+  --certificate-oidc-issuer "$ISSUER" \
   "$IMAGE:${VERSION%.*}"
 ```
 
@@ -597,8 +603,9 @@ release.
 
 Move `v1` only to a verified stable 1.x release, and only after the published
 artifact, its signature, its SBOM and the forward-upgrade checks all pass.
-Never move it for a prerelease or for a 2.x release. Exact version tags stay
-immutable, and minor tags such as `v1.0` continue to move as described above.
+Never move it for a prerelease or for a 2.x release. Never retag an exact
+version tag (the registry does not prevent it; operators verify by digest),
+and minor tags such as `v1.0` continue to move as described above.
 
 Retag by digest, exactly as for the minor tag, so `v1` is an alias for the
 index that was already signed:
@@ -607,14 +614,15 @@ index that was already signed:
 crane tag "$IMAGE:$VERSION" "${VERSION%%.*}"
 ```
 
-Then confirm the alias is the same artifact and still verifies:
+Then confirm the alias is the same artifact and still verifies, using the same
+`$IDENTITY` and `$ISSUER`:
 
 ```sh
 crane digest "$IMAGE:$VERSION"
 crane digest "$IMAGE:${VERSION%%.*}"
 cosign verify \
-  --certificate-identity-regexp "^https://github.com/$REPOSITORY/.github/workflows/.*@refs/tags/$VERSION$" \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity "$IDENTITY" \
+  --certificate-oidc-issuer "$ISSUER" \
   "$IMAGE:${VERSION%%.*}"
 ```
 

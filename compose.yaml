@@ -15,10 +15,12 @@ services:
     restart: unless-stopped
 
   app:
-    # This canonical file always pulls an immutable release tag and never
-    # builds. Contributors who want a source build add
-    # compose.build.override.yml.
+    # This canonical file never builds and never pulls: scripts/verify_image.sh
+    # pulls the exact release tag below and verifies its signature, and `up`
+    # then uses only that local image. Contributors who want a source build
+    # add compose.build.override.yml.
     image: ghcr.io/meandrousshark/odograph:v0.11.0
+    pull_policy: never
     depends_on:
       db:
         condition: service_healthy

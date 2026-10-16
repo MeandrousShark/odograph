@@ -60,8 +60,9 @@ any existing container/volume, or the repository working tree.
   --base REF              git commit-ish for the currently-supported release
   --base-image IMAGE      exact earlier app image, instead of rebuilding base source
   --candidate REF         git commit-ish to build as the candidate
-  --candidate-image IMAGE published candidate image with an explicit non-latest
-                          tag or digest; omitted to build candidate source
+  --candidate-image IMAGE published candidate image, an exact release
+                          tag (vX.Y.Z) or full digest; omitted to build
+                          candidate source
   --database-image-migration
                           allow exactly the rendered db image change and exercise
                           fresh-volume candidate restore plus old-image rollback
@@ -107,27 +108,24 @@ if [ -z "$BASE_REF" ] || [ -z "$CANDIDATE_REF" ]; then
 fi
 
 immutable_image_ref() {
-    local ref="$1" tag
-    if [[ "$ref" =~ ^[^[:space:]@]+@sha256:[[:xdigit:]]{64}$ ]]; then
-        return 0
-    fi
-    if [[ "$ref" =~ ^[^[:space:]@]+:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
-        tag="${ref##*:}"
-        # Lowercased with tr rather than "${tag,,}": that expansion is bash 4+,
-        # and macOS still ships bash 3.2, where it is a syntax error rather
-        # than a graceful failure.
-        [ "$(printf '%s' "$tag" | tr '[:upper:]' '[:lower:]')" != "latest" ] && return 0
-    fi
+    local ref="$1"
+    # Only a full digest or an exact release tag (vX.Y.Z, optionally with a
+    # prerelease suffix) pins one build. Floating aliases such as v1, v0.11
+    # and latest are refused.
+    local digest_re='^[^[:space:]@]+@sha256:[[:xdigit:]]{64}$'
+    local tag_re='^[^[:space:]@]+:v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+    [[ "$ref" =~ $digest_re ]] && return 0
+    [[ "$ref" =~ $tag_re ]] && return 0
     return 1
 }
 
 if [ -n "$BASE_IMAGE" ] && ! immutable_image_ref "$BASE_IMAGE"; then
-    echo "error: --base-image must use an explicit non-latest tag or a full sha256 digest" >&2
+    echo "error: --base-image must use an exact release tag (vX.Y.Z) or a full sha256 digest" >&2
     usage
 fi
 
 if [ -n "$CANDIDATE_IMAGE" ] && ! immutable_image_ref "$CANDIDATE_IMAGE"; then
-    echo "error: --candidate-image must use an explicit non-latest tag or a full sha256 digest" >&2
+    echo "error: --candidate-image must use an exact release tag (vX.Y.Z) or a full sha256 digest" >&2
     usage
 fi
 

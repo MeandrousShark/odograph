@@ -571,12 +571,9 @@ ISSUER="https://token.actions.githubusercontent.com"
 `$IMAGE` is the published image reference; `$AMD64_DIGEST`/`$ARM64_DIGEST`
 are the per-architecture digests recorded in that release's notes. The
 identity string above follows the standard shape Sigstore/GitHub Actions
-OIDC certificates use for a workflow-triggered release, but treat it as a
-starting point to compare against, not a guarantee: if `cosign verify` ever
-rejects it, run the same command with `--certificate-identity-regexp
-'https://github\.com/.*/\.github/workflows/release\.yml@refs/tags/.*'`
-instead (looser, but still repository- and workflow-scoped) to see the
-certificate's actual recorded identity, and use that going forward.
+OIDC certificates use for a workflow-triggered release. Verification uses
+this exact identity and issuer; do not loosen it to a pattern. If `cosign
+verify` rejects it, treat the artifact as unverified and stop.
 
 Verify the manifest and both architecture signatures:
 

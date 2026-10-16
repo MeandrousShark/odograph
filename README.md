@@ -35,7 +35,7 @@ Start with [Install](#install), then see [Use Odograph](docs/usage.md).
 The recommended path is the full release checkout and
 `scripts/generate_env.sh` walkthrough below. If you already manage Compose,
 you can use the [minimal Compose installation](docs/install-compose.md) with
-only the two release files.
+only the release's Compose file, `.env.example` and image verification script.
 
 ### What you need
 
@@ -48,6 +48,8 @@ only the two release files.
   newer. The old `docker-compose` v1 will not work.
 - OpenSSL or Python 3 on the host, used to generate your secrets
 - `curl`, for health checks
+- [cosign](https://docs.sigstore.dev/cosign/system_config/installation/), which
+  `scripts/verify_image.sh` uses to verify the release image
 - A domain name pointing at the host
 - A reverse proxy that terminates HTTPS
 - About 2 GB of RAM and 5 GB of free disk to start
@@ -98,7 +100,19 @@ change something.
 
 ### Start Odograph
 
-With Docker:
+First pull and verify the release image. The script reads the image from
+`compose.yaml`, pulls that exact tag and checks its signature against this
+project's release workflow with cosign. It stops with an error if the check
+fails:
+
+```sh
+scripts/verify_image.sh
+```
+
+It uses `docker` when installed and otherwise `podman`; set
+`CONTAINER_RUNTIME=podman` to choose Podman explicitly.
+
+Then start the services. With Docker:
 
 ```sh
 docker compose up -d
@@ -110,8 +124,10 @@ Or with Podman:
 podman-compose up -d
 ```
 
-Compose downloads the immutable image tag pinned by the checked-out release, so
-you always get exactly the version you checked out.
+The app image is the exact release tag pinned by the checked-out release, and
+`scripts/verify_image.sh` verified it by digest. `compose.yaml` never pulls the
+app image itself, so Compose starts only the verified local image or fails; it
+does not fetch an unverified one.
 
 Run `docker compose ps` until both services report `healthy`:
 
@@ -311,7 +327,7 @@ rather than switching the image.
 ## Contributing
 
 Development happens in this repository through pull requests. Its `main`
-branch may contain unreleased work, so use an immutable release tag for
+branch may contain unreleased work, so use an exact release tag for
 installations. Want to run the test suite or work on the code? See
 [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and local instructions.
 AI-assisted contributions are welcome under the same standard as any other; see
