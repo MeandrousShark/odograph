@@ -156,6 +156,8 @@ active filters.
 Results are grouped by month. Select **Load more** at the end of a month to
 browse its next page. An archive export uses the filters currently shown.
 
+![Trips archive filtered to one synthetic week, with category controls and a Needs category badge on unclassified trips.](images/usage-trips.png)
+
 Each row links to **Trip detail**. **Edit trip** opens an inline card with
 **Save** and **Cancel**. Inline Business and Personal buttons change a
 category immediately. The row's **More trip actions** menu can clear a
@@ -367,6 +369,8 @@ quarterly pills for Q1 through Q4, or enter From and To dates and select
 **View range**. Annual and range reports provide **Export XLSX**. The annual
 page also links to the **Expense ledger** and includes standard versus actual
 expense estimates when the required records are present.
+
+![Annual report for synthetic data, with summary totals, review-before-filing caveats, monthly deductions, vehicle breakdown and odometer coverage.](images/usage-report.png)
 
 **Stats** is the driving overview. It provides year or date-range totals,
 weekly and monthly charts, unclassified mileage, saved-place route rankings,

@@ -25,6 +25,7 @@ PUBLIC_DOCS = frozenset({
     "docs/known-issues.md", "docs/oidc.md", "docs/osrm.md", "docs/owntracks.md", "docs/privacy.md", "docs/releasing.md",
     "docs/reverse-proxy.md", "docs/security.md", "docs/upgrading.md", "docs/usage.md",
     "docs/images/usage-dashboard.png", "docs/images/usage-review.png",
+    "docs/images/usage-trips.png", "docs/images/usage-report.png",
 })
 PRIVATE_FILES = frozenset({"tests/test_handoff_contract.py"})
 LOCAL_STATE = frozenset({".git", ".claude", ".codex", ".agents", ".venv", "__pycache__", ".pytest_cache", ".devsite"})
