@@ -48,7 +48,7 @@ async def _signed_in(client) -> bool:
 
 def test_reset_ends_only_the_target_accounts_sessions(monkeypatch, caplog):
     monkeypatch.setenv("DATABASE_URL", TEST_DB)
-    monkeypatch.setenv("SESSION_SECRET", "disposable-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "disposable-session-secret-long-enough-for-config")
     monkeypatch.setenv("INITIAL_ADMIN_SIGNUP", "1")
     monkeypatch.setenv("DEV_NO_AUTH", "0")
     monkeypatch.setenv("SMTP_HOST", "smtp.example.invalid")

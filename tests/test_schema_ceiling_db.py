@@ -132,7 +132,7 @@ def test_startup_refuses_a_newer_schema_before_the_role_contract(monkeypatch):
     from app.config import Config
     from app.main import create_app
     monkeypatch.setenv("DATABASE_URL", TEST_DB)
-    monkeypatch.setenv("SESSION_SECRET", "disposable-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "disposable-session-secret-long-enough-for-config")
     monkeypatch.setenv("DEV_NO_AUTH", "0")
     for name in ("OSRM_URL", "GEOCODE_API_KEY", "GEOCODE_PROVIDER", "NTFY_URL", "SMTP_HOST",
                  "OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET"):
@@ -184,7 +184,7 @@ def _refused_cli(run):
 
 
 def _command_env():
-    env = {**os.environ, "DATABASE_URL": TEST_DB, "SESSION_SECRET": "test-session-secret"}
+    env = {**os.environ, "DATABASE_URL": TEST_DB, "SESSION_SECRET": "test-session-secret-long-enough-for-config"}
     for key in ("OSRM_URL", "GEOCODE_API_KEY", "GEOCODE_PROVIDER", "NTFY_URL", "NTFY_TOPIC", "SMTP_HOST"):
         env.pop(key, None)
     return env

@@ -262,7 +262,7 @@ def test_unauthenticated_surfaces_do_not_disclose_runtime_identity(monkeypatch):
     for key, value in {
         "DATABASE_URL": "postgresql://unused/unused",
         "INGEST_PASSWORD": "ingest-password",
-        "SESSION_SECRET": "session-secret",
+        "SESSION_SECRET": "session-secret-long-enough-for-config",
         "ADMIN_TOKEN": "setup-token",
         "APP_VERSION": app_version,
         "APP_GIT_REVISION": git_revision,

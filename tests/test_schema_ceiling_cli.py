@@ -132,7 +132,7 @@ def test_manage_account_keeps_other_failures_generic(monkeypatch, capsys):
 
 def test_reprocess_detector_prints_the_message(monkeypatch, capsys):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-long-enough-for-config")
     monkeypatch.setattr(reprocess_detector, "_reprocess", _too_new)
     assert reprocess_detector.main(["--account", "1"]) == 1
     assert capsys.readouterr().err == f"error: {MESSAGE}\n"
@@ -143,7 +143,7 @@ def test_reprocess_detector_keeps_other_failures_to_the_type(monkeypatch, capsys
         raise RuntimeError("postgresql://secret@host")
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-long-enough-for-config")
     monkeypatch.setattr(reprocess_detector, "_reprocess", failing)
     assert reprocess_detector.main(["--account", "1"]) == 1
     assert capsys.readouterr().err == "error: detector reprocess failed (RuntimeError)\n"
@@ -163,7 +163,7 @@ def test_diagnose_reports_a_newer_schema_as_a_finding(monkeypatch, capsys, error
         return []
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-long-enough-for-config")
     monkeypatch.setattr(diagnose, "application_role_pools", pools)
     monkeypatch.setattr(diagnose, "run_connectivity_checks", no_connectivity)
     asyncio.run(diagnose._main())

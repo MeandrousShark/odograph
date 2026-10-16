@@ -949,6 +949,12 @@ step_materialize() {
 
 step1_base_up() {
     (cd "$BASE_DIR" && ./scripts/generate_env.sh) >/dev/null
+    # A base whose example lists INITIAL_ADMIN_SIGNUP supports browser signup,
+    # whatever its shipped default. Enable it for the step 2 bootstrap; a base
+    # without the key keeps its own bootstrap capability.
+    if env_value "$BASE_DIR/.env" INITIAL_ADMIN_SIGNUP >/dev/null 2>&1; then
+        set_env_value "$BASE_DIR/.env" INITIAL_ADMIN_SIGNUP 1
+    fi
     OIDC_CLIENT_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
     set_env_value "$BASE_DIR/.env" OIDC_ISSUER "$OIDC_ISSUER"
     set_env_value "$BASE_DIR/.env" OIDC_CLIENT_ID "$OIDC_CLIENT_ID"

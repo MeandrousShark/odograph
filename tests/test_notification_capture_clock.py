@@ -59,7 +59,7 @@ sys.exit(helper.main())
         await original(self,key,value)
     monkeypatch.setattr(Projection,'literal',delayed_literal)
     fields={'display_tz':'UTC','email_to':'to@example.com','ntfy_topic':'topic','email_filing_reminder_mmdd':'01-15'}
-    row={'tz_size':3,'to_size':14,'topic_size':5,'ntfy_size':5,'filing_size':5,
+    row={'tz_size':3,'to_size':14,'topic_size':5,'ntfy_size':5,'filing_size':5,'short_topic':'topic',
         'nudge_weekly_hour':18,'odometer_reminder_hour':9,'email_digest_hour':9,'odometer_reminder_requested':True,
         'email_weekly_nudge':True,'email_monthly_summary':True,'email_filing_reminder':True,'email_odometer_reminder':True}
     async def scalar(self,conn,query,params=()):
@@ -146,7 +146,7 @@ def test_disabled_year_one_actual_helper_matches_legacy_factory_skip(tmp_path,mo
     samples,conn,config=controlled_helper_clock(tmp_path,monkeypatch,before,after)
     if disabled=='url': config.ntfy_url=''
     elif disabled=='topic':
-        conn.fields['ntfy_topic']=''; conn.settings['topic_size']=0
+        conn.fields['ntfy_topic']=''; conn.settings['topic_size']=0; conn.settings['short_topic']=''
     else: conn.settings['odometer_reminder_requested']=False
     legacy=SimpleNamespace(ntfy_url=config.ntfy_url,ntfy_topic=conn.fields['ntfy_topic'],
         odometer_reminder_requested=conn.settings['odometer_reminder_requested'])

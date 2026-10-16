@@ -79,8 +79,8 @@ cd odograph
 scripts/generate_env.sh
 ```
 
-Open `.env`, set your timezone, and disable browser signup before starting the
-stack:
+Open `.env` and set your timezone before starting the stack. Browser signup
+is already disabled:
 
 ```env
 DISPLAY_TZ=America/Los_Angeles

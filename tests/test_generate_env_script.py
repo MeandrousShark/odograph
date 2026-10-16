@@ -161,7 +161,8 @@ def test_generated_baseline_is_complete_private_and_contains_no_admin_token(tmp_
         "FORWARDED_ALLOW_IPS",
     }
     assert all(active[name] for name in active)
-    assert active["INITIAL_ADMIN_SIGNUP"] == "1"
+    assert active["INITIAL_ADMIN_SIGNUP"] == "0"
+    assert len(active["SESSION_SECRET"]) >= 32
     assert "ADMIN_TOKEN" not in env_file.read_text()
     assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
     assert "Optional services remain disabled and unset" in result.stdout

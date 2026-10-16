@@ -143,7 +143,8 @@ async def transport(config, body_fd, cookies_fd, state):
     info = os.fstat(body_fd)
     if not stat.S_ISREG(info.st_mode) or info.st_size != config['body_bytes']:
         raise ValueError('invalid ntfy body descriptor')
-    url = config['url'].rstrip('/') + '/' + config['topic']
+    from app.validation import ntfy_topic_url
+    url = ntfy_topic_url(config['url'], config['topic'])
     async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0), cookies=jar) as client:
         with os.fdopen(os.dup(body_fd), 'rb') as source:
             async def content():

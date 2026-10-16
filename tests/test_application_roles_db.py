@@ -256,7 +256,7 @@ def test_normal_signup_and_personal_pages_use_restricted_pools(monkeypatch):
     from app.config import Config
     from app.main import create_app
     monkeypatch.setenv("DATABASE_URL", TEST_DB)
-    monkeypatch.setenv("SESSION_SECRET", "disposable-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "disposable-session-secret-long-enough-for-config")
     monkeypatch.setenv("INITIAL_ADMIN_SIGNUP", "1")
     monkeypatch.setenv("DEV_NO_AUTH", "0")
     for name in ("OSRM_URL", "GEOCODE_API_KEY", "GEOCODE_PROVIDER", "NTFY_URL", "SMTP_HOST", "OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET"):

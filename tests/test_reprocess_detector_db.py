@@ -33,7 +33,7 @@ DETECTOR_ENV = ("MAX_ACCURACY_M", "MAX_SPEED_MS", "STAY_RADIUS_M", "STAY_MIN_DUR
 @pytest.fixture
 def command_env(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", TEST_DB)
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret-long-enough-for-config")
     for name in DETECTOR_ENV:
         monkeypatch.delenv(name, raising=False)
     return monkeypatch
@@ -304,7 +304,7 @@ def test_command_runs_as_a_real_process_with_its_own_operation_owner():
         return device
 
     device = _run(body)
-    env = {**os.environ, "DATABASE_URL": TEST_DB, "SESSION_SECRET": "test-session-secret"}
+    env = {**os.environ, "DATABASE_URL": TEST_DB, "SESSION_SECRET": "test-session-secret-long-enough-for-config"}
     for name in DETECTOR_ENV:
         env.pop(name, None)
     result = subprocess.run(

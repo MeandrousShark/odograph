@@ -486,7 +486,7 @@ def test_tracking_setup_forms_use_normal_account_auth_and_show_secret_only_once(
             async with b.connection() as conn:
                 foreign = await create_device(conn, "Other account")
             app = _app(b)
-            with patch.dict(os.environ, {"DATABASE_URL": TEST_DB, "SESSION_SECRET": "test-cookie-secret"}, clear=True):
+            with patch.dict(os.environ, {"DATABASE_URL": TEST_DB, "SESSION_SECRET": "test-cookie-secret-long-enough-for-config"}, clear=True):
                 app.state.config = Config.from_env()
             app.state.templates = make_templates(app.state.config)
             app.state.make_detector_runner = lambda bound: DetectorRunner(bound, Params())

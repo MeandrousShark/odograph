@@ -154,7 +154,7 @@ def test_done_callback_logs_critical_when_run_once_raises_a_base_exception(caplo
 
 # ---- 2. lifespan startup failure still tears down what already came up --
 
-REQUIRED_ENV = {"INGEST_PASSWORD": "ingest-password", "SESSION_SECRET": "session-secret"}
+REQUIRED_ENV = {"INGEST_PASSWORD": "ingest-password", "SESSION_SECRET": "session-secret-long-enough-for-config"}
 # Every optional gate cleared so only what a test explicitly sets is enabled
 # -- OSRM/geocode/ntfy/SMTP off, retention on (its default, > 0 days).
 OPTIONAL_ENV_TO_CLEAR = (

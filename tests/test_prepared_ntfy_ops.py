@@ -560,3 +560,20 @@ def test_real_renderer_and_actual_auth_preserve_adjacent_surrogates(monkeypatch,
             finally:
                 await receiver.close()
     asyncio.run(scenario())
+
+
+def test_isolated_send_encodes_the_topic_as_one_path_segment(monkeypatch, tmp_path):
+    observe_spawn(monkeypatch)
+    async def scenario():
+        receiver = Receiver()
+        port = await receiver.start()
+        async with httpx.AsyncClient() as held:
+            prepared = prepare(tmp_path / 'spool', f'http://127.0.0.1:{port}/', held,
+                               body='body', topic='a?click=x')
+            try:
+                await supervisor.send_prepared(prepared, http_client=held)
+                assert receiver.requests[0][0].startswith(b'POST /a%3Fclick%3Dx HTTP/1.1\r\n')
+            finally:
+                prepared.reservation.release()
+                await receiver.close()
+    asyncio.run(scenario())

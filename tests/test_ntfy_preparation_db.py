@@ -158,3 +158,37 @@ def test_stale_exact_topic_recheck_skips_transport_and_ledger(monkeypatch, tmp_p
                 finally:
                     await receiver.close()
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('kind', ['weekly', 'quarterly'])
+@pytest.mark.parametrize('topic', ['a?click=x', '../x', 'x' * 65])
+def test_saved_topic_that_is_not_an_ntfy_topic_is_skipped(monkeypatch, tmp_path, caplog, kind, topic):
+    clock(monkeypatch)
+    async def scenario():
+        async with _scenario() as (raw, manager, runtime, control, accounts):
+            pool, _ = accounts
+            await seed(pool, kind, False)
+            async with pool.connection() as conn:
+                await conn.execute('UPDATE account_settings SET ntfy_topic=%s WHERE account_id=%s',
+                                   (topic, account_id(conn)))
+            receiver = Receiver()
+            port = await receiver.start()
+            root = tmp_path / 'spool'
+            worker = SimpleNamespace(config=SimpleNamespace(preparation_spool_dir=root,
+                app_url='', ntfy_url=f'http://127.0.0.1:{port}', ntfy_token='', ntfy_username='', ntfy_password=''),
+                pools=SimpleNamespace(runtime=runtime, control=control))
+            async with httpx.AsyncClient() as held:
+                try:
+                    with caplog.at_level('WARNING', logger='app.ntfy_preparation'):
+                        await invoke(manager, pool, worker, kind, held)
+                    assert receiver.requests == []
+                    assert 'saved topic is not a valid ntfy topic' in caplog.text
+                    assert topic not in caplog.text
+                    table = 'nudge_delivery_windows' if kind == 'weekly' else 'odometer_reminder_windows'
+                    async with pool.connection() as conn:
+                        assert (await (await conn.execute(f'SELECT count(*) FROM {table}')).fetchone()) == (0,)
+                    assert not list(root.glob('op-*'))
+                    assert manager.snapshot()['leases'] == 0
+                finally:
+                    await receiver.close()
+    asyncio.run(scenario())

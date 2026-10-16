@@ -222,6 +222,33 @@ async def _email_form(request: Request, fields: set[str]) -> dict[str, str]:
     return {name: values[0] for name, values in parsed.items()}
 
 
+async def _invite_form(
+    request: Request, fields: set[str], max_bytes: int,
+) -> tuple[dict[str, str] | None, int, bool]:
+    """Read an invitation form and check its CSRF token before its shape.
+
+    Returns (values, 0, False) for a complete form. A rejected form returns
+    (None, status, counted), where counted is true only once the CSRF token
+    has passed, so a request without a valid form token never records a
+    failed attempt. A wrong CSRF token raises 403 like check_form_csrf.
+    """
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/x-www-form-urlencoded":
+        return None, 400, False
+    body = await _read_capped_body(request, max_bytes)
+    if body is None:
+        return None, 413, False
+    try:
+        parsed = parse_qs(body.decode("utf-8"), keep_blank_values=True,
+                          strict_parsing=True, max_num_fields=len(fields))
+    except (UnicodeDecodeError, ValueError):
+        return None, 400, False
+    csrf_tokens = parsed.get("csrf_token", [])
+    check_form_csrf(request, csrf_tokens[0] if len(csrf_tokens) == 1 else "")
+    if set(parsed) != fields or any(len(values) != 1 for values in parsed.values()):
+        return None, 400, True
+    return {name: values[0] for name, values in parsed.items()}, 0, False
+
+
 def _avatar_upload_exceeds_limit(request: Request) -> bool:
     """Return whether a declared upload is over the configured cap.
 
@@ -1027,26 +1054,14 @@ def make_router() -> APIRouter:
         if limiter.blocked(ip):
             return await _render_invite(request, error=GENERIC_INVITE_ERROR, status_code=429)
 
-        if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/x-www-form-urlencoded":
-            limiter.record_failure(ip)
-            return await _render_invite(request, error=GENERIC_INVITE_ERROR, status_code=400)
-        body = await _read_capped_body(request, MAX_INVITE_FORM_BYTES)
-        if body is None:
-            limiter.record_failure(ip)
-            return await _render_invite(request, error=GENERIC_INVITE_ERROR, status_code=413)
-        try:
-            fields = parse_qs(body.decode("utf-8"), keep_blank_values=True,
-                              strict_parsing=True, max_num_fields=5)
-            if set(fields) != {"token", "password", "password_confirm", "display_timezone", "csrf_token"}:
-                raise ValueError("invalid fields")
-            if any(len(values) != 1 for values in fields.values()):
-                raise ValueError("duplicate fields")
-            values = {name: items[0] for name, items in fields.items()}
-        except (UnicodeDecodeError, ValueError):
-            limiter.record_failure(ip)
-            return await _render_invite(request, error=GENERIC_INVITE_ERROR, status_code=400)
-
-        check_form_csrf(request, values["csrf_token"])
+        values, status_code, counted = await _invite_form(
+            request, {"token", "password", "password_confirm", "display_timezone", "csrf_token"},
+            MAX_INVITE_FORM_BYTES,
+        )
+        if values is None:
+            if counted:
+                limiter.record_failure(ip)
+            return await _render_invite(request, error=GENERIC_INVITE_ERROR, status_code=status_code)
         token = values["token"]
         password = values["password"]
         timezone_name = values["display_timezone"].strip()
@@ -1097,12 +1112,13 @@ def make_router() -> APIRouter:
         ip = client_ip(request)
         if limiter.blocked(ip):
             return await _render_invite(request, error=GENERIC_INVITE_ERROR, status_code=429)
-        try:
-            values = await _email_form(request, {"token", "display_timezone", "csrf_token"})
-        except HTTPException:
-            limiter.record_failure(ip)
+        values, _, counted = await _invite_form(
+            request, {"token", "display_timezone", "csrf_token"}, MAX_EMAIL_FORM_BYTES,
+        )
+        if values is None:
+            if counted:
+                limiter.record_failure(ip)
             return await _render_invite(request, error=GENERIC_INVITE_ERROR, status_code=400)
-        check_form_csrf(request, values["csrf_token"])
         try:
             token = values["token"]
             timezone_name = values["display_timezone"].strip()

@@ -116,7 +116,7 @@ def _misconfigured_nominatim_config(monkeypatch) -> Config:
     scenario tests/test_config.py's `test_geocode_provider_nominatim_without_
     url_fails_fast` exercises against `build_geocode_provider` directly.
     """
-    for key, value in zip(REQUIRED_VARS, ("postgresql://x/x", "ingest-pw", "session-secret")):
+    for key, value in zip(REQUIRED_VARS, ("postgresql://x/x", "ingest-pw", "session-secret-long-enough-for-config")):
         monkeypatch.setenv(key, value)
     for key in (
         "GEOCODE_API_KEY", "GEOCODE_OMIT_COUNTRY", "GEOCODE_NOMINATIM_URL",
@@ -437,7 +437,7 @@ def test_report_and_connectivity_never_contain_secrets_or_coordinates(monkeypatc
     secrets = {
         "DATABASE_URL": "postgresql://mileage:db-secret-value@db/mileage",
         "INGEST_PASSWORD": "ingest-secret-value",
-        "SESSION_SECRET": "session-secret-value",
+        "SESSION_SECRET": "session-secret-value-long-enough-for-config",
         "GEOCODE_API_KEY": "geocode-secret-value",
         "NTFY_URL": "http://ntfy.internal",
         "NTFY_TOPIC": "mileage",

@@ -188,7 +188,7 @@ def test_settings_metadata_refusal_after_data_read_uses_real_app_busy_response(m
         pytest.fail('capacity refusal must not render false database failure data')
     monkeypatch.setattr(settings, 'render_page', render)
     for name, value in {'DATABASE_URL': 'postgresql://localhost/test-only-diagnostics',
-                        'SESSION_SECRET': 'test-only-diagnostics', 'DEV_NO_AUTH': '1',
+                        'SESSION_SECRET': 'test-only-diagnostics-long-enough-for-config', 'DEV_NO_AUTH': '1',
                         'CAPACITY_ROUTINE_PENDING': '0'}.items():
         monkeypatch.setenv(name, value)
     async def run():

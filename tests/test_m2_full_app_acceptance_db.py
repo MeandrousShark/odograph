@@ -419,7 +419,7 @@ def test_full_app_bootstrap_onboarding_and_admin_recovery_keep_proofs_private(
     m2_stall_probe, monkeypatch, caplog,
 ):
     monkeypatch.setenv("DATABASE_URL", TEST_DB)
-    monkeypatch.setenv("SESSION_SECRET", "disposable-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "disposable-session-secret-long-enough-for-config")
     monkeypatch.setenv("INITIAL_ADMIN_SIGNUP", "1")
     monkeypatch.setenv("DEV_NO_AUTH", "0")
     monkeypatch.setenv("SMTP_HOST", "smtp.example.invalid")

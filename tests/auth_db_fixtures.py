@@ -13,7 +13,7 @@ from app.config import Config
 
 def auth_config(database_url, **overrides):
     with patch.dict(os.environ, {
-        "DATABASE_URL": database_url, "SESSION_SECRET": "test-auth-secret",
+        "DATABASE_URL": database_url, "SESSION_SECRET": "test-auth-secret-long-enough-for-config",
     }, clear=True):
         config = Config.from_env()
     return replace(config, **overrides)

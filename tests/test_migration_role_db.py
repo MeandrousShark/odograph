@@ -99,7 +99,7 @@ def test_startup_refuses_a_plain_migration_role(monkeypatch):
     from app.config import Config
     from app.main import create_app
     monkeypatch.setenv("DATABASE_URL", _url(PLAIN))
-    monkeypatch.setenv("SESSION_SECRET", "disposable-session-secret")
+    monkeypatch.setenv("SESSION_SECRET", "disposable-session-secret-long-enough-for-config")
     monkeypatch.setenv("DEV_NO_AUTH", "0")
     for name in ("OSRM_URL", "GEOCODE_API_KEY", "GEOCODE_PROVIDER", "NTFY_URL", "SMTP_HOST",
                  "OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET"):

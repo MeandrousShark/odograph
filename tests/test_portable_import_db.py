@@ -1520,3 +1520,23 @@ def test_rates_the_delete_cannot_destroy_do_not_block_an_import(mutation, label)
         assert response.status_code == 200, response.text
 
     _scenario(run)
+
+
+@pytest.mark.parametrize("raw", [
+    pytest.param(b"[" * 100000, id="deep-nesting"),
+    pytest.param(b'{"format": ' + b"9" * 5000 + b"}", id="5000-digit-integer"),
+    pytest.param(b"\xff\xfe not utf-8", id="not-utf-8"),
+])
+def test_unparseable_upload_is_reported_as_invalid_json(raw):
+    async def run(pool):
+        transport = httpx.ASGITransport(app=_bare_app(pool))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            csrf = await _csrf(client)
+            files = {"file": ("bundle.json", raw, "application/json")}
+            response = await client.post(
+                "/settings/import/data", data={"csrf_token": csrf}, files=files,
+            )
+        assert response.status_code == 400
+        assert response.json()["error"] == "invalid_json"
+
+    _scenario(run)

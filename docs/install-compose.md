@@ -103,8 +103,8 @@ PYENV
 ```
 
 Then open `.env` in an editor. Add a `COMPOSE_PROJECT_NAME` line (the file
-does not include one) for a stable Compose project name, change
-`INITIAL_ADMIN_SIGNUP` from `1` to `0`, and set an explicit IANA timezone.
+does not include one) for a stable Compose project name, keep
+`INITIAL_ADMIN_SIGNUP=0`, and set an explicit IANA timezone.
 Keep the generated secrets private. The relevant
 fields are shown below with placeholders, not values to copy over your file.
 `INGEST_PASSWORD` is retained for legacy-upgrade compatibility; after fresh

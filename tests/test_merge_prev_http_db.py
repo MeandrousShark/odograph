@@ -46,7 +46,7 @@ def _bare_app(pool) -> FastAPI:
     app.state.dev_principal = pool.principal
     app.state.make_detector_runner = lambda bound: DetectorRunner(bound, Params())
     with patch.dict(os.environ, {
-        "DATABASE_URL": TEST_DB, "SESSION_SECRET": "test-secret", "DEV_NO_AUTH": "1",
+        "DATABASE_URL": TEST_DB, "SESSION_SECRET": "test-secret-long-enough-for-config", "DEV_NO_AUTH": "1",
     }, clear=True):
         app.state.config = Config.from_env()
     app.state.templates = make_templates(app.state.config)

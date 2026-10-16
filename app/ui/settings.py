@@ -16,7 +16,7 @@ from app.diagnose import build_report, run_connectivity_checks
 from app.odometer import OdometerReading, reconcile
 from app.rates import METERS_PER_MILE
 from app.trip_queries import DISPLAY_DISTANCE_SQL
-from app.validation import parse_finite_number
+from app.validation import NTFY_TOPIC_HINT, is_valid_ntfy_topic, parse_finite_number
 from app.vehicles import (
     create_vehicle,
     deactivate_vehicle,
@@ -211,6 +211,9 @@ def register(router: APIRouter) -> None:
                 raise HTTPException(status_code=400, detail="Invalid reminder month and day")
             if any(char in email_to or char in ntfy_topic for char in "\r\n"):
                 raise HTTPException(status_code=400, detail="Invalid notification destination")
+            ntfy_topic = ntfy_topic.strip()
+            if ntfy_topic and not is_valid_ntfy_topic(ntfy_topic):
+                raise HTTPException(status_code=400, detail=f"Invalid ntfy topic: {NTFY_TOPIC_HINT}")
             async with request.state.account_pool.connection() as conn:
                 await conn.execute(
                     "UPDATE account_settings SET display_tz = %s, ntfy_topic = %s, email_to = %s, "
@@ -218,7 +221,7 @@ def register(router: APIRouter) -> None:
                     "email_weekly_nudge = %s, email_monthly_summary = %s, email_filing_reminder = %s, "
                     "email_odometer_reminder = %s, email_digest_hour = %s, email_filing_reminder_mmdd = %s, "
                     "updated_at = now() WHERE account_id = %s",
-                    (timezone_name, ntfy_topic.strip(), email_to.strip(), nudge_weekly_hour,
+                    (timezone_name, ntfy_topic, email_to.strip(), nudge_weekly_hour,
                      odometer_reminder_requested == "1", odometer_reminder_hour,
                      email_weekly_nudge == "1", email_monthly_summary == "1", email_filing_reminder == "1",
                      email_odometer_reminder == "1", email_digest_hour, f"{month:02d}-{day:02d}", account_id(conn)),

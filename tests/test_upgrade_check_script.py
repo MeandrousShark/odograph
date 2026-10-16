@@ -50,6 +50,7 @@ def _install_repo(
     modern_auth: bool = False,
     no_bootstrap: bool = False,
     owned_schema: bool = False,
+    example_signup: str = "1",
 ) -> tuple[Path, str, str]:
     repo = tmp_path / "repo"
     scripts_dir = repo / "scripts"
@@ -66,7 +67,7 @@ def _install_repo(
     elif owned_schema:
         bootstrap_env = "'POSTGRES_PASSWORD=fake' 'INITIAL_ADMIN_SIGNUP=1'"
     elif modern_auth:
-        bootstrap_env = "'POSTGRES_PASSWORD=fake' 'INGEST_PASSWORD=fake' 'INITIAL_ADMIN_SIGNUP=1'"
+        bootstrap_env = f"'POSTGRES_PASSWORD=fake' 'INGEST_PASSWORD=fake' 'INITIAL_ADMIN_SIGNUP={example_signup}'"
     else:
         bootstrap_env = "'POSTGRES_PASSWORD=fake' 'ADMIN_TOKEN=fake' 'INGEST_PASSWORD=fake'"
     _write_executable(
@@ -693,8 +694,13 @@ def test_source_candidate_allows_app_drift_and_uses_build_override(tmp_path):
     assert list(scratch_root.glob("upgrade_check.*")) == []
 
 
-def test_modern_auth_uses_signup_and_modern_rollback_contract(tmp_path):
-    repo, base_ref, candidate_ref = _install_repo(tmp_path, modern_auth=True)
+# A base generating INITIAL_ADMIN_SIGNUP=0 must still bootstrap through
+# signup: the drill enables it in its own generated .env.
+@pytest.mark.parametrize("example_signup", ["1", "0"])
+def test_modern_auth_uses_signup_and_modern_rollback_contract(tmp_path, example_signup):
+    repo, base_ref, candidate_ref = _install_repo(
+        tmp_path, modern_auth=True, example_signup=example_signup,
+    )
 
     result, log_path, _, scratch_root = _run(
         repo,

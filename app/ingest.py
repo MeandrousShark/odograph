@@ -316,7 +316,9 @@ def make_router() -> APIRouter:
             return _ok()
         try:
             payload = json.loads(body)
-        except (json.JSONDecodeError, UnicodeDecodeError):
+        except (ValueError, RecursionError):
+            # ValueError covers JSONDecodeError, UnicodeDecodeError and the
+            # integer digit limit; RecursionError covers deep nesting.
             log.warning("ingest: dropping unparseable body (%d bytes)", len(body))
             return _ok()
         if not isinstance(payload, dict):
@@ -437,12 +439,31 @@ def make_router() -> APIRouter:
     return router
 
 
+# Optional fix readings outside these bounds are stored as NULL. The real
+# columns hold about 3.4e38; these limits stay far inside that and far
+# beyond any physical reading, so the INSERT cannot fail on them.
+MAX_ABS_READING = 1e9
+BATTERY_RANGE = (0, 100)
+
+
 def _num(v) -> float | None:
-    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        return None
+    try:
+        value = float(v)
+    except OverflowError:
+        return None
+    if not math.isfinite(value) or abs(value) > MAX_ABS_READING:
+        return None
+    return value
 
 
 def _int(v) -> int | None:
-    return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    value = _num(v)
+    if value is None:
+        return None
+    value = int(value)
+    return value if BATTERY_RANGE[0] <= value <= BATTERY_RANGE[1] else None
 
 
 def _discarded_type_for_log(payload: dict) -> str:
@@ -491,9 +512,12 @@ def _jsonb_encode(payload: dict) -> tuple[str | None, str | None]:
     """
     try:
         text = json.dumps(payload, allow_nan=False)
+        reason = _unstorable_char_reason(payload)
     except ValueError:
         return None, "non-finite number in payload"
-    reason = _unstorable_char_reason(payload)
+    except RecursionError:
+        # json.loads accepts deeper nesting than these encoders can walk.
+        return None, "payload nested too deeply"
     if reason:
         return None, reason
     return text, None
@@ -543,7 +567,11 @@ def _validate_location(payload: dict) -> str | None:
         return "lat/lon out of range"
     if lat == 0 and lon == 0:
         return "null island (0,0)"
-    if not math.isfinite(tst):
+    try:
+        finite = math.isfinite(tst)
+    except OverflowError:
+        return "tst out of range"
+    if not finite:
         return "non-finite tst"
     if tst <= 0 or tst > MAX_TST:
         return "tst out of range"

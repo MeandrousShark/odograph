@@ -514,7 +514,7 @@ async def test_managed_account_helper_sets_deadlines_and_rolls_back_before_retur
 def test_config_environment_rejects_unreviewed_bounds(monkeypatch, env, value):
     from app.config import Config
     monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/example")
-    monkeypatch.setenv("SESSION_SECRET", "test-session")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-long-enough-for-config")
     monkeypatch.setenv(env, value)
     with pytest.raises(ValueError):
         Config.from_env()
@@ -524,7 +524,7 @@ def test_config_exposes_reviewed_ingest_authentication_wait_bounds(monkeypatch):
     from app.config import Config
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/example")
-    monkeypatch.setenv("SESSION_SECRET", "test-session")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-long-enough-for-config")
     monkeypatch.setenv("CAPACITY_AUTH_INGEST_PENDING", "7")
     monkeypatch.setenv("CAPACITY_AUTH_INGEST_WAIT_S", "0.8")
     monkeypatch.setenv("CAPACITY_INGEST_IDENTITY_PENDING", "1")
