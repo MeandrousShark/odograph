@@ -7,10 +7,13 @@
 # Usage:
 #   scripts/devsite.sh up
 #   scripts/devsite.sh down
-#   scripts/devsite.sh reseed
+#   scripts/devsite.sh reseed [--scenario week]
 #   scripts/devsite.sh migrate
 #   scripts/devsite.sh status
 #   scripts/devsite.sh logs [app|db]
+#
+# `reseed --scenario week` also seeds screenshot-ready data for the last
+# complete Monday-to-Sunday week (see scripts/dev_seed.py).
 #
 # `up` is idempotent: running it twice never starts a second database
 # container or a second uvicorn process. `down` stops both and leaves the
@@ -59,12 +62,13 @@ UVICORN_BIN="${DEVSITE_UVICORN:-$REPO_ROOT/.venv/bin/uvicorn}"
 
 usage() {
     cat >&2 <<'EOF'
-usage: scripts/devsite.sh up|down|reseed|migrate|status|logs [app|db]
+usage: scripts/devsite.sh up|down|reseed [--scenario week]|migrate|status|logs [app|db]
 
   up       start the QA database and uvicorn --reload, generating
            .env.devsite on first run
   down     stop both, preserving the database's named volume
-  reseed   wipe and re-run scripts/dev_seed.py for a clean dataset
+  reseed   wipe and re-run scripts/dev_seed.py for a clean dataset;
+           --scenario week also seeds a screenshot-ready past week
   migrate  apply new migrations to the existing QA data
   status   report what is running and on which port
   logs     print recent output (app's uvicorn log by default, or db)
@@ -356,13 +360,23 @@ cmd_down() {
 }
 
 cmd_reseed() {
+    # Only --scenario is forwarded, so reseed can never be pointed at another
+    # database or run without the wipe confirmation.
+    local seed_args=()
+    if [ "$#" -gt 0 ]; then
+        if [ "$#" -ne 2 ] || [ "$1" != "--scenario" ]; then
+            echo "usage: scripts/devsite.sh reseed [--scenario week]" >&2
+            exit 1
+        fi
+        seed_args=(--scenario "$2")
+    fi
     load_env_file
     require_existing_db_container
     wait_for_db_ready
     require_executable "$PYTHON_BIN" \
         "Run 'python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt' first, or set DEVSITE_PYTHON."
     echo "Wiping and reseeding $DB_NAME..."
-    (cd "$REPO_ROOT" && "$PYTHON_BIN" scripts/dev_seed.py --database-url "$DATABASE_URL" --wipe)
+    (cd "$REPO_ROOT" && "$PYTHON_BIN" scripts/dev_seed.py --database-url "$DATABASE_URL" --wipe ${seed_args[@]+"${seed_args[@]}"})
 }
 
 cmd_migrate() {
