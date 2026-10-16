@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       candidate-image:
-        description: Immutable published candidate image; omitted to build the revision
+        description: Exact published candidate image; omitted to build the revision
         required: false
         default: ""
         type: string

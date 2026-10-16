@@ -102,6 +102,9 @@ case "$ref" in
     *@*)
         name="${ref%%@*}"
         pinned_digest="${ref#*@}"
+        case "${name##*/}" in
+            *:*) die "app image '$ref' has both a tag and a digest; use either a tag or a digest." ;;
+        esac
         [[ "$pinned_digest" =~ $DIGEST_RE ]] \
             || die "app image '$ref' has an invalid digest; expected sha256: followed by 64 hex digits."
         ;;

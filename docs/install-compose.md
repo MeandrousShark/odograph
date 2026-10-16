@@ -2,9 +2,10 @@
 
 If you already manage Docker Compose or podman-compose, you can install
 Odograph using only the `compose.yaml`, `.env.example` and
-`scripts/verify_image.sh` files from one exact release. The recommended path remains the [full release
-checkout](../README.md#quick-start), which also provides the guarded secret,
-backup, restore, test-track, OSRM, and upgrade helpers.
+`scripts/verify_image.sh` files from one exact release. The recommended path
+remains the [full release checkout](../README.md#quick-start), which also
+provides the guarded secret, backup, restore, test-track, OSRM, and upgrade
+helpers.
 
 Do not mix files from different releases. Use a published exact release tag
 for every download, and never use `main` or a moving image tag for this setup.
@@ -171,6 +172,10 @@ docker compose up -d
 
 With Podman, use `podman-compose` for the Compose commands and run
 `CONTAINER_RUNTIME=podman ./verify_image.sh`.
+
+`verify_image.sh` checks only the app image named in `./compose.yaml`. If a
+`compose.override.yaml` or a `COMPOSE_FILE` setting replaces the app image,
+that image is not verified.
 
 Wait until both `db` and `app` report `healthy`, then check the loopback health
 endpoint:

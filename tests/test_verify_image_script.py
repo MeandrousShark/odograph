@@ -243,3 +243,19 @@ def test_scripts_pass_shellcheck(name):
 
     assert result.returncode == 0, result.stdout
     assert os.access(ROOT / "scripts" / name, os.X_OK)
+
+
+def test_tag_plus_digest_reference_is_refused_with_an_accurate_message(tmp_path):
+    result, log = _run(tmp_path, f"{REPO}:v1.2.3@{DIGEST}")
+
+    assert result.returncode != 0
+    assert "either a tag or a digest" in result.stderr
+    assert log == []
+
+
+def test_inspect_failure_is_a_failure(tmp_path):
+    result, log = _run(tmp_path, f"{REPO}:v1.2.3", env={"FAKE_INSPECT_EXIT": "1"})
+
+    assert result.returncode != 0
+    assert "could not inspect" in result.stderr
+    assert not any(line.startswith("cosign") for line in log)

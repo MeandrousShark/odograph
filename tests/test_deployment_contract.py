@@ -95,12 +95,17 @@ def test_quickstart_separates_critical_path_from_post_install_operations():
 def test_install_and_upgrade_guides_verify_the_app_image_before_starting_it():
     # Compose never pulls the app image (pull_policy: never), so each guide
     # must run the verification script before `up`.
-    for relative in ("README.md", "docs/install-compose.md", "docs/upgrading.md"):
+    for relative in ("README.md", "docs/install-compose.md", "docs/upgrading.md", "docs/backups.md"):
         text = (ROOT / relative).read_text()
         assert "verify_image.sh" in text, relative
-        assert "sigstore.dev/cosign" in text, relative
+        if relative != "docs/backups.md":
+            assert "sigstore.dev/cosign" in text, relative
     install = (ROOT / "docs" / "install-compose.md").read_text()
     assert install.index("./verify_image.sh") < install.index("docker compose up -d")
+    upgrading = (ROOT / "docs" / "upgrading.md").read_text()
+    app_only = upgrading.split("4. **If the database image is unchanged", 1)[1]
+    app_only = app_only.split("```sh", 1)[1].split("```", 1)[0]
+    assert app_only.index("scripts/verify_image.sh") < app_only.index("docker compose up -d")
     assert "docker compose pull\n" not in install
     assert "compose pull app" not in install
 

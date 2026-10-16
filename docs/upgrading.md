@@ -81,7 +81,9 @@ ready.
    target Compose file supplies the new digest-pinned database image. Replace
    the existing `COMPOSE_PROJECT_NAME` line in `.env` with a new unused value.
    Do not regenerate `.env` and do not add a second project-name line. Then
-   pull and verify the target app image, because Compose will not pull it:
+   pull and verify the target app image, because Compose will not pull it. A
+   [minimal Compose installation](install-compose.md) has no `scripts/`
+   directory and runs `./verify_image.sh` instead:
 
    ```sh
    git fetch --tags
@@ -94,6 +96,8 @@ ready.
    docker compose config >/dev/null
    scripts/verify_image.sh
    ```
+
+   With Podman, run `CONTAINER_RUNTIME=podman scripts/verify_image.sh`.
 
 3. **Initialize and restore the fresh target database before starting the app:**
 
@@ -272,7 +276,8 @@ image. That loses every write made after the backup. The steps are in
 untouched, you can instead stop the target project (`docker compose stop app
 db` while `.env` still names it), restore `.env` from `.env.pre-upgrade`,
 check out the previous release and start that project again; it still holds
-the pre-upgrade data.
+the pre-upgrade data. That image is already on the host. If it is not, run the
+saved `verify_image.sh` described in [Rollback](#rollback) first.
 
 ## Rehearse an upgrade against your own backup
 
@@ -291,9 +296,11 @@ scripts/rehearse_upgrade.sh --archive backups/rehearsal.dump \
 
 `--candidate` supplies the target's Compose file and scripts.
 `--candidate-image` runs that exact published image; without it, the script
-builds the app from the target's source. If your installed release predates
-the script, run it from a separate clone of the repository and pass the
-archive's full path. The script prints the summary path, or writes to
+builds the app from the target's source. Drill images are pulled without
+signature verification because the drill project is disposable; run
+`scripts/verify_image.sh` before starting the real installation. If your
+installed release predates the script, run it from a separate clone of the
+repository and pass the archive's full path. The script prints the summary path, or writes to
 `--output PATH`. It exits non-zero when any check fails.
 
 The summary lists how long each migration took, the time from start to
@@ -509,9 +516,10 @@ migration failure is almost always deterministic (a data shape the migration
 didn't expect, insufficient privileges, disk space) and will fail the same
 way every time until the underlying cause is fixed. If you can't resolve it
 promptly after an application-only upgrade, check out the previous exact
-release, pull and verify its pinned image (`scripts/verify_image.sh`, or
-`docker compose pull app` if that release predates the script), and restart
-on the database that's still on the old schema, since nothing committed. After a database-image migration,
+release, pull and verify its pinned image with the saved copy of
+`verify_image.sh` described in [Rollback](#rollback), and restart on the
+database that's still on the old schema, since nothing committed. After a
+database-image migration,
 including 0.x to 1.0, do not start the previous release on the target
 database: the new image initialized it, and the older PostGIS libraries do not
 match it. Stop the target project first (`docker compose stop app db` while
@@ -538,6 +546,24 @@ also requires a fresh old-image project. Running the previous exact image
 against the migrated database is supported only where a release's notes
 document that release pair as drilled; see [Support policy](#support-policy).
 None exists for 0.x to 1.0.
+
+**Save the verification script before checking out the previous release.** A
+release older than `scripts/verify_image.sh` does not contain it, so checking
+it out removes the script. While still on the newer release, copy it out of
+the checkout:
+
+```sh
+cp scripts/verify_image.sh "$HOME/verify_image.sh"
+```
+
+After `git checkout vPREVIOUS`, run `"$HOME/verify_image.sh"` from the
+installation directory before any `docker compose up`. The script reads
+`./compose.yaml`, which is the previous release's file. An older
+`compose.yaml` has no `pull_policy: never`, so `up` would pull an absent image
+without verifying it; running the saved script first makes the verified image
+present locally. Only for a tag the script cannot verify (for example a
+release published before signing) is `docker compose pull app` a last resort,
+and it is an unverified pull.
 
 Odograph 1.0 and later refuse to start against a database migrated by a newer
 release. Startup, and the maintenance commands for account management,
@@ -573,8 +599,13 @@ even if it appears to start.
    # Do not use a shell COMPOSE_PROJECT_NAME value or a `-p` override.
    unset COMPOSE_PROJECT_NAME
    docker compose config >/dev/null
-   scripts/verify_image.sh   # for a release that predates the script: docker compose pull app
+   "$HOME/verify_image.sh"
    ```
+
+   Run the copy of `verify_image.sh` saved before the checkout, as described
+   at the start of this section. With Podman, replace each `docker compose`
+   command with `podman-compose` and run
+   `CONTAINER_RUNTIME=podman "$HOME/verify_image.sh"`.
 
 3. Start only the old-image database, restore the original pre-upgrade archive,
    then start and verify the old application:
@@ -607,12 +638,12 @@ point-in-time logical backup.
 
    ```sh
    git checkout vPREVIOUS
-   scripts/verify_image.sh
+   "$HOME/verify_image.sh"
    ```
 
-   A previous release that predates `scripts/verify_image.sh` has no such file
-   and does not set `pull_policy: never`; use `docker compose pull app` for
-   it.
+   Run the copy of `verify_image.sh` saved before the checkout, as described
+   at the start of this section. With Podman, run
+   `CONTAINER_RUNTIME=podman "$HOME/verify_image.sh"`.
 
 3. Restore the pre-upgrade dump into a **fresh** volume/Compose project, per
    [Disaster recovery](backups.md#disaster-recovery). The same

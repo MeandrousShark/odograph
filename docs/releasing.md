@@ -471,10 +471,11 @@ COMPOSE_CMD=podman-compose scripts/upgrade_check.sh \
   --candidate-image "$IMAGE@$MANIFEST_DIGEST"
 ```
 
-`--candidate-image` must be an exact release tag (`vX.Y.Z`) or full digest, not a floating alias. The drill
-creates a fresh backup, verifies it, restores into a fresh volume, upgrades,
-checks the candidate schema and data, then rolls back to the base release and
-pre-upgrade data. Run it with both supported Compose frontends. Base and
+`--candidate-image` must be an exact release tag (`vX.Y.Z`) or full digest,
+not a floating alias. The drill creates a fresh backup, verifies it, restores
+into a fresh volume, upgrades, checks the candidate schema and data, then rolls
+back to the base release and pre-upgrade data. Drill images are pulled without
+signature verification because the drill project is disposable. Run it with both supported Compose frontends. Base and
 candidate app definitions may differ, but their rendered database service must
 remain identical; a database-service operational change needs a release-specific
 drill documented in that release's notes.

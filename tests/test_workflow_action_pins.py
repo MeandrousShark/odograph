@@ -8,7 +8,11 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKFLOWS = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
+WORKFLOWS = sorted(
+    path
+    for pattern in ("*.yml", "*.yaml")
+    for path in (ROOT / ".github" / "workflows").glob(pattern)
+)
 
 SHA_REF = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
 USES_LINE = re.compile(r"^\s*(?:-\s+)?uses:\s*(?P<ref>\S+)(?P<rest>.*)$")

@@ -518,6 +518,9 @@ started=1
 run_compose up -d db
 wait_for_healthy db
 scripts/restore_database.sh "$ARCHIVE"
+# Compose does not pull the app image; verify and pull it first if this host
+# has not run this release.
+scripts/verify_image.sh
 run_compose up -d app
 wait_for_healthy db
 wait_for_healthy app

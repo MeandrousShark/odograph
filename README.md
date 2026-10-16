@@ -112,6 +112,9 @@ scripts/verify_image.sh
 It uses `docker` when installed and otherwise `podman`; set
 `CONTAINER_RUNTIME=podman` to choose Podman explicitly.
 
+The script verifies only the app image in `./compose.yaml`; an override file or
+`COMPOSE_FILE` setting that replaces the app image is not verified.
+
 Then start the services. With Docker:
 
 ```sh
