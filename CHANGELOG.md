@@ -280,6 +280,32 @@ reproduced here.
 - The signature verification documentation uses the exact certificate
   identity. The looser regular-expression fallback and the wildcard identity
   patterns in the release procedure are removed.
+- Under `FORWARDED_ALLOW_IPS=*`, the client address is the rightmost
+  `X-Forwarded-For` entry, the address the immediate proxy saw, instead of the
+  leftmost entry. Values a client sends ahead of it no longer become the
+  recorded address or the key of the address-based sign-in and ingest limits,
+  even when the proxy appends to the incoming header. Exact addresses and
+  CIDRs keep uvicorn's right-to-left handling. With a CDN, tunnel or second
+  proxy in front of your reverse proxy and `*`, every client now shares the
+  outer proxy's address and one rate limit; set `FORWARDED_ALLOW_IPS` to each
+  proxy's exact address. See
+  [Trusting forwarded headers](docs/reverse-proxy.md#trusting-forwarded-headers).
+- The nginx example in [Reverse proxy and TLS](docs/reverse-proxy.md#nginx) now
+  sets `X-Forwarded-For` to the connecting address instead of appending to the
+  incoming header, so the application receives one value set by the proxy.
+  The application no longer depends on this to record the right address, but
+  if you copied the earlier example, changing that line to
+  `proxy_set_header X-Forwarded-For $remote_addr;` and reloading nginx is
+  recommended, so anything else that reads the header sees the same address.
+  The Caddy example needs no change. See
+  [Trusting forwarded headers](docs/reverse-proxy.md#trusting-forwarded-headers).
+- The failed sign-in and password-reset limiters track up to 16,384
+  addresses. When the table is full, the address whose last failure is
+  oldest is dropped to make room, so a new address is never refused only
+  because many others have failed recently.
+- Local sign-in password checks share the same two-slot verification limit as
+  the other sign-in paths. While both slots are busy, `/login/local` answers
+  `429` without checking the password.
 
 ### Migrations
 

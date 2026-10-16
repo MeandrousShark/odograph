@@ -55,6 +55,19 @@ def test_env_example_is_only_the_runnable_baseline():
     }
 
 
+def test_image_command_reads_forwarded_trust_from_the_environment():
+    # uvicorn and the app's rightmost X-Forwarded-For rule under `*` both read
+    # FORWARDED_ALLOW_IPS from the environment, so the image must enable
+    # --proxy-headers without overriding that setting on the command line.
+    dockerfile = (ROOT / "Dockerfile").read_text()
+    cmd = dockerfile.split("\nCMD ", 1)[1].split("\n\n", 1)[0]
+
+    assert '"--proxy-headers"' in cmd
+    assert "forwarded-allow-ips" not in cmd
+    compose = yaml.safe_load((ROOT / "compose.yaml").read_text())
+    assert compose["services"]["app"]["environment"]["FORWARDED_ALLOW_IPS"] == "${FORWARDED_ALLOW_IPS}"
+
+
 def test_quickstart_separates_critical_path_from_post_install_operations():
     # Keep the first-use path short and ordered. Optional operations belong in
     # their own sections so an operator can reach a signed-in instance without

@@ -205,3 +205,46 @@ def test_cancelled_challenge_preparation_retains_auth_then_transfers_to_mail(mon
                 await app.state.security_mail.drain()
             assert app.state.capacity.snapshot()["mail"]["active"] == 0
     asyncio.run(run())
+
+
+def test_local_login_returns_busy_without_verification_when_auth_slots_are_full(monkeypatch):
+    lookups, verified = [], []
+
+    async def account(*args):
+        lookups.append(args)
+        return ACCOUNT.copy()
+
+    async def exists(conn):
+        return True
+
+    def verify(*args):
+        verified.append(args)
+        return True
+
+    app = _app(monkeypatch)
+    app.state.capacity = AdmissionManager(app.state.config)
+    app.state.login_limiter = auth.FailedAuthLimiter(5, 60, max_concurrent_auth=1)
+    monkeypatch.setattr(auth, "get_account_by_email", account)
+    monkeypatch.setattr(auth, "account_exists", exists)
+    monkeypatch.setattr(auth, "verify_password", verify)
+
+    async def run():
+        release = asyncio.Event()
+        held = asyncio.create_task(app.state.login_limiter.run_bounded(release.wait))
+        await asyncio.sleep(0)
+        try:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
+                await client.get("/seed")
+                response = await client.post("/login/local", data={
+                    "email": ACCOUNT["email"], "password": "correct", "csrf_token": "csrf-test",
+                })
+        finally:
+            release.set()
+            await held
+        return response
+
+    response = asyncio.run(run())
+    assert response.status_code == 429
+    assert response.text == f"login.html:{auth.GENERIC_LOGIN_ERROR}"
+    assert verified == [] and lookups == []
+    assert not app.state.login_limiter._failures

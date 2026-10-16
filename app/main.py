@@ -40,6 +40,7 @@ from app.email_digest import EmailDigestWorker, run_prepared_email_turn
 from app.ntfy_preparation import run_prepared_nudge_turn, run_prepared_odometer_turn
 from app.expenses import EXPENSE_CONFLICT_LABELS, comparison_caveat_lines, comparison_status
 from app.formatting import format_duration, format_miles, format_usd
+from app.forwarded import RightmostForwardedForMiddleware, wildcard_trust
 from app.geocode import GeocodeWorker
 from app.provider_pacing import ProviderPacer
 from app.ingest import FailedAuthLimiter
@@ -480,7 +481,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         same_site="lax",
         https_only=not cfg.dev_no_auth,
     )
-    # Added after SessionMiddleware so it's the outermost user middleware
+    # Added after SessionMiddleware so it wraps it
     # (Starlette's add_middleware prepends -- the most recently added wraps
     # everything else): the nonce lands in scope state before routing/session
     # handling runs, and the response headers get set last, after any cookie
@@ -490,6 +491,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         tile_host=cfg.map_tile_host,
         hsts_max_age=cfg.hsts_max_age,
     )
+    # Outermost, so every route and middleware reads the corrected client.
+    # It runs inside uvicorn's --proxy-headers middleware, which has already
+    # applied FORWARDED_ALLOW_IPS and X-Forwarded-Proto.
+    if wildcard_trust(cfg.forwarded_allow_ips):
+        app.add_middleware(RightmostForwardedForMiddleware)
 
     @app.exception_handler(AuthRedirect)
     async def _auth_redirect(request: Request, exc: AuthRedirect):

@@ -40,21 +40,64 @@ def test_attempt_limiter_counts_every_attempt_in_its_window():
     assert limiter.allow("client")
 
 
-def test_attempt_limiter_refuses_new_keys_at_capacity_without_evicting(caplog):
+def test_attempt_limiter_admits_new_keys_at_capacity_and_logs_once(caplog):
     clock = _Clock()
     limiter = reset.AttemptLimiter("test", 2, 60, max_keys=2, clock=clock)
     assert limiter.allow("secret-one@example.com")
     assert limiter.allow("secret-two@example.com")
     with caplog.at_level(logging.WARNING, logger="app.password_reset"):
-        assert not limiter.allow("secret-three@example.com")
-        assert not limiter.allow("secret-four@example.com")
+        assert limiter.allow("secret-three@example.com")
+        assert limiter.allow("secret-four@example.com")
     assert len(caplog.records) == 1
     assert "secret" not in caplog.text and "example.com" not in caplog.text
-    # Existing keys keep their limits and remaining allowance.
-    assert limiter.allow("secret-one@example.com")
-    assert not limiter.allow("secret-one@example.com")
-    clock.now += 61
-    assert limiter.allow("secret-three@example.com")
+    assert len(limiter._attempts) == 2
+
+
+def test_attempt_limiter_fresh_key_is_admitted_when_table_is_full():
+    clock = _Clock()
+    limiter = reset.AttemptLimiter("test", 2, 60, max_keys=4, clock=clock)
+    for index in range(4):
+        clock.now += 1
+        assert limiter.allow(f"key-{index}")
+    clock.now += 1
+    assert limiter.allow("fresh")
+    assert limiter.allow("fresh")
+    assert not limiter.allow("fresh")
+    assert len(limiter._attempts) == 4
+
+
+def test_attempt_limiter_limited_key_survives_newer_keys_within_capacity():
+    clock = _Clock()
+    limiter = reset.AttemptLimiter("test", 2, 60, max_keys=4, clock=clock)
+    assert limiter.allow("limited")
+    assert limiter.allow("limited")
+    assert not limiter.allow("limited")
+    for index in range(3):
+        clock.now += 1
+        assert limiter.allow(f"newer-{index}")
+        assert len(limiter._attempts) <= 4
+    assert not limiter.allow("limited")
+    assert len(limiter._attempts) == 4
+
+
+def test_attempt_limiter_evicts_key_with_oldest_newest_attempt():
+    clock = _Clock()
+    limiter = reset.AttemptLimiter("test", 3, 60, max_keys=4, clock=clock)
+    assert limiter.allow("first")
+    for name in ("second", "third", "fourth"):
+        clock.now += 1
+        assert limiter.allow(name)
+    # A newer attempt for "first" makes "second" the least recent key.
+    clock.now += 1
+    assert limiter.allow("first")
+    clock.now += 1
+    assert limiter.allow("fifth")
+    assert set(limiter._attempts) == {"first", "third", "fourth", "fifth"}
+    assert len(limiter._attempts["first"]) == 2
+    clock.now += 1
+    for index in range(10):
+        assert limiter.allow(f"more-{index}")
+        assert len(limiter._attempts) <= 4
 
 
 @pytest.mark.parametrize("value,expected", [

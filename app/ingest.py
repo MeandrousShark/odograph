@@ -28,7 +28,7 @@ import json
 import logging
 import math
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from hashlib import sha256
 from datetime import datetime, timedelta, timezone
 
@@ -65,6 +65,9 @@ class FailedAuthLimiter:
 
     Only failures count toward the sliding window. Once blocked, an IP must
     wait for that window before attempting another expensive verification.
+    The key table is bounded: when it is full, recording a failure for a new
+    IP evicts the least recently failed key. A new IP is never blocked only
+    because the table is full.
     """
 
     def __init__(
@@ -74,7 +77,7 @@ class FailedAuthLimiter:
         clock=time.monotonic,
         prune_interval_s: float | None = None,
         max_concurrent_auth: int = 2,
-        max_keys: int = 1024,
+        max_keys: int = 16384,
     ):
         if max_concurrent_auth < 1:
             raise ValueError("max_concurrent_auth must be positive")
@@ -86,7 +89,7 @@ class FailedAuthLimiter:
         self._clock = clock
         self._prune_interval_s = prune_interval_s or min(window_s, 60.0)
         self._next_global_prune = self._clock() + self._prune_interval_s
-        self._failures: dict[str, deque] = {}
+        self._failures: OrderedDict[str, deque] = OrderedDict()
         self._max_concurrent_auth = max_concurrent_auth
         self._auth_tasks: set[asyncio.Task] = set()
 
@@ -112,7 +115,7 @@ class FailedAuthLimiter:
         now = self._clock()
         self._maybe_prune_all(now)
         self._prune(ip, now)
-        return (ip not in self._failures and len(self._failures) >= self.max_keys) or len(self._failures.get(ip, ())) >= self.max_failures
+        return len(self._failures.get(ip, ())) >= self.max_failures
 
     def record_failure(self, ip: str) -> None:
         ip = sha256(ip.encode()).hexdigest()
@@ -121,9 +124,10 @@ class FailedAuthLimiter:
         self._prune(ip, now)
         if ip not in self._failures:
             if len(self._failures) >= self.max_keys:
-                return
+                self._failures.popitem(last=False)
             self._failures[ip] = deque(maxlen=self.max_failures)
         self._failures[ip].append(now)
+        self._failures.move_to_end(ip)
 
     async def run_bounded(self, operation):
         """Keep an auth slot until work ends, even if its caller leaves."""
@@ -167,7 +171,11 @@ class _AuthSaturated(Exception):
 
 
 def client_ip(request: Request) -> str:
-    """Use only Uvicorn's trusted-proxy-normalized client address."""
+    """Use only the trusted-proxy-normalized client address.
+
+    Uvicorn sets it from FORWARDED_ALLOW_IPS; under `*`,
+    app.forwarded replaces it with the rightmost X-Forwarded-For entry.
+    """
     return request.client.host if request.client else "unknown"
 
 

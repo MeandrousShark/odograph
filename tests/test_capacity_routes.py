@@ -222,7 +222,7 @@ def test_partial_multipart_spools_close_on_every_receive_failure(monkeypatch, fa
     asyncio.run(run())
 
 
-def test_failed_auth_map_is_bounded_and_does_not_evict_failure_history():
+def test_failed_auth_map_is_bounded_and_admits_new_keys_when_full():
     now = [0.]
     limiter = FailedAuthLimiter(2, 10, clock=lambda: now[0], max_keys=2)
     limiter.record_failure('known')
@@ -231,10 +231,10 @@ def test_failed_auth_map_is_bounded_and_does_not_evict_failure_history():
     for index in range(100):
         limiter.record_failure('new' + str(index))
     assert len(limiter._failures) == 2
-    assert limiter.blocked('known') and limiter.blocked('new')
+    assert not limiter.blocked('new')
     assert all(len(q) <= 2 for q in limiter._failures.values())
     now[0] = 11
-    assert not limiter.blocked('new')
+    assert not limiter.blocked('new99')
     assert not limiter._failures
 
 

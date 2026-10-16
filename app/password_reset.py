@@ -14,7 +14,7 @@ import asyncio
 import logging
 import secrets
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from contextlib import asynccontextmanager, AsyncExitStack
 from typing import AsyncContextManager, Callable
 
@@ -36,7 +36,7 @@ INITIATOR_ADMIN = "admin"
 MAX_QUEUED_REQUESTS = 64
 RECOVERY_WORKERS = 2
 SECURITY_MAIL_SENDS = 2
-MAX_LIMITER_KEYS = 1024
+MAX_LIMITER_KEYS = 16384
 
 
 async def issue_password_reset(
@@ -112,8 +112,8 @@ async def host_reset_password(conn, account_id: int, password_hash: str) -> dict
 class AttemptLimiter:
     """Count every attempt per key in a sliding window, with bounded keys.
 
-    At capacity a new key is refused rather than evicting a live limit, so a
-    flood of fresh keys fails closed instead of resetting active limits.
+    At capacity a new key evicts the key whose newest attempt is oldest, so
+    a new key is never refused only because the table is full.
     """
 
     def __init__(self, name: str, max_attempts: int, window_s: float, *,
@@ -123,8 +123,8 @@ class AttemptLimiter:
         self.window_s = window_s
         self.max_keys = max_keys
         self._clock = clock
-        self._attempts: dict[str, deque] = {}
-        self._saturation_logged_at: float | None = None
+        self._attempts: OrderedDict[str, deque] = OrderedDict()
+        self._eviction_logged_at: float | None = None
 
     def _prune(self, now: float) -> None:
         cutoff = now - self.window_s
@@ -141,14 +141,15 @@ class AttemptLimiter:
         attempts = self._attempts.get(key)
         if attempts is None:
             if len(self._attempts) >= self.max_keys:
-                if self._saturation_logged_at is None or now - self._saturation_logged_at >= self.window_s:
-                    self._saturation_logged_at = now
-                    log.warning("%s attempt limiter is at capacity; refusing new keys", self.name)
-                return False
+                if self._eviction_logged_at is None or now - self._eviction_logged_at >= self.window_s:
+                    self._eviction_logged_at = now
+                    log.warning("%s attempt limiter is at capacity; evicting least recent keys", self.name)
+                self._attempts.popitem(last=False)
             attempts = self._attempts[key] = deque(maxlen=self.max_attempts)
         if len(attempts) >= self.max_attempts:
             return False
         attempts.append(now)
+        self._attempts.move_to_end(key)
         return True
 
 

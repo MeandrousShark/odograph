@@ -316,3 +316,19 @@ def test_certificate_identity_regexp_scanner_rejects_loose_patterns(tmp_path):
     errors = _identity_regexp_errors(tmp_path, [*loose, "exact.md"])
 
     assert [error.split(":", 1)[0] for error in errors] == list(loose)
+
+
+def test_nginx_example_replaces_x_forwarded_for_with_the_connecting_address():
+    """Appending keeps a client-supplied value ahead of the proxy's own."""
+    appending = "$proxy_add_x_forwarded_for"
+    documents = [ROOT / "README.md", *sorted((ROOT / "docs").rglob("*.md"))]
+    offenders = [
+        path.relative_to(ROOT).as_posix()
+        for path in documents
+        if appending in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == []
+
+    proxy_guide = (ROOT / "docs/reverse-proxy.md").read_text(encoding="utf-8")
+    nginx_block = proxy_guide.split("```nginx", 1)[1].split("```", 1)[0]
+    assert "proxy_set_header X-Forwarded-For $remote_addr;" in nginx_block

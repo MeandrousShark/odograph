@@ -1016,22 +1016,33 @@ def make_router() -> APIRouter:
                 status_code=429,
             )
 
-        async with control_connection(request.app.state.control_pool) as conn:
-            account = await get_account_by_email(conn, normalize_email(email))
-
         email_norm = normalize_email(email)
-        ok = (
-            account is not None
-            and account["is_enabled"]
-            and hmac.compare_digest(
-                email_norm.encode("utf-8"), account["email"].encode("utf-8")
+
+        async def verify():
+            async with control_connection(request.app.state.control_pool) as conn:
+                account = await get_account_by_email(conn, email_norm)
+            ok = (
+                account is not None
+                and account["is_enabled"]
+                and hmac.compare_digest(
+                    email_norm.encode("utf-8"), account["email"].encode("utf-8")
+                )
+                and await owned_thread(
+                    verify_password, password, account["password_hash"]
+                )
             )
-            and await owned_thread(
-                verify_password, password, account["password_hash"]
+            if not ok:
+                limiter.record_failure(ip)
+                return None
+            return account
+
+        try:
+            account = await limiter.run_bounded(verify)
+        except _AuthSaturated:
+            return await _render_login(
+                request, error=GENERIC_LOGIN_ERROR, status_code=429
             )
-        )
-        if not ok:
-            limiter.record_failure(ip)
+        if account is None:
             return await _render_login(
                 request, error=GENERIC_LOGIN_ERROR, status_code=401
             )
