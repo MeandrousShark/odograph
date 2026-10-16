@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       candidate-image:
-        description: Immutable published candidate image; omitted to build the revision
+        description: Exact published candidate image; omitted to build the revision
         required: false
         default: ""
         type: string
@@ -49,7 +49,7 @@ jobs:
     outputs:
       bases: ${{ steps.read.outputs.bases }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ inputs.revision || github.sha }}
           persist-credentials: false
@@ -73,12 +73,12 @@ jobs:
       matrix:
         base: ${{ fromJSON(needs.bases.outputs.bases) }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
           ref: ${{ inputs.revision || github.sha }}
           persist-credentials: false
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.13"
           cache: pip
@@ -104,7 +104,7 @@ jobs:
             tee "evidence/upgrade-drill-${BASE}.txt"
       - name: Upload upgrade drill evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ inputs.evidence-name || 'upgrade-drill' }}-${{ matrix.base }}
           path: evidence/

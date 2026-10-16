@@ -43,7 +43,7 @@ jobs:
       run-preflight: ${{ steps.gate.outputs.run-preflight }}
       version: ${{ steps.gate.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
           ref: ${{ github.sha }}
@@ -121,7 +121,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
       - name: Upload release input evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-preflight-inputs
           path: ${{ runner.temp }}/release-preflight-evidence/
@@ -150,11 +150,11 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.prepare.outputs.revision }}
           persist-credentials: false
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.13"
           cache: pip
@@ -208,7 +208,7 @@ jobs:
             echo EOF
           } >> "$GITHUB_OUTPUT"
       - name: Audit locked Python dependencies
-        uses: pypa/gh-action-pip-audit@v1.1.0
+        uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
         with:
           inputs: requirements.lock
           no-deps: true
@@ -219,7 +219,7 @@ jobs:
             > "$RUNNER_TEMP/release-preflight-quality/pip-audit.txt"
       - name: Upload quality evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-preflight-quality
           path: ${{ runner.temp }}/release-preflight-quality/
@@ -250,7 +250,7 @@ jobs:
     env:
       LOCAL_IMAGE: odograph-preflight:${{ needs.prepare.outputs.revision }}-${{ matrix.architecture }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.prepare.outputs.revision }}
           persist-credentials: false
@@ -268,7 +268,7 @@ jobs:
             echo "uname: $(uname -m)"
             echo "build_platform: ${{ matrix.platform }}"
           } > "evidence/runner-${{ matrix.architecture }}.txt"
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
       - name: Read architecture scan policy
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
@@ -279,7 +279,7 @@ jobs:
             --trivy-amd64-output evidence/trivy-amd64.ignore \
             --trivy-arm64-output evidence/trivy-arm64.ignore
       - name: Build native local image archive
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           platforms: ${{ matrix.platform }}
@@ -312,7 +312,7 @@ jobs:
               (. [0].Config.Env | index("APP_GIT_REVISION=" + $revision)) != null
             ' "evidence/image-${ARCHITECTURE}.json"
       - name: Scan native image
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           input: ${{ runner.temp }}/odograph-${{ matrix.architecture }}.tar
           format: table
@@ -324,7 +324,7 @@ jobs:
           scanners: vuln
           trivyignores: evidence/${{ matrix.trivy-ignore }}
       - name: Scan ${{ matrix.architecture }} PostGIS image
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
           TRIVY_PLATFORM: ${{ matrix.platform }}
         with:
@@ -337,7 +337,7 @@ jobs:
           severity: HIGH,CRITICAL
           scanners: vuln
       - name: Generate native SPDX SBOM
-        uses: anchore/sbom-action@v0.24.0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
           image: ${{ env.LOCAL_IMAGE }}
           format: spdx-json
@@ -365,7 +365,7 @@ jobs:
         run: docker image rm "$LOCAL_IMAGE" >/dev/null 2>&1 || true
       - name: Upload native image evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-preflight-${{ matrix.architecture }}
           path: evidence/
@@ -391,13 +391,13 @@ jobs:
       arm64-digest: ${{ steps.resolve.outputs.arm64-digest }}
       index-digest: ${{ steps.resolve.outputs.index-digest }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.prepare.outputs.revision }}
           persist-credentials: false
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
       - name: Install cosign
-        uses: sigstore/cosign-installer@v4.1.2
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
           cosign-release: v3.1.3
       - name: Resolve the published index and child digests
@@ -462,7 +462,7 @@ jobs:
           done
       - name: Upload published signature evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-published-signatures
           path: evidence/
@@ -489,7 +489,7 @@ jobs:
             digest-output: arm64-digest
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.prepare.outputs.revision }}
           persist-credentials: false
@@ -529,7 +529,7 @@ jobs:
             "evidence/published-smoke-${ARCHITECTURE}.txt" "linux/${ARCHITECTURE}"
       - name: Upload published native evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-published-${{ matrix.architecture }}
           path: evidence/

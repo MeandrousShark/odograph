@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import yaml
+from workflow_actions import is_pinned, pinned_names
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,7 +57,7 @@ def test_release_test_gate_runs_full_postgis_suite_and_pip_audit():
 
     steps = steps_by_name(test)
     setup_python = next(
-        step for step in test["steps"] if step.get("uses") == "actions/setup-python@v6"
+        step for step in test["steps"] if is_pinned(step.get("uses"), "actions/setup-python")
     )
     assert setup_python["with"]["cache-dependency-path"] == "requirements-dev.lock"
     assert steps["Install test dependencies"]["run"] == (
@@ -79,7 +80,7 @@ def test_release_test_gate_runs_full_postgis_suite_and_pip_audit():
         "${{ needs.prepare.outputs.version }}"
     )
     audit = steps["Audit locked Python dependencies"]
-    assert audit["uses"] == "pypa/gh-action-pip-audit@v1.1.0"
+    assert is_pinned(audit["uses"], "pypa/gh-action-pip-audit")
     assert audit["with"] == {
         "inputs": "requirements.lock",
         "no-deps": "true",
@@ -100,9 +101,9 @@ def test_each_architecture_is_built_from_tagged_tree_and_scanned_by_digest():
         assert job["permissions"] == {"contents": "read", "packages": "write"}
         assert job["outputs"]["digest"] == "${{ steps.build.outputs.digest }}"
 
-        checkout = job["steps"][0]
+        checkout = dict(job["steps"][0])
+        assert is_pinned(checkout.pop("uses"), "actions/checkout")
         assert checkout == {
-            "uses": "actions/checkout@v6",
             "with": {
                 "ref": "${{ needs.prepare.outputs.revision }}",
                 "persist-credentials": "false",
@@ -111,7 +112,7 @@ def test_each_architecture_is_built_from_tagged_tree_and_scanned_by_digest():
         steps = steps_by_name(job)
         build_name = f"Build and push untagged {platform.removeprefix('linux/')} image"
         build = steps[build_name]
-        assert build["uses"] == "docker/build-push-action@v7"
+        assert is_pinned(build["uses"], "docker/build-push-action")
         assert build["with"]["context"] == "."
         assert build["with"]["platforms"] == platform
         assert "VERSION=${{ needs.prepare.outputs.version }}" in build["with"]["build-args"]
@@ -127,7 +128,7 @@ def test_each_architecture_is_built_from_tagged_tree_and_scanned_by_digest():
         assert build["with"]["sbom"] == "false"
 
         scan = steps[f"Scan {platform.removeprefix('linux/')} image"]
-        assert scan["uses"] == "aquasecurity/trivy-action@v0.36.0"
+        assert is_pinned(scan["uses"], "aquasecurity/trivy-action")
         assert scan["with"]["image-ref"].endswith("@${{ steps.build.outputs.digest }}")
         assert scan["with"]["exit-code"] == "1"
         assert scan["with"]["ignore-unfixed"] == "true"
@@ -138,7 +139,7 @@ def test_each_architecture_is_built_from_tagged_tree_and_scanned_by_digest():
         postgis_scan = steps[
             f"Scan {platform.removeprefix('linux/')} PostGIS image"
         ]
-        assert postgis_scan["uses"] == "aquasecurity/trivy-action@v0.36.0"
+        assert is_pinned(postgis_scan["uses"], "aquasecurity/trivy-action")
         assert postgis_scan["env"] == {"TRIVY_PLATFORM": platform}
         assert postgis_scan["with"] == {
             "image-ref": "ghcr.io/meandrousshark/odograph-postgis@sha256:c4c1184f0c4d899f65c3df9ea6d296c3a3a5f1b233090651ac49429b4e2100b4",
@@ -153,9 +154,10 @@ def test_each_architecture_is_built_from_tagged_tree_and_scanned_by_digest():
 
         qemu_steps = [step for step in job["steps"] if step.get("uses", "").startswith("docker/setup-qemu")]
         if qemu_platform:
-            assert qemu_steps == [
-                {"uses": "docker/setup-qemu-action@v4", "with": {"platforms": qemu_platform}}
-            ]
+            assert len(qemu_steps) == 1
+            qemu = dict(qemu_steps[0])
+            assert is_pinned(qemu.pop("uses"), "docker/setup-qemu-action")
+            assert qemu == {"with": {"platforms": qemu_platform}}
         else:
             assert qemu_steps == []
 
@@ -199,7 +201,7 @@ def test_publish_generates_and_attests_a_per_architecture_sbom():
     steps = steps_by_name(publish)
 
     amd64_sbom = steps["Generate linux/amd64 SBOM"]
-    assert amd64_sbom["uses"] == "anchore/sbom-action@v0.24.0"
+    assert is_pinned(amd64_sbom["uses"], "anchore/sbom-action")
     assert amd64_sbom["with"]["image"] == (
         "${{ needs.prepare.outputs.image }}@${{ needs.build-amd64.outputs.digest }}"
     )
@@ -209,7 +211,7 @@ def test_publish_generates_and_attests_a_per_architecture_sbom():
     assert amd64_sbom["with"]["upload-release-assets"] == "false"
 
     arm64_sbom = steps["Generate linux/arm64 SBOM"]
-    assert arm64_sbom["uses"] == "anchore/sbom-action@v0.24.0"
+    assert is_pinned(arm64_sbom["uses"], "anchore/sbom-action")
     assert arm64_sbom["with"]["image"] == (
         "${{ needs.prepare.outputs.image }}@${{ needs.build-arm64.outputs.digest }}"
     )
@@ -226,8 +228,8 @@ def test_publish_generates_and_attests_a_per_architecture_sbom():
     install_cosign_index = [step.get("name") for step in publish["steps"]].index(
         "Install cosign"
     )
-    assert publish["steps"][install_cosign_index]["uses"] == (
-        "sigstore/cosign-installer@v4.1.2"
+    assert is_pinned(
+        publish["steps"][install_cosign_index]["uses"], "sigstore/cosign-installer"
     )
     attest_index = [step.get("name") for step in publish["steps"]].index(
         "Attest each architecture's SBOM"
@@ -257,16 +259,16 @@ def test_publish_signs_the_manifest_and_each_architecture_digest():
 
 def test_external_actions_are_reputable_versioned_releases():
     expected = {
-        "actions/checkout@v6",
-        "actions/setup-python@v6",
-        "docker/login-action@v4",
-        "docker/setup-qemu-action@v4",
-        "docker/setup-buildx-action@v4",
-        "docker/build-push-action@v7",
-        "pypa/gh-action-pip-audit@v1.1.0",
-        "aquasecurity/trivy-action@v0.36.0",
-        "anchore/sbom-action@v0.24.0",
-        "sigstore/cosign-installer@v4.1.2",
+        "actions/checkout",
+        "actions/setup-python",
+        "docker/login-action",
+        "docker/setup-qemu-action",
+        "docker/setup-buildx-action",
+        "docker/build-push-action",
+        "pypa/gh-action-pip-audit",
+        "aquasecurity/trivy-action",
+        "anchore/sbom-action",
+        "sigstore/cosign-installer",
     }
     used = {
         step["uses"]
@@ -274,4 +276,4 @@ def test_external_actions_are_reputable_versioned_releases():
         for step in job["steps"]
         if "uses" in step
     }
-    assert used == expected
+    assert pinned_names(used) == expected

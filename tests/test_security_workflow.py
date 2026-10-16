@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import yaml
+from workflow_actions import is_pinned, pinned_names
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,7 +36,7 @@ def test_pip_audit_has_no_tag_acceptance_and_remains_blocking():
     assert "advisory" in job["name"]
     assert "red on findings" in job["name"]
     audit = steps_by_name(job)["Audit locked Python dependencies"]
-    assert audit["uses"] == "pypa/gh-action-pip-audit@v1.1.0"
+    assert is_pinned(audit["uses"], "pypa/gh-action-pip-audit")
     assert audit["with"] == {
         "inputs": "requirements.lock",
         "no-deps": "true",
@@ -67,7 +68,7 @@ def test_both_architectures_build_locally_without_registry_access():
 
     steps = steps_by_name(job)
     build = steps["Build local image archive"]
-    assert build["uses"] == "docker/build-push-action@v7"
+    assert is_pinned(build["uses"], "docker/build-push-action")
     assert build["with"]["platforms"] == "${{ matrix.platform }}"
     assert build["with"]["outputs"] == "type=docker,dest=${{ matrix.archive }}"
     assert "push" not in build["with"]
@@ -124,7 +125,7 @@ def test_scheduled_postgis_scans_use_the_pinned_remote_children_without_emulatio
         for command in ("docker run", "docker build", "docker pull")
     )
     scan = steps_by_name(job)["Scan published PostGIS image"]
-    assert scan["uses"] == "aquasecurity/trivy-action@v0.36.0"
+    assert is_pinned(scan["uses"], "aquasecurity/trivy-action")
     assert scan["env"] == {"TRIVY_PLATFORM": "${{ matrix.platform }}"}
     assert scan["with"] == {
         "image-ref": "ghcr.io/meandrousshark/odograph-postgis@sha256:c4c1184f0c4d899f65c3df9ea6d296c3a3a5f1b233090651ac49429b4e2100b4",
@@ -148,11 +149,11 @@ def test_security_workflow_uses_only_reputable_versioned_actions():
         if "uses" in step
     }
 
-    assert used == {
-        "actions/checkout@v6",
-        "docker/setup-qemu-action@v4",
-        "docker/setup-buildx-action@v4",
-        "docker/build-push-action@v7",
-        "pypa/gh-action-pip-audit@v1.1.0",
-        "aquasecurity/trivy-action@v0.36.0",
+    assert pinned_names(used) == {
+        "actions/checkout",
+        "docker/setup-qemu-action",
+        "docker/setup-buildx-action",
+        "docker/build-push-action",
+        "pypa/gh-action-pip-audit",
+        "aquasecurity/trivy-action",
     }

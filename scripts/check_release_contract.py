@@ -48,10 +48,10 @@ def validate_release_contract(root: Path, tag: str, image: str) -> None:
             "README.md is missing the release install contract: "
             "an exact release checkout or pinned clone"
         )
-    if "immutable image tag pinned by the checked-out release" not in readme:
+    if "exact release tag pinned by the checked-out release" not in readme:
         raise ReleaseContractError(
             "README.md is missing the release install contract: "
-            "immutable image tag pinned by the checked-out release"
+            "exact release tag pinned by the checked-out release"
         )
     if re.search(r"ghcr\.io/[^\s`]+:latest", readme, re.IGNORECASE):
         raise ReleaseContractError("README.md tells operators to use a latest image")

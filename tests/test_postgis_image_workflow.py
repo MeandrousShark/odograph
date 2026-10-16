@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from workflow_actions import is_pinned, pinned_names
 
 
 pytestmark = pytest.mark.ops
@@ -109,7 +110,7 @@ def test_native_build_jobs_build_scan_and_test_the_same_archive(
     assert "org.opencontainers.image.source" in verify["run"]
     assert "org.opencontainers.image.revision" in verify["run"]
 
-    assert scan["uses"] == "aquasecurity/trivy-action@v0.36.0"
+    assert is_pinned(scan["uses"], "aquasecurity/trivy-action")
     assert scan["with"] == {
         "image-ref": f"odograph-postgis:test-${{{{ github.sha }}}}-{arch}",
         "format": "table",
@@ -137,9 +138,9 @@ def test_native_build_jobs_build_scan_and_test_the_same_archive(
     assert "scripts/release_preflight_smoke.sh" in smoke["run"]
     evidence = steps[f"Upload {arch} scan and smoke evidence"]
     assert evidence["if"] == "always()"
-    assert evidence["uses"] == "actions/upload-artifact@v4"
+    assert is_pinned(evidence["uses"], "actions/upload-artifact")
     assert evidence["with"]["path"] == "evidence/"
-    assert upload["uses"] == "actions/upload-artifact@v4"
+    assert is_pinned(upload["uses"], "actions/upload-artifact")
     assert (
         upload["with"]["name"]
         == f"postgis-image-${{{{ github.run_id }}}}-${{{{ github.run_attempt }}}}-linux-{arch}"
@@ -170,7 +171,7 @@ def test_publish_is_main_only_and_consumes_exact_archives_without_rebuilding():
         download = next(
             step
             for step in publish["steps"]
-            if step.get("uses") == "actions/download-artifact@v4"
+            if is_pinned(step.get("uses"), "actions/download-artifact")
             and f"linux-{arch}" in step["with"]["name"]
         )
         assert download["with"]["name"] == (
@@ -203,7 +204,7 @@ def test_publish_attaches_per_child_sboms_and_signs_every_digest():
 
     for arch in ("amd64", "arm64"):
         sbom = steps[f"Generate linux/{arch} SPDX SBOM"]
-        assert sbom["uses"] == "anchore/sbom-action@v0.24.0"
+        assert is_pinned(sbom["uses"], "anchore/sbom-action")
         assert sbom["with"]["image"] == (
             f"${{{{ env.IMAGE }}}}@${{{{ steps.children.outputs.{arch}_digest }}}}"
         )
@@ -232,14 +233,14 @@ def test_publish_attaches_per_child_sboms_and_signs_every_digest():
 def test_workflow_uses_versioned_actions_and_never_passes_token_to_build_jobs():
     workflow = load_workflow()
     expected = {
-        "actions/checkout@v6",
-        "actions/download-artifact@v4",
-        "actions/upload-artifact@v4",
-        "anchore/sbom-action@v0.24.0",
-        "aquasecurity/trivy-action@v0.36.0",
-        "docker/login-action@v4",
-        "docker/setup-buildx-action@v4",
-        "sigstore/cosign-installer@v4.1.2",
+        "actions/checkout",
+        "actions/download-artifact",
+        "actions/upload-artifact",
+        "anchore/sbom-action",
+        "aquasecurity/trivy-action",
+        "docker/login-action",
+        "docker/setup-buildx-action",
+        "sigstore/cosign-installer",
     }
     used = {
         step["uses"]
@@ -247,7 +248,7 @@ def test_workflow_uses_versioned_actions_and_never_passes_token_to_build_jobs():
         for step in job["steps"]
         if "uses" in step
     }
-    assert used == expected
+    assert pinned_names(used) == expected
     for job_name in ("build-amd64", "build-arm64"):
         text = "\n".join(
             step.get("run", "") for step in workflow["jobs"][job_name]["steps"]

@@ -79,8 +79,8 @@ installation, any other Compose project, or the repository working tree.
   --archive PATH          scripts/backup_database.sh archive (with its .sha256)
   --candidate REF         git commit-ish supplying Compose and operational scripts;
                           its app is built from source unless --candidate-image
-  --candidate-image IMAGE published candidate app image with an explicit
-                          non-latest tag or a full sha256 digest
+  --candidate-image IMAGE published candidate app image, an exact
+                          release tag (vX.Y.Z) or a full sha256 digest
   --legacy-env FILE       file of allowlisted preference and MILEAGE_RATE_<YEAR>
                           keys for a pre-schema-26 archive; any other non-empty
                           key is refused
@@ -134,20 +134,19 @@ if [[ ! "$HEALTH_TIMEOUT" =~ ^[1-9][0-9]{0,6}$ ]]; then
 fi
 
 immutable_image_ref() {
-    local ref="$1" tag
-    if [[ "$ref" =~ ^[^[:space:]@]+@sha256:[[:xdigit:]]{64}$ ]]; then
-        return 0
-    fi
-    if [[ "$ref" =~ ^[^[:space:]@]+:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
-        tag="${ref##*:}"
-        # tr rather than "${tag,,}", which is a syntax error in macOS bash 3.2.
-        [ "$(printf '%s' "$tag" | tr '[:upper:]' '[:lower:]')" != "latest" ] && return 0
-    fi
+    local ref="$1"
+    # Only a full digest or an exact release tag (vX.Y.Z, optionally with a
+    # prerelease suffix) pins one build. Floating aliases such as v1, v0.11
+    # and latest are refused.
+    local digest_re='^[^[:space:]@]+@sha256:[[:xdigit:]]{64}$'
+    local tag_re='^[^[:space:]@]+:v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+    [[ "$ref" =~ $digest_re ]] && return 0
+    [[ "$ref" =~ $tag_re ]] && return 0
     return 1
 }
 
 if [ -n "$CANDIDATE_IMAGE" ] && ! immutable_image_ref "$CANDIDATE_IMAGE"; then
-    echo "error: --candidate-image must use an explicit non-latest tag or a full sha256 digest" >&2
+    echo "error: --candidate-image must use an exact release tag (vX.Y.Z) or a full sha256 digest" >&2
     usage
 fi
 

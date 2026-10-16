@@ -114,6 +114,10 @@ reproduced here.
 - Native signed PostgreSQL 16.15/PostGIS 3.6.4 images for supported Linux
   AMD64 and ARM64 hosts, published as the immutable
   `ghcr.io/meandrousshark/odograph-postgis` multi-architecture index.
+- `scripts/verify_image.sh` pulls the app image named in `compose.yaml` and
+  verifies its cosign signature by digest against the release workflow
+  identity for that exact tag. See
+  [Verifying image signatures and SBOMs](docs/security.md#verifying-image-signatures-and-sboms).
 
 ### Changed
 
@@ -121,6 +125,14 @@ reproduced here.
   PostGIS image. Existing installations moving from `postgis/postgis:16-3.4`
   must follow the [fresh-target database image migration procedure](docs/upgrading.md#upgrading-the-postgis-database-image)
   before starting the target stack.
+- Running `scripts/verify_image.sh` is now a required step before
+  `docker compose up` in the install and upgrade guides, and `cosign` is a
+  prerequisite. The app service sets `pull_policy: never`, so Compose no
+  longer pulls the app image itself and `docker compose pull app` is replaced
+  by the script. The guides describe the image as an exact release tag
+  verified by digest. Upgrade and rehearsal scripts accept only a full digest
+  or a `vX.Y.Z` tag for published images, not floating aliases such as `v1`,
+  `v0.11` or `latest`.
 - Schema 26 assigns existing personal data, settings, and tracker progress to
   the installation's established account, preserving its IDs and history.
   Requests, workers, and portable operations use explicit account-bound
@@ -263,6 +275,11 @@ reproduced here.
   account-owned table. The restricted runtime role reads and changes only the
   rows of the account bound to its transaction, and none without one. Startup
   and restore validate the `ownership-activated-v1` contract.
+- Third-party GitHub Actions in the workflows are pinned to full commit SHAs,
+  with the release tag recorded in a trailing comment.
+- The signature verification documentation uses the exact certificate
+  identity. The looser regular-expression fallback and the wildcard identity
+  patterns in the release procedure are removed.
 
 ### Migrations
 

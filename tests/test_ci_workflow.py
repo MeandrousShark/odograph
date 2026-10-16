@@ -5,6 +5,7 @@ import subprocess
 import sys
 
 import yaml
+from workflow_actions import is_pinned
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,7 +48,7 @@ def test_ci_runs_full_suite_on_main_pushes_and_pull_requests_with_postgis(tmp_pa
 
     steps = {step.get("name"): step for step in job["steps"]}
     setup_python = next(
-        step for step in job["steps"] if step.get("uses") == "actions/setup-python@v6"
+        step for step in job["steps"] if is_pinned(step.get("uses"), "actions/setup-python")
     )
     assert setup_python["with"]["cache-dependency-path"] == "requirements-dev.lock"
     assert steps["Install test dependencies"]["run"] == (
@@ -76,7 +77,7 @@ def test_ci_runs_full_suite_on_main_pushes_and_pull_requests_with_postgis(tmp_pa
     assert retained.get("continue-on-error", "false") == "false"
     assert retained["if"] == "always()"
     assert retained["timeout-minutes"] == "2"
-    assert retained["uses"] == "actions/upload-artifact@v4"
+    assert is_pinned(retained["uses"], "actions/upload-artifact")
     assert retained["with"] == {
         "name": "pytest-log-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.event_name }}-${{ matrix.shard }}",
         "path": "${{ runner.temp }}/pytest-shard.log",
@@ -290,7 +291,7 @@ def test_ci_public_tree_is_an_explicit_unprivileged_gate():
     for candidate in workflow["jobs"].values():
         assert candidate["runs-on"] == "ubuntu-latest"
         for step in candidate["steps"]:
-            if step.get("uses") == "actions/checkout@v6":
+            if is_pinned(step.get("uses"), "actions/checkout"):
                 assert step["with"]["persist-credentials"] == "false"
     assert "pull_request_target" not in workflow["on"]
     assert "secrets." not in WORKFLOW.read_text()

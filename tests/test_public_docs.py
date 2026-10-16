@@ -251,3 +251,68 @@ def test_invalid_link_fixture_is_rejected_without_scanning_private_docs(tmp_path
 )
 def test_private_documents_are_not_part_of_public_markdown_inventory(private_name):
     assert all(Path(relative).name != private_name for relative in PUBLIC_MARKDOWN)
+
+
+_IDENTITY_REGEXP_FLAG = re.compile(
+    r"--certificate-identity-regexp(?:=|[ \t]+|[ \t]*\\\n[ \t]*)"
+    r"(?P<value>'[^'\n]*'|\"[^\"\n]*\"|[^\s'\"]+)"
+)
+# Wildcards that would let the owner, repository or workflow file vary.
+_IDENTITY_WILDCARDS = (".*", ".+", "[^", "\\S", "\\w", "(?")
+
+
+def _identity_regexp_errors(root: Path, relative_paths) -> list[str]:
+    errors = []
+    for relative in relative_paths:
+        text = (root / relative).read_text(encoding="utf-8")
+        for match in _IDENTITY_REGEXP_FLAG.finditer(text):
+            raw = match.group("value")
+            value = raw[1:-1] if raw[:1] in "'\"" else raw
+            if not (value.startswith("^") and value.endswith("$")):
+                errors.append(f"{relative}: certificate identity regexp is not anchored: {raw}")
+                continue
+            # Only the part before the tag separator names owner, repo and workflow.
+            identity = value[1:-1].split("@", 1)[0]
+            bad = [token for token in _IDENTITY_WILDCARDS if token in identity]
+            if bad:
+                errors.append(
+                    f"{relative}: certificate identity regexp has a wildcard "
+                    f"in the owner, repository or workflow file: {raw}"
+                )
+    return errors
+
+
+def _identity_regexp_scan_paths() -> list[str]:
+    paths = list(PUBLIC_MARKDOWN)
+    for pattern in ("scripts/*", ".github/workflows/*.yml"):
+        paths.extend(
+            str(path.relative_to(ROOT)) for path in sorted(ROOT.glob(pattern)) if path.is_file()
+        )
+    return paths
+
+
+def test_certificate_identity_regexps_are_anchored_and_name_one_workflow():
+    assert _identity_regexp_errors(ROOT, _identity_regexp_scan_paths()) == []
+
+
+def test_certificate_identity_regexp_scanner_rejects_loose_patterns(tmp_path):
+    loose = {
+        "unanchored.md": "cosign verify --certificate-identity-regexp "
+        "'https://github\\.com/o/r/\\.github/workflows/release\\.yml@refs/tags/v1'\n",
+        "any-owner.md": "cosign verify --certificate-identity-regexp "
+        "'^https://github\\.com/.*/\\.github/workflows/release\\.yml@refs/tags/.*$'\n",
+        "any-workflow.md": 'cosign verify --certificate-identity-regexp "^https://github.com/$REPOSITORY'
+        '/.github/workflows/.*@refs/tags/$VERSION$"\n',
+        "continued.sh": "cosign verify \\\n  --certificate-identity-regexp "
+        "'^https://github\\.com/[^/]+/repo/\\.github/workflows/release\\.yml@refs/tags/v1$'\n",
+    }
+    for name, content in loose.items():
+        (tmp_path / name).write_text(content)
+    (tmp_path / "exact.md").write_text(
+        "cosign verify \\\n  --certificate-identity-regexp "
+        "'^https://github\\.com/Owner/repo/\\.github/workflows/release\\.yml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$'\n"
+    )
+
+    errors = _identity_regexp_errors(tmp_path, [*loose, "exact.md"])
+
+    assert [error.split(":", 1)[0] for error in errors] == list(loose)

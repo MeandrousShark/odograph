@@ -177,6 +177,10 @@ scripts/restore_database.sh backups/mileage-20260719T030000Z.dump
 docker compose up -d app
 ```
 
+Compose does not pull the app image (`pull_policy: never`). On a host that has
+not yet run this release, such as a replacement server, run
+`scripts/verify_image.sh` before `docker compose up -d app`.
+
 The restore first renders the complete archive with `pg_restore` into a private
 temporary directory. Allow free local disk space for two uncompressed SQL
 copies of the archive. It then applies the required extension schemas and
@@ -514,6 +518,9 @@ started=1
 run_compose up -d db
 wait_for_healthy db
 scripts/restore_database.sh "$ARCHIVE"
+# Compose does not pull the app image; verify and pull it first if this host
+# has not run this release.
+scripts/verify_image.sh
 run_compose up -d app
 wait_for_healthy db
 wait_for_healthy app
@@ -573,7 +580,8 @@ old one; nothing here deletes it for you.
    ```
 
 4. **Start the app only after the restore succeeds**, and verify it before
-   cutting over:
+   cutting over. On a host that has not run this release, first run
+   `scripts/verify_image.sh`, since Compose does not pull the app image:
 
    ```sh
    docker compose up -d app

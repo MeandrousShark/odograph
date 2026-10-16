@@ -64,11 +64,12 @@ def test_quickstart_separates_critical_path_from_post_install_operations():
     clone = critical.index("git clone --branch vX.Y.Z --depth 1")
     generate_env = critical.index("scripts/generate_env.sh")
     signup_disabled = critical.index("INITIAL_ADMIN_SIGNUP=0")
+    verify = critical.index("scripts/verify_image.sh")
     start = critical.index("docker compose up -d")
     create_admin = critical.index("python -m app.manage_account create-admin")
     https = critical.index("## Set up HTTPS")
 
-    assert clone < generate_env < signup_disabled < start < create_admin
+    assert clone < generate_env < signup_disabled < verify < start < create_admin
     assert "git checkout vX.Y.Z" not in critical
     assert "docker compose up -d" in critical
     assert "podman-compose up -d" in critical
@@ -89,6 +90,24 @@ def test_quickstart_separates_critical_path_from_post_install_operations():
     assert "backup_database.sh" in post_install
     assert "docs/security.md#hardening-checklist" in post_install
     assert "docs/configuration.md#external-services" in post_install
+
+
+def test_install_and_upgrade_guides_verify_the_app_image_before_starting_it():
+    # Compose never pulls the app image (pull_policy: never), so each guide
+    # must run the verification script before `up`.
+    for relative in ("README.md", "docs/install-compose.md", "docs/upgrading.md", "docs/backups.md"):
+        text = (ROOT / relative).read_text()
+        assert "verify_image.sh" in text, relative
+        if relative != "docs/backups.md":
+            assert "sigstore.dev/cosign" in text, relative
+    install = (ROOT / "docs" / "install-compose.md").read_text()
+    assert install.index("./verify_image.sh") < install.index("docker compose up -d")
+    upgrading = (ROOT / "docs" / "upgrading.md").read_text()
+    app_only = upgrading.split("4. **If the database image is unchanged", 1)[1]
+    app_only = app_only.split("```sh", 1)[1].split("```", 1)[0]
+    assert app_only.index("scripts/verify_image.sh") < app_only.index("docker compose up -d")
+    assert "docker compose pull\n" not in install
+    assert "compose pull app" not in install
 
 
 def test_compose_preserves_state_and_waits_for_healthy_database():

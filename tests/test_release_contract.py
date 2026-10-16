@@ -19,10 +19,10 @@ def _stage_contract(tmp_path: Path, readme: str | None = None) -> Path:
         "# Changelog\n\n## [1.2.3] - 2026-08-11\n\nA release.\n"
     )
     (tmp_path / "compose.yaml").write_text(
-        "services:\n  app:\n    image: ghcr.io/example/odograph:v1.2.3\n"
+        "services:\n  app:\n    image: ghcr.io/example/odograph:v1.2.3\n    pull_policy: never\n"
     )
     (tmp_path / "README.md").write_text(readme or (
-        "Run `git checkout vX.Y.Z`; Compose uses the immutable image tag "
+        "Run `git checkout vX.Y.Z`; Compose uses the exact release tag "
         "pinned by the checked-out release.\n"
     ))
     (tmp_path / "Dockerfile").write_text(
@@ -62,7 +62,7 @@ def test_release_contract_accepts_a_pinned_clone_install_command(tmp_path):
         tmp_path,
         "Run `git clone --branch vX.Y.Z --depth 1 "
         "https://github.com/MeandrousShark/odograph.git`; Compose uses the "
-        "immutable image tag pinned by the checked-out release.\n",
+        "exact release tag pinned by the checked-out release.\n",
     )
 
     result = _run(root)
@@ -94,7 +94,7 @@ def test_actual_readme_has_a_supported_release_install_contract(tmp_path):
 def test_release_contract_rejects_missing_or_moving_install_commands(tmp_path, readme):
     root = _stage_contract(
         tmp_path,
-        readme + "Compose uses the immutable image tag pinned by the checked-out release.\n",
+        readme + "Compose uses the exact release tag pinned by the checked-out release.\n",
     )
 
     result = _run(root)
