@@ -351,6 +351,24 @@ def test_forwarded_allow_ips_wildcard_or_empty_warns(clean_env, caplog, value):
     assert any("FORWARDED_ALLOW_IPS" in r.message for r in caplog.records)
 
 
+def test_forwarded_allow_ips_wildcard_warning_names_the_rightmost_entry(clean_env, caplog):
+    clean_env.setenv("FORWARDED_ALLOW_IPS", "*")
+    with caplog.at_level("WARNING"):
+        cfg = Config.from_env()
+    assert cfg.forwarded_allow_ips == "*"
+    message = next(r.getMessage() for r in caplog.records if "FORWARDED_ALLOW_IPS" in r.getMessage())
+    assert "any peer" in message
+    assert "rightmost X-Forwarded-For entry" in message
+
+
+def test_forwarded_allow_ips_reaches_config_under_dev_no_auth(clean_env):
+    # The warning is silent in development, but the client address rule
+    # must still follow uvicorn's trust setting.
+    clean_env.setenv("DEV_NO_AUTH", "1")
+    clean_env.setenv("FORWARDED_ALLOW_IPS", "*")
+    assert Config.from_env().forwarded_allow_ips == "*"
+
+
 def test_forwarded_allow_ips_unset_warns_too(clean_env, caplog):
     # Unset behaves the same as explicitly empty once it reaches the app --
     # the compose file always sets the variable from .env, so an operator

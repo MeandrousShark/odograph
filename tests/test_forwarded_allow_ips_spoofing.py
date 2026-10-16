@@ -9,6 +9,11 @@ middleware Uvicorn installs under --proxy-headers -- at its safe default
 that trusted address gets its X-Forwarded-For header honored at all, so an
 attacker connecting directly can put anything in the header and it never
 changes what client_ip() sees.
+
+Under FORWARDED_ALLOW_IPS=*, uvicorn trusts every hop and picks the leftmost
+X-Forwarded-For entry; the app adds RightmostForwardedForMiddleware inside it
+so the client address is the rightmost entry, the address the immediate proxy
+saw. The tests at the end run both together, as create_app arranges them.
 """
 from __future__ import annotations
 
@@ -20,7 +25,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from authlib.integrations.base_client import OAuthError
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from starlette.applications import Starlette
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import PlainTextResponse
@@ -28,10 +33,19 @@ from starlette.routing import Route
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.auth import make_router as make_auth_router
+from app.config import Config
+from app.forwarded import RightmostForwardedForMiddleware, wildcard_trust
 from app.ingest import FailedAuthLimiter, client_ip
 from app.ingest import make_router as make_ingest_router
 
 MAX_FAILURES = 3
+
+
+def _behind_uvicorn(app, trusted_hosts):
+    # Same order as production: uvicorn's middleware outside, the app's inside.
+    if wildcard_trust(trusted_hosts):
+        app.add_middleware(RightmostForwardedForMiddleware)
+    return ProxyHeadersMiddleware(app, trusted_hosts=trusted_hosts)
 
 
 # --- /ingest: FailedAuthLimiter keyed by client_ip, no session/CSRF involved ---
@@ -46,7 +60,7 @@ def _ingest_app(*, trusted_hosts):
         ingest_max_body_bytes=65536,
     )
     app.include_router(make_ingest_router())
-    return ProxyHeadersMiddleware(app, trusted_hosts=trusted_hosts)
+    return _behind_uvicorn(app, trusted_hosts)
 
 
 async def _post_ingest(app, *, peer, xff=None):
@@ -225,7 +239,7 @@ def _login_app(*, trusted_hosts):
     app.state.templates = templates
     app.state.login_limiter = FailedAuthLimiter(max_failures=MAX_FAILURES, window_s=900)
     app.include_router(make_auth_router())
-    return ProxyHeadersMiddleware(app, trusted_hosts=trusted_hosts), templates
+    return _behind_uvicorn(app, trusted_hosts), templates
 
 
 async def _fail_login(app, templates, client: httpx.AsyncClient, *, xff=None):
@@ -312,7 +326,7 @@ def _callback_app(*, trusted_hosts):
     app.state.control_pool = _FakePool(None)
     app.state.login_limiter = FailedAuthLimiter(max_failures=MAX_FAILURES, window_s=900)
     app.include_router(make_auth_router())
-    return ProxyHeadersMiddleware(app, trusted_hosts=trusted_hosts)
+    return _behind_uvicorn(app, trusted_hosts)
 
 
 async def _get_callback(app, *, peer, xff=None):
@@ -412,8 +426,12 @@ def _nginx_header_value(directive: str, *, remote_addr: str, incoming: str | Non
     )
 
 
-def _seen_by_app(*, directive, incoming, peer_host, trusted_hosts):
-    """Run the app's client_ip() behind uvicorn's proxy-headers middleware."""
+def _seen_by_app(*, directive, incoming, peer_host, trusted_hosts, app_middleware=True):
+    """Run the app's client_ip() behind uvicorn's proxy-headers middleware.
+
+    With app_middleware, the stack matches create_app: uvicorn's middleware
+    outside and, under `*`, RightmostForwardedForMiddleware inside it.
+    """
 
     async def whoami(request):
         return PlainTextResponse(f"{client_ip(request)} {request.url.scheme}")
@@ -428,9 +446,11 @@ def _seen_by_app(*, directive, incoming, peer_host, trusted_hosts):
             incoming=None,
         ),
     }
-    app = ProxyHeadersMiddleware(
-        Starlette(routes=[Route("/", whoami)]), trusted_hosts=trusted_hosts
-    )
+    inner = Starlette(routes=[Route("/", whoami)])
+    if app_middleware:
+        app = _behind_uvicorn(inner, trusted_hosts)
+    else:
+        app = ProxyHeadersMiddleware(inner, trusted_hosts=trusted_hosts)
 
     async def run():
         transport = httpx.ASGITransport(app=app, client=(peer_host, 51000))
@@ -460,15 +480,20 @@ def test_documented_nginx_config_records_the_connecting_address(incoming, peer_h
     assert scheme == "https"
 
 
-def test_appending_directive_would_let_the_client_supplied_value_be_recorded():
-    """Documents why the nginx example must replace the header, not append."""
-    client, _scheme = _seen_by_app(
+def test_appending_directive_records_the_connecting_address_under_the_shipped_setting():
+    """An appending proxy keeps the client-supplied value ahead of its own.
+
+    uvicorn alone under `*` would record that leftmost value; the app's
+    rightmost-entry rule records the address the proxy saw instead.
+    """
+    kwargs = dict(
         directive="$proxy_add_x_forwarded_for",
         incoming=CLIENT_SUPPLIED,
         peer_host="127.0.0.1",
         trusted_hosts=_shipped_forwarded_allow_ips(),
     )
-    assert client == CLIENT_SUPPLIED
+    assert _seen_by_app(**kwargs, app_middleware=False)[0] == CLIENT_SUPPLIED
+    assert _seen_by_app(**kwargs) == [REAL_CLIENT, "https"]
 
 
 def test_documented_caddy_block_leaves_forwarded_header_handling_to_caddy():
@@ -477,3 +502,260 @@ def test_documented_caddy_block_leaves_forwarded_header_handling_to_caddy():
     block = _fenced_block("caddyfile").lower()
     assert "trusted_proxies" not in block
     assert not re.search(r"header_up\b[^\n]*x-forwarded-for", block)
+
+
+# --- FORWARDED_ALLOW_IPS=*: the rightmost X-Forwarded-For entry is the client ---
+
+
+async def _echo(scope, receive, send):
+    host, port = scope["client"]
+    body = f"{host}|{port}|{scope['scheme']}".encode()
+    await send({"type": "http.response.start", "status": 200,
+                "headers": [(b"content-type", b"text/plain")]})
+    await send({"type": "http.response.body", "body": body})
+
+
+def _wildcard_echo():
+    return ProxyHeadersMiddleware(RightmostForwardedForMiddleware(_echo), trusted_hosts="*")
+
+
+async def _seen(app, headers=(), *, peer=("127.0.0.1", 40000)):
+    transport = httpx.ASGITransport(app=app, client=peer)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get("/", headers=list(headers))
+    host, port, scheme = response.text.split("|")
+    return host, int(port), scheme
+
+
+def _xff(*values):
+    return [("X-Forwarded-For", value) for value in values]
+
+
+def test_wildcard_trust_matches_uvicorns_bare_wildcard_only():
+    assert wildcard_trust("*")
+    for value in ("", " * ", "*,127.0.0.1", "127.0.0.1,*", "127.0.0.1", "10.0.0.0/8"):
+        assert not wildcard_trust(value)
+
+
+def test_uvicorn_alone_under_wildcard_uses_the_leftmost_entry():
+    # Pins the uvicorn behavior the app middleware exists to correct.
+    app = ProxyHeadersMiddleware(_echo, trusted_hosts="*")
+    assert asyncio.run(_seen(app, _xff("6.6.6.6, 203.0.113.9")))[0] == "6.6.6.6"
+
+
+def test_wildcard_single_entry_is_the_client():
+    assert asyncio.run(_seen(_wildcard_echo(), _xff("203.0.113.9")))[:2] == ("203.0.113.9", 0)
+
+
+def test_wildcard_client_supplied_leading_entry_is_ignored():
+    assert asyncio.run(_seen(_wildcard_echo(), _xff("6.6.6.6, 203.0.113.9")))[0] == "203.0.113.9"
+
+
+def test_wildcard_three_entries_use_the_rightmost():
+    seen = asyncio.run(_seen(_wildcard_echo(), _xff("6.6.6.6, 198.51.100.1, 203.0.113.9")))
+    assert seen[0] == "203.0.113.9"
+
+
+def test_wildcard_ipv6_and_port_forms():
+    app = _wildcard_echo()
+    assert asyncio.run(_seen(app, _xff("6.6.6.6, 2001:db8::9")))[:2] == ("2001:db8::9", 0)
+    assert asyncio.run(_seen(app, _xff("6.6.6.6, [2001:db8::9]")))[:2] == ("2001:db8::9", 0)
+    assert asyncio.run(_seen(app, _xff("6.6.6.6, [2001:db8::9]:4711")))[:2] == ("2001:db8::9", 4711)
+    assert asyncio.run(_seen(app, _xff("6.6.6.6, 203.0.113.9:4711")))[:2] == ("203.0.113.9", 4711)
+
+
+def test_wildcard_multiple_header_lines_are_combined_in_order():
+    seen = asyncio.run(_seen(_wildcard_echo(), _xff("6.6.6.6, 7.7.7.7", "203.0.113.9")))
+    assert seen[0] == "203.0.113.9"
+
+
+def test_wildcard_skips_empty_trailing_entries():
+    assert asyncio.run(_seen(_wildcard_echo(), _xff("6.6.6.6, 203.0.113.9, ,")))[0] == "203.0.113.9"
+
+
+def test_wildcard_all_empty_header_leaves_the_peer():
+    seen = asyncio.run(_seen(_wildcard_echo(), _xff(" , "), peer=("192.0.2.10", 5555)))
+    assert seen[:2] == ("192.0.2.10", 5555)
+
+
+def test_wildcard_no_header_leaves_the_peer():
+    assert asyncio.run(_seen(_wildcard_echo(), peer=("192.0.2.10", 5555)))[:2] == ("192.0.2.10", 5555)
+
+
+def test_wildcard_non_ip_rightmost_entry_is_used_as_is():
+    # Like uvicorn's own choice of entry, the value is not validated. Only the
+    # immediate peer controls the rightmost entry, and under * it is trusted.
+    seen = asyncio.run(_seen(_wildcard_echo(), _xff("203.0.113.9, not-an-ip")))
+    assert seen[0] == "not-an-ip"
+
+
+def test_wildcard_scheme_still_comes_from_x_forwarded_proto():
+    headers = _xff("6.6.6.6, 203.0.113.9") + [("X-Forwarded-Proto", "https")]
+    assert asyncio.run(_seen(_wildcard_echo(), headers)) == ("203.0.113.9", 0, "https")
+
+
+def test_wildcard_forwarded_header_is_ignored():
+    headers = [("Forwarded", "for=6.6.6.6")]
+    seen = asyncio.run(_seen(_wildcard_echo(), headers, peer=("192.0.2.10", 5555)))
+    assert seen[0] == "192.0.2.10"
+
+
+def test_wildcard_websocket_scope_uses_the_rightmost_entry():
+    seen = {}
+
+    async def inner(scope, receive, send):
+        seen.update(client=scope["client"], scheme=scope["scheme"])
+
+    app = ProxyHeadersMiddleware(RightmostForwardedForMiddleware(inner), trusted_hosts="*")
+    scope = {
+        "type": "websocket", "scheme": "ws", "client": ("127.0.0.1", 40000),
+        "headers": [(b"x-forwarded-for", b"6.6.6.6, 203.0.113.9"), (b"x-forwarded-proto", b"https")],
+    }
+    asyncio.run(app(scope, None, None))
+    assert seen == {"client": ("203.0.113.9", 0), "scheme": "wss"}
+
+
+def test_lifespan_scope_passes_through_untouched():
+    seen = []
+
+    async def inner(scope, receive, send):
+        seen.append(scope)
+
+    scope = {"type": "lifespan"}
+    asyncio.run(RightmostForwardedForMiddleware(inner)(scope, None, None))
+    assert seen == [{"type": "lifespan"}]
+
+
+# --- create_app applies the middleware only for the bare wildcard ---
+
+
+_REQUIRED_ENV = {
+    "DATABASE_URL": "postgresql://unused/unused",
+    "INGEST_PASSWORD": "ingest-password",
+    "SESSION_SECRET": "session-secret-long-enough-for-config",
+}
+
+
+def _created_app(monkeypatch, forwarded_allow_ips):
+    from app.main import create_app
+
+    for key, value in _REQUIRED_ENV.items():
+        monkeypatch.setenv(key, value)
+    for key in ("DEV_NO_AUTH", "OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("FORWARDED_ALLOW_IPS", forwarded_allow_ips)
+    app = create_app(Config.from_env())
+
+    @app.get("/test-client")
+    async def test_client(request: Request):
+        return PlainTextResponse(f"{request.client.host}|{request.client.port}|{request.url.scheme}")
+
+    return app
+
+
+def test_create_app_under_wildcard_uses_the_rightmost_entry(monkeypatch):
+    app = _created_app(monkeypatch, "*")
+    assert app.user_middleware[0].cls is RightmostForwardedForMiddleware
+    served = ProxyHeadersMiddleware(app, trusted_hosts="*")
+
+    async def run():
+        transport = httpx.ASGITransport(app=served, client=("127.0.0.1", 40000))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            return await client.get("/test-client", headers={
+                "X-Forwarded-For": "6.6.6.6, 203.0.113.9", "X-Forwarded-Proto": "https"})
+
+    assert asyncio.run(run()).text == "203.0.113.9|0|https"
+
+
+def test_create_app_with_exact_trust_keeps_uvicorns_right_to_left_walk(monkeypatch):
+    # With an exact address, uvicorn skips trusted hops from the right; the
+    # rightmost-entry rule would pick 127.0.0.1 here instead.
+    app = _created_app(monkeypatch, "127.0.0.1")
+    assert all(m.cls is not RightmostForwardedForMiddleware for m in app.user_middleware)
+    served = ProxyHeadersMiddleware(app, trusted_hosts="127.0.0.1")
+
+    async def run():
+        transport = httpx.ASGITransport(app=served, client=("127.0.0.1", 40000))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            return await client.get("/test-client", headers={
+                "X-Forwarded-For": "203.0.113.9, 127.0.0.1"})
+
+    assert asyncio.run(run()).text == "203.0.113.9|0|http"
+
+
+def test_create_app_does_not_treat_padded_or_listed_wildcard_as_wildcard(monkeypatch):
+    for value in (" * ", "127.0.0.1,*"):
+        app = _created_app(monkeypatch, value)
+        assert all(m.cls is not RightmostForwardedForMiddleware for m in app.user_middleware)
+
+
+# --- FORWARDED_ALLOW_IPS=* with an appending proxy: the limiters key on the proxy's view ---
+
+
+PROXY = ("127.0.0.1", 40000)
+
+
+def _appended(sent, seen_by_proxy):
+    # What an appending proxy forwards for a client that sent `sent`.
+    return f"{sent}, {seen_by_proxy}" if sent else seen_by_proxy
+
+
+def test_wildcard_ingest_limiter_ignores_rotating_leading_entries():
+    app = _ingest_app(trusted_hosts="*")
+    client_address = "203.0.113.5"
+
+    async def run():
+        results = []
+        for i in range(MAX_FAILURES + 2):
+            response = await _post_ingest(app, peer=PROXY, xff=_appended(f"10.0.0.{i}", client_address))
+            results.append(response.status_code)
+        return results
+
+    results = asyncio.run(run())
+    assert results[:MAX_FAILURES] == [401] * MAX_FAILURES
+    assert results[MAX_FAILURES:] == [503] * 2
+
+
+def test_wildcard_ingest_leading_entry_does_not_count_against_that_address():
+    app = _ingest_app(trusted_hosts="*")
+    other_address = "198.51.100.7"
+
+    async def run():
+        for _ in range(MAX_FAILURES + 2):
+            await _post_ingest(app, peer=PROXY, xff=_appended(other_address, "203.0.113.5"))
+        return await _post_ingest(app, peer=PROXY, xff=_appended(None, other_address))
+
+    assert asyncio.run(run()).status_code == 401
+
+
+def test_wildcard_login_limiter_ignores_rotating_leading_entries():
+    app, templates = _login_app(trusted_hosts="*")
+    transport = httpx.ASGITransport(app=app, client=PROXY)
+
+    async def run():
+        results = []
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            for i in range(MAX_FAILURES + 2):
+                xff = _appended(f"192.0.2.{i}", "203.0.113.5")
+                response = await _fail_login(app, templates, client, xff=xff)
+                results.append(response.status_code)
+        return results
+
+    results = asyncio.run(run())
+    assert results[:MAX_FAILURES] == [401] * MAX_FAILURES
+    assert results[MAX_FAILURES:] == [429] * 2
+
+
+def test_wildcard_login_leading_entry_does_not_count_against_that_address():
+    app, templates = _login_app(trusted_hosts="*")
+    other_address = "198.51.100.7"
+    transport = httpx.ASGITransport(app=app, client=PROXY)
+
+    async def run():
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            for _ in range(MAX_FAILURES + 2):
+                await _fail_login(app, templates, client, xff=_appended(other_address, "203.0.113.5"))
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            return await _fail_login(app, templates, client, xff=_appended(None, other_address))
+
+    assert asyncio.run(run()).status_code == 401

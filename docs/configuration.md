@@ -24,7 +24,7 @@ for disabled.
 | `POSTGRES_PASSWORD` | generated, required | URI-safe privileged setup and backup password used to initialize the Compose database and construct `DATABASE_URL`. Changing it does not change the role password in an existing database volume. |
 | `DATABASE_URL` | set by `compose.yaml` | Privileged PostgreSQL URL used for migrations, managed-role setup, backup, and recovery. Normal requests and workers use generated restricted connections. Set it directly only outside the canonical Compose stack. |
 | `DISPLAY_TZ` | `UTC` in the app | Initial IANA timezone suggestion for first-account setup, and the one-time timezone import for an upgraded account. After setup, change the account timezone in Settings. An invalid IANA name stops startup. |
-| `FORWARDED_ALLOW_IPS` | empty in the app, `*` in generated config | Immediate proxy IPs or CIDRs uvicorn may trust for forwarded client and scheme headers. The generated wildcard is safe only with the shipped loopback-bound port. See [Reverse proxy and TLS](reverse-proxy.md#trusting-forwarded-headers). |
+| `FORWARDED_ALLOW_IPS` | empty in the app, `*` in generated config | Immediate proxy IPs or CIDRs uvicorn may trust for forwarded client and scheme headers. The generated wildcard is safe only with the shipped loopback-bound port. Under the exact value `*`, the client address is the rightmost `X-Forwarded-For` entry; with chained proxies, list each proxy's exact address instead. See [Reverse proxy and TLS](reverse-proxy.md#trusting-forwarded-headers). |
 
 Compose fixes the database name and role to `mileage`. `COMPOSE_PROJECT_NAME`
 is a standard Compose variable that namespaces containers, networks, and named

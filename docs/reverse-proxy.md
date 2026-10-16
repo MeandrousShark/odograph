@@ -95,15 +95,27 @@ connection appear to uvicorn as a runtime-specific bridge or gateway address
 rather than `127.0.0.1`; the wildcard handles both Docker and Podman without
 guessing a private subnet.
 
-The proxy in front of the application must set `X-Forwarded-For` to the
-address that connected to it, replacing any value the client sent rather than
-appending to it. With `FORWARDED_ALLOW_IPS=*` the application uses the first
-(leftmost) entry, so a header that kept the client's own value ahead of the
-proxy's would make that value the recorded client address. With an exact
-`FORWARDED_ALLOW_IPS`, uvicorn walks the list from the right and uses the
-first address it does not trust, which is the address the outermost trusted
-proxy saw. The Caddy example above already replaces the header; the nginx
-example does so with `$remote_addr`.
+Under `FORWARDED_ALLOW_IPS=*`, the client address is the rightmost
+`X-Forwarded-For` entry: the address the immediate proxy saw. Entries a client
+sent ahead of it are ignored, whether the proxy replaces the header or appends
+to it. Multiple `X-Forwarded-For` header lines are read in order as one list.
+If every entry is empty, the connecting address is used. The rightmost entry
+is used as written, without checking that it is an IP address. The wildcard
+must be exactly `*`; a value such as `127.0.0.1,*` is a list of exact
+addresses, as it is for uvicorn. With exact addresses or CIDRs, uvicorn walks
+the list from the right and uses the first address it does not trust, which
+is the address the outermost trusted proxy saw. `X-Forwarded-Proto` handling
+is the same in both cases, and the `Forwarded` header is not used.
+The application reads the same `FORWARDED_ALLOW_IPS` environment variable as
+uvicorn, so set trust there rather than with uvicorn's `--forwarded-allow-ips`
+option.
+
+Having the proxy replace `X-Forwarded-For` with the address that connected to
+it, rather than append to the incoming header, is still recommended. The
+application then receives one value set by the proxy, and other tools that
+read the header, such as logs or a later proxy, see the same address. The
+Caddy example above already replaces the header; the nginx example does so
+with `$remote_addr`.
 
 Change the setting when the topology changes:
 
@@ -119,6 +131,11 @@ Change the setting when the topology changes:
 - If the proxy is on another host, change the compose publish address to a
   private interface, restrict the host firewall to the remote proxy, and trust
   only the immediate source IP/CIDR seen after any host or container NAT.
+- If another proxy, CDN or tunnel sits in front of your reverse proxy, the
+  rightmost entry under `*` is the outer proxy's address, so every client
+  shares one recorded address and one sign-in rate limit. Set
+  `FORWARDED_ALLOW_IPS` to the exact addresses or CIDRs of every proxy in the
+  chain as the application sees them, so uvicorn skips them from the right.
 
 Multiple trusted entries may be comma-separated. Prefer exact peer addresses
 or the narrowest practical private CIDR whenever the loopback-only safety

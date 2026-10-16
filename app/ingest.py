@@ -167,7 +167,11 @@ class _AuthSaturated(Exception):
 
 
 def client_ip(request: Request) -> str:
-    """Use only Uvicorn's trusted-proxy-normalized client address."""
+    """Use only the trusted-proxy-normalized client address.
+
+    Uvicorn sets it from FORWARDED_ALLOW_IPS; under `*`,
+    app.forwarded replaces it with the rightmost X-Forwarded-For entry.
+    """
     return request.client.host if request.client else "unknown"
 
 

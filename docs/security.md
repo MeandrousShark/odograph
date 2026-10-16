@@ -297,14 +297,15 @@ still receive `401`; the separate local credential limiter still uses `429`.
 
 The IP-keyed limiters use `client_ip()`, which reads only the address Uvicorn's
 `--proxy-headers` handling has already normalized from a trusted proxy's
-`X-Forwarded-For`, never a header read directly by application code. That
+`X-Forwarded-For`. Under `FORWARDED_ALLOW_IPS=*`, where every peer is trusted,
+the application replaces that address with the rightmost `X-Forwarded-For`
+entry before any route or middleware reads it. That
 makes `FORWARDED_ALLOW_IPS` a security-relevant setting, not a cosmetic
 logging knob: if it's set too permissively, a client can spoof the address
 those limiters key on and dodge them entirely. The application logs a startup
 warning whenever `FORWARDED_ALLOW_IPS` is `*` or empty outside development
 mode, precisely because that combination is only safe under one specific
-topology, and only when the proxy replaces `X-Forwarded-For` with the
-connecting address rather than appending to it. See the checklist below.
+topology. See the checklist below.
 
 Two things this scope deliberately does not cover: per-account limiting of
 sign-in attempts (those limiters key on client address, not on the account
@@ -373,18 +374,22 @@ configuration files.
 3. **Get `FORWARDED_ALLOW_IPS` right for your actual topology.** The shipped
    default, `FORWARDED_ALLOW_IPS=*`, is safe only when the application port
    is loopback-only, as the shipped compose file publishes it on
-   `127.0.0.1:8077`, and your reverse proxy replaces `X-Forwarded-For` with
-   the address that connected to it instead of appending to the incoming
-   header. A proxy that forwards a client-supplied value lets that value be
-   recorded; see
-   [Trusting forwarded headers](reverse-proxy.md#trusting-forwarded-headers).
-   Both failed-auth rate limiters, and every recorded client address, derive
-   entirely from what this setting lets Uvicorn trust. If you ever publish
-   the application port to a non-loopback address, or route a proxy to it
-   through anything other than that loopback binding, narrow this to the
-   proxy's exact IP or CIDR. See the same section for the topology-specific
-   guidance. Confirm at startup: the application logs a warning naming the
-   exact risk whenever this is `*` or empty outside development mode.
+   `127.0.0.1:8077`, so only a local process such as your reverse proxy can
+   connect to it directly. Both failed-auth rate limiters, and every recorded
+   client address, derive entirely from what this setting lets Uvicorn
+   trust. If you ever publish the application port to a non-loopback
+   address, or route a proxy to it through anything other than that
+   loopback binding, narrow this to the proxy's exact IP or CIDR.
+   Under `*`, the application uses the rightmost `X-Forwarded-For` entry, the
+   address your reverse proxy saw. With a CDN, tunnel or second proxy in
+   front, that is the outer proxy for every client, so list the exact
+   addresses of each proxy in the chain instead. Having the proxy replace
+   `X-Forwarded-For` with the connecting address, as the documented examples
+   do, is recommended. See
+   [Trusting forwarded headers](reverse-proxy.md#trusting-forwarded-headers)
+   for the topology-specific guidance. Confirm at startup: the application
+   logs a warning naming the exact risk whenever this is `*` or empty
+   outside development mode.
 
 4. **Confirm the port really is loopback-bound.** `docker compose ps` or
    `podman-compose ps` should show `127.0.0.1:8077->8000` for the `app`

@@ -153,6 +153,7 @@ class Config:
     storage_instance_budget_bytes: int = DEFAULT_STORAGE_INSTANCE_BUDGET_BYTES
     storage_instance_reserve_bytes: int = DEFAULT_STORAGE_INSTANCE_RESERVE_BYTES
     preparation_spool_dir: str = ""
+    forwarded_allow_ips: str = ""
 
     capacity_ingest_slots: int = 2
     capacity_routine_slots: int = 1
@@ -313,18 +314,28 @@ class Config:
         forwarded_allow_ips = os.environ.get("FORWARDED_ALLOW_IPS", "")
         if not dev_no_auth and forwarded_allow_ips in ("", "*"):
             # `*` trusts X-Forwarded-For from any peer, so a client reaching the
-            # app directly can spoof the address both FailedAuthLimiters key on;
-            # empty trusts no peer, so a real proxy's forwarding is silently
-            # ignored and every client behind it collapses onto one IP bucket.
-            # Both are fine only because the shipped compose file binds the app
-            # port to loopback behind a trusted proxy -- never fatal, since that
-            # setup is correct today and must not break on upgrade.
-            log.warning(
-                "FORWARDED_ALLOW_IPS=%s -- safe only while this port stays "
-                "loopback-bound behind a trusted reverse proxy. If the port is "
-                "published directly, set this to the proxy's exact IP/CIDR instead.",
-                forwarded_allow_ips or "<empty>",
-            )
+            # app directly can choose the address the IP-keyed limiters key on;
+            # the app then uses the rightmost entry (app/forwarded.py), which
+            # behind two proxies is the inner proxy's peer. Empty trusts no
+            # peer, so a real proxy's forwarding is silently ignored and every
+            # client behind it collapses onto one IP bucket. Both are fine only
+            # because the shipped compose file binds the app port to loopback
+            # behind one trusted proxy -- never fatal, since that setup is
+            # correct today and must not break on upgrade.
+            if forwarded_allow_ips:
+                log.warning(
+                    "FORWARDED_ALLOW_IPS=* trusts X-Forwarded-For from any peer that "
+                    "can reach this port -- safe only while it stays loopback-bound "
+                    "behind a trusted reverse proxy. The client address is the "
+                    "rightmost X-Forwarded-For entry, so with chained proxies or a "
+                    "directly published port, set this to the exact proxy IP/CIDR."
+                )
+            else:
+                log.warning(
+                    "FORWARDED_ALLOW_IPS=<empty> -- safe only while this port stays "
+                    "loopback-bound behind a trusted reverse proxy. If the port is "
+                    "published directly, set this to the proxy's exact IP/CIDR instead."
+                )
 
         app_url = os.environ.get("APP_URL", "").rstrip("/")
         if app_url and not security_link_base(app_url):
@@ -511,4 +522,5 @@ class Config:
                 os.environ.get("ACCOUNT_AVATAR_MAX_BYTES", DEFAULT_ACCOUNT_AVATAR_MAX_BYTES)
             ),
             preparation_spool_dir=os.environ.get("PREPARATION_SPOOL_DIR", ""),
+            forwarded_allow_ips=forwarded_allow_ips,
         )
