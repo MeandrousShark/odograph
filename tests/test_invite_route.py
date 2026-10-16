@@ -246,3 +246,28 @@ def test_invite_is_closed_in_dev_no_auth(monkeypatch, method):
             assert response.headers["referrer-policy"] == "no-referrer"
             assert calls == []
     asyncio.run(check())
+
+
+@pytest.mark.parametrize("path", ["/invite", "/invite/oidc"])
+def test_invite_checks_form_token_before_recording_failures(monkeypatch, path):
+    async def check():
+        app, calls = _app(monkeypatch, max_failures=1)
+        app.state.oauth = object()
+        limiter = app.state.login_limiter
+        async with await _client(app) as client:
+            await client.get("/invite")
+            csrf = (await client.get("/session")).json()["csrf"]
+            wrong = {"csrf_token": "wrong", "display_timezone": "UTC"}
+            for data in (wrong, {"display_timezone": "UTC"}):
+                response = await client.post(path, data=data)
+                assert response.status_code == 403
+            not_form = await client.post(path, content=b"{}", headers={"content-type": "text/plain"})
+            assert not_form.status_code == 400
+            assert not limiter.blocked("127.0.0.1")
+
+            missing_field = await client.post(path, data={"csrf_token": csrf, "display_timezone": "UTC"})
+            assert missing_field.status_code == 400
+            assert auth.GENERIC_INVITE_ERROR in missing_field.text
+            assert limiter.blocked("127.0.0.1")
+            assert calls == []
+    asyncio.run(check())

@@ -125,7 +125,7 @@ def test_python_dash_m_app_diagnose_runs_end_to_end_against_a_real_database():
         **os.environ,
         "DATABASE_URL": TEST_DB,
         "INGEST_PASSWORD": "ingest-password",
-        "SESSION_SECRET": "session-secret",
+        "SESSION_SECRET": "session-secret-long-enough-for-config",
         "APP_VERSION": "test-version",
         "APP_GIT_REVISION": "test-revision",
     }

@@ -247,6 +247,9 @@ rows.
    An installation with data but no account must establish one on the
    previous release first. See
    [Account ownership migration](#account-ownership-migration-schema-26).
+9. **`SESSION_SECRET` must be at least 32 characters.** Startup refuses a
+   shorter value. Replace it before upgrading, for example with
+   `openssl rand -base64 32`; this signs out every browser.
 
 Rehearse the upgrade against a copy of your own backup before you upgrade the
 live installation, to learn the first-start duration and catch any refusal

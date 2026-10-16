@@ -8,6 +8,7 @@ from app.provider_http import bounded_request, NOTIFICATION_RESPONSE_MAX_BYTES
 from app.odometer import vehicles_due_for_reminder
 from app.account_context import account_id
 from app.account_settings import SETTINGS_COLUMNS
+from app.validation import ntfy_topic_url
 from psycopg.rows import dict_row
 
 
@@ -65,6 +66,6 @@ async def publish_ntfy(
     elif token:
         headers["Authorization"] = f"Bearer {token}"
     await bounded_request(http_client, "POST",
-        f"{ntfy_url.rstrip('/')}/{topic}", content=message, headers=headers, auth=auth,
+        ntfy_topic_url(ntfy_url, topic), content=message, headers=headers, auth=auth,
         max_bytes=NOTIFICATION_RESPONSE_MAX_BYTES,
     )

@@ -177,8 +177,8 @@ detector parameters, and worker intervals remain operator configuration.
 |---|---:|---|
 | `INGEST_USERNAME` | `owntracks` | One-time legacy shared-login import on upgrade; new devices use usernames issued in Settings > Tracking. |
 | `INGEST_PASSWORD` | generated baseline | One-time legacy shared-secret import on upgrade. Editing it later does not rotate or restore the saved credential. New devices use passwords issued in Tracking. |
-| `SESSION_SECRET` | generated, required | Signs browser session cookies. Replacing it signs out every browser. |
-| `INITIAL_ADMIN_SIGNUP` | `0` when absent | `1` permits creation of the first administrator only while no account exists. Generated fresh-install config sets it to `1`; the durable account row closes signup permanently. |
+| `SESSION_SECRET` | generated, required | Signs browser session cookies. Must be at least 32 characters; startup refuses a shorter value. Replacing it signs out every browser. |
+| `INITIAL_ADMIN_SIGNUP` | `0` when absent | `1` permits creation of the first administrator only while no account exists. Generated fresh-install config sets it to `0`; create the first administrator with `python -m app.manage_account create-admin`. The durable account row closes signup permanently. |
 | `LOGIN_AUTH_MAX_FAILURES` | `10` | Failed local credential checks allowed per client within the login window. |
 | `LOGIN_AUTH_WINDOW_S` | `900` | Local login, signup, password, and account-credential limiter window in seconds. |
 | `INGEST_AUTH_MAX_FAILURES` | `10` | Failed OwnTracks authentication attempts allowed per client within the ingest window. Blocked clients receive `503` with `Retry-After` before credential verification or body reads, even when retrying with correct credentials. |
@@ -470,7 +470,10 @@ are not cached as permanent missing addresses. SMTP sends retain their
 ### ntfy
 
 Set `NTFY_URL` for the shared transport, then save your topic and reminder
-choices in Settings. `NTFY_TOPIC` is only a legacy upgrade input.
+choices in Settings. `NTFY_TOPIC` is only a legacy upgrade input. A topic is
+1 to 64 letters, digits, hyphens or underscores, and Settings refuses any
+other value. A saved topic that does not match, for example one imported
+before this check, is skipped with a logged warning instead of being sent.
 
 After preparation, each send uses a fresh helper with the 15-second whole
 HTTP deadline and 64 KiB decoded response limit. Admission and files remain
@@ -480,7 +483,7 @@ remain unrecorded and can be retried even if the server accepted the message.
 | Variable | Default | Purpose |
 |---|---:|---|
 | `NTFY_URL` | unset | ntfy server base URL. |
-| `NTFY_TOPIC` | unset | Legacy one-time destination import; manage the saved topic in Settings. |
+| `NTFY_TOPIC` | unset | Legacy one-time destination import; manage the saved topic in Settings. A topic is 1 to 64 letters, digits, hyphens or underscores; startup refuses any other value. |
 | `NTFY_TOKEN` | unset | Optional bearer token. |
 | `NTFY_USERNAME` | unset | Optional Basic-auth username. |
 | `NTFY_PASSWORD` | unset | Optional Basic-auth password. Username/password take precedence over a token when both are set. |

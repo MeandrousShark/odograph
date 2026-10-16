@@ -45,7 +45,7 @@ def clean_env(monkeypatch):
     optional var, so each test starts from a known-empty auth config
     regardless of what's exported in the real shell environment.
     """
-    for key, value in zip(REQUIRED_VARS, ("postgresql://x/x", "ingest-pw", "session-secret")):
+    for key, value in zip(REQUIRED_VARS, ("postgresql://x/x", "ingest-pw", "session-secret-long-enough-for-config")):
         monkeypatch.setenv(key, value)
     for key in ALL_OPTIONAL_AUTH_VARS + RUNTIME_IDENTITY_VARS:
         monkeypatch.delenv(key, raising=False)
@@ -507,3 +507,26 @@ def test_detector_turn_limit_rejects_invalid_values(clean_env, value):
     clean_env.setenv("DETECTOR_TURN_MAX_POINTS", value)
     with pytest.raises(RuntimeError, match="DETECTOR_TURN_MAX_POINTS must be a non-negative"):
         Config.from_env()
+
+
+def test_session_secret_requires_32_characters(clean_env):
+    clean_env.setenv("SESSION_SECRET", "s" * 31)
+    with pytest.raises(RuntimeError, match="SESSION_SECRET is too short") as raised:
+        Config.from_env()
+    assert "scripts/generate_env.sh" in str(raised.value)
+    assert "openssl rand -base64 32" in str(raised.value)
+    clean_env.setenv("SESSION_SECRET", "s" * 32)
+    assert Config.from_env().session_secret == "s" * 32
+
+
+@pytest.mark.parametrize("topic", ["a?click=x", "../x", "a/b", "a" * 65, "a b"])
+def test_invalid_ntfy_topic_fails_config_load(clean_env, topic):
+    clean_env.setenv("NTFY_TOPIC", topic)
+    with pytest.raises(RuntimeError, match="NTFY_TOPIC is invalid"):
+        Config.from_env()
+
+
+@pytest.mark.parametrize(("raw", "topic"), [("alerts_1-x", "alerts_1-x"), ("/alerts/", "alerts"), ("", "")])
+def test_valid_or_empty_ntfy_topic_loads(clean_env, raw, topic):
+    clean_env.setenv("NTFY_TOPIC", raw)
+    assert Config.from_env().ntfy_topic == topic

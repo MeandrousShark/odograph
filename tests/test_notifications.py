@@ -12,6 +12,7 @@ from app.notifications import (
     odometer_reminder_vehicles,
     publish_ntfy,
 )
+from app.validation import is_valid_ntfy_topic, ntfy_topic_url
 
 
 class _Cursor:
@@ -141,3 +142,34 @@ def test_publish_ntfy_rejects_oversize_success_response():
             await publish_ntfy(client, "https://ntfy.example.com", "alerts", "", "", "", "x")
     with pytest.raises(ProviderResponseTooLarge):
         asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("topic", ["a?click=x", "../x", "a/b", "a" * 65, "a b", "", "a\n"])
+def test_ntfy_topic_grammar_rejects_non_topics(topic):
+    assert not is_valid_ntfy_topic(topic)
+
+
+def test_ntfy_topic_grammar_accepts_ntfy_topics():
+    assert is_valid_ntfy_topic("alerts_1-x")
+    assert is_valid_ntfy_topic("a" * 64)
+
+
+def test_ntfy_topic_url_encodes_the_topic_as_one_path_segment():
+    assert ntfy_topic_url("https://ntfy.example.com/", "alerts_1-x") == "https://ntfy.example.com/alerts_1-x"
+    assert ntfy_topic_url("https://ntfy.example.com", "a?click=x") == "https://ntfy.example.com/a%3Fclick%3Dx"
+    assert ntfy_topic_url("https://ntfy.example.com", "../x") == "https://ntfy.example.com/..%2Fx"
+
+
+def test_publish_ntfy_sends_to_the_encoded_topic_path():
+    paths = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.raw_path)
+        return httpx.Response(200)
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await publish_ntfy(client, "https://ntfy.example.com", "a?click=x", "", "", "", "x")
+
+    asyncio.run(scenario())
+    assert paths == [b"/a%3Fclick%3Dx"]

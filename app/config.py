@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from app.detector.core import Params
 from app.geocode import GeocodeProvider, build_geocode_provider, resolve_geocode_provider_name
+from app.validation import NTFY_TOPIC_HINT, is_valid_ntfy_topic
 
 log = logging.getLogger(__name__)
 
@@ -16,6 +17,7 @@ DEFAULT_MAP_TILE_ATTRIBUTION = (
     '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
 )
 DEFAULT_MISSING_TRIP_GAP_M = 1000.0
+MIN_SESSION_SECRET_LENGTH = 32
 # Single source of truth for the avatar upload cap: also read back by
 # app/auth.py as the getattr fallback for test doubles whose config double
 # predates this field.
@@ -272,6 +274,14 @@ class Config:
         missing = [k for k in required if not os.environ.get(k)]
         if missing:
             raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
+        if len(os.environ["SESSION_SECRET"]) < MIN_SESSION_SECRET_LENGTH:
+            raise RuntimeError(
+                f"SESSION_SECRET is too short: use at least {MIN_SESSION_SECRET_LENGTH} characters, "
+                "for example from scripts/generate_env.sh or `openssl rand -base64 32`"
+            )
+        ntfy_topic = os.environ.get("NTFY_TOPIC", "").strip("/")
+        if ntfy_topic and not is_valid_ntfy_topic(ntfy_topic):
+            raise RuntimeError(f"NTFY_TOPIC is invalid: {NTFY_TOPIC_HINT}")
 
         oidc_issuer = os.environ.get("OIDC_ISSUER", "")
         oidc_client_id = os.environ.get("OIDC_CLIENT_ID", "")
@@ -434,7 +444,7 @@ class Config:
             geocode_sweep_s=_f("GEOCODE_SWEEP_S", 300.0),
             raw_message_retention_days=_f("RAW_MESSAGE_RETENTION_DAYS", 365.0),
             ntfy_url=os.environ.get("NTFY_URL", "").rstrip("/"),
-            ntfy_topic=os.environ.get("NTFY_TOPIC", "").strip("/"),
+            ntfy_topic=ntfy_topic,
             ntfy_token=os.environ.get("NTFY_TOKEN", ""),
             ntfy_username=os.environ.get("NTFY_USERNAME", ""),
             ntfy_password=os.environ.get("NTFY_PASSWORD", ""),

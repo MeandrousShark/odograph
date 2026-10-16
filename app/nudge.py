@@ -20,6 +20,7 @@ import httpx
 from psycopg_pool import AsyncConnectionPool
 
 from app.db import NUDGE_ADVISORY_LOCK_KEY
+from app.validation import is_valid_ntfy_topic
 from app.notifications import notification_preferences_current, count_unclassified_trips, publish_ntfy
 
 log = logging.getLogger(__name__)
@@ -123,6 +124,9 @@ class NudgeWorker:
                     conn, ntfy_topic=self.topic, display_tz=str(self.display_tz),
                     nudge_weekly_hour=self.hour,
                 ) or not self.topic:
+                    return
+                if not is_valid_ntfy_topic(self.topic):
+                    log.warning("ntfy: skipping weekly delivery: topic is not a valid ntfy topic")
                     return
                 existing = await conn.execute(
                     "SELECT 1 FROM nudge_delivery_windows WHERE account_id = %s AND window_ends_at = %s", (account_id(conn), window_end)

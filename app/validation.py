@@ -1,4 +1,4 @@
-"""Shared numeric-input validation. `parse_finite_number` is used both by
+"""Shared input validation. `parse_finite_number` is used both by
 `app/portable/normalize.py` (a bundle value pulled from arbitrary uploaded
 JSON) and by `app/ui/`'s form handlers plus `app/rates.py`'s env-var override
 (a value FastAPI/pydantic or `float()` has already turned into a Python float
@@ -8,7 +8,9 @@ everywhere a bare float reaches the database or a computation.
 from __future__ import annotations
 
 import math
+import re
 from typing import Any
+from urllib.parse import quote
 
 
 def parse_finite_number(
@@ -36,3 +38,16 @@ def parse_finite_number(
     if maximum is not None and value > maximum:
         return None
     return value
+
+
+# ntfy's own topic format. A topic is one URL path segment on the server.
+NTFY_TOPIC_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+NTFY_TOPIC_HINT = "use 1 to 64 letters, digits, hyphens or underscores"
+
+
+def is_valid_ntfy_topic(topic: Any) -> bool:
+    return isinstance(topic, str) and NTFY_TOPIC_RE.fullmatch(topic) is not None
+
+
+def ntfy_topic_url(server_url: str, topic: str) -> str:
+    return server_url.rstrip("/") + "/" + quote(topic, safe="")

@@ -19,7 +19,7 @@ ROOT = Path(__file__).parents[1]
 REQUIRED_ENV = {
     "DATABASE_URL": "postgresql://unused/unused",
     "INGEST_PASSWORD": "ingest-password",
-    "SESSION_SECRET": "session-secret",
+    "SESSION_SECRET": "session-secret-long-enough-for-config",
 }
 
 

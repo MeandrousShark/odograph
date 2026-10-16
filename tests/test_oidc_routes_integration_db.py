@@ -108,11 +108,12 @@ async def _run_route_scenario(monkeypatch):
             provider = _Provider()
             request = _request(pools, provider)
 
-            async def invite_form(_request, fields):
+            async def invite_form(current, fields, _max_bytes):
                 assert fields == {"token", "display_timezone", "csrf_token"}
-                return {"token": token, "display_timezone": "UTC", "csrf_token": "csrf"}
+                auth.check_form_csrf(current, "csrf")
+                return {"token": token, "display_timezone": "UTC", "csrf_token": "csrf"}, 0, False
 
-            monkeypatch.setattr(auth, "_email_form", invite_form)
+            monkeypatch.setattr(auth, "_invite_form", invite_form)
 
             async def begin_invite():
                 request.session["csrf"] = "csrf"
@@ -348,10 +349,11 @@ async def _run_capacity_scenario(monkeypatch):
             provider = _Provider()
             request = _request(pools, provider)
 
-            async def invite_form(_request, fields):
-                return {"token": token, "display_timezone": "UTC", "csrf_token": "csrf"}
+            async def invite_form(current, fields, _max_bytes):
+                auth.check_form_csrf(current, "csrf")
+                return {"token": token, "display_timezone": "UTC", "csrf_token": "csrf"}, 0, False
 
-            monkeypatch.setattr(auth, "_email_form", invite_form)
+            monkeypatch.setattr(auth, "_invite_form", invite_form)
             response = await _endpoint("/invite/oidc", "POST")(request)
             params = parse_qs(urlsplit(oidc_authorization_url(response)).query)
             request.query_params = {"state": params["state"][0], "code": "valid"}

@@ -410,9 +410,9 @@ configuration files.
    remaining phones have their own credentials.
 
 7. **Keep account creation and recovery narrow.** Fresh generated
-   configuration sets `INITIAL_ADMIN_SIGNUP=1`; the first account row closes
-   signup even if that value remains unchanged. Existing configurations that
-   omit it stay fail-closed. A signed-out password reset is emailed only to an
+   configuration sets `INITIAL_ADMIN_SIGNUP=0`, so browser signup stays off;
+   if it is set to `1`, the first account row closes signup even if that value
+   remains unchanged. Existing configurations that omit it stay fail-closed. A signed-out password reset is emailed only to an
    account's verified login email; requests get the same reply whether or not
    an account matches. Before initial bootstrap, create the first account with
    `python -m app.manage_account create-admin`; after bootstrap, first-account

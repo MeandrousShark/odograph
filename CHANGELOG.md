@@ -202,6 +202,14 @@ reproduced here.
   rows. A startup security-contract mismatch now names the offending relation,
   role, privilege or policy, and startup rejects unexpected function and
   sequence privileges.
+- `.env.example`, and so a configuration from `scripts/generate_env.sh`, now
+  sets `INITIAL_ADMIN_SIGNUP=0`. Create the first administrator with
+  `python -m app.manage_account create-admin`, or set it to `1` to allow one
+  browser signup before any account exists.
+- ntfy topics are validated against ntfy's topic format: 1 to 64 letters,
+  digits, hyphens or underscores. Settings refuses any other topic, the topic
+  is sent as one encoded URL path segment, and a saved topic that does not
+  match is skipped with a logged warning instead of being sent.
 
 ### Fixed
 
@@ -229,6 +237,12 @@ reproduced here.
 - Concurrent backups to the same output are refused instead of overwriting each
   other, and restore inspects the container state before it starts. See
   [One-off backup](docs/backups.md#one-off-backup).
+- Ingest acknowledges and drops a body that is nested too deeply or holds an
+  over-long integer instead of failing with a server error, and drops a fix
+  whose `tst` is out of range. An out-of-range `acc`, `vel` or `alt`, or a
+  `batt` outside 0 to 100, is stored as empty while the fix is kept. Portable
+  import reports such a file as invalid JSON.
+- Invitation pages check the form token before counting a failed attempt.
 
 ### Security
 
@@ -281,6 +295,11 @@ reproduced here.
 - Startup refuses a `public` schema whose relations do not match the
   application's table list exactly, so move any added table to another
   schema first.
+- Startup refuses a `SESSION_SECRET` shorter than 32 characters. Before
+  upgrading, replace a shorter value with one from `openssl rand -base64 32`;
+  this signs out every browser.
+- Startup refuses an `NTFY_TOPIC` that is not 1 to 64 letters, digits, hyphens
+  or underscores.
 - No exact-image rollback is supported from 1.0 to a 0.x release. Recovery
   restores the verified pre-upgrade backup into a fresh volume under the old
   image and loses every write made after that backup. See

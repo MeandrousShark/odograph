@@ -177,7 +177,9 @@ def make_router() -> APIRouter:
 
             try:
                 payload = await owned_thread(json.loads, raw)
-            except (json.JSONDecodeError, UnicodeDecodeError):
+            except (ValueError, RecursionError):
+                # ValueError covers JSONDecodeError, UnicodeDecodeError and the
+                # integer digit limit; RecursionError covers deep nesting.
                 return JSONResponse(
                     {"ok": False, "error": "invalid_json", "detail": "Uploaded file is not valid JSON"},
                     status_code=400,

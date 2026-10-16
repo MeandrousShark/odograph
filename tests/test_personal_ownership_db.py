@@ -207,6 +207,7 @@ async def _http_scenario(spool_root):
                 if url == "/settings":
                     assert 'name="email_digest_hour" min="0" max="23" value="9"' in response.text
                     assert 'name="email_filing_reminder_mmdd" value="01-15"' in response.text
+                    assert 'name="ntfy_topic" value="" maxlength="64" pattern="[A-Za-z0-9_\\-]{1,64}"' in response.text
             assert (await client.get(f"/trips/{ids[73]}" )).status_code == 404
             csrf_headers = {"X-CSRF-Token": "test-csrf"}
             for url, data in (
@@ -230,6 +231,23 @@ async def _http_scenario(spool_root):
                 settings = await load_account_settings(conn)
             assert str(settings.display_tz) == "Pacific/Auckland"
             assert settings.email_to == "alpha@example.test"
+            for topic in ("a?click=x", "../x", "a/b", "a" * 65, "a b"):
+                response = await client.post(
+                    "/settings/preferences", headers=csrf_headers,
+                    data={"display_timezone": "UTC", "ntfy_topic": topic},
+                )
+                assert response.status_code == 400, topic
+                assert response.json()["detail"].startswith("Invalid ntfy topic:")
+            async with apool.connection() as conn:
+                assert (await load_account_settings(conn)).ntfy_topic == ""
+            response = await client.post(
+                "/settings/preferences", headers=csrf_headers,
+                data={"display_timezone": "Pacific/Auckland", "ntfy_topic": " alerts_1-x ",
+                      "email_to": "alpha@example.test", "email_monthly_summary": "1"},
+            )
+            assert response.status_code == 204
+            async with apool.connection() as conn:
+                assert (await load_account_settings(conn)).ntfy_topic == "alerts_1-x"
             async with bpool.connection() as b:
                 assert (await load_account_settings(b)).email_to == ""
                 assert str((await load_account_settings(b)).display_tz) == "UTC"

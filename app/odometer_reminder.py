@@ -19,6 +19,7 @@ import httpx
 from psycopg_pool import AsyncConnectionPool
 
 from app.db import ODOMETER_REMINDER_ADVISORY_LOCK_KEY
+from app.validation import is_valid_ntfy_topic
 from app.notifications import notification_preferences_current, odometer_reminder_vehicles, publish_ntfy
 from app.odometer import latest_quarter_start
 
@@ -93,6 +94,9 @@ class OdometerReminderWorker:
                     conn, ntfy_topic=self.topic, display_tz=str(self.display_tz),
                     odometer_reminder_hour=self.hour, odometer_reminder_requested=True,
                 ) or not self.topic:
+                    return
+                if not is_valid_ntfy_topic(self.topic):
+                    log.warning("ntfy: skipping quarterly delivery: topic is not a valid ntfy topic")
                     return
                 existing = await conn.execute(
                     "SELECT 1 FROM odometer_reminder_windows WHERE account_id = %s AND quarter_starts_at = %s",

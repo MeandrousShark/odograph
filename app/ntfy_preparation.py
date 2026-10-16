@@ -5,6 +5,7 @@ from contextlib import aclosing
 from dataclasses import dataclass
 from datetime import datetime
 import json
+import logging
 import os
 
 from psycopg.rows import dict_row
@@ -18,7 +19,10 @@ from app.ntfy_helper import ENVIRONMENT_KEYS
 from app.ntfy_supervisor import send_prepared
 from app.preparation import FRAME_BYTES, PreparationOperation
 from app.prepared_ntfy import PreparedNtfy
+from app.validation import is_valid_ntfy_topic
 from app.worker import TurnOutcome
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -40,10 +44,19 @@ async def capture_ntfy_job(conn, operation, config, kind, *, now=None):
         "octet_length(convert_to(ntfy_topic,current_setting('client_encoding'))) AS topic_size, "
         "octet_length(convert_to(email_to,current_setting('client_encoding'))) AS to_size, "
         "octet_length(convert_to(email_filing_reminder_mmdd,current_setting('client_encoding'))) AS filing_size, "
+        # Only a topic short enough to be valid is read back for the check.
+        'CASE WHEN char_length(ntfy_topic) <= 64 THEN ntfy_topic END AS short_topic, '
         'nudge_weekly_hour, odometer_reminder_hour, odometer_reminder_requested '
         'FROM account_settings WHERE account_id=%s FOR SHARE', (account_id(conn),))
     if row is None:
         raise RuntimeError('account preferences are missing')
+    enabled = bool(config.ntfy_url and row['topic_size'] and
+                   (kind == 'weekly' or row['odometer_reminder_requested']))
+    if enabled and not is_valid_ntfy_topic(row['short_topic']):
+        # Settings saved before topic validation are skipped, not sent.
+        log.warning('ntfy: skipping %s delivery for account %s: saved topic is not a valid ntfy topic',
+                    kind, account_id(conn))
+        enabled = False
     for key, size, field, keep in (
         ('display_tz', 'tz_size', 'display_tz', True),
         ('ntfy_topic', 'topic_size', 'ntfy_topic', True),
@@ -53,8 +66,6 @@ async def capture_ntfy_job(conn, operation, config, kind, *, now=None):
         await projection.text(conn, key, row[size], field, keep=keep)
     await projection.timezone_paths()
     hour = row['nudge_weekly_hour' if kind == 'weekly' else 'odometer_reminder_hour']
-    enabled = bool(config.ntfy_url and row['topic_size'] and
-                   (kind == 'weekly' or row['odometer_reminder_requested']))
     bounds = await session.request({'type':'initialize','kind':kind,'hour':hour,'enabled':enabled,
         'now':now.isoformat() if now is not None else None})
     for key, value in (('app_url', config.app_url), ('url', config.ntfy_url),

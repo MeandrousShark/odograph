@@ -61,7 +61,7 @@
     <legend>Notification destinations</legend>
     <div class="settings-preference-grid">
       <label class="settings-preference-field">ntfy topic
-        <input name="ntfy_topic" value="{{ preferences.ntfy_topic }}" maxlength="200">
+        <input name="ntfy_topic" value="{{ preferences.ntfy_topic }}" maxlength="64" pattern="[A-Za-z0-9_\-]{1,64}" title="1 to 64 letters, digits, hyphens or underscores">
       </label>
       <label class="settings-preference-field">Email recipients
         <input name="email_to" value="{{ preferences.email_to }}" maxlength="512">

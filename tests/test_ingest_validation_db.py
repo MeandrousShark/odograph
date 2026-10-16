@@ -285,3 +285,71 @@ def test_valid_surrogate_pair_is_accepted_and_round_trips_unchanged():
         assert await _points_count(pool) == 1
 
     asyncio.run(_scenario(run))
+
+
+def _post_raw(client, body: bytes):
+    return client.post("/ingest", headers=AUTH_HEADER, content=body)
+
+
+@pytest.mark.parametrize("body", [
+    pytest.param(b"[" * 100000, id="deep-nesting"),
+    pytest.param(b'{"_type":"location","acc":' + b"9" * 5000 + b"}", id="5000-digit-integer"),
+    pytest.param(b'{"_type":"location","x":' + b"[" * 2000 + b"]" * 2000 + b"}", id="nesting-past-encoder"),
+])
+def test_unparseable_or_unstorable_body_is_dropped_with_200(body, caplog):
+    async def run(pool, client):
+        with caplog.at_level(logging.WARNING, logger="app.ingest"):
+            response = await _post_raw(client, body)
+        assert response.status_code == 200
+        assert response.json() == []
+        assert await _raw_message_count(pool) == 0
+        assert await _points_count(pool) == 0
+        assert "dropping" in caplog.text
+
+    asyncio.run(_scenario(run))
+
+
+def test_out_of_range_integer_tst_is_dropped_not_stored(caplog):
+    async def run(pool, client):
+        body = json.dumps(_base_payload(tst=0)).replace('"tst": 0', '"tst": ' + "9" * 400).encode()
+        with caplog.at_level(logging.INFO, logger="app.ingest"):
+            response = await _post_raw(client, body)
+        assert response.status_code == 200
+        assert response.json() == []
+        assert await _points_count(pool) == 0
+        assert await _raw_message_count(pool) == 1
+        assert "tst out of range" in caplog.text
+
+    asyncio.run(_scenario(run))
+
+
+@pytest.mark.parametrize("overrides", [
+    pytest.param({"acc": 10 ** 400, "vel": 1e300, "alt": -1e10, "batt": 99999}, id="out-of-range"),
+    pytest.param({"acc": -(10 ** 400), "vel": 10 ** 400, "alt": 10 ** 400, "batt": -1}, id="negative"),
+    pytest.param({"batt": 10 ** 400}, id="huge-battery"),
+])
+def test_out_of_range_readings_are_stored_as_null(overrides):
+    async def run(pool, client):
+        response = await _post(client, _base_payload(**overrides))
+        assert response.status_code == 200
+        assert response.json() == []
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT accuracy_m, velocity_kmh, altitude_m, battery_pct FROM points"
+            )
+            assert await cur.fetchall() == [(None, None, None, None)]
+
+    asyncio.run(_scenario(run))
+
+
+def test_in_range_readings_are_stored():
+    async def run(pool, client):
+        response = await _post(client, _base_payload(acc=12, vel=55.5, alt=-20, batt=100))
+        assert response.status_code == 200
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT accuracy_m, velocity_kmh, altitude_m, battery_pct FROM points"
+            )
+            assert await cur.fetchall() == [(12.0, 55.5, -20.0, 100)]
+
+    asyncio.run(_scenario(run))

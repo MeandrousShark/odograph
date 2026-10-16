@@ -12,7 +12,7 @@ STORAGE_KEYS = (
 @pytest.fixture
 def storage_env(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused/unused")
-    monkeypatch.setenv("SESSION_SECRET", "synthetic-storage-config")
+    monkeypatch.setenv("SESSION_SECRET", "synthetic-storage-config-long-enough-for-config")
     for key in STORAGE_KEYS:
         monkeypatch.delenv(key, raising=False)
     return monkeypatch

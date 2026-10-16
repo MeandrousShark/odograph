@@ -24,7 +24,7 @@ from app.ui import make_router
 REQUIRED_ENV = {
     "DATABASE_URL": "postgresql://unused/unused",
     "INGEST_PASSWORD": "ingest-password",
-    "SESSION_SECRET": "session-secret",
+    "SESSION_SECRET": "session-secret-long-enough-for-config",
 }
 
 
