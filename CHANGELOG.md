@@ -299,6 +299,13 @@ reproduced here.
   recommended, so anything else that reads the header sees the same address.
   The Caddy example needs no change. See
   [Trusting forwarded headers](docs/reverse-proxy.md#trusting-forwarded-headers).
+- The failed sign-in and password-reset limiters track up to 16,384
+  addresses. When the table is full, the address whose last failure is
+  oldest is dropped to make room, so a new address is never refused only
+  because many others have failed recently.
+- Local sign-in password checks share the same two-slot verification limit as
+  the other sign-in paths. While both slots are busy, `/login/local` answers
+  `429` without checking the password.
 
 ### Migrations
 
