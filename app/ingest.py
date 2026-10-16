@@ -460,10 +460,9 @@ def _num(v) -> float | None:
 
 def _int(v) -> int | None:
     value = _num(v)
-    if value is None:
+    if value is None or not BATTERY_RANGE[0] <= value <= BATTERY_RANGE[1]:
         return None
-    value = int(value)
-    return value if BATTERY_RANGE[0] <= value <= BATTERY_RANGE[1] else None
+    return int(value)
 
 
 def _discarded_type_for_log(payload: dict) -> str:

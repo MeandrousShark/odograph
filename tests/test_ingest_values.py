@@ -20,7 +20,7 @@ def test_reading_inside_bounds_is_kept(value, expected):
     assert _num(value) == expected
 
 
-@pytest.mark.parametrize("value", [99999, -1, 101, 10 ** 400, math.inf, math.nan, True])
+@pytest.mark.parametrize("value", [99999, -1, 101, -0.5, 100.5, 10 ** 400, math.inf, math.nan, True])
 def test_battery_outside_percent_range_becomes_none(value):
     assert _int(value) is None
 
