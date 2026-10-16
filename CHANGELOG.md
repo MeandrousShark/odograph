@@ -9,6 +9,8 @@ reproduced here.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-16
+
 ### Added
 
 - Multi-account operation. The administrator invites members from
@@ -324,6 +326,10 @@ reproduced here.
   An installation from `v0.11.0` or earlier must first apply the v0.11.1
   road-snap correction if it has not; see
   [Upgrading to 1.0](docs/upgrading.md#supported-starting-versions).
+- Prior-release artifact upgrade gate: release preflight ran the Docker
+  Compose upgrade drill from `v0.10.2`, `v0.11.0`, `v0.11.1` and `v0.11.3` to
+  this release before it was tagged. `v0.10.0` and `v0.11.2` share these
+  schema 25 upgrade paths.
 
 ### Breaking changes
 
