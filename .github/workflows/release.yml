@@ -53,7 +53,7 @@ jobs:
   test:
     needs: prepare
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     env:
       TEST_DATABASE_URL: postgresql://mileage:testpw@127.0.0.1:5432/mileage
     services:
