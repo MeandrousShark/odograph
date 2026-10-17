@@ -124,6 +124,26 @@ For a Podman installation, replace each `docker compose` command with
 This procedure is also the model used by the release preflight database-image
 migration drill.
 
+## Upgrading from 1.0
+
+Migration 046 is class `rewrite`: it makes storage limits optional and
+exempts the administrator. Existing administrator grants become unlimited and
+every member grant follows the instance default. Usage counters and stored
+data are unchanged.
+
+Storage limits are now off unless configured. On the first start after the
+migration, an installation without `STORAGE_ACCOUNT_LIMIT_BYTES` in `.env`
+removes every member's allowance; nothing is refused for storage afterward.
+To keep the 1.0 behavior, set `STORAGE_ACCOUNT_LIMIT_BYTES=2147483648` before
+the upgrade. Members then keep 2 GiB with 256 MiB raw and 128 MiB enhancement
+limits, and only the administrator becomes unlimited. Setting
+`STORAGE_RAW_LIMIT_BYTES` or `STORAGE_ENHANCEMENT_LIMIT_BYTES` without
+`STORAGE_ACCOUNT_LIMIT_BYTES` now refuses startup. See
+[Logical storage accounting](configuration.md#logical-storage-accounting).
+
+Rollback across migration 046 requires the verified pre-upgrade backup, as
+described in [Rollback](#rollback).
+
 ## Upgrading to 1.0
 
 This section is for installations moving from a 0.x release to Odograph 1.0.

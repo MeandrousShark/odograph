@@ -26,12 +26,15 @@ def is_account_grant_refusal(exc: BaseException) -> bool:
     return _capacity_message(exc) == ACCOUNT_GRANT_REFUSAL
 
 
-async def account_grant_fundable(conn, account_default_bytes: int) -> bool:
+async def account_grant_fundable(conn, account_default_bytes: int | None) -> bool:
     """Whether the instance budget could fund one more default account grant.
 
     Advisory only: it mirrors the account insert trigger but reserves nothing,
-    so account creation still enforces the limit itself.
+    so account creation still enforces the limit itself. Without a default
+    account limit there is nothing to fund.
     """
+    if account_default_bytes is None:
+        return True
     cur = await conn.execute(
         "SELECT instance_budget_bytes, instance_reserve_bytes, total_grants_bytes "
         "FROM public.storage_instance_status()"
@@ -63,16 +66,23 @@ async def storage_status(conn) -> dict[str, int | bool | str]:
     (actual, reserved, raw, enhancement, account_limit, raw_limit,
      enhancement_limit, discovery_paused, retry_paused, snap_paused) = row
     total = actual + reserved
-    account_blocked = total >= account_limit
-    raw_blocked = raw >= raw_limit
-    enhancement_paused = (enhancement >= enhancement_limit or account_blocked
+    # A NULL limit means no limit for that measure.
+    def at(used, limit):
+        return limit is not None and used >= limit
+
+    def near(used, limit):
+        return limit is not None and used * 5 >= limit * 4
+
+    account_blocked = at(total, account_limit)
+    raw_blocked = at(raw, raw_limit)
+    enhancement_paused = (at(enhancement, enhancement_limit) or account_blocked
                           or discovery_paused or retry_paused or snap_paused)
-    warning = (total * 5 >= account_limit * 4 or raw * 5 >= raw_limit * 4
-               or enhancement * 5 >= enhancement_limit * 4)
+    warning = (near(total, account_limit) or near(raw, raw_limit)
+               or near(enhancement, enhancement_limit))
     if account_blocked or raw_blocked or enhancement_paused:
-        recovery = "Storage is at its allowance. Delete unneeded data or ask the operator to raise the limits."
+        recovery = "Storage is at its allowance. Delete unneeded data or ask an administrator to raise the limits."
     elif warning:
-        recovery = "Storage is approaching its allowance. Review retained data or ask the operator to raise the limits."
+        recovery = "Storage is approaching its allowance. Review retained data or ask an administrator to raise the limits."
     else:
         recovery = ""
     return {
@@ -99,8 +109,8 @@ async def enhancement_available(conn, *, needed_bytes: int = 1,
         raise ValueError("storage capacity check requires nonnegative bytes")
     owner = account_id(conn)
     cur = await conn.execute(
-        "SELECT u.actual_bytes+u.reserved_bytes+%s-%s<=g.account_limit_bytes "
-        "AND u.enhancement_bytes+%s<=g.enhancement_limit_bytes "
+        "SELECT COALESCE(u.actual_bytes+u.reserved_bytes+%s-%s<=g.account_limit_bytes,true) "
+        "AND COALESCE(u.enhancement_bytes+%s<=g.enhancement_limit_bytes,true) "
         "FROM public.account_usage u JOIN public.storage_grants g USING(account_id) "
         "WHERE u.account_id=%s",
         (needed_bytes, account_credit_bytes, needed_bytes, owner),

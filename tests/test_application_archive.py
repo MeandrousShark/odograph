@@ -58,9 +58,9 @@ async def _seed(database_url):
         async with application_role_pools(database_url) as roles:
             async with roles.control.connection() as conn:
                 first = await create_admin(conn, "a@example.invalid", "synthetic-hash")
-            # Test-only second account inserted directly by the owner role.
+            # Test-only member account inserted directly by the owner role.
             async with pool.connection() as conn:
-                await conn.execute("INSERT INTO accounts(id,email,password_hash,is_admin) VALUES(73,'b@example.invalid','synthetic-hash',true)")
+                await conn.execute("INSERT INTO accounts(id,email,password_hash,is_admin) VALUES(73,'b@example.invalid','synthetic-hash',false)")
                 await conn.execute("INSERT INTO account_settings(account_id) VALUES(73)")
             for owner in (first["id"], 73):
                 bound = AccountPool(roles.runtime, AccountPrincipal(owner, True, 1))
@@ -181,8 +181,8 @@ def test_application_archive_preserves_rows_credentials_sequences_and_restricted
         first, runtime_info = asyncio.run(_seed(source.database_url))
         with psycopg.connect(source.database_url) as conn:
             conn.execute(
-                "UPDATE storage_grants SET account_limit_bytes=1,raw_limit_bytes=1,"
-                "enhancement_limit_bytes=1")
+                "UPDATE storage_grants SET limit_mode='custom',account_limit_bytes=1,raw_limit_bytes=1,"
+                "enhancement_limit_bytes=1 WHERE account_id=73")
         before = _snapshot(source.database_url)
         security_before = _row_security(source.database_url)
         assert [row[0] for row in security_before[0] if row[1:] == (True, True)] == sorted(OWNED_TABLES + PROTECTED_TABLES)
@@ -210,7 +210,7 @@ def test_application_archive_preserves_rows_credentials_sequences_and_restricted
             assert conn.execute(
                 "SELECT count(*) FROM account_usage u JOIN storage_grants g USING(account_id) "
                 "WHERE u.actual_bytes+u.reserved_bytes>g.account_limit_bytes"
-            ).fetchone() == (2,)
+            ).fetchone() == (1,)
         assert _snapshot(target.database_url) == before
         with psycopg.connect(target.database_url) as conn:
             conn.execute("UPDATE accounts SET auth_version=auth_version+%s", (RESTORE_AUTH_VERSION_STEP,))

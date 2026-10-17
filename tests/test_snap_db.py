@@ -23,7 +23,7 @@ from app.snap import MatchPoint, SNAP_MIN_ROUTE_BYTES, SnapWorker, downsample
 from app.storage import storage_status
 from app.worker import BatchOutcome
 from app.detector.runner import load_trip_points
-from conftest import reset_account_db, seed_tracking_device
+from conftest import finite_test_grant, reset_account_db, seed_tracking_device
 from app.account_context import account_id
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -224,6 +224,7 @@ def test_snap_capacity_pause_keeps_pending_route_and_resumes_after_grant_rises()
                 })
 
             async with raw.connection() as conn:
+                await finite_test_grant(conn, owner)
                 await conn.execute(
                     "UPDATE storage_grants SET enhancement_limit_bytes=1 WHERE account_id=%s",
                     (owner,),

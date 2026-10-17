@@ -36,7 +36,7 @@ from app.rates import YearRate, deduction
 from app.ui import make_router as make_ui_router
 from app.tracking import create_device
 from app.vehicles import create_vehicle
-from conftest import add_test_account, reset_db, reset_account_db
+from conftest import add_test_account, finite_test_grant, reset_db, reset_account_db
 from personal_support import configure_personal_app, fixture_device
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -923,7 +923,7 @@ def test_wrong_format_or_version_rejected(mutate, expected_field):
     _scenario(run)
 
 
-@pytest.mark.parametrize("schema_version", [26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45])
+@pytest.mark.parametrize("schema_version", [26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46])
 def test_format_3_bundles_import_into_current_schema(schema_version):
     """Migration 027 only deletes raw_messages rows, which bundles never
     carry, 028 only enforces row-level security, 029 adds invitations, 030
@@ -933,9 +933,10 @@ def test_format_3_bundles_import_into_current_schema(schema_version):
     lifecycle state. Schema 38 adds internal snap retry state, and 39 adds
     import admission. Schema 40 adds internal storage accounting, 41 adds
     durable geocode state, 42 adds storage limits, 43 adds the account
-    display name, 44 adds trip warning acknowledgements, and 45 removes the
-    single-account guard. Format-3 exports from schema 26 through 45 import because these additions do not change
-    bundle data."""
+    display name, 44 adds trip warning acknowledgements, 45 removes the
+    single-account guard, and 46 makes storage limits optional. Format-3
+    exports from schema 26 through 46 import because these additions do not
+    change bundle data."""
     async def run(pool):
         transport = httpx.ASGITransport(app=_bare_app(pool))
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -1179,6 +1180,7 @@ def test_import_and_dry_run_refuse_positive_net_growth_at_account_ceiling():
 
         await reset_account_db(pool.admin_pool)
         async with pool.admin_pool.connection() as conn:
+            await finite_test_grant(conn, pool.principal.account_id)
             await conn.execute(
                 "UPDATE storage_grants g SET account_limit_bytes = u.actual_bytes + u.reserved_bytes, "
                 "raw_limit_bytes = LEAST(g.raw_limit_bytes, u.actual_bytes + u.reserved_bytes), "
@@ -1229,6 +1231,7 @@ def test_over_capacity_import_keeps_other_account_ingest_available(monkeypatch, 
         async with other.connection() as conn:
             credential = await create_device(conn, "other-account")
         async with pool.admin_pool.connection() as conn:
+            await finite_test_grant(conn, pool.principal.account_id)
             await conn.execute(
                 "UPDATE storage_grants g SET account_limit_bytes = u.actual_bytes + u.reserved_bytes, "
                 "raw_limit_bytes = LEAST(g.raw_limit_bytes, u.actual_bytes + u.reserved_bytes), "

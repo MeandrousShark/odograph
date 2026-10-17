@@ -38,7 +38,8 @@ log = logging.getLogger(__name__)
 # replay receipts. Schema 43 adds accounts.display_name, a column of a table
 # the bundle never carries. Schema 44 adds trip warning acknowledgements,
 # which the bundle deliberately omits. Schema 45 only removes the
-# single-account guard on accounts.
+# single-account guard on accounts. Schema 46 makes protected storage limits
+# optional and adds grant modes.
 # None changes the portable bundle.
 # Keep the tuples explicit so a future migration never becomes cross-schema
 # compatible merely because its version is adjacent.
@@ -106,6 +107,12 @@ _COMPATIBLE_SCHEMA_TRANSITIONS = {
     (3, 31, 45), (3, 32, 45), (3, 33, 45), (3, 34, 45), (3, 35, 45),
     (3, 36, 45), (3, 37, 45), (3, 38, 45), (3, 39, 45), (3, 40, 45),
     (3, 41, 45), (3, 42, 45), (3, 43, 45), (3, 44, 45), (3, 45, 45),
+    (1, 21, 46), (2, 22, 46), (2, 23, 46), (2, 24, 46), (2, 25, 46),
+    (3, 26, 46), (3, 27, 46), (3, 28, 46), (3, 29, 46), (3, 30, 46),
+    (3, 31, 46), (3, 32, 46), (3, 33, 46), (3, 34, 46), (3, 35, 46),
+    (3, 36, 46), (3, 37, 46), (3, 38, 46), (3, 39, 46), (3, 40, 46),
+    (3, 41, 46), (3, 42, 46), (3, 43, 46), (3, 44, 46), (3, 45, 46),
+    (3, 46, 46),
 }
 
 

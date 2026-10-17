@@ -9,6 +9,22 @@ reproduced here.
 
 ## [Unreleased]
 
+### Changed
+
+- Storage limits are off unless `STORAGE_ACCOUNT_LIMIT_BYTES` is set. Without
+  it no account has an allowance, nothing is refused for storage, and
+  Settings shows usage only. Set `STORAGE_ACCOUNT_LIMIT_BYTES=2147483648` to
+  keep the 1.0 limits; raw and enhancement limits then default to 256 MiB and
+  128 MiB. Setting either sub-limit without an account limit refuses startup.
+  See [Upgrading from 1.0](docs/upgrading.md#upgrading-from-10).
+- The administrator account never has a storage limit and uses none of the
+  instance budget. With an account limit set, the budget funds member
+  accounts only.
+- A restart applies the configured default only to accounts that follow it.
+  Migration 046 (class `rewrite`) makes existing administrator grants
+  unlimited and every member grant follow the default.
+- Storage messages for members say to ask an administrator for more space.
+
 ## [1.0.0] - 2026-10-16
 
 ### Added

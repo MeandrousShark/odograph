@@ -59,3 +59,31 @@ def test_over_budget_display_preserves_usage_above_limit_and_recovery_options():
 def test_healthy_shell_has_no_warning_or_recovery_banner():
     body = _render(_usage())
     assert 'aria-label="Storage allowance"' not in body
+
+
+def test_unlimited_account_shows_usage_only():
+    body = _render(_usage(account_limit_bytes=None, raw_limit_bytes=None,
+                          enhancement_limit_bytes=None), "settings.html")
+    assert "This account has no storage limit." in body
+    assert "768 bytes used" in body and "128 bytes used" in body and "64 bytes used" in body
+    assert "<progress" not in body
+    assert "%)" not in body
+    assert "Nearly full" not in body and "allowance</p>" not in body
+    assert "ask an administrator for more space" not in body
+    assert 'aria-label="Storage allowance"' not in body
+
+
+def test_unlimited_sub_limit_hides_only_that_bar():
+    body = _render(_usage(raw_limit_bytes=None), "settings.html")
+    assert "This account has no storage limit." not in body
+    assert 'aria-label="All saved data usage"' in body
+    assert 'aria-label="Tracking messages usage"' not in body
+    assert "128 bytes used" in body
+    assert 'aria-label="Road matching and saved addresses usage"' in body
+    assert "ask an administrator for more space" in body
+
+
+def test_storage_recovery_points_members_at_an_administrator():
+    body = _render(_usage(warning=True), "settings.html")
+    assert "ask an administrator for more space" in body
+    assert "ask the operator" not in body

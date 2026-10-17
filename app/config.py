@@ -22,7 +22,7 @@ MIN_SESSION_SECRET_LENGTH = 32
 # app/auth.py as the getattr fallback for test doubles whose config double
 # predates this field.
 DEFAULT_ACCOUNT_AVATAR_MAX_BYTES = 512000
-DEFAULT_STORAGE_ACCOUNT_LIMIT_BYTES = 2 * 1024 ** 3
+# Sub-limit defaults apply only when STORAGE_ACCOUNT_LIMIT_BYTES is set.
 DEFAULT_STORAGE_RAW_LIMIT_BYTES = 256 * 1024 ** 2
 DEFAULT_STORAGE_ENHANCEMENT_LIMIT_BYTES = 128 * 1024 ** 2
 DEFAULT_STORAGE_INSTANCE_BUDGET_BYTES = 12 * 1024 ** 3
@@ -77,6 +77,20 @@ def _storage_bytes(name: str, default: int) -> int:
     if value <= 0 or value > 2 ** 63 - 1:
         raise RuntimeError(f"{name} must be a positive bigint-sized integer")
     return value
+
+
+def _storage_limits() -> tuple[int | None, int | None, int | None]:
+    """Account, raw and enhancement limits. No account limit means no limits."""
+    if os.environ.get("STORAGE_ACCOUNT_LIMIT_BYTES", "") == "":
+        for name in ("STORAGE_RAW_LIMIT_BYTES", "STORAGE_ENHANCEMENT_LIMIT_BYTES"):
+            if os.environ.get(name, "") != "":
+                raise RuntimeError(f"{name} requires STORAGE_ACCOUNT_LIMIT_BYTES to be set")
+        return None, None, None
+    limits = [_storage_bytes("STORAGE_ACCOUNT_LIMIT_BYTES", 0)]
+    for name, default in (("STORAGE_RAW_LIMIT_BYTES", DEFAULT_STORAGE_RAW_LIMIT_BYTES),
+                          ("STORAGE_ENHANCEMENT_LIMIT_BYTES", DEFAULT_STORAGE_ENHANCEMENT_LIMIT_BYTES)):
+        limits.append(_storage_bytes(name, default) if os.environ.get(name, "") != "" else default)
+    return tuple(limits)
 
 
 @dataclass
@@ -147,9 +161,9 @@ class Config:
     hsts_max_age: int
     portable_import_max_bytes: int
     account_avatar_max_bytes: int
-    storage_account_limit_bytes: int = DEFAULT_STORAGE_ACCOUNT_LIMIT_BYTES
-    storage_raw_limit_bytes: int = DEFAULT_STORAGE_RAW_LIMIT_BYTES
-    storage_enhancement_limit_bytes: int = DEFAULT_STORAGE_ENHANCEMENT_LIMIT_BYTES
+    storage_account_limit_bytes: int | None = None
+    storage_raw_limit_bytes: int | None = None
+    storage_enhancement_limit_bytes: int | None = None
     storage_instance_budget_bytes: int = DEFAULT_STORAGE_INSTANCE_BUDGET_BYTES
     storage_instance_reserve_bytes: int = DEFAULT_STORAGE_INSTANCE_RESERVE_BYTES
     preparation_spool_dir: str = ""
@@ -196,8 +210,11 @@ class Config:
     def __post_init__(self):
         from app.capacity import validate_capacity_config
         validate_capacity_config(self)
-        if (self.storage_raw_limit_bytes > self.storage_account_limit_bytes
-                or self.storage_enhancement_limit_bytes > self.storage_account_limit_bytes
+        account = self.storage_account_limit_bytes
+        sublimits = (self.storage_raw_limit_bytes, self.storage_enhancement_limit_bytes)
+        if account is None and any(limit is not None for limit in sublimits):
+            raise RuntimeError("storage sub-limits require STORAGE_ACCOUNT_LIMIT_BYTES to be set")
+        if (any(limit is not None and limit > account for limit in sublimits)
                 or self.storage_instance_reserve_bytes >= self.storage_instance_budget_bytes):
             raise RuntimeError("storage limits must fit account and instance allowances")
 
@@ -359,13 +376,12 @@ class Config:
         if not 2 <= osrm_max_coords <= 10_000:
             raise RuntimeError("OSRM_MAX_COORDS must be an integer from 2 through 10000")
 
+        account_limit, raw_limit, enhancement_limit = _storage_limits()
+
         return cls(
-            storage_account_limit_bytes=_storage_bytes(
-                "STORAGE_ACCOUNT_LIMIT_BYTES", DEFAULT_STORAGE_ACCOUNT_LIMIT_BYTES),
-            storage_raw_limit_bytes=_storage_bytes(
-                "STORAGE_RAW_LIMIT_BYTES", DEFAULT_STORAGE_RAW_LIMIT_BYTES),
-            storage_enhancement_limit_bytes=_storage_bytes(
-                "STORAGE_ENHANCEMENT_LIMIT_BYTES", DEFAULT_STORAGE_ENHANCEMENT_LIMIT_BYTES),
+            storage_account_limit_bytes=account_limit,
+            storage_raw_limit_bytes=raw_limit,
+            storage_enhancement_limit_bytes=enhancement_limit,
             storage_instance_budget_bytes=_storage_bytes(
                 "STORAGE_INSTANCE_BUDGET_BYTES", DEFAULT_STORAGE_INSTANCE_BUDGET_BYTES),
             storage_instance_reserve_bytes=_storage_bytes(

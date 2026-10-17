@@ -421,12 +421,14 @@ Imports must fit the account's transaction-final allowance. Dry run validates
 that allowance without retaining data or charges; a failed import rolls back
 the entire import, including settings.
 
-Settings also shows your logical storage allowance, including capacity reserved
-for processing accepted location fixes. Warnings begin at 80% of the account,
-raw-message, or optional-enhancement allowance. At a ceiling, growth pauses;
-existing history, exports, sign-in, recovery and changes that do not increase
-usage remain available. Ask the operator to raise capacity, or export a copy
-and deliberately remove unneeded data. Odograph never silently deletes trips
+Settings also shows your logical storage usage, including capacity reserved
+for processing accepted location fixes. Storage limits are optional and off
+unless the operator configures them; administrators never have one. When your
+account has a limit, warnings begin at 80% of the account, raw-message, or
+optional-enhancement allowance. At a ceiling, growth pauses; existing history,
+exports, sign-in, recovery and changes that do not increase usage remain
+available. Ask an administrator to raise the limit, or export a copy and
+deliberately remove unneeded data. Odograph never silently deletes trips
 to make space. Raw-message retention can free allowance without deleting trips.
 
 Optional route/address work pauses independently when its allowance is full.

@@ -226,6 +226,17 @@ FUNCTION_SPECS = tuple(
     for spec in FUNCTION_SPECS
 ) + WARNING_ACK_FUNCTION_SPECS
 STORAGE_FUNCTIONS += WARNING_ACK_FUNCTIONS
+LIMIT_MODE_FUNCTIONS = (
+    "public.storage_grant_account()", "public.storage_check_ceiling()",
+    "public.storage_configure_limits(bigint,bigint,bigint,bigint,bigint)",
+    "public.storage_instance_status()", "public.storage_geocode_room(bigint,bigint)",
+    "public.geocode_refresh_capacity_pause(bigint)",
+)
+FUNCTION_SPECS = tuple(
+    replace(spec, source="046_storage_limit_modes.sql")
+    if spec.signature in LIMIT_MODE_FUNCTIONS else spec
+    for spec in FUNCTION_SPECS
+)
 FUNCTIONS = {spec.signature: spec.caller for spec in FUNCTION_SPECS}
 FUNCTION_OWNERS = {spec.signature: spec.owner for spec in FUNCTION_SPECS}
 # Superseded by migration 034 but never dropped. A --no-privileges restore
@@ -251,6 +262,8 @@ def _contract_function_specs(schema_version: int) -> tuple[FunctionSpec, ...]:
                       else "041_geocode_progress.sql" if schema_version >= 41
                       else "040_storage_accounting.sql")
             spec = replace(spec, source=source)
+        if schema_version < 46 and spec.signature in LIMIT_MODE_FUNCTIONS:
+            spec = replace(spec, source="042_storage_ceiling.sql")
         if schema_version < 42 and spec.signature == "public.reconcile_storage_usage()":
             spec = replace(spec, source="040_storage_accounting.sql")
         if schema_version == 41 and spec.signature in (
@@ -661,7 +674,7 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
         await _validate_geocode_schema(conn, schema_version)
         await _validate_geocode_indexes(conn, schema_version)
     if schema_version >= 42 and "public.storage_find_replay(bigint,text,text,bytea,text)" in contract_functions:
-        await _validate_s2_schema(conn)
+        await _validate_s2_schema(conn, schema_version)
     specs = [spec for spec in _contract_function_specs(schema_version) if spec.signature in contract_functions]
     cur = await conn.execute(
         "SELECT s.signature,pg_get_userbyid(p.proowner),p.prosecdef,p.proconfig,p.prosrc,l.lanname,p.provolatile "
@@ -746,13 +759,14 @@ async def _effective_rights(conn, roles, tables, functions) -> _EffectiveRights:
     return _EffectiveRights(database, table, column, function, sequences, sequence, state)
 
 
-async def _validate_s2_schema(conn) -> None:
+async def _validate_s2_schema(conn, schema_version: int = 46) -> None:
+    limit_modes = schema_version >= 46
     columns = {
         "storage_policy": ("id", "account_default_bytes", "raw_default_bytes",
                            "enhancement_default_bytes", "instance_budget_bytes",
                            "instance_reserve_bytes"),
         "storage_grants": ("account_id", "account_limit_bytes", "raw_limit_bytes",
-                           "enhancement_limit_bytes"),
+                           "enhancement_limit_bytes") + (("limit_mode",) if limit_modes else ()),
         "storage_quota_baseline": ("account_id", "transaction_id", "actual_bytes",
                                    "reserved_bytes", "raw_bytes", "enhancement_bytes"),
         "raw_replay_receipts": ("account_id", "raw_message_id", "namespace_kind",
@@ -775,16 +789,21 @@ async def _validate_s2_schema(conn) -> None:
     _require_contract(found.get("trips") == [
         ("snap_capacity_needed_bytes", "bigint", True, "0", "", "")],
         "S2 snap capacity column")
+    # Limits are optional from schema 46: NULL means no limit for that measure.
+    limits_required = not limit_modes
     expected_types = {
-        "storage_policy": ("smallint",) + ("bigint",) * 5,
-        "storage_grants": ("bigint",) * 4,
-        "storage_quota_baseline": ("bigint", "xid8") + ("bigint",) * 4,
-        "raw_replay_receipts": ("bigint", "bigint", "text", "text", "bytea"),
+        "storage_policy": (("smallint", True),) + (("bigint", limits_required),) * 3 + (("bigint", True),) * 2,
+        "storage_grants": (("bigint", True),) + (("bigint", limits_required),) * 3
+            + ((("text", True),) if limit_modes else ()),
+        "storage_quota_baseline": tuple((data_type, True) for data_type in
+                                        ("bigint", "xid8") + ("bigint",) * 4),
+        "raw_replay_receipts": tuple((data_type, True) for data_type in
+                                     ("bigint", "bigint", "text", "text", "bytea")),
     }
     for table, expected in expected_types.items():
         _require_contract(tuple((row[1], row[2], row[3], row[4], row[5])
                                 for row in found[table]) ==
-                          tuple((data_type, True, None, "", "") for data_type in expected),
+                          tuple((data_type, required, None, "", "") for data_type, required in expected),
                           f"S2 column definition: {table}")
     constraints = {
         "raw_messages_account_id_id_key": "UNIQUE (account_id, id)",
@@ -816,6 +835,20 @@ async def _validate_s2_schema(conn) -> None:
         "storage_quota_baseline_pkey": "PRIMARY KEY (account_id)",
         "trips_snap_capacity_needed_bytes_check": "CHECK ((snap_capacity_needed_bytes >= 0))",
     }
+    if limit_modes:
+        constraints.update({
+            "storage_policy_sublimit_check":
+                "CHECK (((account_default_bytes IS NOT NULL) OR "
+                "((raw_default_bytes IS NULL) AND (enhancement_default_bytes IS NULL))))",
+            "storage_grants_limit_mode_check":
+                "CHECK ((limit_mode = ANY (ARRAY['default'::text, 'custom'::text, 'unlimited'::text])))",
+            "storage_grants_sublimit_check":
+                "CHECK (((account_limit_bytes IS NOT NULL) OR "
+                "((raw_limit_bytes IS NULL) AND (enhancement_limit_bytes IS NULL))))",
+            "storage_grants_mode_limit_check":
+                "CHECK ((((limit_mode <> 'unlimited'::text) OR (account_limit_bytes IS NULL)) AND "
+                "((limit_mode <> 'custom'::text) OR (account_limit_bytes IS NOT NULL))))",
+        })
     cur = await conn.execute(
         "SELECT co.conname,pg_get_constraintdef(co.oid),co.convalidated,co.condeferrable,co.condeferred "
         "FROM pg_constraint co JOIN pg_class c ON c.oid=co.conrelid "
@@ -1059,6 +1092,18 @@ async def _validate_storage_triggers(conn, schema_version: int = 44) -> None:
                           f"storage trigger definition: {table}.{name}")
 
 
+async def _check_storage_grants(conn) -> None:
+    """One policy row, a grant for every account, and finite grants funded."""
+    cur = await conn.execute(
+        "SELECT (SELECT COUNT(*) FROM public.storage_policy)=1 "
+        "AND NOT EXISTS(SELECT 1 FROM public.accounts a LEFT JOIN public.storage_grants g "
+        "ON g.account_id=a.id WHERE g.account_id IS NULL) "
+        "AND (SELECT COALESCE(SUM(g.account_limit_bytes),0) FROM public.storage_grants g) "
+        "<= (SELECT p.instance_budget_bytes-p.instance_reserve_bytes "
+        "FROM public.storage_policy p WHERE p.id=1)")
+    _require_contract(await cur.fetchone() == (True,), "storage grant data")
+
+
 def _function_body(source: str, signature: str) -> str:
     name, arguments = signature.rstrip(")").split("(", 1)
     wanted = arguments.split(",") if arguments else []
@@ -1129,14 +1174,12 @@ async def prepare_application_roles(database_url: str, *, restoring: bool = Fals
                 cur = await conn.execute("SELECT public.storage_usage_consistent()")
                 _require_contract(await cur.fetchone() == (True,), "storage accounting data")
             if schema_version >= 42:
+                await _check_storage_grants(conn)
+            if schema_version >= 46:
                 cur = await conn.execute(
-                    "SELECT (SELECT COUNT(*) FROM public.storage_policy)=1 "
-                    "AND NOT EXISTS(SELECT 1 FROM public.accounts a LEFT JOIN public.storage_grants g "
-                    "ON g.account_id=a.id WHERE g.account_id IS NULL) "
-                    "AND (SELECT COALESCE(SUM(g.account_limit_bytes),0) FROM public.storage_grants g) "
-                    "<= (SELECT p.instance_budget_bytes-p.instance_reserve_bytes "
-                    "FROM public.storage_policy p WHERE p.id=1)")
-                _require_contract(await cur.fetchone() == (True,), "storage grant data")
+                    "SELECT NOT EXISTS(SELECT 1 FROM public.accounts a JOIN public.storage_grants g "
+                    "ON g.account_id=a.id WHERE a.is_admin AND g.limit_mode<>'unlimited')")
+                _require_contract(await cur.fetchone() == (True,), "administrator storage grant")
             if storage_config is not None and schema_version >= 42:
                 await conn.execute(
                     "SELECT public.storage_configure_limits(%s,%s,%s,%s,%s)",
@@ -1146,6 +1189,16 @@ async def prepare_application_roles(database_url: str, *, restoring: bool = Fals
                      storage_config.storage_instance_budget_bytes,
                      storage_config.storage_instance_reserve_bytes),
                 )
+            if schema_version >= 46:
+                # After any configured change, so a new default never refuses startup.
+                await _check_storage_grants(conn)
+                cur = await conn.execute(
+                    "SELECT NOT EXISTS(SELECT 1 FROM public.storage_grants g "
+                    "CROSS JOIN public.storage_policy p WHERE p.id=1 AND g.limit_mode='default' "
+                    "AND (g.account_limit_bytes IS DISTINCT FROM p.account_default_bytes "
+                    "OR g.raw_limit_bytes IS DISTINCT FROM p.raw_default_bytes "
+                    "OR g.enhancement_limit_bytes IS DISTINCT FROM p.enhancement_default_bytes))")
+                _require_contract(await cur.fetchone() == (True,), "default storage grant policy")
             return state
     except _RolesUsedElsewhere:
         raise

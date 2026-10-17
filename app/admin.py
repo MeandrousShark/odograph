@@ -25,7 +25,6 @@ from app.auth import (
 )
 from app.capacity_routes import AdmissionRoute, capacity_policy, release_authentication
 from app.capacity import CapacityBusy
-from app.config import DEFAULT_STORAGE_ACCOUNT_LIMIT_BYTES
 from app.invitations import (
     InvitationUnavailable,
     invitation_mail_admission,
@@ -42,8 +41,9 @@ log = logging.getLogger(__name__)
 MAX_ADMIN_FORM_BYTES = 4096
 INVITATION_CAPACITY_NOTICE = (
     "No invitation was created. The instance storage budget has no room for another "
-    "account. Raise STORAGE_INSTANCE_BUDGET_BYTES and restart Odograph, or purge an "
-    "account that is no longer needed, then try again."
+    "account at the default account limit. Raise STORAGE_INSTANCE_BUDGET_BYTES or lower "
+    "STORAGE_ACCOUNT_LIMIT_BYTES and restart Odograph, or purge an account that is no "
+    "longer needed, then try again."
 )
 
 
@@ -389,8 +389,7 @@ def make_router() -> APIRouter:
         actor = _actor(user, request)
         async with control_connection(request.app.state.control_pool) as conn:
             fundable = await account_grant_fundable(
-                conn, getattr(request.app.state.config, "storage_account_limit_bytes",
-                              DEFAULT_STORAGE_ACCOUNT_LIMIT_BYTES),
+                conn, getattr(request.app.state.config, "storage_account_limit_bytes", None),
             )
         if not fundable:
             return await _render_accounts(

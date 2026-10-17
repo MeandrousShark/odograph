@@ -525,6 +525,18 @@ async def seed_tracking_device(conn, label="phone", *, device_id=None) -> int:
     return stream
 
 
+async def finite_test_grant(conn, owner: int) -> None:
+    """Give `owner` the 1.0 finite limits as a custom grant, before a test narrows them.
+
+    Fixture owners are administrators, whose grants are unlimited.
+    `conn` must bypass row-level security.
+    """
+    await conn.execute(
+        "UPDATE storage_grants SET limit_mode='custom',account_limit_bytes=%s,"
+        "raw_limit_bytes=%s,enhancement_limit_bytes=%s WHERE account_id=%s",
+        (2 * 1024 ** 3, 256 * 1024 ** 2, 128 * 1024 ** 2, owner))
+
+
 # Every collected case must carry exactly one of these three, so a coder
 # session can select a cheap subset instead of the full suite (enforced by
 # tests/test_tier_markers.py's
