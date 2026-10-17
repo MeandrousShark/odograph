@@ -97,13 +97,18 @@ hours; per administrator, 10 per 15 minutes and 50 per 24 hours.
 
 ### Account limit
 
-Every account, the administrator included, receives a storage allowance funded
-from the instance budget. On the defaults that funds five accounts. When no
-allowance is left, creating an invitation is refused with a message naming
-`STORAGE_INSTANCE_BUDGET_BYTES`, and an invitation accepted after the budget
-ran out is refused without being used up. To admit more accounts, raise
-`STORAGE_INSTANCE_BUDGET_BYTES` and restart, or purge an account that is no
-longer needed. See [Logical storage accounting](configuration.md#logical-storage-accounting).
+Storage limits are off by default, so the number of member accounts is not
+limited by storage. The administrator account never has a storage limit.
+
+When `STORAGE_ACCOUNT_LIMIT_BYTES` is set, each member account receives that
+allowance, funded from the instance budget. With a 2 GiB account limit, the
+default budget funds five members. When no allowance is left, creating an
+invitation is refused with a message naming `STORAGE_INSTANCE_BUDGET_BYTES`,
+and an invitation accepted after the budget ran out is refused without being
+used up. To admit more accounts, raise `STORAGE_INSTANCE_BUDGET_BYTES` or lower
+`STORAGE_ACCOUNT_LIMIT_BYTES` and restart, or purge an account that is no
+longer needed. A member who reaches their allowance is told to ask an
+administrator. See [Logical storage accounting](configuration.md#logical-storage-accounting).
 
 ### Disable and re-enable an account
 

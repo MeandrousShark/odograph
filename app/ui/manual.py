@@ -457,7 +457,7 @@ def register(router: APIRouter) -> None:
                     if usage["account_blocked"]:
                         raise HTTPException(
                             status_code=503,
-                            detail="Storage allowance reached. Ask the operator to raise it, "
+                            detail="Storage allowance reached. Ask an administrator to raise it, "
                                    "or remove unneeded data before adding a route.",
                         )
                     endpoints = await _resolve_manual_route_endpoints(

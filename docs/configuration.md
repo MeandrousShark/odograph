@@ -105,22 +105,35 @@ request connections cannot change counters directly or repair drift.
 
 | Variable | Default | Purpose |
 | --- | ---: | --- |
-| `STORAGE_ACCOUNT_LIMIT_BYTES` | `2147483648` (2 GiB) | Default allowance for each account, including stored data and prepaid core processing. |
-| `STORAGE_RAW_LIMIT_BYTES` | `268435456` (256 MiB) | Raw messages and their exact-replay receipts; a subset of the account allowance. |
-| `STORAGE_ENHANCEMENT_LIMIT_BYTES` | `134217728` (128 MiB) | Optional snapped geometry and cached addresses; also a subset of the account allowance. |
+| `STORAGE_ACCOUNT_LIMIT_BYTES` | unset (no limit) | Default allowance for each member account, including stored data and prepaid core processing. Unset or empty turns storage limits off. |
+| `STORAGE_RAW_LIMIT_BYTES` | `268435456` (256 MiB) when an account limit is set | Raw messages and their exact-replay receipts; a subset of the account allowance. |
+| `STORAGE_ENHANCEMENT_LIMIT_BYTES` | `134217728` (128 MiB) when an account limit is set | Optional snapped geometry and cached addresses; also a subset of the account allowance. |
 | `STORAGE_INSTANCE_BUDGET_BYTES` | `12884901888` (12 GiB) | Total funded logical grant budget. This is not database free space. |
 | `STORAGE_INSTANCE_RESERVE_BYTES` | `2147483648` (2 GiB) | Unallocated logical reserve, unavailable for ordinary account growth. |
 
-All values must be positive integers. Raw and enhancement limits cannot exceed
-the account limit; reserve must be smaller than budget. At validated restart,
-the default grant applies to every extant account, including disabled accounts.
-The sum of grants must fit budget minus reserve, or startup refuses to serve.
-Account creation acquires a funded grant before any account state commits.
-Disabled accounts retain their grant until actual purge. The grant budget is
-also the account limit: on the defaults, budget minus reserve funds five
-2 GiB accounts, the administrator included. Invitations are refused while no
-grant is fundable; raise `STORAGE_INSTANCE_BUDGET_BYTES` and restart to admit
-more accounts. There is no browser quota editor.
+Storage limits are off unless `STORAGE_ACCOUNT_LIMIT_BYTES` is set. Without
+it, no account has an allowance: writes, imports, route and address
+enhancement and invitations are never refused for storage, and Settings shows
+usage only. Usage is still counted and verified. Setting
+`STORAGE_RAW_LIMIT_BYTES` or `STORAGE_ENHANCEMENT_LIMIT_BYTES` without an
+account limit refuses startup. To keep the 1.0 behavior, set
+`STORAGE_ACCOUNT_LIMIT_BYTES=2147483648`; the raw and enhancement limits then
+default to 256 MiB and 128 MiB.
+
+Set values must be positive integers. Raw and enhancement limits cannot exceed
+the account limit; reserve must be smaller than budget. The administrator
+account never has a storage limit. Each member account either follows the
+instance default or has its own limit. At validated restart, the configured
+default applies to every member account that follows it, including disabled
+accounts; accounts with their own limit keep it. The sum of finite grants must
+fit budget minus reserve, or startup refuses to serve. With an account limit
+set, account creation acquires a funded grant before any account state
+commits, so the budget also limits how many members can join: on the defaults
+with a 2 GiB account limit, budget minus reserve funds five members.
+Invitations are refused while no grant is fundable; raise
+`STORAGE_INSTANCE_BUDGET_BYTES` or lower `STORAGE_ACCOUNT_LIMIT_BYTES` and
+restart to admit more accounts. Disabled accounts retain their grant until
+actual purge.
 
 Lowering allowances never removes history. Positive net growth pauses at a
 ceiling, while reads, exports, sign-in, recovery, cleanup and zero/negative net
@@ -128,8 +141,9 @@ changes remain available. Reserved detector output for accepted points remains
 funded. Raise limits through a validated restart with enough grant budget, or
 deliberately clean up unneeded data; eligible work resumes when capacity returns.
 Settings shows actual/reserved usage, each subset, warnings from 80%, and
-over-budget state. Operator diagnostics expose aggregate grants and counts,
-without another account's history.
+over-budget state for each limited measure. Operator diagnostics expose
+aggregate finite grants and the number of accounts with an allowance, nearing
+one or at one, without another account's history.
 
 At account or enhancement capacity, new optional provider work pauses and
 existing enhancements remain. Trips use raw routes/distances and coordinate

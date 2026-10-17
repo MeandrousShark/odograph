@@ -16,6 +16,7 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from app import admin
 from app.invitations import issue_invitation_record
 from app.accounts import create_admin
+from app.application_roles import prepare_application_roles
 from app.auth import AuthRedirect
 from app.db import make_pool
 from app.ingest import FailedAuthLimiter
@@ -322,10 +323,17 @@ def test_cancelled_invitation_send_owns_its_real_pool_connection(monkeypatch, ba
     asyncio.run(_scenario(check))
 
 
+def _limited_config():
+    return auth_config(TEST_DB, initial_admin_signup=False, dev_no_auth=False,
+                       storage_account_limit_bytes=2 * 1024 ** 3,
+                       storage_raw_limit_bytes=256 * 1024 ** 2,
+                       storage_enhancement_limit_bytes=128 * 1024 ** 2)
+
+
 def test_admin_invitation_issuance_is_refused_when_no_account_grant_is_fundable():
     async def check(owner, pools, account):
-        await fund_account_grants(owner, 1)
-        app = _app(pools)
+        await fund_account_grants(owner, 0)
+        app = _app(pools, config=_limited_config())
         async with await _client(app) as client:
             await client.post(f"/test/session/{account['id']}/1")
             refused = await client.post("/admin/invitations", data={
@@ -339,7 +347,7 @@ def test_admin_invitation_issuance_is_refused_when_no_account_grant_is_fundable(
                 assert await (await conn.execute(
                     "SELECT count(*) FROM invitations")).fetchone() == (0,)
 
-            await fund_account_grants(owner, 2)
+            await fund_account_grants(owner, 1)
             issued = await client.post("/admin/invitations", data={
                 "csrf_token": "route-csrf", "email": "new@example.invalid",
             })
@@ -348,6 +356,24 @@ def test_admin_invitation_issuance_is_refused_when_no_account_grant_is_fundable(
             async with owner.connection() as conn:
                 assert await (await conn.execute(
                     "SELECT count(*) FROM invitations")).fetchone() == (1,)
+    asyncio.run(_scenario(check))
+
+
+def test_admin_invitation_needs_no_funding_without_a_default_account_limit():
+    async def check(owner, pools, account):
+        app = _app(pools)
+        assert app.state.config.storage_account_limit_bytes is None
+        await prepare_application_roles(TEST_DB, storage_config=app.state.config)
+        async with owner.connection() as conn:
+            await conn.execute("UPDATE storage_policy SET instance_budget_bytes=instance_reserve_bytes+1")
+        async with await _client(app) as client:
+            await client.post(f"/test/session/{account['id']}/1")
+            issued = await client.post("/admin/invitations", data={
+                "csrf_token": "route-csrf", "email": "new@example.invalid",
+            })
+            assert issued.status_code == 200
+            assert admin.INVITATION_CAPACITY_NOTICE not in issued.text
+            assert 'id="admin-invitation-token"' in issued.text
     asyncio.run(_scenario(check))
 
 

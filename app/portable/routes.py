@@ -212,8 +212,8 @@ def make_router() -> APIRouter:
                     raise
                 refusal = PortableImportError(
                     "storage_capacity_exceeded",
-                    "The import needs more storage allowance. Raise the account limit or "
-                    "remove existing data, then retry the whole import.",
+                    "The import needs more storage allowance. Ask an administrator to raise "
+                    "the account limit or remove existing data, then retry the whole import.",
                 )
                 return JSONResponse(refusal.to_response(), status_code=refusal.status_code)
 

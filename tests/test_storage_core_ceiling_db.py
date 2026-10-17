@@ -6,6 +6,7 @@ import os
 
 import pytest
 
+from conftest import finite_test_grant
 from app.account_context import account_id
 from app.db import make_pool
 from app.detector.core import Params, Point
@@ -44,6 +45,7 @@ def test_forced_core_reconstruction_preserves_human_rows_at_exact_ceiling():
                 )).fetchall()
                 before = await storage_status(conn)
             async with raw.connection() as conn:
+                await finite_test_grant(conn, owner)
                 await conn.execute("UPDATE storage_grants SET account_limit_bytes=%s,"
                                    "raw_limit_bytes=1,enhancement_limit_bytes=1 WHERE account_id=%s",
                                    (before["total_bytes"], owner))
@@ -125,6 +127,7 @@ def test_restarted_dirty_suffix_and_full_reprocess_fit_exact_account_ceiling():
                 assert before["reserved_bytes"] > 0
                 ceiling = before["total_bytes"]
             async with raw.connection() as conn:
+                await finite_test_grant(conn, owner)
                 await conn.execute(
                     "UPDATE storage_grants SET account_limit_bytes=%s,raw_limit_bytes=1,"
                     "enhancement_limit_bytes=1 WHERE account_id=%s",

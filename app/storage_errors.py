@@ -13,7 +13,7 @@ def register_storage_errors(app):
             raise exc
         return JSONResponse(
             {"detail": "Storage is full. This change wasn't saved. Your existing data is still available. "
-                       "Export a copy before removing data, or ask the operator for more space."},
+                       "Export a copy before removing data, or ask an administrator for more space."},
             status_code=503,
             headers={"Retry-After": "60"},
         )

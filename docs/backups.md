@@ -26,10 +26,11 @@ Logical storage policy, funded grants, usage counters, core-processing
 reserves, and retained-raw replay receipts are included too. Restore
 finalization reconciles usage from stored rows and validates the protected
 accounting and capacity contract. The matching application's next startup
-applies its configured default allowances to every account, including disabled
-accounts. Lower allowances preserve existing data; positive growth stays
-paused until capacity returns. Protect the storage configuration in `.env`
-alongside the other configuration needed for recovery.
+applies its configured default allowances to every account that follows the
+instance default, including disabled accounts; administrator and per-account
+limits are restored as saved. Lower allowances preserve existing data;
+positive growth stays paused until capacity returns. Protect the storage
+configuration in `.env` alongside the other configuration needed for recovery.
 
 Archives made before schema 27 can also contain the configuration message
 that OwnTracks' Publish Settings button sends, which includes the tracker's

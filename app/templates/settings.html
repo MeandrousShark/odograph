@@ -25,13 +25,18 @@
 <section class="settings-section" id="storage-allowance" aria-labelledby="storage-heading">
 <h2 id="storage-heading">Storage allowance</h2>
 <p>This includes saved data and space reserved to turn received location fixes into trips. It differs from the space used by the database on disk.</p>
+{% if storage.account_limit_bytes is none %}<p>This account has no storage limit.</p>{% endif %}
 <div class="storage-allowance-grid">
 {% for label, used, limit in (("All saved data", storage.total_bytes, storage.account_limit_bytes), ("Tracking messages", storage.raw_bytes, storage.raw_limit_bytes), ("Road matching and saved addresses", storage.enhancement_bytes, storage.enhancement_limit_bytes)) %}
   <div class="storage-allowance-item">
     <strong>{{ label }}</strong>
+    {% if limit is none %}
+    <p>{% if used < 1048576 %}{{ used }} bytes{% else %}{{ "%.1f"|format(used / 1048576) }} MiB{% endif %} used</p>
+    {% else %}
     <p>{% if limit < 1048576 %}{{ used }} bytes of {{ limit }} bytes{% else %}{{ "%.1f"|format(used / 1048576) }} MiB of {{ "%.1f"|format(limit / 1048576) }} MiB{% endif %} ({{ "%.1f"|format(100 * used / limit) }}%)</p>
     <progress max="{{ limit }}" value="{{ [used, limit]|min }}" aria-label="{{ label }} usage"></progress>
     {% if used >= limit %}<p class="storage-state">{% if used > limit %}Over allowance{% else %}At allowance{% endif %}</p>{% elif used * 5 >= limit * 4 %}<p class="storage-state">Nearly full</p>{% endif %}
+    {% endif %}
   </div>
 {% endfor %}
 </div>
@@ -44,8 +49,10 @@
 {% if storage.enhancement_paused %}
 <p><strong>Road matching and address lookups are paused.</strong> Trips use their recorded route and distance, with coordinates when no saved address is available. Saved routes and addresses stay available; pending work resumes when there's room.</p>
 {% endif %}
-<p>Export a copy before removing unneeded data, or ask the operator for more space. Tracking-message retention can also free space. Trips aren't deleted automatically to make room.</p>
+{% if storage.account_limit_bytes is not none %}
+<p>Export a copy before removing unneeded data, or ask an administrator for more space. Tracking-message retention can also free space. Trips aren't deleted automatically to make room.</p>
 <p class="muted">An exact tracking-message retry uses no extra space while its original message is kept. After the original is deleted, another retry needs space to save it again.</p>
+{% endif %}
 </section>
 {% endif %}
 

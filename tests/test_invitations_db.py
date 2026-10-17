@@ -555,7 +555,7 @@ async def _assert_capacity_refusal_left_no_state(owner, token, email, accounts):
 
 def test_redemption_beyond_funded_grants_is_a_capacity_refusal_without_partial_state():
     async def check(owner, pools, admin_user):
-        await fund_account_grants(owner, 2)
+        await fund_account_grants(owner, 1)
         async with pools.control.connection() as conn:
             first = await issue_invitation(conn, admin_user, "first@example.invalid")
             second = await issue_invitation(conn, admin_user, "second@example.invalid")
@@ -572,7 +572,7 @@ def test_redemption_beyond_funded_grants_is_a_capacity_refusal_without_partial_s
             with pytest.raises(InvitationUnavailable) as replay:
                 await redeem_invitation(conn, first, "good-password")
             assert not isinstance(replay.value, InvitationCapacityExceeded)
-        await fund_account_grants(owner, 3)
+        await fund_account_grants(owner, 2)
         async with pools.control.connection() as conn:
             assert await redeem_invitation(conn, second, "good-password")
     asyncio.run(_scenario(check))
@@ -607,7 +607,7 @@ def test_only_bootstrap_creates_an_administrator():
 
 def test_invite_route_shows_capacity_message_and_keeps_the_token():
     async def check(owner, pools, admin_user):
-        await fund_account_grants(owner, 1)
+        await fund_account_grants(owner, 0)
         async with pools.control.connection() as conn:
             token = await issue_invitation(conn, admin_user, "member@example.invalid")
         app = _invite_route_app(pools)

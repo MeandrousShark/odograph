@@ -345,7 +345,7 @@ async def _run_capacity_scenario(monkeypatch):
                 token = await issue_invitation(
                     conn, dict(admin, is_admin=True), "invitee@example.invalid",
                 )
-            await fund_account_grants(owner, 1)
+            await fund_account_grants(owner, 0)
             provider = _Provider()
             request = _request(pools, provider)
 

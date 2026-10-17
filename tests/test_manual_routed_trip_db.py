@@ -22,7 +22,7 @@ from app.account_context import account_id
 from personal_support import personal_request
 from app.rates import METERS_PER_MILE
 from app.ui import MANUAL_ROUTE_UNAVAILABLE_NOTICE, make_router
-from conftest import reset_account_db
+from conftest import finite_test_grant, reset_account_db
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to run DB-backed tests")
@@ -336,6 +336,7 @@ def test_full_allowance_skips_manual_provider_and_preserves_existing_data(monkey
         async with pool.connection() as conn:
             usage = await storage_status(conn)
         async with pool.admin_pool.connection() as conn:
+            await finite_test_grant(conn, pool.principal.account_id)
             await conn.execute("UPDATE storage_grants SET account_limit_bytes=%s,"
                                "raw_limit_bytes=1,enhancement_limit_bytes=1 WHERE account_id=%s",
                                (usage["total_bytes"], pool.principal.account_id))

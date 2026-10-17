@@ -29,7 +29,7 @@ from app.db import make_pool
 from app.ingest import FailedAuthLimiter, make_router
 from app.local_auth import hash_password
 from app.tracking import create_device, rotate_credential, revoke_credential
-from conftest import reset_account_db, seed_tracking_device
+from conftest import finite_test_grant, reset_account_db, seed_tracking_device
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = [
@@ -270,6 +270,7 @@ def test_replay_at_raw_ceiling_succeeds_and_new_raw_is_retryable():
         changed = json.dumps({"_type": "waypoint", "name": "changed"}).encode()
         assert (await _post_body(client, first)).status_code == 200
         async with pool.admin_pool.connection() as conn:
+            await finite_test_grant(conn, pool.principal.account_id)
             await conn.execute(
                 "UPDATE storage_grants SET raw_limit_bytes = "
                 "(SELECT raw_bytes FROM account_usage WHERE account_id = %s) "
@@ -289,6 +290,7 @@ def test_replay_at_raw_ceiling_succeeds_and_new_raw_is_retryable():
 def test_rejected_first_message_leaves_no_raw_or_receipt_for_retry():
     async def run(pool, client):
         async with pool.admin_pool.connection() as conn:
+            await finite_test_grant(conn, pool.principal.account_id)
             await conn.execute(
                 "UPDATE storage_grants SET raw_limit_bytes = 1 WHERE account_id = %s",
                 (pool.principal.account_id,),

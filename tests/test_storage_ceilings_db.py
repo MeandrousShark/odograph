@@ -13,8 +13,8 @@ from app.application_roles import _load_state, prepare_application_roles, valida
 from app.db import MIGRATIONS_DIR, make_pool, run_migrations
 from app.role_setup import RoleSetupError
 from app.storage import is_storage_capacity_error, storage_status
-from conftest import (drop_and_recreate_schema, reset_account_db, restore_test_schema,
-                      seed_tracking_device)
+from conftest import (add_test_account, drop_and_recreate_schema, finite_test_grant,
+                      reset_account_db, restore_test_schema, seed_tracking_device)
 
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -38,9 +38,11 @@ def test_funded_grant_exact_boundary_and_overbudget_net_refund():
         async with pool.connection() as conn:
             owner = account_id(conn)
             before = await storage_status(conn)
-            assert before["account_limit_bytes"] == 2 * 1024 ** 3
+            # The fixture owner is the administrator, whose grant is unlimited.
+            assert before["account_limit_bytes"] is None
             assert before["total_bytes"] == before["actual_bytes"] + before["reserved_bytes"]
         async with raw.connection() as conn:
+            await finite_test_grant(conn, owner)
             await conn.execute(
                 "UPDATE storage_grants SET account_limit_bytes=%s,raw_limit_bytes=%s,"
                 "enhancement_limit_bytes=1 WHERE account_id=%s",
@@ -95,6 +97,7 @@ def test_concurrent_device_writes_do_not_overshoot_account_boundary():
                        await seed_tracking_device(conn, "phone-b"))
             before = await storage_status(conn)
         async with raw.connection() as conn:
+            await finite_test_grant(conn, owner)
             await conn.execute(
                 "UPDATE storage_grants SET account_limit_bytes=%s,raw_limit_bytes=130,"
                 "enhancement_limit_bytes=1 "
@@ -142,6 +145,7 @@ def test_maintenance_reconciliation_preserves_existing_overbudget_data(repair_dr
                 "FROM account_usage WHERE account_id=%s", (owner,),
             )).fetchone()
         async with raw.connection() as conn:
+            await finite_test_grant(conn, owner)
             await conn.execute(
                 "UPDATE storage_grants SET account_limit_bytes=1,raw_limit_bytes=1,"
                 "enhancement_limit_bytes=1 WHERE account_id=%s", (owner,),
@@ -184,7 +188,8 @@ def test_maintenance_reconciliation_preserves_existing_overbudget_data(repair_dr
 def test_grant_budget_creation_disable_and_purge_release():
     async def body(raw, pool):
         async with raw.connection() as conn:
-            await conn.execute("UPDATE storage_policy SET instance_budget_bytes=3*2147483648,"
+            # One member grant fits; the administrator's unlimited grant is unfunded.
+            await conn.execute("UPDATE storage_policy SET instance_budget_bytes=2*2147483648,"
                                "instance_reserve_bytes=2147483648 WHERE id=1")
             cur = await conn.execute("SELECT COUNT(*) FROM storage_grants")
             assert (await cur.fetchone())[0] == 1
@@ -210,7 +215,10 @@ def test_grant_budget_creation_disable_and_purge_release():
 
 
 def test_restart_limits_regrant_existing_accounts_and_reject_unfunded_budget():
-    async def body(raw, pool):
+    async def body(raw, admin_pool):
+        async with admin_pool.connection() as conn:
+            admin = account_id(conn)
+        pool = await add_test_account(raw, 77)
         async with pool.connection() as conn:
             owner = account_id(conn)
             before = await storage_status(conn)
@@ -245,6 +253,11 @@ def test_restart_limits_regrant_existing_accounts_and_reject_unfunded_budget():
                                         storage_config=configured(2 * limit + reserve, 2 * limit))
         async with pool.connection() as conn:
             assert (await storage_status(conn))["account_limit_bytes"] == 2 * limit
+        async with raw.connection() as conn:
+            assert await (await conn.execute(
+                "SELECT limit_mode,account_limit_bytes,raw_limit_bytes,enhancement_limit_bytes "
+                "FROM storage_grants WHERE account_id=%s", (admin,))).fetchone() == (
+                "unlimited", None, None, None)
     _run(body)
 
 
@@ -260,6 +273,7 @@ def test_prepaid_core_output_commits_at_account_ceiling():
             )
             before = await storage_status(conn)
         async with raw.connection() as conn:
+            await finite_test_grant(conn, owner)
             await conn.execute(
                 "UPDATE storage_grants SET account_limit_bytes=%s,raw_limit_bytes=1,"
                 "enhancement_limit_bytes=1 WHERE account_id=%s",
@@ -296,6 +310,7 @@ def test_avatar_replacement_and_clear_use_transaction_net_charge():
                                "avatar_updated_at=now() "
                                "WHERE id=%s", (b"abcd", owner))
         async with raw.connection() as conn:
+            await finite_test_grant(conn, owner)
             await conn.execute("UPDATE storage_grants SET account_limit_bytes=%s,"
                                "raw_limit_bytes=1,enhancement_limit_bytes=1 WHERE account_id=%s",
                                (before["total_bytes"] + 4 + 9, owner))
@@ -333,6 +348,76 @@ def test_pre_s2_role_contract_restores_without_new_schema(monkeypatch, tmp_path,
             await prepare_application_roles(TEST_DB)
             async with raw.connection() as conn:
                 await validate_application_contract(conn, await _load_state(conn))
+        finally:
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
+            await restore_test_schema(raw)
+            await raw.close()
+    asyncio.run(scenario())
+
+
+def test_upgrade_from_schema_45_exempts_administrators_and_follows_policy(monkeypatch, tmp_path):
+    gib, mib = 1024 ** 3, 1024 ** 2
+
+    def limits(account, raw, enhancement):
+        return SimpleNamespace(
+            storage_account_limit_bytes=account, storage_raw_limit_bytes=raw,
+            storage_enhancement_limit_bytes=enhancement,
+            storage_instance_budget_bytes=12 * gib, storage_instance_reserve_bytes=2 * gib)
+
+    async def grants(conn):
+        return await (await conn.execute(
+            "SELECT a.is_admin,g.limit_mode,g.account_limit_bytes,g.raw_limit_bytes,"
+            "g.enhancement_limit_bytes FROM storage_grants g JOIN accounts a ON a.id=g.account_id "
+            "ORDER BY a.id")).fetchall()
+
+    async def scenario():
+        raw = make_pool(TEST_DB)
+        await raw.open(wait=True)
+        try:
+            await drop_and_recreate_schema(raw)
+            historical_dir = tmp_path / "migrations"
+            historical_dir.mkdir()
+            for source in sorted(MIGRATIONS_DIR.glob("*.sql")):
+                if int(source.name.split("_", 1)[0]) <= 45:
+                    shutil.copy(source, historical_dir / source.name)
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", historical_dir)
+            await run_migrations(raw)
+            await prepare_application_roles(TEST_DB)
+            async with raw.connection() as conn:
+                await conn.execute("INSERT INTO accounts(id,email,password_hash,is_admin) VALUES "
+                                   "(1,'admin@example.invalid','unused',true),"
+                                   "(2,'member@example.invalid','unused',false)")
+                for owner in (1, 2):
+                    await conn.execute("INSERT INTO raw_messages(account_id,payload) "
+                                       "VALUES(%s,'{\"kept\":true}')", (owner,))
+                usage = await (await conn.execute(
+                    "SELECT * FROM account_usage ORDER BY account_id")).fetchall()
+                assert await (await conn.execute(
+                    "SELECT account_limit_bytes,raw_limit_bytes,enhancement_limit_bytes "
+                    "FROM storage_grants ORDER BY account_id")).fetchall() == [
+                    (2 * gib, 256 * mib, 128 * mib)] * 2
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
+            await run_migrations(raw)
+            async with raw.connection() as conn:
+                assert await grants(conn) == [
+                    (True, "unlimited", None, None, None),
+                    (False, "default", 2 * gib, 256 * mib, 128 * mib)]
+                assert await (await conn.execute(
+                    "SELECT * FROM account_usage ORDER BY account_id")).fetchall() == usage
+                assert (await (await conn.execute("SELECT public.storage_usage_consistent()"))
+                        .fetchone())[0]
+            await prepare_application_roles(TEST_DB, storage_config=limits(None, None, None))
+            async with raw.connection() as conn:
+                assert await grants(conn) == [
+                    (True, "unlimited", None, None, None), (False, "default", None, None, None)]
+            await prepare_application_roles(
+                TEST_DB, storage_config=limits(2 * gib, 256 * mib, 128 * mib))
+            async with raw.connection() as conn:
+                assert await grants(conn) == [
+                    (True, "unlimited", None, None, None),
+                    (False, "default", 2 * gib, 256 * mib, 128 * mib)]
+                assert await (await conn.execute(
+                    "SELECT * FROM account_usage ORDER BY account_id")).fetchall() == usage
         finally:
             monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
             await restore_test_schema(raw)

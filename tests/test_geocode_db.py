@@ -18,7 +18,7 @@ from app.db import make_pool
 from app.geocode import GeoapifyProvider, GeocodeWorker
 from app.storage import storage_status
 from app.ui import TRIP_COLUMNS
-from conftest import reset_account_db, seed_tracking_device
+from conftest import finite_test_grant, reset_account_db, seed_tracking_device
 from app.account_context import account_id
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -107,6 +107,7 @@ def test_geocode_capacity_pause_retains_retry_and_resumes_without_repeat_calls()
                 await seed_tracking_device(conn, DEVICE, device_id=1)
                 await _insert_trip(conn, T0, T0 + timedelta(minutes=1), 47.1, -122.1)
             async with raw.connection() as conn:
+                await finite_test_grant(conn, owner)
                 await conn.execute(
                     "UPDATE storage_grants SET enhancement_limit_bytes=128 WHERE account_id=%s",
                     (owner,),
@@ -186,6 +187,7 @@ def test_geocode_preflight_pause_is_visible_and_resumes_without_provider_probe()
                     "FROM account_usage WHERE account_id=%s", (owner,),
                 )).fetchone()
             async with raw.connection() as conn:
+                await finite_test_grant(conn, owner)
                 await conn.execute(
                     "UPDATE storage_grants SET enhancement_limit_bytes=1 WHERE account_id=%s",
                     (owner,),
@@ -297,6 +299,7 @@ def test_geocode_capacity_race_can_pause_when_discovery_turn_byte_cannot_grow():
                     "SELECT actual_bytes+reserved_bytes FROM account_usage WHERE account_id=%s",
                     (owner,),
                 )).fetchone())[0]
+                await finite_test_grant(conn, owner)
                 await conn.execute(
                     "UPDATE storage_grants SET account_limit_bytes=%s,raw_limit_bytes=1,"
                     "enhancement_limit_bytes=129 WHERE account_id=%s",

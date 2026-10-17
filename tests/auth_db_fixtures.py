@@ -54,11 +54,15 @@ async def bind_auth_test_roles(admin_pool):
     return pools
 
 
-async def fund_account_grants(owner_pool, accounts: int) -> None:
-    """Size the instance budget to fund exactly `accounts` default account grants."""
+async def fund_account_grants(owner_pool, members: int) -> None:
+    """Size the instance budget to fund exactly `members` default member grants.
+
+    The administrator's grant is unlimited and uses no budget. One spare byte
+    keeps the budget above the reserve when `members` is 0.
+    """
     async with owner_pool.connection() as conn:
         await conn.execute(
             "UPDATE storage_policy SET instance_budget_bytes = "
-            "instance_reserve_bytes + %s * account_default_bytes WHERE id = 1",
-            (accounts,),
+            "instance_reserve_bytes + %s * account_default_bytes + 1 WHERE id = 1",
+            (members,),
         )
