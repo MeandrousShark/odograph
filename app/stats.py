@@ -20,8 +20,8 @@ from app.rates import METERS_PER_MILE
 CATEGORY_COLORS = {
     "business": "var(--cat-business)",
     "personal": "var(--cat-personal)",
-    "unclassified": "var(--warn)",
-    "nondeductible": "var(--overlay0)",
+    "unclassified": "var(--cat-unclassified)",
+    "nondeductible": "var(--cat-nondeductible)",
 }
 CATEGORIES = tuple(CATEGORY_COLORS)
 
@@ -58,6 +58,9 @@ class Dashboard:
     places: list[dict]
     unnamed_trip_count: int
     nondeductible_m: float = 0.0
+    # Whether each chart draws a non-deductible bar, so its legend can match.
+    weekly_has_nondeductible: bool = False
+    monthly_has_nondeductible: bool = False
 
     @property
     def total_m(self) -> float:
@@ -259,4 +262,6 @@ def build_dashboard(
         places=places,
         unnamed_trip_count=unnamed_trip_count,
         nondeductible_m=nondeductible_m,
+        weekly_has_nondeductible=any(b.nondeductible_m for b in weekly.values()),
+        monthly_has_nondeductible=any(b.nondeductible_m for b in monthly.values()),
     )

@@ -25,6 +25,12 @@ reproduced here.
   unlimited and every member grant follow the default.
 - Storage messages for members say to ask an administrator for more space.
 
+### Fixed
+
+- Stats: Recent weekly miles now has a legend, and chart bars for
+  Unclassified and Non-deductible use the same colors as their legend
+  swatches and the Dashboard.
+
 ## [1.0.0] - 2026-10-16
 
 ### Added
