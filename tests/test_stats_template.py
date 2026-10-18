@@ -4,15 +4,16 @@ Same make_templates()/.render() convention as tests/test_expenses.py.
 """
 from __future__ import annotations
 
+import re
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 from app.main import make_templates
-from app.stats import Dashboard, build_dashboard
+from app.stats import CATEGORY_COLORS, Dashboard, build_dashboard
 from app.stats_multiyear import MultiYearChart
-from app.stats_trends import ShareTrend
+from app.stats_trends import ShareTrend, build_share_trend
 from app.stats_vehicle import VehicleBreakdown, VehicleStats
 
 TZ = ZoneInfo("America/Los_Angeles")
@@ -216,3 +217,124 @@ def test_monthly_chart_drill_down_anchor_appears_when_link_fn_supplied():
     )
     body = _render(dashboard)
     assert "<a href" in body
+
+
+CSS = (Path(__file__).parents[1] / "static/style.css").read_text()
+LEGEND_LABELS = {
+    "business": "Business", "personal": "Personal",
+    "unclassified": "Unclassified", "nondeductible": "Non-deductible",
+}
+
+
+def _section(body: str, name: str) -> str:
+    match = re.search(rf'<section class="[^"]*stats-{name}-section".*?</section>', body, re.S)
+    assert match, name
+    return match.group(0)
+
+
+def _legend_categories(section: str) -> list[str]:
+    legend = re.search(r'<p class="stats-legend">(.*?)</p>', section, re.S)
+    assert legend, "section has no legend"
+    entries = re.findall(r'<span class="(\w+)">([^<]*)</span>', legend.group(1))
+    for category, label in entries:
+        assert label == LEGEND_LABELS[category]
+    return [category for category, _label in entries]
+
+
+def _bar_categories(section: str) -> set[str]:
+    return set(re.findall(r"<title>[^<]*? (\w+): [\d.]+ mi", section))
+
+
+def _swatch_token(category: str) -> str:
+    rule = re.search(
+        rf"\.stats-legend \.{category}::before \{{ background: ([^;]+); \}}", CSS
+    )
+    assert rule, category
+    return rule.group(1)
+
+
+def _all_category_dashboard() -> Dashboard:
+    week = date(2026, 7, 6)
+    rows = [
+        (week, "business", 1, 1609.344), (week, "personal", 1, 1609.344),
+        (week, "unclassified", 1, 1609.344), (week, "nondeductible", 1, 1609.344),
+    ]
+    return build_dashboard(
+        2026, date(2026, 1, 1), date(2026, 7, 13),
+        [("business", 1, 1.0), ("personal", 1, 1.0), ("unclassified", 1, 1.0), ("nondeductible", 1, 1.0)],
+        rows, [(date(2026, 7, 1), c, n, m) for _d, c, n, m in rows], [], [], 0,
+    )
+
+
+def test_weekly_and_monthly_charts_each_render_a_category_legend():
+    body = _render(_all_category_dashboard())
+    for name in ("weekly", "monthly"):
+        section = _section(body, name)
+        assert _legend_categories(section) == [
+            "business", "personal", "unclassified", "nondeductible"
+        ]
+        assert _bar_categories(section) == set(LEGEND_LABELS)
+
+
+def test_legend_hides_nondeductible_when_the_chart_draws_none():
+    dashboard = build_dashboard(
+        2026, date(2026, 1, 1), date(2026, 7, 13),
+        [("business", 1, 1609.344)],
+        [(date(2026, 7, 6), "business", 1, 1609.344)],
+        [(date(2026, 7, 1), "business", 1, 1609.344)],
+        [], [], 0,
+    )
+    body = _render(dashboard)
+    for name in ("weekly", "monthly"):
+        section = _section(body, name)
+        assert _legend_categories(section) == ["business", "personal", "unclassified"]
+        assert "nondeductible" not in _bar_categories(section)
+
+
+def test_weekly_legend_follows_the_weekly_series_not_the_monthly_one():
+    # January is outside the 12 recent weeks, so only the monthly chart
+    # draws the non-deductible bar.
+    dashboard = build_dashboard(
+        2026, date(2026, 1, 1), date(2026, 7, 13),
+        [("business", 1, 1609.344), ("nondeductible", 1, 1609.344)],
+        [(date(2026, 7, 6), "business", 1, 1609.344)],
+        [(date(2026, 1, 1), "nondeductible", 1, 1609.344)],
+        [], [], 0,
+    )
+    body = _render(dashboard)
+    weekly, monthly = _section(body, "weekly"), _section(body, "monthly")
+    assert "nondeductible" not in _bar_categories(weekly)
+    assert "nondeductible" not in _legend_categories(weekly)
+    assert "nondeductible" in _bar_categories(monthly)
+    assert "nondeductible" in _legend_categories(monthly)
+
+
+def test_bar_fills_use_the_same_tokens_as_legend_swatches():
+    body = _render(_all_category_dashboard())
+    for name in ("weekly", "monthly"):
+        section = _section(body, name)
+        for category in LEGEND_LABELS:
+            fills = re.findall(
+                rf'fill="([^"]+)"><title>[^<]*? {category}: ', section
+            )
+            assert fills, (name, category)
+            assert set(fills) == {CATEGORY_COLORS[category]}
+            assert CATEGORY_COLORS[category] == _swatch_token(category)
+
+
+def test_share_trend_legend_matches_its_bands_and_swatch_tokens():
+    rows = [
+        (2024, 2, "business", 1, 1000.0),
+        (2024, 2, "personal", 1, 1000.0),
+        (2024, 2, "nondeductible", 1, 2000.0),
+        (2024, 5, "business", 1, 1000.0),
+        (2024, 5, "personal", 1, 1000.0),
+    ]
+    for data, expected in ((rows, ["business", "personal", "nondeductible"]), (rows[:2] + rows[3:], ["business", "personal"])):
+        trend = build_share_trend(data, [2024], 12)
+        section = _section(_render(_dashboard(), trend=trend), "trend")
+        assert _legend_categories(section) == expected
+        assert _bar_categories(section) == set(expected)
+        for category in expected:
+            assert f'fill="{CATEGORY_COLORS[category]}"' in section
+            assert CATEGORY_COLORS[category] == _swatch_token(category)

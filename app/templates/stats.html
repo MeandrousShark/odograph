@@ -76,11 +76,12 @@
 <section class="stats-section stats-chart-section stats-weekly-section" aria-labelledby="stats-weekly-heading">
   <h2 id="stats-weekly-heading">Recent weekly miles</h2>
   <div class="chart-scroll">{{ stats.weekly_chart | safe }}</div>
+  {% with show_nondeductible = stats.weekly_has_nondeductible %}{% include "_stats_category_legend.html" %}{% endwith %}
 </section>
 <section class="stats-section stats-chart-section stats-monthly-section" aria-labelledby="stats-monthly-heading">
   <h2 id="stats-monthly-heading">Monthly miles</h2>
   <div class="chart-scroll">{{ stats.monthly_chart | safe }}</div>
-  <p class="stats-legend"><span class="business">Business</span><span class="personal">Personal</span><span class="unclassified">Unclassified</span>{% if stats.nondeductible_m %}<span class="nondeductible">Non-deductible</span>{% endif %}</p>
+  {% with show_nondeductible = stats.monthly_has_nondeductible %}{% include "_stats_category_legend.html" %}{% endwith %}
 </section>
 
 {% if multiyear and multiyear.chart_svg and multiyear.years | length > 1 %}
