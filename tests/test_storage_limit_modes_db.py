@@ -146,7 +146,7 @@ def test_member_grant_funding_and_administrator_exemption():
     _run(body)
 
 
-def test_configure_limits_changes_default_grants_only_and_funds_finite_grants():
+def test_configure_limits_keeps_custom_account_limit_and_funds_finite_grants():
     async def body(raw, admin_pool):
         admin = admin_pool.principal.account_id
         await add_test_account(raw, 77)
@@ -156,10 +156,10 @@ def test_configure_limits_changes_default_grants_only_and_funds_finite_grants():
                 "UPDATE storage_grants SET limit_mode='custom',account_limit_bytes=%s,"
                 "raw_limit_bytes=%s,enhancement_limit_bytes=%s WHERE account_id=78",
                 (GIB, 256 * MIB, 128 * MIB))
-            custom = await _grant(conn, 78)
             await _configure(conn, 3 * GIB, MIB, MIB, 4 * GIB + GIB, GIB)
             assert await _grant(conn, 77) == ("default", 3 * GIB, MIB, MIB)
-            assert await _grant(conn, 78) == custom
+            # Custom grants keep their account limit; sub-limits follow the policy.
+            assert await _grant(conn, 78) == ("custom", GIB, MIB, MIB)
             assert await _grant(conn, admin) == ("unlimited", None, None, None)
         # The finite total after the change, 3 GiB + 1 byte + 1 GiB, exceeds 4 GiB.
         with pytest.raises(psycopg.errors.RaiseException) as refused:
@@ -171,7 +171,7 @@ def test_configure_limits_changes_default_grants_only_and_funds_finite_grants():
             # Without a default only the custom grant is funded.
             await _configure(conn, None, None, None, GIB + GIB, GIB)
             assert await _grant(conn, 77) == ("default", None, None, None)
-            assert await _grant(conn, 78) == custom
+            assert await _grant(conn, 78) == ("custom", GIB, None, None)
             assert await (await conn.execute(
                 "SELECT account_default_bytes,instance_budget_bytes FROM storage_policy")
             ).fetchone() == (None, 2 * GIB)

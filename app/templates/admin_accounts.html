@@ -1,13 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Account administration: Odograph{% endblock %}
 {% block content %}
+{% macro storage_size(value) %}{% if value >= 1073741824 %}{{ "%.2f"|format(value / 1073741824) }} GiB{% elif value >= 1048576 %}{{ "%.1f"|format(value / 1048576) }} MiB{% else %}{{ value }} bytes{% endif %}{% endmacro %}
 
 <div class="settings-page">
 <div class="settings-page-header page-title">
   <div>
     <p class="page-title-eyebrow">Administration</p>
     <h2 id="admin-page-title" class="page-title-heading">Accounts</h2>
-    <p class="page-title-subtitle">Manage login access and invitations. Account activity and trip details stay private to each account.</p>
+    <p class="page-title-subtitle">Manage login access, storage limits and invitations. Account activity and trip details stay private to each account.</p>
   </div>
 </div>
 
@@ -63,7 +64,7 @@
   <table class="admin-card-table" role="table" aria-labelledby="accounts-heading">
     <thead role="rowgroup"><tr role="row">
       <th scope="col" role="columnheader">ID</th><th scope="col" role="columnheader">Display name</th><th scope="col" role="columnheader">Login email</th><th scope="col" role="columnheader">Email verified</th><th scope="col" role="columnheader">Role</th>
-      <th scope="col" role="columnheader">Access</th><th scope="col" role="columnheader">Login methods</th><th scope="col" role="columnheader">Deletion</th><th scope="col" role="columnheader">Recovery</th>
+      <th scope="col" role="columnheader">Access</th><th scope="col" role="columnheader">Login methods</th><th scope="col" role="columnheader">Storage</th><th scope="col" role="columnheader">Deletion</th><th scope="col" role="columnheader">Recovery</th>
     </tr></thead>
     <tbody role="rowgroup">
     {% for account in accounts %}
@@ -90,6 +91,17 @@
           {% elif account.id == user.id %}<span class="muted">Current account</span>{% endif %}
         </td>
         <td role="cell" data-label="Login methods">{% if account.has_password and account.has_oidc %}Password, OIDC{% elif account.has_password %}Password{% elif account.has_oidc %}OIDC{% else %}None{% endif %}</td>
+        <td role="cell" data-label="Storage">
+          {% set storage = account.storage %}
+          {% if storage %}
+          {{ storage_size(storage.used_bytes) }} used<br>
+          {% if storage.is_admin %}No limit (administrator)
+          {% elif storage.account_limit_bytes is none %}{% if storage.limit_mode == "default" %}Instance default: no limit{% else %}No limit{% endif %}
+          {% elif storage.limit_mode == "default" %}Instance default: {{ storage_size(storage.account_limit_bytes) }}
+          {% else %}Custom: {{ storage_size(storage.account_limit_bytes) }}{% endif %}
+          {% if storage.account_limit_bytes is not none and storage.used_bytes > storage.account_limit_bytes %}<br><strong>Over allowance</strong>{% endif %}
+          {% else %}<span class="muted">Unavailable</span>{% endif %}
+        </td>
         <td role="cell" data-label="Deletion">
           {% if account.deletion_deadline %}{{ account.deletion_deadline|local_dt }}{% else %}Not scheduled{% endif %}
         </td>
@@ -105,7 +117,30 @@
       </tr>
       {% if account.id != user.id %}
       <tr role="row" class="admin-account-deletion-row">
-        <td role="cell" colspan="9">
+        <td role="cell" colspan="10">
+          {% set storage = account.storage %}
+          {% if storage and not storage.is_admin %}
+          <details class="admin-account-deletion">
+            <summary>Change storage limit for {{ account.email }}</summary>
+            <div class="admin-account-deletion-panel">
+              <form method="post" action="/admin/accounts/{{ account.id }}/storage-limit" class="admin-deletion-form" data-storage-limit-form>
+                <input type="hidden" name="csrf_token" value="{{ csrf }}">
+                <label>Storage limit
+                  <select name="limit_mode">
+                    <option value="default"{% if storage.limit_mode == "default" %} selected{% endif %}>Instance default ({% if storage.default_limit_bytes is none %}no limit{% else %}{{ storage_size(storage.default_limit_bytes) }}{% endif %})</option>
+                    <option value="unlimited"{% if storage.limit_mode == "unlimited" %} selected{% endif %}>No limit</option>
+                    <option value="custom"{% if storage.limit_mode == "custom" %} selected{% endif %}>Custom</option>
+                  </select>
+                </label>
+                <label>Custom limit in GiB
+                  <input type="number" name="account_gib" step="0.01" min="0.01" max="{{ storage.max_gib }}" inputmode="decimal"{% if storage.custom_gib %} value="{{ storage.custom_gib }}"{% endif %}>
+                </label>
+                <p>{% if storage.max_gib == "0.00" %}The instance storage budget has no room for a custom limit on this account.{% else %}Up to {{ storage.max_gib }} GiB fits the instance storage budget for this account.{% endif %} Leave the size empty unless the limit is custom. Lowering a limit keeps existing data; new data is refused while usage is above it.</p>
+                <button type="submit" class="control">Save storage limit</button>
+              </form>
+            </div>
+          </details>
+          {% endif %}
           {% if not account.deletion_deadline %}
           <details class="admin-account-deletion">
             <summary>Schedule deletion for {{ account.email }}</summary>
@@ -157,7 +192,7 @@
       </tr>
       {% endif %}
     {% else %}
-      <tr role="row"><td role="cell" colspan="9" class="muted">No accounts.</td></tr>
+      <tr role="row"><td role="cell" colspan="10" class="muted">No accounts.</td></tr>
     {% endfor %}
     </tbody>
   </table>
@@ -238,4 +273,19 @@
   </div>
 </section>
 </div>
+<script nonce="{{ csp_nonce }}">
+(function () {
+  // The size is only submitted for a custom limit.
+  document.querySelectorAll("[data-storage-limit-form]").forEach(function (form) {
+    var mode = form.querySelector("select[name=limit_mode]");
+    var size = form.querySelector("input[name=account_gib]");
+    function sync() {
+      size.disabled = mode.value !== "custom";
+      size.required = mode.value === "custom";
+    }
+    mode.addEventListener("change", sync);
+    sync();
+  });
+})();
+</script>
 {% endblock %}

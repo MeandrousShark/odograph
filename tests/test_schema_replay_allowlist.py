@@ -36,6 +36,7 @@ _SCHEMA_REPLAY_MODULE_STEMS = {
     "test_role_setup_db",  # account context scenarios drop the roles
     "test_storage_accounting_db",  # schema 39 forward backfill
     "test_storage_ceilings_db",  # schema 40 and 41 role contracts, upgrade from 45
+    "test_storage_limit_editor_db",  # upgrade from 46
     "test_storage_roles_db",  # committed accounting trigger drift
     "test_upgrade_contract_db",  # historical provisioned upgrades
 }

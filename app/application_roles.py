@@ -237,6 +237,21 @@ FUNCTION_SPECS = tuple(
     if spec.signature in LIMIT_MODE_FUNCTIONS else spec
     for spec in FUNCTION_SPECS
 )
+LIMIT_EDITOR_FUNCTION_SPECS = (
+    FunctionSpec("public.storage_set_account_grant(bigint,bigint,bigint,text,bigint)", CONTROL_ROLE,
+                 "047_storage_limit_editor.sql", MIGRATE_ROLE),
+    FunctionSpec("public.storage_list_account_grants(bigint,bigint)", CONTROL_ROLE,
+                 "047_storage_limit_editor.sql", MIGRATE_ROLE),
+)
+LIMIT_EDITOR_FUNCTIONS = tuple(spec.signature for spec in LIMIT_EDITOR_FUNCTION_SPECS)
+# Migration 047 also replaces storage_configure_limits so custom grants follow
+# the policy sub-limits.
+LIMIT_EDITOR_REPLACED_FUNCTIONS = ("public.storage_configure_limits(bigint,bigint,bigint,bigint,bigint)",)
+FUNCTION_SPECS = tuple(
+    replace(spec, source="047_storage_limit_editor.sql")
+    if spec.signature in LIMIT_EDITOR_REPLACED_FUNCTIONS else spec
+    for spec in FUNCTION_SPECS
+) + LIMIT_EDITOR_FUNCTION_SPECS
 FUNCTIONS = {spec.signature: spec.caller for spec in FUNCTION_SPECS}
 FUNCTION_OWNERS = {spec.signature: spec.owner for spec in FUNCTION_SPECS}
 # Superseded by migration 034 but never dropped. A --no-privileges restore
@@ -251,6 +266,8 @@ STATE_TABLES = ("managed_role_state", "recovery_metadata")
 def _contract_function_specs(schema_version: int) -> tuple[FunctionSpec, ...]:
     specs = []
     for spec in FUNCTION_SPECS:
+        if schema_version < 47 and spec.signature in LIMIT_EDITOR_FUNCTIONS:
+            continue
         if schema_version < 44 and spec.signature in WARNING_ACK_FUNCTIONS:
             continue
         if schema_version < 42 and spec.signature in S2_FUNCTIONS:
@@ -262,6 +279,8 @@ def _contract_function_specs(schema_version: int) -> tuple[FunctionSpec, ...]:
                       else "041_geocode_progress.sql" if schema_version >= 41
                       else "040_storage_accounting.sql")
             spec = replace(spec, source=source)
+        if schema_version < 47 and spec.signature in LIMIT_EDITOR_REPLACED_FUNCTIONS:
+            spec = replace(spec, source="046_storage_limit_modes.sql")
         if schema_version < 46 and spec.signature in LIMIT_MODE_FUNCTIONS:
             spec = replace(spec, source="042_storage_ceiling.sql")
         if schema_version < 42 and spec.signature == "public.reconcile_storage_usage()":
@@ -425,7 +444,8 @@ async def _provision(conn) -> None:
                             and (schema_version >= 42 or table not in S2_TABLES)
                             and (schema_version >= 41 or table not in GEOCODE_TABLES))
     contract_functions = {signature: caller for signature, caller in FUNCTIONS.items()
-                          if (schema_version >= 44 or signature not in WARNING_ACK_FUNCTIONS)
+                          if (schema_version >= 47 or signature not in LIMIT_EDITOR_FUNCTIONS)
+                          and (schema_version >= 44 or signature not in WARNING_ACK_FUNCTIONS)
                           and (schema_version >= 42 or signature not in S2_FUNCTIONS)
                           and (schema_version >= 41 or signature not in GEOCODE_FUNCTIONS)}
     await conn.execute("REVOKE CREATE ON SCHEMA public FROM PUBLIC")
@@ -540,7 +560,8 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
                             and (schema_version >= 42 or table not in S2_TABLES)
                             and (schema_version >= 41 or table not in GEOCODE_TABLES))
     contract_functions = {signature: caller for signature, caller in FUNCTIONS.items()
-                          if (schema_version >= 44 or signature not in WARNING_ACK_FUNCTIONS)
+                          if (schema_version >= 47 or signature not in LIMIT_EDITOR_FUNCTIONS)
+                          and (schema_version >= 44 or signature not in WARNING_ACK_FUNCTIONS)
                           and (schema_version >= 42 or signature not in S2_FUNCTIONS)
                           and (schema_version >= 41 or signature not in GEOCODE_FUNCTIONS)}
     account_update_columns = _account_control_update_columns(schema_version)
@@ -1158,6 +1179,7 @@ async def prepare_application_roles(database_url: str, *, restoring: bool = Fals
                     await _check_contract_functions_exist(
                         conn, (spec.signature for spec in FUNCTION_SPECS
                                if spec.signature in FUNCTIONS and spec.source not in FUNCTION_FILES
+                               and (schema_version >= 47 or spec.signature not in LIMIT_EDITOR_FUNCTIONS)
                                and (schema_version >= 44 or spec.signature not in WARNING_ACK_FUNCTIONS)
                                and (schema_version >= 42 or spec.signature not in S2_FUNCTIONS)
                                and (schema_version >= 41 or spec.signature not in GEOCODE_FUNCTIONS)))
@@ -1199,6 +1221,16 @@ async def prepare_application_roles(database_url: str, *, restoring: bool = Fals
                     "OR g.raw_limit_bytes IS DISTINCT FROM p.raw_default_bytes "
                     "OR g.enhancement_limit_bytes IS DISTINCT FROM p.enhancement_default_bytes))")
                 _require_contract(await cur.fetchone() == (True,), "default storage grant policy")
+            if schema_version >= 47:
+                # Custom sub-limits follow the policy, clamped to the custom limit.
+                cur = await conn.execute(
+                    "SELECT NOT EXISTS(SELECT 1 FROM public.storage_grants g "
+                    "CROSS JOIN public.storage_policy p WHERE p.id=1 AND g.limit_mode='custom' "
+                    "AND (g.raw_limit_bytes IS DISTINCT FROM CASE WHEN p.raw_default_bytes IS NULL "
+                    "THEN NULL ELSE LEAST(p.raw_default_bytes,g.account_limit_bytes) END "
+                    "OR g.enhancement_limit_bytes IS DISTINCT FROM CASE WHEN p.enhancement_default_bytes "
+                    "IS NULL THEN NULL ELSE LEAST(p.enhancement_default_bytes,g.account_limit_bytes) END))")
+                _require_contract(await cur.fetchone() == (True,), "custom storage grant policy")
             return state
     except _RolesUsedElsewhere:
         raise

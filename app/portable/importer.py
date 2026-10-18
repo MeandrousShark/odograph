@@ -39,7 +39,8 @@ log = logging.getLogger(__name__)
 # the bundle never carries. Schema 44 adds trip warning acknowledgements,
 # which the bundle deliberately omits. Schema 45 only removes the
 # single-account guard on accounts. Schema 46 makes protected storage limits
-# optional and adds grant modes.
+# optional and adds grant modes. Schema 47 adds the administrator storage
+# limit editor functions.
 # None changes the portable bundle.
 # Keep the tuples explicit so a future migration never becomes cross-schema
 # compatible merely because its version is adjacent.
@@ -113,6 +114,12 @@ _COMPATIBLE_SCHEMA_TRANSITIONS = {
     (3, 36, 46), (3, 37, 46), (3, 38, 46), (3, 39, 46), (3, 40, 46),
     (3, 41, 46), (3, 42, 46), (3, 43, 46), (3, 44, 46), (3, 45, 46),
     (3, 46, 46),
+    (1, 21, 47), (2, 22, 47), (2, 23, 47), (2, 24, 47), (2, 25, 47),
+    (3, 26, 47), (3, 27, 47), (3, 28, 47), (3, 29, 47), (3, 30, 47),
+    (3, 31, 47), (3, 32, 47), (3, 33, 47), (3, 34, 47), (3, 35, 47),
+    (3, 36, 47), (3, 37, 47), (3, 38, 47), (3, 39, 47), (3, 40, 47),
+    (3, 41, 47), (3, 42, 47), (3, 43, 47), (3, 44, 47), (3, 45, 47),
+    (3, 46, 47), (3, 47, 47),
 }
 
 

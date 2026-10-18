@@ -151,7 +151,7 @@ def test_admin_list_display_name_column():
 
     body = asyncio.run(check()).text
     head = body.split('<thead role="rowgroup">', 1)[1].split("</thead>", 1)[0]
-    assert head.count('role="columnheader"') == 9
+    assert head.count('role="columnheader"') == 10
     assert '<th scope="col" role="columnheader">Display name</th>' in head
     rows = body.split('<tr role="row" class="admin-account-row')[1:]
     assert '<td role="cell" data-label="Display name"></td>' in rows[0]
