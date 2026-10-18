@@ -105,10 +105,36 @@ allowance, funded from the instance budget. With a 2 GiB account limit, the
 default budget funds five members. When no allowance is left, creating an
 invitation is refused with a message naming `STORAGE_INSTANCE_BUDGET_BYTES`,
 and an invitation accepted after the budget ran out is refused without being
-used up. To admit more accounts, raise `STORAGE_INSTANCE_BUDGET_BYTES` or lower
-`STORAGE_ACCOUNT_LIMIT_BYTES` and restart, or purge an account that is no
-longer needed. A member who reaches their allowance is told to ask an
-administrator. See [Logical storage accounting](configuration.md#logical-storage-accounting).
+used up. To admit more accounts, lower or remove member limits in
+**Accounts**, which takes effect immediately, or purge an account that is no
+longer needed. Otherwise raise `STORAGE_INSTANCE_BUDGET_BYTES` or lower
+`STORAGE_ACCOUNT_LIMIT_BYTES` and restart. A member who reaches their
+allowance is told to ask an administrator. See
+[Logical storage accounting](configuration.md#logical-storage-accounting).
+
+### Edit a member's storage limit
+
+The **Storage** column in **Accounts** shows each account's usage and limit.
+An enabled administrator can change a member's limit from **Change storage
+limit** below that member's row. The change takes effect immediately, without
+a restart:
+
+- **Instance default** follows `STORAGE_ACCOUNT_LIMIT_BYTES`, or no limit when
+  it is unset. A restart that changes the default updates these accounts.
+- **No limit** removes the account's limits and uses none of the instance
+  budget.
+- **Custom** sets the account limit in GiB, from 0.01 GiB with up to two
+  decimal places. The raw and enhancement limits follow their configured
+  defaults, capped at the custom limit. A restart keeps the custom account
+  limit and reapplies the configured raw and enhancement defaults to it.
+
+A finite limit must fit the instance budget: budget minus reserve, less every
+other account's finite limit. The form shows the largest size that fits.
+Administrator accounts always have no limit and cannot be edited.
+
+Lowering a limit below current usage keeps all existing data. The member sees
+the account as over its allowance, new data that adds storage is refused, and
+deleting data still works.
 
 ### Disable and re-enable an account
 

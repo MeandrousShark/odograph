@@ -5,6 +5,7 @@ import logging
 from html import escape
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from decimal import Decimal
 from urllib.parse import parse_qs, quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -36,14 +37,34 @@ from app.invitations import (
 from app.mailer import Mailer
 from app.security_mail_preparation import SecurityMailConstructionError, SecurityMailSpec
 from app.storage import account_grant_fundable
+from app.storage_limits import (
+    StorageLimitBusy,
+    StorageLimitUnavailable,
+    StorageLimitUnfunded,
+    list_account_storage,
+    limit_gib,
+    max_custom_gib,
+    parse_custom_gib,
+    set_account_storage_limit,
+)
 
 log = logging.getLogger(__name__)
 MAX_ADMIN_FORM_BYTES = 4096
 INVITATION_CAPACITY_NOTICE = (
     "No invitation was created. The instance storage budget has no room for another "
-    "account at the default account limit. Raise STORAGE_INSTANCE_BUDGET_BYTES or lower "
-    "STORAGE_ACCOUNT_LIMIT_BYTES and restart Odograph, or purge an account that is no "
-    "longer needed, then try again."
+    "account at the default account limit. Lower or remove member storage limits on "
+    "this page, which takes effect immediately, or purge an account that is no longer "
+    "needed. Otherwise raise STORAGE_INSTANCE_BUDGET_BYTES or lower "
+    "STORAGE_ACCOUNT_LIMIT_BYTES and restart Odograph, then try again."
+)
+STORAGE_LIMIT_UNFUNDED_NOTICE = (
+    "Storage limit not changed. The instance storage budget cannot fund it. Choose a "
+    "smaller limit, lower or remove the limit of another member, or raise "
+    "STORAGE_INSTANCE_BUDGET_BYTES and restart Odograph."
+)
+STORAGE_LIMIT_KEPT_DATA = (
+    " Existing data is kept. If usage is above the limit, new data is refused until "
+    "usage is below it."
 )
 
 
@@ -103,9 +124,20 @@ async def _load_page_data(
         accounts = await _metadata_accounts(conn)
         invitations = await list_invitations(conn, actor)
         audit_events = await list_account_security_audit(conn, actor)
+        try:
+            storage = await list_account_storage(conn, actor)
+        except (StorageLimitBusy, StorageLimitUnavailable) as exc:
+            # The rest of the page stays usable; rows show storage as unavailable.
+            log.warning("account storage limits unavailable (%s)", type(exc).__name__)
+            storage = {}
     checked_at = datetime.now(timezone.utc)
     for account in accounts:
         account["purge_available"] = bool(account["deletion_deadline"] and account["deletion_deadline"] <= checked_at)
+        account["storage"] = storage.get(account["id"])
+        if account["storage"] is not None:
+            account["storage"]["max_gib"] = str(max_custom_gib(account["storage"]["fundable_bytes"]))
+            if account["storage"]["limit_mode"] == "custom":
+                account["storage"]["custom_gib"] = str(limit_gib(account["storage"]["account_limit_bytes"]))
     for invitation in invitations:
         if invitation["consumed_at"] is not None:
             invitation["status"] = "Accepted"
@@ -282,6 +314,63 @@ async def _set_account_enabled_route(
     return await _render_accounts(request, user, notice=notice, committed=True)
 
 
+async def _storage_limit_route(request: Request, user: dict, account_id: int) -> Response:
+    form = await _read_form(request, {"csrf_token", "limit_mode"}, optional_fields={"account_gib"})
+    check_form_csrf(request, form["csrf_token"])
+    if account_id < 1:
+        raise HTTPException(status_code=404)
+    mode = form["limit_mode"]
+    size = form.get("account_gib", "")
+    if mode not in ("default", "custom", "unlimited"):
+        return await _render_accounts(request, user, notice="Choose a storage limit option.", status_code=400)
+    if mode != "custom" and size != "":
+        return await _render_accounts(
+            request, user, notice="Leave the size empty unless the limit is custom.", status_code=400,
+        )
+    if mode == "custom" and size == "":
+        return await _render_accounts(request, user, notice="Enter a size for a custom limit.", status_code=400)
+    account_bytes = parse_custom_gib(size) if mode == "custom" else None
+    if mode == "custom" and account_bytes is None:
+        return await _render_accounts(
+            request, user,
+            notice="Enter a custom limit of at least 0.01 GiB, with at most two decimal places.",
+            status_code=400,
+        )
+    actor = _actor(user, request)
+    refusal = None
+    try:
+        async with control_connection(request.app.state.control_pool, lane="lifecycle") as conn:
+            target = (await list_account_storage(conn, actor)).get(account_id)
+            if target is not None and target["is_admin"] and mode != "unlimited":
+                refusal = ("Administrator accounts always have no storage limit.", 409)
+            elif mode == "custom" and target is not None and account_bytes > target["fundable_bytes"]:
+                room = max_custom_gib(target["fundable_bytes"])
+                refusal = (f"Enter a custom limit from 0.01 GiB to {room} GiB. The instance "
+                           "storage budget cannot fund more for this account." if room >= Decimal("0.01")
+                           else STORAGE_LIMIT_UNFUNDED_NOTICE, 409)
+            else:
+                outcome = await set_account_storage_limit(conn, actor, account_id, mode, account_bytes)
+    except StorageLimitUnfunded:
+        refusal = (STORAGE_LIMIT_UNFUNDED_NOTICE, 409)
+    except StorageLimitBusy:
+        refusal = ("Storage limits are busy. Try again.", 503)
+    except StorageLimitUnavailable:
+        refusal = ("Storage limit could not be changed. Check the account and administrator requirements.", 409)
+    if refusal is not None:
+        return await _render_accounts(request, user, notice=refusal[0], status_code=refusal[1])
+    if outcome == "unchanged":
+        notice = "Storage limit was already set that way. Nothing changed."
+    elif mode == "unlimited":
+        notice = "Storage limit removed. This account has no storage limit."
+    elif mode == "default":
+        notice = "Storage limit set to the instance default." + (
+            STORAGE_LIMIT_KEPT_DATA if target is None or target["default_limit_bytes"] is not None
+            else " The instance default has no limit.")
+    else:
+        notice = f"Storage limit set to {Decimal(size)} GiB." + STORAGE_LIMIT_KEPT_DATA
+    return await _render_accounts(request, user, notice=notice, committed=True)
+
+
 async def _deletion_route(request: Request, user: dict, account_id: int, action: str) -> Response:
     required = {"csrf_token"} if action == "cancel" else {"csrf_token", "target_email"}
     optional = {"acknowledge"} if action == "request" else {"confirm_purge", "current_password"} if action == "purge" else set()
@@ -354,6 +443,11 @@ def make_router() -> APIRouter:
         request: Request, account_id: int, user: dict = Depends(require_admin),
     ):
         return await _set_account_enabled_route(request, user, account_id, enable=True)
+
+    @router.post("/admin/accounts/{account_id}/storage-limit")
+    @capacity_policy("auth_interactive")
+    async def storage_limit_route(request: Request, account_id: int, user: dict = Depends(require_admin)):
+        return await _storage_limit_route(request, user, account_id)
 
     @router.post("/admin/accounts/{account_id}/deletion")
     @capacity_policy("auth_interactive")

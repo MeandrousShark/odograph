@@ -122,24 +122,29 @@ default to 256 MiB and 128 MiB.
 
 Set values must be positive integers. Raw and enhancement limits cannot exceed
 the account limit; reserve must be smaller than budget. The administrator
-account never has a storage limit. Each member account either follows the
-instance default or has its own limit. At validated restart, the configured
-default applies to every member account that follows it, including disabled
-accounts; accounts with their own limit keep it. The sum of finite grants must
-fit budget minus reserve, or startup refuses to serve. With an account limit
-set, account creation acquires a funded grant before any account state
-commits, so the budget also limits how many members can join: on the defaults
-with a 2 GiB account limit, budget minus reserve funds five members.
-Invitations are refused while no grant is fundable; raise
+account never has a storage limit. Each member account follows the instance
+default, has its own limit or has no limit; an administrator sets this in
+**Accounts** without a restart (see [Edit a member's storage
+limit](accounts.md#edit-a-members-storage-limit)). At validated restart, the
+configured default applies to every member account that follows it, including
+disabled accounts; accounts with their own limit keep it, and their raw and
+enhancement limits follow the configured defaults, capped at that limit. The
+sum of finite grants must fit budget minus reserve, or startup refuses to
+serve. With an account limit set, account creation acquires a funded grant
+before any account state commits, so the budget also limits how many members
+can join: on the defaults with a 2 GiB account limit, budget minus reserve
+funds five members. Invitations are refused while no grant is fundable; lower
+or remove member limits in **Accounts**, or raise
 `STORAGE_INSTANCE_BUDGET_BYTES` or lower `STORAGE_ACCOUNT_LIMIT_BYTES` and
-restart to admit more accounts. Disabled accounts retain their grant until
+restart, to admit more accounts. Disabled accounts retain their grant until
 actual purge.
 
 Lowering allowances never removes history. Positive net growth pauses at a
 ceiling, while reads, exports, sign-in, recovery, cleanup and zero/negative net
 changes remain available. Reserved detector output for accepted points remains
-funded. Raise limits through a validated restart with enough grant budget, or
-deliberately clean up unneeded data; eligible work resumes when capacity returns.
+funded. Raise a member's limit in **Accounts** or the default through a
+validated restart, with enough grant budget, or deliberately clean up unneeded
+data; eligible work resumes when capacity returns.
 Settings shows actual/reserved usage, each subset, warnings from 80%, and
 over-budget state for each limited measure. Operator diagnostics expose
 aggregate finite grants and the number of accounts with an allowance, nearing

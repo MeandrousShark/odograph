@@ -9,6 +9,19 @@ reproduced here.
 
 ## [Unreleased]
 
+### Added
+
+- Administrators can set each member's storage limit in **Accounts**: follow
+  the instance default, no limit, or a custom size in GiB. Changes take effect
+  immediately and a restart keeps them; raw and enhancement limits of a custom
+  account follow the configured defaults, capped at its limit. A finite limit
+  must fit the instance budget. Lowering a limit below usage keeps existing
+  data and refuses only growth. Administrator accounts always have no limit.
+  Migration 047 (class `rewrite`) adds the protected functions behind the
+  editor and makes each restart apply the sub-limit defaults to custom
+  accounts. See
+  [Edit a member's storage limit](docs/accounts.md#edit-a-members-storage-limit).
+
 ### Changed
 
 - Storage limits are off unless `STORAGE_ACCOUNT_LIMIT_BYTES` is set. Without

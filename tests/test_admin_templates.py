@@ -107,7 +107,7 @@ def test_account_deletion_actions_stay_with_their_target_in_full_width_rows():
     assert len(deletion_rows) == 4
 
     schedule_row = deletion_rows[0].split("</tr>", 1)[0]
-    assert 'colspan="9"' in schedule_row
+    assert 'colspan="10"' in schedule_row
     assert "Schedule deletion for enabled-member@example.invalid" in schedule_row
     assert 'action="/admin/accounts/2/deletion"' in schedule_row
     assert 'name="target_email"' in schedule_row
@@ -178,3 +178,89 @@ def test_expired_invitations_do_not_offer_the_atomic_open_resend_action():
     assert "Expired" in expired.text
     assert '/admin/invitations/11/resend' not in expired.text
     assert '/admin/invitations/11/resend' in opened.text
+
+
+def _storage_account(account_id, *, admin=False, mode="default", limit=None, default=None,
+                     used=0, max_gib="5.00", custom_gib=None):
+    storage = {
+        "is_admin": admin, "limit_mode": mode, "account_limit_bytes": limit,
+        "default_limit_bytes": default, "used_bytes": used, "fundable_bytes": 0,
+        "max_gib": max_gib,
+    }
+    if custom_gib is not None:
+        storage["custom_gib"] = custom_gib
+    return {
+        "id": account_id, "email": f"account-{account_id}@example.invalid", "email_verified": True,
+        "is_admin": admin, "is_enabled": True, "has_password": True, "has_oidc": False,
+        "deletion_deadline": None, "purge_available": False, "storage": storage,
+    }
+
+
+def _storage_rows(accounts):
+    async def check():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=_app(accounts)), base_url="http://testserver",
+        ) as client:
+            return await client.get("/accounts")
+
+    page = asyncio.run(check())
+    assert page.status_code == 200
+    rows = page.text.split('<tr role="row" class="admin-account-row')[1:]
+    return page.text, [row.split("</tr>", 1)[0] for row in rows], rows
+
+
+def test_storage_column_shows_usage_and_each_limit_mode():
+    gib, mib = 1024 ** 3, 1024 ** 2
+    body, cells, _ = _storage_rows([
+        _storage_account(1, admin=True, mode="unlimited", default=2 * gib, used=3 * mib),
+        _storage_account(2, mode="unlimited", default=2 * gib),
+        _storage_account(3, mode="default", limit=2 * gib, default=2 * gib, used=512),
+        _storage_account(4, mode="custom", limit=int(1.5 * gib), default=2 * gib, custom_gib="1.50"),
+        _storage_account(5, mode="custom", limit=10737418, default=2 * gib, used=11 * mib,
+                         custom_gib="0.01"),
+        _storage_account(6, mode="default", limit=None, default=None),
+    ])
+    assert "3.0 MiB used" in cells[0] and "No limit (administrator)" in cells[0]
+    assert "No limit" in cells[1] and "Instance default" not in cells[1]
+    assert "512 bytes used" in cells[2] and "Instance default: 2.00 GiB" in cells[2]
+    assert "Custom: 1.50 GiB" in cells[3]
+    assert "Over allowance" in cells[4] and "11.0 MiB used" in cells[4]
+    assert all("Over allowance" not in cell for index, cell in enumerate(cells) if index != 4)
+    assert "Instance default: no limit" in cells[5]
+    assert "Unavailable" not in body
+
+
+def test_storage_editor_is_offered_for_members_only():
+    gib = 1024 ** 3
+    body, _, rows = _storage_rows([
+        _storage_account(1, admin=True, mode="unlimited", default=gib),
+        _storage_account(7, admin=True, mode="unlimited", default=gib),
+        _storage_account(2, mode="custom", limit=gib, default=gib, max_gib="3.25", custom_gib="1.00"),
+        _storage_account(3, mode="default", limit=gib, default=gib, max_gib="0.00"),
+    ])
+    assert 'action="/admin/accounts/1/storage-limit"' not in body
+    assert 'action="/admin/accounts/7/storage-limit"' not in body
+    member = rows[2]
+    assert 'action="/admin/accounts/2/storage-limit"' in member
+    assert '<input type="hidden" name="csrf_token" value="csrf">' in member
+    assert '<option value="custom" selected>Custom</option>' in member
+    assert '<option value="default">Instance default (1.00 GiB)</option>' in member
+    assert '<option value="unlimited">No limit</option>' in member
+    assert ('<input type="number" name="account_gib" step="0.01" min="0.01" max="3.25" '
+            'inputmode="decimal" value="1.00">') in member
+    assert "Up to 3.25 GiB fits" in member
+    assert "<label>Storage limit" in member and "<label>Custom limit in GiB" in member
+    full = rows[3]
+    assert '<option value="default" selected>' in full
+    assert 'max="0.00" inputmode="decimal">' in full
+    assert "no room for a custom limit" in full
+
+
+def test_storage_column_tolerates_missing_storage_data():
+    body, cells, _ = _storage_rows([{
+        "id": 2, "email": "member@example.invalid", "email_verified": True, "is_admin": False,
+        "is_enabled": True, "has_password": True, "has_oidc": False, "deletion_deadline": None,
+        "purge_available": False,
+    }])
+    assert '<span class="muted">Unavailable</span>' in cells[0]
+    assert "/storage-limit" not in body

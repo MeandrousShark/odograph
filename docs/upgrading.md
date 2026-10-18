@@ -141,8 +141,17 @@ limits, and only the administrator becomes unlimited. Setting
 `STORAGE_ACCOUNT_LIMIT_BYTES` now refuses startup. See
 [Logical storage accounting](configuration.md#logical-storage-accounting).
 
-Rollback across migration 046 requires the verified pre-upgrade backup, as
-described in [Rollback](#rollback).
+Migration 047 is class `rewrite`: it adds the storage limit editor in
+**Accounts** (see
+[Edit a member's storage limit](accounts.md#edit-a-members-storage-limit)) and
+changes how a restart applies limits. A member with a custom limit keeps that
+account limit, while its raw and enhancement limits follow the configured
+defaults, capped at the custom limit. The first start after the migration
+applies this to any existing custom grant. Account limits, usage counters and
+stored data are unchanged.
+
+Rollback across migration 046 or 047 requires the verified pre-upgrade backup,
+as described in [Rollback](#rollback).
 
 ## Upgrading to 1.0
 

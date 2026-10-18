@@ -553,7 +553,7 @@ def test_warning_ack_upgrade_keeps_contract_without_reprovisioning(monkeypatch, 
             await prepare_application_roles(TEST_DB)
             async with pool.connection() as conn:
                 assert await (await conn.execute(
-                    "SELECT MAX(version) FROM schema_migrations")).fetchone() == (46,)
+                    "SELECT MAX(version) FROM schema_migrations")).fetchone() == (47,)
                 assert await (await conn.execute(
                     "SELECT row_to_json(t)::text FROM trips t WHERE id=%s", (trip_id,))).fetchone() == (trip_before,)
                 assert await (await conn.execute(
