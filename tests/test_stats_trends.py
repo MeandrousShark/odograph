@@ -99,7 +99,7 @@ def test_nondeductible_is_a_third_classified_share_band():
 
     assert q1.business_share == pytest.approx(0.25)
     assert q1.nondeductible_m == 2000.0
-    assert "var(--overlay0)" in chart
+    assert "var(--cat-nondeductible)" in chart
     trend = build_share_trend(rows, [2024], 12)
     assert trend.has_nondeductible is True
     assert "Classified mileage share by quarter" in trend.chart_svg

@@ -55,7 +55,7 @@ def test_dashboard_combines_category_totals_and_builds_current_period_charts():
     assert dashboard.weekly_chart.count('text-anchor="middle"') == 12
     assert dashboard.monthly_chart.count('text-anchor="middle"') == 7
     assert "var(--cat-business)" in dashboard.weekly_chart
-    assert "var(--warn)" in dashboard.monthly_chart
+    assert "var(--cat-unclassified)" in dashboard.monthly_chart
 
 
 def test_dashboard_zero_data_is_safe_and_has_no_business_share():
@@ -96,7 +96,7 @@ def test_dashboard_includes_nondeductible_in_total_and_share_denominator():
     assert dashboard.total_m == 4000.0
     assert dashboard.nondeductible_m == 3000.0
     assert dashboard.business_share == pytest.approx(0.25)
-    assert "var(--overlay0)" in dashboard.weekly_chart
+    assert "var(--cat-nondeductible)" in dashboard.weekly_chart
 
 
 def test_dashboard_ignores_out_of_window_and_unknown_bucket_rows():
