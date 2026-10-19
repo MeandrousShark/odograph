@@ -3,19 +3,19 @@
 {% block title %}{{ report.year }} Report: Odograph{% endblock %}
 {% block content %}
 
-<div class="report-page">
-  <div class="report-page-header page-title">
+<div class="page report-page">
+  <div class="page-title page-header">
     <div>
       <p class="page-title-eyebrow">Report</p>
       <h2 id="report-page-title" class="page-title-heading">{{ report.year }} annual mileage report</h2>
       <p class="page-title-subtitle">Mileage totals, deductions, and filing details.</p>
     </div>
     <div class="page-title-actions report-page-actions">
-      <nav class="report-year-nav" aria-label="Report year">
+      <nav class="year-nav" aria-label="Report year">
         <a href="/report/{{ report.year - 1 }}">← {{ report.year - 1 }}</a>
         <strong>{{ report.year }}</strong>
         {% if next_year_disabled %}
-        <span class="report-year-next" aria-disabled="true">{{ report.year + 1 }} →</span>
+        <span class="year-nav-next" aria-disabled="true">{{ report.year + 1 }} →</span>
         {% else %}
         <a href="/report/{{ report.year + 1 }}">{{ report.year + 1 }} →</a>
         {% endif %}

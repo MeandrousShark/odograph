@@ -1,10 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Account administration: Odograph{% endblock %}
 {% block content %}
-{% macro storage_size(value) %}{% if value >= 1073741824 %}{{ "%.2f"|format(value / 1073741824) }} GiB{% elif value >= 1048576 %}{{ "%.1f"|format(value / 1048576) }} MiB{% else %}{{ value }} bytes{% endif %}{% endmacro %}
 
-<div class="settings-page">
-<div class="settings-page-header page-title">
+<div class="page settings-page">
+<div class="page-title page-header settings-page-header">
   <div>
     <p class="page-title-eyebrow">Administration</p>
     <h2 id="admin-page-title" class="page-title-heading">Accounts</h2>
@@ -94,11 +93,11 @@
         <td role="cell" data-label="Storage">
           {% set storage = account.storage %}
           {% if storage %}
-          {{ storage_size(storage.used_bytes) }} used<br>
+          {{ storage.used_bytes|storage_size }} used<br>
           {% if storage.is_admin %}No limit (administrator)
           {% elif storage.account_limit_bytes is none %}{% if storage.limit_mode == "default" %}Instance default: no limit{% else %}No limit{% endif %}
-          {% elif storage.limit_mode == "default" %}Instance default: {{ storage_size(storage.account_limit_bytes) }}
-          {% else %}Custom: {{ storage_size(storage.account_limit_bytes) }}{% endif %}
+          {% elif storage.limit_mode == "default" %}Instance default: {{ storage.account_limit_bytes|storage_size("GiB") }}
+          {% else %}Custom: {{ storage.account_limit_bytes|storage_size("GiB") }}{% endif %}
           {% if storage.account_limit_bytes is not none and storage.used_bytes > storage.account_limit_bytes %}<br><strong>Over allowance</strong>{% endif %}
           {% else %}<span class="muted">Unavailable</span>{% endif %}
         </td>
@@ -127,7 +126,7 @@
                 <input type="hidden" name="csrf_token" value="{{ csrf }}">
                 <label>Storage limit
                   <select name="limit_mode">
-                    <option value="default"{% if storage.limit_mode == "default" %} selected{% endif %}>Instance default ({% if storage.default_limit_bytes is none %}no limit{% else %}{{ storage_size(storage.default_limit_bytes) }}{% endif %})</option>
+                    <option value="default"{% if storage.limit_mode == "default" %} selected{% endif %}>Instance default ({% if storage.default_limit_bytes is none %}no limit{% else %}{{ storage.default_limit_bytes|storage_size("GiB") }}{% endif %})</option>
                     <option value="unlimited"{% if storage.limit_mode == "unlimited" %} selected{% endif %}>No limit</option>
                     <option value="custom"{% if storage.limit_mode == "custom" %} selected{% endif %}>Custom</option>
                   </select>

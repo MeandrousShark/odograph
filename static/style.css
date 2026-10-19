@@ -1,3 +1,13 @@
+/* Page rules. Dashboard and Trips are the visual reference.
+   - Content pages use one .page wrapper and start with .page-title.page-header.
+   - Every action button uses .control with -primary (one per form, the
+     committing action), -secondary or -destructive; no unclassed buttons.
+   - Destructive actions confirm in an in-page dialog, not hx-confirm.
+   - Filters live in the shared closed disclosure, with an active-filter
+     summary shown while it is closed.
+   - At most one bordered surface level per section.
+   - One .summary-tile, one .year-nav and one .chart-legend component. */
+
 /* Nocturne-inspired semantic system. Raw values live in the two ramps below,
    while application selectors consume the semantic variables that follow.
    Keeping the ramps separate makes theme changes predictable and prevents
@@ -546,10 +556,6 @@ a:hover { color: var(--accent-hover); }
 .icon-button:hover { color: var(--accent-hover); border-color: var(--accent-hover); background: var(--accent-soft); }
 .icon-button:active { color: var(--accent-pressed); border-color: var(--accent-pressed); }
 .icon-button:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
-.icon-button-primary {
-  color: var(--accent-on-primary); background: var(--accent-primary); border-color: var(--accent-primary);
-}
-.icon-button-primary:hover { color: var(--accent-on-primary); background: var(--accent-hover); border-color: var(--accent-hover); }
 .compact-actions { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
 .compact-actions > .icon-button { flex: none; }
 .progress-track {
@@ -569,6 +575,21 @@ a:hover { color: var(--accent-hover); }
   font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
 }
 .page-title-subtitle { margin: var(--space-1) 0 0; color: var(--fg-muted); font-size: .9rem; max-width: 65ch; }
+.page { max-width: 72rem; margin: 0 auto; min-width: 0; }
+.page-header { align-items: center; margin-bottom: var(--space-5); }
+.page-header .page-title-subtitle { max-width: 42rem; }
+.year-nav {
+  display: inline-flex; min-height: var(--control-height); align-items: center;
+  gap: var(--space-1); font-size: .85rem; white-space: nowrap;
+}
+.year-nav a, .year-nav .year-nav-next {
+  display: inline-flex; min-height: var(--control-height); align-items: center;
+  padding: 0 var(--space-2); border: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  border-radius: var(--radius-sm); color: var(--control-fg); background: var(--control-fill);
+  text-decoration: none;
+}
+.year-nav a:hover { border-color: var(--accent-hover); background: var(--accent-soft); }
+.year-nav strong { padding: 0 var(--space-1); color: var(--fg); font-size: 1rem; }
 h2 { font-size: 1.05rem; margin: 1.5rem 0 .25rem; }
 /* One size up from the shared h2 (not a change to that rule, which other
    pages still depend on) so a month grouping reads as a stronger break in
@@ -1607,9 +1628,6 @@ details.add-manual .route-mode-option { flex-direction: row; align-items: center
    Workers table) end in a data column, not an action column, and a
    structural last-child selector would reach those too. */
 .settings-table-actions { text-align: right; }
-.settings-page { max-width: 72rem; margin: 0 auto; min-width: 0; }
-.settings-page-header { align-items: center; margin-bottom: var(--space-5); }
-.settings-page-header .page-title-subtitle { max-width: 42rem; }
 .settings-page .settings-account-section,
 .settings-page .settings-section,
 .settings-page > .section-disclosure {
@@ -1746,7 +1764,6 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 .account-security-email { margin: 0 0 var(--space-4); overflow-wrap: anywhere; }
 .account-security-section h3 { margin: 0; }
 .account-security-section .auth-form { max-width: 26rem; }
-.account-settings-page { max-width: 48rem; margin: var(--space-6) auto 0; }
 .account-settings-stack { display: flex; flex-direction: column; gap: var(--space-4); }
 .account-settings-card > h3 { margin: 0; color: var(--fg); font-size: 1.1rem; }
 .account-settings-profile .account-settings-avatar-section {
@@ -1788,10 +1805,6 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 
 /* Trip Detail shares Review's summary language while keeping its own page
    surface and source-aware controls. */
-.trip-detail-page { max-width: 68rem; margin: 0 auto; min-width: 0; }
-.trip-detail-page-header { align-items: center; margin-bottom: var(--space-5); }
-.trip-detail-page-header .page-title-eyebrow { margin-bottom: var(--space-1); }
-.trip-detail-page-header .page-title-subtitle { max-width: 42rem; }
 .trip-detail-overview {
   display: grid; grid-template-columns: minmax(0, 1fr) minmax(18rem, 1fr);
   grid-template-areas: "summary map" "route map";
@@ -1922,52 +1935,24 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 .merge-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
 .merge-status { font-size: .9rem; color: var(--fg-muted); }
 /* auto-fit computes its repetition count from the track's definite MAX,
-   not the min -- so a fixed max on the track (previously 14rem) undercounts
-   columns at narrow widths: a ~495px phone needs two 224px maxes to fit
-   side by side, but auto-fit only tries 224px-wide columns and settles for
-   one, leaving the row half-empty. Moving the max off the track (`1fr`, so
-   counting is driven by the 11rem min) and onto the container as a
-   max-width fixes both ends: report.html/report_range.html's handful of
-   stats still stay compact rather than stretching edge-to-edge across the
-   1100px body -- the 1052px content column caps at 60.5rem (4 x 14rem
-   tracks + 3 x 1.5rem gaps), so floor((968+24)/(176+24)) is 4, giving the
-   same four-per-row look (and 4+4+2 on the fuller expenses page) as
-   before. At phone widths, auto-fit now counts by the 11rem floor: ~430-
-   495px viewports (382-447px content) fit 2 columns, and 320px (272px
-   content) still collapses to 1 with no horizontal scroll. 11rem still
-   fits the widest real label ("Registration / taxes" on expenses.html)
-   over a five-figure dollar value without overflow, though the label may
-   wrap onto two lines at the tightest widths. */
-.report-summary {
+   not the min, so keep the max at `1fr` and let the 11rem min drive the
+   count. Phone widths use a fixed two-column grid instead (below). */
+.summary-tiles {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
-  gap: 1.5rem; max-width: 60.5rem; margin: 1rem 0;
+  gap: var(--space-5); margin: 0 0 var(--space-5);
 }
-.report-summary div { display: flex; flex-direction: column; gap: .1rem; }
-.report-summary strong { font-size: 1.2rem; }
+.summary-tile { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; margin: 0; }
+.summary-tile > span { color: var(--fg-muted); font-size: .8rem; }
+.summary-tile > strong { font-size: 1.25rem; font-variant-numeric: tabular-nums; }
+.summary-tile > small { color: var(--fg-muted); font-size: .75rem; overflow-wrap: anywhere; }
+.summary-tile-total { padding-top: var(--space-2); border-top: 3px solid var(--accent-primary); }
 .report-caveats { border: 1px solid var(--warn); border-radius: 6px; padding: .5rem .75rem;
                    margin: 1rem 0; font-size: .85rem; }
 .report-caveats ul { margin: .35rem 0 0; padding-left: 1.25rem; }
 
-/* Report pages use the same title hierarchy as Review and Trip Detail while
-   keeping their existing controls, calculations, and table markup. These
-   selectors stay under .report-page so Expenses keeps its independent
-   summary styles. */
-.report-page { max-width: 72rem; margin: 0 auto; min-width: 0; }
-.report-page-header { align-items: center; margin-bottom: var(--space-5); }
-.report-page-header .page-title-subtitle { max-width: 42rem; }
+/* Report pages keep their existing controls, calculations, and table markup
+   under .report-page alongside the shared .page wrapper. */
 .report-page-actions { justify-content: flex-end; }
-.report-year-nav {
-  display: inline-flex; min-height: var(--control-height); align-items: center;
-  gap: var(--space-1); font-size: .85rem; white-space: nowrap;
-}
-.report-year-nav a, .report-year-nav .report-year-next {
-  display: inline-flex; min-height: var(--control-height); align-items: center;
-  padding: 0 var(--space-2); border: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
-  border-radius: var(--radius-sm); color: var(--control-fg); background: var(--control-fill);
-  text-decoration: none;
-}
-.report-year-nav a:hover { border-color: var(--accent-hover); background: var(--accent-soft); }
-.report-year-nav strong { padding: 0 var(--space-1); color: var(--fg); font-size: 1rem; }
 .report-controls {
   align-items: end; gap: var(--space-4); margin-bottom: var(--space-6);
   padding: var(--space-3) var(--space-4); border: 1px solid var(--border);
@@ -1981,28 +1966,6 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
   margin: 0; padding: var(--space-5); border: 1px solid var(--border);
   border-radius: var(--radius-md); background: var(--surface); color: var(--fg-muted);
 }
-.report-page .report-summary {
-  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: var(--space-3);
-  max-width: none; margin: 0 0 var(--space-4);
-}
-.report-page .report-summary > div {
-  min-width: 0; padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--border); border-radius: var(--radius-md);
-  background: var(--surface); box-shadow: var(--shadow);
-}
-.report-page .report-summary-label {
-  display: block; color: var(--fg-muted); font-size: .75rem; font-weight: 600;
-  letter-spacing: .04em; text-transform: uppercase;
-}
-.report-page .report-summary strong {
-  display: block; margin-top: var(--space-2); color: var(--fg);
-  font-size: 1.4rem; line-height: 1.1; font-variant-numeric: tabular-nums;
-}
-.report-page .report-summary > .report-summary-business { border-top: 3px solid var(--cat-business); }
-.report-page .report-summary > .report-summary-personal { border-top: 3px solid var(--cat-personal); }
-.report-page .report-summary > .report-summary-nondeductible { border-top: 3px solid var(--cat-nondeductible); }
-.report-page .report-summary > .report-summary-share,
-.report-page .report-summary > .report-summary-deduction { border-top: 3px solid var(--accent-primary); }
 .report-page .report-rate-note {
   margin: 0 0 var(--space-4); padding: 0 var(--space-1);
   font-size: .85rem; font-variant-numeric: tabular-nums;
@@ -2045,23 +2008,7 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 
 /* Expenses uses the same page framing as the report while keeping ledger
    controls, editors, and warnings within their own presentation scope. */
-.expenses-page { max-width: 72rem; margin: 0 auto; min-width: 0; }
-.expenses-page-header { align-items: center; margin-bottom: var(--space-5); }
-.expenses-page-header .page-title-eyebrow { margin-bottom: var(--space-1); }
-.expenses-page-header .page-title-subtitle { max-width: 42rem; }
 .expenses-page-actions { justify-content: flex-end; }
-.expenses-year-nav {
-  display: inline-flex; min-height: var(--control-height); align-items: center;
-  gap: var(--space-1); font-size: .85rem; white-space: nowrap;
-}
-.expenses-year-nav a {
-  display: inline-flex; min-height: var(--control-height); align-items: center;
-  padding: 0 var(--space-2); border: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
-  border-radius: var(--radius-sm); color: var(--control-fg); background: var(--control-fill);
-  text-decoration: none;
-}
-.expenses-year-nav a:hover { border-color: var(--accent-hover); background: var(--accent-soft); }
-.expenses-year-nav strong { padding: 0 var(--space-1); color: var(--fg); font-size: 1rem; }
 .expenses-page .expenses-controls {
   align-items: end; gap: var(--space-4); margin-bottom: var(--space-5);
   padding: var(--space-3) var(--space-4); border: 1px solid var(--border);
@@ -2092,24 +2039,6 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 .expenses-page .expense-form > label select { width: 100%; min-width: 0; }
 .expenses-page .expense-add > .expense-live-warning {
   grid-column: 1 / -1; margin: calc(-1 * var(--space-2)) 0 0;
-}
-.expenses-page .expenses-summary {
-  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: var(--space-3);
-  max-width: none; margin: 0 0 var(--space-5);
-}
-.expenses-page .expenses-summary > div {
-  min-width: 0; padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--border); border-radius: var(--radius-md);
-  background: var(--surface); box-shadow: var(--shadow);
-}
-.expenses-page .expenses-summary > .expenses-summary-total { border-top: 3px solid var(--accent-primary); }
-.expenses-page .expenses-summary span {
-  color: var(--fg-muted); font-size: .75rem; font-weight: 600;
-  letter-spacing: .04em; text-transform: uppercase;
-}
-.expenses-page .expenses-summary strong {
-  display: block; margin-top: var(--space-2); color: var(--fg);
-  font-size: 1.4rem; line-height: 1.1; font-variant-numeric: tabular-nums;
 }
 .expenses-page .expenses-table-wrapper {
   max-width: 100%; margin: 0 0 var(--space-5); padding: var(--space-2) var(--space-3);
@@ -2143,10 +2072,15 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 }
 
 @media (max-width: 760px) {
-  .report-page-header { align-items: flex-start; }
-  .report-page-header .page-title-subtitle { display: none; }
+  .page-header { align-items: flex-start; }
+  /* Orienting copy that repeat visitors no longer read. Vertical space is
+     the scarce resource here, so it drops rather than merely shrinking. */
+  .page-header .page-title-subtitle { display: none; }
+  .year-nav { width: 100%; justify-content: space-between; }
+  /* Two columns keep a four-tile summary to two rows; the widest label
+     ("Registration / taxes") wraps rather than overflowing at 320px. */
+  .summary-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
   .report-page-actions { width: 100%; justify-content: flex-start; }
-  .report-year-nav { flex: 1 1 100%; }
   .report-controls { gap: var(--space-3); padding: var(--space-3); }
   .report-controls .report-quarter-field,
   .report-controls .report-date-range { width: 100%; min-width: 0; }
@@ -2159,18 +2093,11 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
   .report-controls .report-date-range label { min-width: 0; }
   .report-controls .report-date-range input { width: 100%; min-width: 0; }
   .report-controls .report-date-range button { grid-column: 1 / -1; width: 100%; }
-  .report-page .report-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
-  .report-page .report-summary > div { padding: var(--space-3); }
-  .report-page .report-summary strong { font-size: 1.2rem; }
   .report-page .table-wrapper { padding: var(--space-1) var(--space-2); }
   .report-coverage { padding: var(--space-3); }
   .report-expense-comparison { margin-top: var(--space-5); padding-top: var(--space-4); }
 }
 
-.stats-summary { display: grid; grid-template-columns: repeat(4, minmax(9rem, 1fr)); gap: .75rem; margin: 1rem 0; }
-.stats-summary div { background: var(--bg-alt); border: 1px solid var(--border); border-radius: 6px; padding: .6rem .75rem; display: flex; flex-direction: column; gap: .15rem; }
-.stats-summary span, .stats-summary small { font-size: .8rem; color: var(--fg-muted); }
-.stats-summary strong { font-size: 1.15rem; font-variant-numeric: tabular-nums; }
 .stats-section { margin: 1.5rem 0; }
 /* The weekly/monthly SVGs render a fixed 720-unit viewBox at width: 100%,
    so on narrow phones the whole chart -- including its 11px axis text --
@@ -2186,17 +2113,17 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 .stats-chart text { fill: var(--fg-muted); font-size: 11px; }
 .stats-axis { stroke: var(--border-strong); stroke-width: 1; }
 .stats-gridline { stroke: var(--border); stroke-width: 1; }
-.stats-legend { display: flex; gap: .8rem; font-size: .8rem; color: var(--fg-muted); }
-.stats-legend span::before { content: ""; display: inline-block; width: .65rem; height: .65rem; border-radius: 2px; margin-right: .25rem; }
-.stats-legend .business::before { background: var(--cat-business); }
-.stats-legend .personal::before { background: var(--cat-personal); }
-.stats-legend .unclassified::before { background: var(--cat-unclassified); }
-.stats-legend .nondeductible::before { background: var(--cat-nondeductible); }
-.stats-legend .year-1::before { background: var(--year-1); }
-.stats-legend .year-2::before { background: var(--year-2); }
-.stats-legend .year-3::before { background: var(--year-3); }
-.stats-legend .year-4::before { background: var(--year-4); }
-.stats-legend .year-5::before { background: var(--year-5); }
+.chart-legend { display: flex; flex-wrap: wrap; gap: .8rem; margin: var(--space-3) 0 0; font-size: .8rem; color: var(--fg-muted); }
+.chart-legend span::before { content: ""; display: inline-block; width: .65rem; height: .65rem; border-radius: 2px; margin-right: .25rem; }
+.chart-legend .business::before { background: var(--cat-business); }
+.chart-legend .personal::before { background: var(--cat-personal); }
+.chart-legend .unclassified::before { background: var(--cat-unclassified); }
+.chart-legend .nondeductible::before { background: var(--cat-nondeductible); }
+.chart-legend .year-1::before { background: var(--year-1); }
+.chart-legend .year-2::before { background: var(--year-2); }
+.chart-legend .year-3::before { background: var(--year-3); }
+.chart-legend .year-4::before { background: var(--year-4); }
+.chart-legend .year-5::before { background: var(--year-5); }
 /* Drill-down links wrap individual chart bars. Opacity is the only hover
    affordance since a color shift would require yet another semantic token
    for what is a purely interactive (non-data) hint. */
@@ -2216,23 +2143,7 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 
 /* Stats uses a calm stack of contained surfaces so the charts and rankings
    keep their own reading areas on wide screens and narrow screens alike. */
-.stats-page { max-width: 72rem; margin: 0 auto; min-width: 0; }
-.stats-page-header { align-items: center; margin-bottom: var(--space-5); }
-.stats-page-header .page-title-eyebrow { margin-bottom: var(--space-1); }
-.stats-page-header .page-title-subtitle { max-width: 42rem; }
 .stats-page-actions { justify-content: flex-end; }
-.stats-year-nav {
-  display: inline-flex; min-height: var(--control-height); align-items: center;
-  gap: var(--space-1); font-size: .85rem; white-space: nowrap;
-}
-.stats-year-nav a, .stats-year-nav .report-year-next {
-  display: inline-flex; min-height: var(--control-height); align-items: center;
-  padding: 0 var(--space-2); border: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
-  border-radius: var(--radius-sm); color: var(--control-fg); background: var(--control-fill);
-  text-decoration: none;
-}
-.stats-year-nav a:hover { border-color: var(--accent-hover); background: var(--accent-soft); }
-.stats-year-nav strong { padding: 0 var(--space-1); color: var(--fg); font-size: 1rem; }
 .stats-page .trip-page-disclosures {
   margin-bottom: var(--space-5); padding: var(--space-3) var(--space-4);
   border: 1px solid var(--border);
@@ -2250,30 +2161,6 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
   margin: 0; padding: var(--space-5); border: 1px solid var(--border);
   border-radius: var(--radius-md); background: var(--surface); color: var(--fg-muted);
 }
-.stats-page .stats-summary {
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: var(--space-3);
-  max-width: none; margin: 0 0 var(--space-5);
-}
-.stats-page .stats-summary > div {
-  min-width: 0; padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface); box-shadow: var(--shadow);
-}
-.stats-page .stats-summary span {
-  color: var(--fg-muted); font-size: .75rem; font-weight: 600;
-  letter-spacing: .04em; text-transform: uppercase;
-}
-.stats-page .stats-summary small { color: var(--fg-muted); font-size: .8rem; overflow-wrap: anywhere; }
-.stats-page .stats-summary strong {
-  display: block; margin-top: var(--space-2); color: var(--fg);
-  font-size: 1.4rem; line-height: 1.1; font-variant-numeric: tabular-nums;
-}
-.stats-page .stats-summary > .stats-summary-total { border-top: 3px solid var(--accent-primary); }
-.stats-page .stats-summary > .stats-summary-business { border-top: 3px solid var(--cat-business); }
-.stats-page .stats-summary > .stats-summary-personal { border-top: 3px solid var(--cat-personal); }
-.stats-page .stats-summary > .stats-summary-nondeductible { border-top: 3px solid var(--cat-nondeductible); }
-.stats-page .stats-summary > .stats-summary-unclassified { border-top: 3px solid var(--cat-unclassified); }
 .stats-page .stats-section {
   min-width: 0; margin: 0 0 var(--space-5); padding: clamp(var(--space-4), 3vw, var(--space-6));
   border: 1px solid var(--border);
@@ -2285,7 +2172,6 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
   max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain;
 }
 .stats-page .stats-chart { display: block; }
-.stats-page .stats-legend { flex-wrap: wrap; margin: var(--space-3) 0 0; }
 .stats-page .stats-rankings {
   grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); margin: 0 0 var(--space-5);
 }
@@ -2332,14 +2218,14 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 .week-nav-link { min-height: var(--control-height); display: inline-flex; align-items: center; }
 .week-nav-chevron { width: var(--control-height); min-width: var(--control-height); }
 .week-nav-chevron .icon { width: 1rem; height: 1rem; }
-/* Shared by the dashboard's "Next week" control and the annual report's
+/* Shared by the dashboard's "Next week" control and the year nav's
    "next year" control -- both disable in place (rather than hiding) so the
    row doesn't reflow as the reader pages forward, so both need the same
    dimmed, non-interactive treatment. Scoped to these two controls, not a
    bare [aria-disabled="true"] selector, so the rule doesn't reach every
    future aria-disabled element application-wide (a form control, say,
    where cursor: default would be wrong). */
-.week-nav-next[aria-disabled="true"], .report-year-next[aria-disabled="true"] {
+.week-nav-next[aria-disabled="true"], .year-nav-next[aria-disabled="true"] {
   opacity: .5; cursor: default;
 }
 .metric-unavailable { font-size: 1rem; color: var(--fg-muted); }
@@ -2444,7 +2330,6 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 .dashboard-links { display: flex; gap: var(--space-3); align-items: center; margin-bottom: var(--space-4); }
 
 @media (max-width: 700px) {
-  .stats-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stats-rankings { grid-template-columns: 1fr; }
 }
 @media (max-width: 900px) {
@@ -2658,8 +2543,6 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
   .trip-archive-row-actions { align-self: end; opacity: 1; }
   .trip-archive-row-icon-button, .trip-archive-row-more-trigger { width: var(--control-height); }
   .trip-archive-row-more-panel { max-width: calc(100vw - 2 * var(--space-3)); }
-  .trip-detail-page-header { align-items: flex-start; }
-  .trip-detail-page-header .page-title-subtitle { display: none; }
   .trip-detail-overview {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas: "summary" "map" "route";
@@ -2721,25 +2604,17 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 }
 
 @media (max-width: 760px) {
-  .stats-page-header { align-items: flex-start; }
-  .stats-page-header .page-title-subtitle { display: none; }
   .stats-page-actions { width: 100%; justify-content: flex-start; }
-  .stats-year-nav { width: 100%; justify-content: space-between; }
   .stats-page .trip-page-disclosures { padding: var(--space-3); }
   .stats-page .trip-page-disclosure > summary { width: 100%; }
   .stats-page .trip-page-disclosure > .filter-bar { margin-top: var(--space-3); }
-  .stats-page .stats-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
-  .stats-page .stats-summary > div { padding: var(--space-3); }
-  .stats-page .stats-summary strong { font-size: 1.2rem; }
   .stats-page .stats-section { padding: var(--space-3); }
   .stats-page .stats-rankings { grid-template-columns: 1fr; gap: var(--space-3); }
   .stats-page .stats-ranking-card { padding: var(--space-3); }
 }
 
 @media (max-width: 760px) {
-  .expenses-page-header { align-items: flex-start; }
   .expenses-page-actions { width: 100%; justify-content: flex-start; }
-  .expenses-year-nav { width: 100%; justify-content: space-between; }
   .expenses-page .expenses-controls {
     align-items: stretch; gap: var(--space-3); padding: var(--space-3);
   }
@@ -2750,9 +2625,6 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
   .expenses-page details.add-manual form {
     grid-template-columns: minmax(0, 1fr); gap: var(--space-2); padding-top: var(--space-3);
   }
-  .expenses-page .expenses-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
-  .expenses-page .expenses-summary > div { padding: var(--space-3); }
-  .expenses-page .expenses-summary strong { font-size: 1.2rem; }
   .expenses-page .expenses-table-wrapper { padding: var(--space-1) var(--space-2); }
   .expenses-page .expense-editor-panel { margin: var(--space-2); padding: var(--space-3); }
   .expenses-page .expense-editor-grid { grid-template-columns: minmax(0, 1fr); }
@@ -2791,10 +2663,6 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 
 /* Review keeps the task surface visually focused while leaving the shared
    shell, controls, and category colors in charge of their normal semantics. */
-.review-page { max-width: 68rem; margin: 0 auto; min-width: 0; }
-.review-page-header { align-items: center; margin-bottom: var(--space-5); }
-.review-page-header .page-title-eyebrow { margin-bottom: var(--space-1); }
-.review-page-header .page-title-subtitle { max-width: 42rem; }
 .review-close { flex: none; }
 .review-card {
   min-width: 0; padding: clamp(var(--space-4), 3vw, var(--space-6));
@@ -2898,7 +2766,6 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 .review-state-actions { display: flex; align-items: center; justify-content: center; gap: var(--space-2); flex-wrap: wrap; }
 
 @media (max-width: 760px) {
-  .settings-page-header { align-items: flex-start; }
   .admin-card-table,
   .admin-card-table tbody,
   .admin-card-table tr { display: block; width: 100%; }
@@ -3000,10 +2867,6 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 }
 
 @media (max-width: 760px) {
-  .review-page-header { align-items: flex-start; }
-  /* Orienting copy that repeat visitors no longer read. Vertical space is
-     the scarce resource here, so it drops rather than merely shrinking. */
-  .review-page-header .page-title-subtitle { display: none; }
   .review-card { padding: var(--space-4); }
   .review-trip-overview,
   .review-trip-overview-no-map {

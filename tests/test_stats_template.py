@@ -115,19 +115,19 @@ def test_heading_shows_plain_year_when_not_date_filtered():
 
 def test_stats_template_exposes_shared_presentation_hooks():
     body = _render(_dashboard())
-    assert '<div class="stats-page">' in body
-    assert '<div class="stats-page-header page-title">' in body
+    assert '<div class="page stats-page">' in body
+    assert '<div class="page-title page-header">' in body
     assert '<p class="page-title-eyebrow">Stats</p>' in body
     assert '<h2 id="stats-page-title" class="page-title-heading">Driving insights</h2>' in body
-    assert '<nav class="stats-year-nav" aria-label="Stats year">' in body
-    assert '<div class="stats-summary" role="group" aria-label="Mileage summary">' in body
+    assert '<nav class="year-nav" aria-label="Stats year">' in body
+    assert '<div class="summary-tiles" role="group" aria-label="Mileage summary">' in body
     assert 'class="stats-section stats-chart-section stats-weekly-section"' in body
     assert 'class="stats-ranking-card"' in body
 
     css = (Path(__file__).parents[1] / "static/style.css").read_text()
-    assert ".stats-page .stats-summary {" in css
+    assert ".summary-tiles {" in css
     assert ".stats-page .stats-section {" in css
-    stats_mobile = css.index('@media (max-width: 760px) {\n  .stats-page-header')
+    stats_mobile = css.index('@media (max-width: 760px) {\n  .stats-page-actions')
     review_styles = css.index("/* Review keeps the task surface")
     assert stats_mobile < review_styles
 
@@ -233,7 +233,7 @@ def _section(body: str, name: str) -> str:
 
 
 def _legend_categories(section: str) -> list[str]:
-    legend = re.search(r'<p class="stats-legend">(.*?)</p>', section, re.S)
+    legend = re.search(r'<p class="chart-legend">(.*?)</p>', section, re.S)
     assert legend, "section has no legend"
     entries = re.findall(r'<span class="(\w+)">([^<]*)</span>', legend.group(1))
     for category, label in entries:
@@ -247,7 +247,7 @@ def _bar_categories(section: str) -> set[str]:
 
 def _swatch_token(category: str) -> str:
     rule = re.search(
-        rf"\.stats-legend \.{category}::before \{{ background: ([^;]+); \}}", CSS
+        rf"\.chart-legend \.{category}::before \{{ background: ([^;]+); \}}", CSS
     )
     assert rule, category
     return rule.group(1)

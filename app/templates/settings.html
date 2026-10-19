@@ -3,8 +3,8 @@
 {% block title %}Settings: Odograph{% endblock %}
 {% block content %}
 
-<div class="settings-page">
-<div class="settings-page-header page-title">
+<div class="page settings-page">
+<div class="page-title page-header settings-page-header">
   <div>
     <p class="page-title-eyebrow">Settings</p>
     <h2 id="settings-page-title" class="page-title-heading">Preferences and data</h2>
@@ -31,16 +31,17 @@
   <div class="storage-allowance-item">
     <strong>{{ label }}</strong>
     {% if limit is none %}
-    <p>{% if used < 1048576 %}{{ used }} bytes{% else %}{{ "%.1f"|format(used / 1048576) }} MiB{% endif %} used</p>
+    <p>{{ used|storage_size }} used</p>
     {% else %}
-    <p>{% if limit < 1048576 %}{{ used }} bytes of {{ limit }} bytes{% else %}{{ "%.1f"|format(used / 1048576) }} MiB of {{ "%.1f"|format(limit / 1048576) }} MiB{% endif %} ({{ "%.1f"|format(100 * used / limit) }}%)</p>
+    {% set unit = limit|storage_unit %}
+    <p>{{ used|storage_size(unit) }} of {{ limit|storage_size(unit) }} ({{ "%.1f"|format(100 * used / limit) }}%)</p>
     <progress max="{{ limit }}" value="{{ [used, limit]|min }}" aria-label="{{ label }} usage"></progress>
     {% if used >= limit %}<p class="storage-state">{% if used > limit %}Over allowance{% else %}At allowance{% endif %}</p>{% elif used * 5 >= limit * 4 %}<p class="storage-state">Nearly full</p>{% endif %}
     {% endif %}
   </div>
 {% endfor %}
 </div>
-<p class="muted">Saved data: {{ "%.1f"|format(storage.actual_bytes / 1048576) }} MiB. Reserved for trip processing: {{ "%.1f"|format(storage.reserved_bytes / 1048576) }} MiB. Tracking messages, routes, and addresses are included in the total.</p>
+<p class="muted">Saved data: {{ storage.actual_bytes|storage_size }}. Reserved for trip processing: {{ storage.reserved_bytes|storage_size }}. Tracking messages, routes, and addresses are included in the total.</p>
 {% if storage.account_blocked %}
 <p><strong>New data can't be saved.</strong> You can still view and export your history, sign in, recover your account, and remove data. Your tracking app can retry unsaved messages when there's room.</p>
 {% elif storage.raw_blocked %}
@@ -476,7 +477,7 @@ document.addEventListener('click', function (event) {
   {% if report.storage.ok %}
   <dl class="diagnostics-list">
     {% for key, label in (("instance_budget_bytes", "Instance budget"), ("instance_reserve_bytes", "Unallocated reserve"), ("total_grants_bytes", "Funded account allowances")) %}
-    <div><dt>{{ label }}</dt><dd>{{ "%.2f"|format(report.storage.stats[key] / 1073741824) }} GiB</dd></div>
+    <div><dt>{{ label }}</dt><dd>{{ report.storage.stats[key]|storage_size("GiB") }}</dd></div>
     {% endfor %}
     {% for key, label in (("account_count", "Accounts with allowances"), ("warning_count", "Accounts nearing an allowance"), ("blocked_count", "Accounts at an allowance")) %}
     <div><dt>{{ label }}</dt><dd>{{ report.storage.stats[key] }}</dd></div>

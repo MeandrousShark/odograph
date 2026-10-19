@@ -415,21 +415,21 @@ def test_expenses_template_exposes_shared_presentation_surfaces():
         expense_conflict_labels=EXPENSE_CONFLICT_LABELS,
         user={"sub": "test"}, csrf="token",
     )
-    assert '<div class="expenses-page">' in body
-    assert '<div class="expenses-page-header page-title">' in body
+    assert '<div class="page expenses-page">' in body
+    assert '<div class="page-title page-header">' in body
     assert '<p class="page-title-eyebrow">Expenses</p>' in body
     assert '<h2 id="expenses-page-title" class="page-title-heading">2026 vehicle expense ledger</h2>' in body
-    assert '<nav class="expenses-year-nav" aria-label="Expenses year">' in body
+    assert '<nav class="year-nav" aria-label="Expenses year">' in body
     assert '<form class="filter-bar expenses-controls" method="get">' in body
     assert '<details class="add-manual" open>' in body
-    assert '<div class="report-summary expenses-summary">' in body
+    assert '<div class="summary-tiles">' in body
     assert '<div class="table-wrapper expenses-table-wrapper">' in body
 
     stylesheet = (Path(__file__).parents[1] / "static/style.css").read_text()
-    assert ".expenses-page .expenses-summary > div" in stylesheet
+    assert ".summary-tile-total" in stylesheet
     assert ".expenses-page .expense-editor-panel" in stylesheet
     assert ".expenses-page .expense-warning-details > summary" in stylesheet
-    expenses_mobile = stylesheet.index('@media (max-width: 760px) {\n  .expenses-page-header')
+    expenses_mobile = stylesheet.index('@media (max-width: 760px) {\n  .expenses-page-actions')
     review_styles = stylesheet.index("/* Review keeps the task surface")
     assert expenses_mobile < review_styles
 

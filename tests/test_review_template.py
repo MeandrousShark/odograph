@@ -592,7 +592,7 @@ def test_review_page_script_carries_nonce_and_initializes_map():
 def test_review_page_header_has_eyebrow_heading_subtitle_and_close_link():
     body = _render_page(trip=_trip("manual"), remaining=1)
 
-    assert '<section class="review-page" aria-labelledby="review-page-title">' in body
+    assert '<section class="page review-page" aria-labelledby="review-page-title">' in body
     assert '<p class="page-title-eyebrow">Review</p>' in body
     assert '<h2 id="review-page-title" class="page-title-heading">Unclassified trips</h2>' in body
     assert 'class="page-title-subtitle">Classify each trip' in body
