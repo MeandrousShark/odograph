@@ -101,22 +101,23 @@ def test_report_pages_use_the_shared_title_header_and_scoped_report_hooks():
         (annual, "2026 annual mileage report"),
         (quarter, "2026 Q2 mileage report"),
     ):
-        assert '<div class="report-page">' in body
-        assert '<div class="report-page-header page-title">' in body
+        assert '<div class="page report-page">' in body
+        assert '<div class="page-title page-header">' in body
         assert '<p class="page-title-eyebrow">Report</p>' in body
         assert f'class="page-title-heading">{title}</h2>' in body
-    assert 'class="report-year-nav"' in annual
+    assert 'class="year-nav"' in annual
     assert 'href="/report/2026/export"' in annual
     assert 'href="/expenses?year=2026"' in annual
     assert 'class="filter-bar report-controls"' in annual
-    assert 'class="report-summary-metric report-summary-business"' in annual
+    assert '<div class="summary-tile"><span>Business miles</span>' in annual
+    assert 'class="summary-tile summary-tile-total"><span>Total deduction' in annual
     assert 'class="report-table report-month-table"' in annual
     assert 'class="report-table report-vehicle-table"' in annual
     assert 'href="/report/2026"' in quarter
     assert 'href="/report/range/export?from=2026-04-01&to=2026-06-30"' in quarter
 
     css = (Path(__file__).parents[1] / "static/style.css").read_text()
-    assert ".report-page .report-summary > div" in css
+    assert ".summary-tile-total" in css
     assert ".report-page .table-wrapper" in css
 
 
@@ -127,7 +128,7 @@ def test_report_html_renders_shared_summary_for_non_empty_report():
         expense_report=SimpleNamespace(comparisons=[]), user=USER, csrf="token",
         next_year_disabled=False,
     )
-    assert body.count('<div class="report-summary">') == 1
+    assert body.count('<div class="summary-tiles">') == 1
 
 
 def test_report_html_has_q1_through_q4_preset_links_for_displayed_year():
@@ -161,7 +162,7 @@ def test_report_html_next_year_control_disabled_in_place_for_the_current_year():
         expense_report=SimpleNamespace(comparisons=[]), user=USER, csrf="token",
         next_year_disabled=True,
     )
-    assert '<span class="report-year-next" aria-disabled="true">2027 →</span>' in body
+    assert '<span class="year-nav-next" aria-disabled="true">2027 →</span>' in body
     assert 'href="/report/2027"' not in body
     # Previous-year link is unguarded and stays a real link either way.
     assert '<a href="/report/2025">← 2025</a>' in body
@@ -174,7 +175,7 @@ def test_report_html_next_year_control_disabled_for_a_url_reached_future_year():
         expense_report=SimpleNamespace(comparisons=[]), user=USER, csrf="token",
         next_year_disabled=True,
     )
-    assert '<span class="report-year-next" aria-disabled="true">2031 →</span>' in body
+    assert '<span class="year-nav-next" aria-disabled="true">2031 →</span>' in body
     assert 'href="/report/2031"' not in body
 
 
@@ -183,7 +184,7 @@ def test_report_range_html_has_no_odometer_or_expense_sections():
         [_trip(4), _trip(5)], RATES, TZ, date(2026, 4, 1), date(2026, 6, 30)
     )
     body = _render("report_range.html", report=report, user=USER, csrf="token")
-    assert body.count('<div class="report-summary">') == 1
+    assert body.count('<div class="summary-tiles">') == 1
     assert "2026 Q2" in body
     assert "Odometer coverage" not in body
     assert "Odometer reconciliation" not in body
@@ -194,7 +195,7 @@ def test_report_range_html_empty_state_has_no_tables():
     report = build_range_report([], RATES, TZ, date(2026, 4, 1), date(2026, 6, 30))
     body = _render("report_range.html", report=report, user=USER, csrf="token")
     assert "No trips recorded" in body
-    assert "report-summary" not in body
+    assert "summary-tile" not in body
     assert "<table>" not in body
 
 
@@ -206,7 +207,7 @@ def test_report_html_empty_state_has_no_summary_or_tables():
         next_year_disabled=False,
     )
     assert "No trips recorded in 2026." in body
-    assert "report-summary" not in body
+    assert "summary-tile" not in body
     assert "<table>" not in body
 
 

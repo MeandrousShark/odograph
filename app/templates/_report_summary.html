@@ -1,12 +1,12 @@
-<div class="report-summary">
-  <div class="report-summary-metric report-summary-business"><span class="report-summary-label muted">Business miles</span><strong>{{ report.business_m | mi }} mi</strong></div>
-  <div class="report-summary-metric report-summary-personal"><span class="report-summary-label muted">Personal miles</span><strong>{{ report.personal_m | mi }} mi</strong></div>
+<div class="summary-tiles">
+  <div class="summary-tile"><span>Business miles</span><strong>{{ report.business_m | mi }} mi</strong></div>
+  <div class="summary-tile"><span>Personal miles</span><strong>{{ report.personal_m | mi }} mi</strong></div>
   {% if report.nondeductible_m %}
-  <div class="report-summary-metric report-summary-nondeductible"><span class="report-summary-label muted">Non-deductible miles</span><strong>{{ report.nondeductible_m | mi }} mi</strong></div>
+  <div class="summary-tile"><span>Non-deductible miles</span><strong>{{ report.nondeductible_m | mi }} mi</strong></div>
   {% endif %}
-  <div class="report-summary-metric report-summary-share"><span class="report-summary-label muted">Business share</span>
+  <div class="summary-tile"><span>Business share</span>
     <strong>{{ "%.1f"|format(report.business_pct) if report.business_pct is not none else "--" }}%</strong></div>
-  <div class="report-summary-metric report-summary-deduction"><span class="report-summary-label muted">Total deduction</span>
+  <div class="summary-tile summary-tile-total"><span>Total deduction</span>
     <strong>{{ report.total_deduction | usd }}</strong></div>
 </div>
 

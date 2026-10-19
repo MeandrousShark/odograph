@@ -87,3 +87,31 @@ def test_storage_recovery_points_members_at_an_administrator():
     body = _render(_usage(warning=True), "settings.html")
     assert "ask an administrator for more space" in body
     assert "ask the operator" not in body
+
+
+SUB_MIB_USAGE = {
+    "total_bytes": 1037968, "actual_bytes": 1033872, "reserved_bytes": 4096,
+    "raw_bytes": 128 * 1024, "enhancement_bytes": 64 * 1024,
+    "raw_limit_bytes": 256 * 1024, "enhancement_limit_bytes": 128 * 1024,
+}
+
+
+def _storage_section(body):
+    return body.split('id="storage-allowance"', 1)[1].split("</section>", 1)[0]
+
+
+def test_settings_never_pairs_bytes_with_mib_or_gib_for_sub_mib_usage():
+    unlimited = _render(_usage(**SUB_MIB_USAGE, account_limit_bytes=None), "settings.html")
+    section = _storage_section(unlimited)
+    assert "1013.6 KiB used" in section
+    assert "bytes" not in section
+
+    limited = _render(_usage(**SUB_MIB_USAGE, account_limit_bytes=50 * 1024 ** 2), "settings.html")
+    section = _storage_section(limited)
+    assert "1.0 MiB of 50.0 MiB (2.0%)" in section
+    assert "bytes" not in section
+
+
+def test_settings_pairs_usage_with_its_limit_in_the_limits_unit():
+    body = _render(_usage(total_bytes=512 * 1024, account_limit_bytes=768 * 1024), "settings.html")
+    assert "512.0 KiB of 768.0 KiB (66.7%)" in _storage_section(body)

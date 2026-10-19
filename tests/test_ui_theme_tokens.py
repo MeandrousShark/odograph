@@ -197,8 +197,8 @@ def test_settings_account_section_is_available_to_every_real_account():
 def test_settings_uses_the_secondary_page_header_and_keeps_sections_in_order():
     body = _render_settings()
 
-    assert '<div class="settings-page">' in body
-    assert '<div class="settings-page-header page-title">' in body
+    assert '<div class="page settings-page">' in body
+    assert '<div class="page-title page-header">' in body
     assert '<p class="page-title-eyebrow">Settings</p>' in body
     labels = (
         '<section class="settings-account-section"',
@@ -229,16 +229,20 @@ def test_settings_import_keeps_multipart_csrf_and_mobile_file_constraint():
     assert 'name="dry_run" value="1"' in form
 
     mobile_start = CSS.index(
-        '@media (max-width: 760px) {\n  .settings-page-header'
+        '@media (max-width: 760px) {\n  .admin-card-table,'
     )
     review_start = CSS.index(
-        '@media (max-width: 760px) {\n  .review-page-header', mobile_start
+        '@media (max-width: 760px) {\n  .review-card { padding', mobile_start
     )
     mobile = CSS[mobile_start:review_start]
     assert '.settings-page .settings-import-form input[type="file"]' in mobile
     assert "width: 100%; max-width: 760px; min-width: 0;" in mobile
     assert ".settings-page .settings-import-form .settings-file-field { flex: none; }" in mobile
-    assert ".settings-page-header .page-title-subtitle { display: none; }" not in mobile
+    # Settings follows the shared .page-header rules, phone subtitle included.
+    assert ".settings-page-header" not in CSS
+    shared_start = CSS.index("@media (max-width: 760px) {\n  .page-header {")
+    shared = CSS[shared_start:CSS.index("\n}\n", shared_start)]
+    assert ".page-header .page-title-subtitle { display: none; }" in shared
 
 
 def test_production_templates_do_not_load_remote_assets():

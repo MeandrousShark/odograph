@@ -794,7 +794,7 @@ def test_trip_detail_summary_keeps_source_route_and_map_hooks_scoped():
     ))
     stylesheet = (Path(__file__).parents[1] / "static/style.css").read_text()
 
-    assert 'class="trip-detail-page"' in body
+    assert 'class="page trip-detail-page"' in body
     assert 'class="trip-detail-overview"' in body
     assert "Detected trip" in body
     assert "Recording gap" in body

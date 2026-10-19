@@ -159,14 +159,15 @@ def test_account_security_shows_safe_email_password_form_and_recovery_command():
     assert 'action="/settings/account/oidc/unlink"' not in body
     assert "password_hash" not in body
     assert "auth_version" not in body
-    assert '<div class="page-title auth-page-title">' in body
+    assert '<div class="page">' in body
+    assert '<div class="page-title page-header">' in body
     assert '<title>Account Settings: Odograph</title>' in body
     assert '<h2 class="page-title-heading">Account Settings</h2>' in body
     assert '<section class="card account-settings-card account-settings-profile" aria-labelledby="profile-heading">' in body
     assert '<h3 id="profile-heading">Profile</h3>' in body
     assert '<section class="card account-settings-card account-settings-security" aria-labelledby="security-heading">' in body
     assert '<h3 id="security-heading">Security</h3>' in body
-    assert body.index('class="page-title auth-page-title"') < body.index('class="card account-settings-card')
+    assert body.index('class="page-title page-header"') < body.index('class="card account-settings-card')
     assert 'aria-labelledby="change-password-heading"' in body
     assert 'id="change-password-heading">Change password</h4>' in body
     assert 'aria-labelledby="operator-recovery-heading"' in body

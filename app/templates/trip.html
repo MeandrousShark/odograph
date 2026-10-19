@@ -17,8 +17,8 @@
 {% set has_route_endpoints = trip.start_lat is not none and trip.start_lon is not none
    and trip.end_lat is not none and trip.end_lon is not none %}
 
-<div class="trip-detail-page">
-  <div class="trip-detail-page-header page-title">
+<div class="page trip-detail-page">
+  <div class="page-title page-header">
     <div>
       <p class="page-title-eyebrow">Trip detail</p>
       <h2 id="trip-detail-heading" class="page-title-heading">{{ trip.started_at | local_dt('%a %b %-d, %Y') }}</h2>

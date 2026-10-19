@@ -55,6 +55,7 @@ from app.report import caveat_lines, format_rate_periods, quarter_bounds, range_
 from app.retention import RetentionWorker
 from app.snap import SnapWorker
 from app.storage_errors import register_storage_errors
+from app.storage_format import storage_size, storage_unit
 from app.trip_warnings import trip_warnings
 from app.ui import EXCLUSION_LABELS
 
@@ -229,6 +230,7 @@ def make_templates(config: Config) -> Jinja2Templates:
     templates.env.filters.update(
         local_dt=local_dt, local_time=local_time, local_date=local_date,
         duration=duration, km=km, mi=format_miles, usd=format_usd,
+        storage_size=storage_size, storage_unit=storage_unit,
     )
     templates.env.globals["now_local"] = now_local
     templates.env.globals["display_tz"] = str(tz)

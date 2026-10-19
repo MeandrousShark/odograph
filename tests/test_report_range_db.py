@@ -270,7 +270,7 @@ async def _report_page_year_boundary_scenario():
         current = await report_response(pool, "/report/2026", request.state.config)
         assert current.status_code == 200
         current_body = current.body.decode()
-        assert '<span class="report-year-next" aria-disabled="true">2027 →</span>' in current_body
+        assert '<span class="year-nav-next" aria-disabled="true">2027 →</span>' in current_body
         assert 'href="/report/2027"' not in current_body
         assert '<a href="/report/2025">← 2025</a>' in current_body
 

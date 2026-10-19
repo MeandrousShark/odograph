@@ -230,6 +230,17 @@ def test_storage_column_shows_usage_and_each_limit_mode():
     assert "Unavailable" not in body
 
 
+def test_storage_limits_read_in_gib_while_usage_keeps_its_own_unit():
+    mib = 1024 ** 2
+    body, cells, _ = _storage_rows([
+        _storage_account(2, mode="custom", limit=50 * mib, default=50 * mib, used=1037968,
+                         custom_gib="0.05"),
+    ])
+    assert "1013.6 KiB used" in cells[0]
+    assert "Custom: 0.05 GiB" in cells[0]
+    assert '<option value="default">Instance default (0.05 GiB)</option>' in body
+
+
 def test_storage_editor_is_offered_for_members_only():
     gib = 1024 ** 3
     body, _, rows = _storage_rows([

@@ -2,8 +2,8 @@
 {% block title %}Expenses: Odograph{% endblock %}
 {% block content %}
 
-<div class="expenses-page">
-  <div class="expenses-page-header page-title">
+<div class="page expenses-page">
+  <div class="page-title page-header">
     <div>
       <p class="page-title-eyebrow">Expenses</p>
       <h2 id="expenses-page-title" class="page-title-heading">{{ selected_year }} vehicle expense ledger</h2>
@@ -12,7 +12,7 @@
         limits, or recapture.</p>
     </div>
     <div class="page-title-actions expenses-page-actions">
-      <nav class="expenses-year-nav" aria-label="Expenses year">
+      <nav class="year-nav" aria-label="Expenses year">
         <a href="/expenses?year={{ selected_year - 1 }}">← {{ selected_year - 1 }}</a>
         <strong>{{ selected_year }}</strong>
         <a href="/expenses?year={{ selected_year + 1 }}">{{ selected_year + 1 }} →</a>
@@ -89,10 +89,10 @@
 </details>
 
 {% if expenses %}
-<div class="report-summary expenses-summary">
-  <div class="expenses-summary-total"><span class="muted">Ledger total</span><strong>{{ ledger_total | usd }}</strong></div>
+<div class="summary-tiles">
+  <div class="summary-tile summary-tile-total"><span>Ledger total</span><strong>{{ ledger_total | usd }}</strong></div>
   {% for category, total in category_totals|dictsort %}
-  <div><span class="muted">{{ category_labels[category] }}</span><strong>{{ total | usd }}</strong></div>
+  <div class="summary-tile"><span>{{ category_labels[category] }}</span><strong>{{ total | usd }}</strong></div>
   {% endfor %}
 </div>
 

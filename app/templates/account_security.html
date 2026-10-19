@@ -2,8 +2,8 @@
 {% block title %}Account Settings: Odograph{% endblock %}
 {% block content %}
 
-<div class="account-settings-page">
-<div class="page-title auth-page-title">
+<div class="page">
+<div class="page-title page-header">
   <div>
     <h2 class="page-title-heading">Account Settings</h2>
   </div>
@@ -50,7 +50,7 @@
         <h2 id="avatar-remove-dialog-title">Remove avatar?</h2>
         <p id="avatar-remove-dialog-description">This removes your uploaded avatar and restores your initials.</p>
         <div class="app-dialog-actions account-avatar-remove-dialog-actions">
-          <button type="button" data-avatar-remove-cancel autofocus>Cancel</button>
+          <button type="button" class="control control-secondary" data-avatar-remove-cancel autofocus>Cancel</button>
           <button type="submit" class="control control-destructive account-avatar-remove-confirm">Remove avatar</button>
         </div>
       </form>
