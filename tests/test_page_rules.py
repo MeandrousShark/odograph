@@ -1,10 +1,12 @@
-"""Page-level button rules: every button is a .control and nothing uses hx-confirm.
+"""Page-level button rules: every button is a .control with a variant and
+nothing uses hx-confirm.
 
-Migrated pages are checked on their rendered output. Pages still waiting on a
-later slice are checked on their template source (plus the partials they
-include), because rendering them needs database-shaped context. A page listed in
-NOT_YET_MIGRATED must still break the rules; once it is clean the guard below
-fails until the entry is removed, so the list can only shrink.
+Every content page (a template using the shared .page wrapper) is registered
+in exactly one of FOLLOWS_RULES or NOT_YET_MIGRATED. Pages are checked on their
+template source plus the partials they include, since most need
+database-shaped context to render; Account Settings is also checked rendered.
+A page listed in NOT_YET_MIGRATED must still break the rules; once it is clean
+the guard below fails until the entry moves, so the list can only shrink.
 """
 from __future__ import annotations
 
@@ -21,13 +23,24 @@ from app.main import make_templates
 TEMPLATES = Path(__file__).parents[1] / "app" / "templates"
 TZ = ZoneInfo("UTC")
 
-# Slices C3 to C5 remove entries as each page is converted.
-NOT_YET_MIGRATED = {
-    "report.html",
-    "stats.html",
-    "expenses.html",
-    "settings.html",
+FOLLOWS_RULES = {
+    "account_security.html",
+    "report_range.html",
+    "review.html",
 }
+
+# Page -> the plan 0074 slice that converts its buttons, or "unassigned".
+NOT_YET_MIGRATED = {
+    "report.html": "C3",
+    "expenses.html": "C4",
+    "settings.html": "C5",
+    "stats.html": "unassigned",
+    "tracking.html": "unassigned",
+    "admin_accounts.html": "unassigned",
+    "trip.html": "unassigned",
+}
+
+VARIANTS = {"control-primary", "control-secondary", "control-destructive"}
 
 # Buttons that are legitimately not .control. Both live in the shared header
 # shell (base.html) that every rendered page includes.
@@ -51,7 +64,9 @@ def _bad_buttons(buttons: list[dict[str, str]]) -> list[dict[str, str]]:
     bad = []
     for attrs in buttons:
         classes = set(attrs.get("class", "").split())
-        if "control" in classes or classes & COMPONENT_BUTTON_CLASSES:
+        if classes & COMPONENT_BUTTON_CLASSES:
+            continue
+        if "control" in classes and classes & VARIANTS:
             continue
         bad.append(attrs)
     return bad
@@ -142,10 +157,24 @@ def _source_violations(name: str) -> list[str]:
     return found
 
 
+def test_every_content_page_is_registered_once():
+    pages = {
+        path.name for path in TEMPLATES.glob("*.html")
+        if re.search(r'class="page[ "]', path.read_text())
+    }
+    assert not FOLLOWS_RULES & set(NOT_YET_MIGRATED)
+    assert pages == FOLLOWS_RULES | set(NOT_YET_MIGRATED)
+
+
+@pytest.mark.parametrize("page", sorted(FOLLOWS_RULES))
+def test_page_source_follows_the_button_rules(page):
+    assert _source_violations(page) == []
+
+
 @pytest.mark.parametrize("page", sorted(NOT_YET_MIGRATED))
 def test_not_yet_migrated_pages_still_break_the_rules(page):
     assert (TEMPLATES / page).is_file()
     assert _source_violations(page), (
-        f"{page} follows the button rules now; remove it from NOT_YET_MIGRATED "
-        "and add it to RENDERED_PAGES"
+        f"{page} follows the button rules now; move it from NOT_YET_MIGRATED "
+        "to FOLLOWS_RULES"
     )

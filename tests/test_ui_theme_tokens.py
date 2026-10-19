@@ -198,7 +198,7 @@ def test_settings_uses_the_secondary_page_header_and_keeps_sections_in_order():
     body = _render_settings()
 
     assert '<div class="page settings-page">' in body
-    assert '<div class="page-title page-header settings-page-header">' in body
+    assert '<div class="page-title page-header">' in body
     assert '<p class="page-title-eyebrow">Settings</p>' in body
     labels = (
         '<section class="settings-account-section"',
@@ -240,6 +240,9 @@ def test_settings_import_keeps_multipart_csrf_and_mobile_file_constraint():
     assert ".settings-page .settings-import-form .settings-file-field { flex: none; }" in mobile
     # Settings follows the shared .page-header rules, phone subtitle included.
     assert ".settings-page-header" not in CSS
+    shared_start = CSS.index("@media (max-width: 760px) {\n  .page-header {")
+    shared = CSS[shared_start:CSS.index("\n}\n", shared_start)]
+    assert ".page-header .page-title-subtitle { display: none; }" in shared
 
 
 def test_production_templates_do_not_load_remote_assets():
