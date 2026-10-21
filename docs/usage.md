@@ -224,8 +224,9 @@ distance can change. Settings contains **Manual trip edits**, where **Undo**
 reverses a stored merge or split and **Restore** brings back a deleted detected
 trip.
 
-A trip that has just ended can still be in progress: Odograph shows it as soon
-as the phone reports arrival, but it can still grow if the drive continues.
+A trip that has just ended can still be in progress: when the phone reports
+arrival, Odograph shows the trip before the stop is confirmed, and the trip can
+still grow if the drive continues.
 Until the stop is confirmed or a later trip exists, delete, merge and split
 refuse it with "This trip is still in progress. Try again once it ends."
 
@@ -460,9 +461,10 @@ archive, `.env`, verification, restore, and off-host protection.
 
 Check **Settings**, **Device status**. A recent fix means
 ingestion is working and the detector may still be waiting for the trip to
-finish. A trip ends within a couple of minutes when the phone reports an OwnTracks
-region or an iOS visit at the destination; otherwise the detector waits for
-five minutes of points there, which can mean the phone's next report. Sparse
+finish. A trip ends within a few minutes when the phone keeps reporting for
+about a minute after arriving and one of those reports is an OwnTracks region
+or iOS visit fix; otherwise the detector waits for five minutes of points at
+the destination, which can mean the phone's next report. Sparse
 reporting or queued offline data can delay completion. Check
 **Trips** for the date and the Dashboard **Needs attention** area for a
 possible missing-trip warning. A **Recording gap** badge means distance may

@@ -43,9 +43,9 @@ reproduced here.
 - Stats: Recent weekly miles now has a legend, and chart bars for
   Unclassified and Non-deductible use the same colors as their legend
   swatches and the Dashboard.
-- A detected trip now appears within a couple of minutes of arrival when
-  OwnTracks reports a region or an iOS visit at the destination, instead of
-  waiting for the phone's next report, which could be hours later. Existing
+- A detected trip now appears within a few minutes of arrival when OwnTracks
+  reports a region or an iOS visit at the destination, instead of waiting for
+  the phone's next report, which could be hours later. Existing
   trips are unchanged and no reprocessing is needed. Until the stop is
   confirmed, delete, merge and split refuse the trip and ask you to try again
   once it ends. See
