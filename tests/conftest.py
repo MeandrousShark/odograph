@@ -32,6 +32,7 @@ from psycopg_pool import AsyncConnectionPool
 import pytest
 
 from app.db import MIGRATIONS_DIR, make_pool, run_migrations
+from app.local_auth import hash_password
 from app.account_context import (
     CONTROL_ROLE, RUNTIME_ROLE, AccountPool, AccountPrincipal, account_id,
 )
@@ -477,6 +478,23 @@ async def provisioned_role_pools(pool):
         await close_restricted_role_pools(pool)
 
 
+_password_hash: str | None = None
+
+
+def _fixture_password_hash() -> str:
+    """One real hash of "test-password" per session, at production cost.
+
+    Scrypt is deliberately slow, and every bootstrap paid it again. The hash
+    function is bound at import, so a test that patches it cannot change
+    what later fixtures store.
+    """
+    global _password_hash
+    if _password_hash is None:
+        with timing_records.span("hash_password"):
+            _password_hash = hash_password("test-password")
+    return _password_hash
+
+
 @timing_records.timed("account_bootstrap")
 async def bootstrap_test_account(pool, *, owner_id: int = 41, email="development@localhost.invalid") -> FixtureAccountPool:
     """Create a real owner explicitly; no production default owner is added.
@@ -485,14 +503,11 @@ async def bootstrap_test_account(pool, *, owner_id: int = 41, email="development
     restricted runtime role, where row-level security is enforced.
     """
     from app.accounts import create_admin
-    from app.local_auth import hash_password
     async with pool.connection() as conn:
         await conn.execute("SELECT setval(pg_get_serial_sequence('accounts','id'), %s, false)", (owner_id,))
         # Existing personal fixtures name their default vehicle explicitly as 1.
         await conn.execute("SELECT setval(pg_get_serial_sequence('vehicles','id'), 1, false)")
-        with timing_records.span("hash_password"):
-            password_hash = hash_password("test-password")
-        account = await create_admin(conn, email, password_hash)
+        account = await create_admin(conn, email, _fixture_password_hash())
     return await account_pool(pool, account["id"], account["is_enabled"], account["auth_version"])
 
 
