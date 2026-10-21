@@ -60,6 +60,12 @@ async def _trips(conn):
         (account_id(conn),))).fetchall()
 
 
+async def _trip_points(conn, trip_id):
+    return (await (await conn.execute(
+        "SELECT count(*) FROM points WHERE account_id=%s AND trip_id=%s",
+        (account_id(conn), trip_id))).fetchone())[0]
+
+
 async def _stays(conn):
     return await (await conn.execute(
         "SELECT started_at,ended_at FROM stays WHERE account_id=%s ORDER BY started_at",
@@ -142,9 +148,11 @@ def test_a_run_mid_drive_keeps_the_provisional_trip_for_the_rejoin():
             await conn.execute(
                 "UPDATE trips SET category='business', tag_source='human' WHERE id=%s", (trip_id,))
             await _insert(conn, device, rest[:split])
+            points_before = await _trip_points(conn, trip_id)
         assert await DetectorRunner(pool, Params()).run_once()
         async with pool.connection() as conn:
             mid = await _trips(conn)
+            assert await _trip_points(conn, trip_id) == points_before
             await _settle(conn, device)
         # A later transaction, so the new points' received_at passes now().
         async with pool.connection() as conn:
