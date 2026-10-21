@@ -36,7 +36,8 @@ CI splits the suite into parallel jobs, each with its own database: one runs
 bare `.venv/bin/pytest` still runs the full suite.
 
 Each test case, setup and teardown included, has a 60 second limit. A case
-that runs longer dumps every thread's stack to stderr and stops the run.
+that runs longer dumps every thread's stack to stderr and stops the run. Under
+`--pdb` the limit stops once a phase fails, so debugging is not cut short.
 
 Every test carries one tier marker. Pure logic, rendering and validation
 belong in `unit`; `db` is for SQL, row-level security, persistence, commits

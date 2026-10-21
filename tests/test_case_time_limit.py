@@ -19,6 +19,12 @@ def slow_setup():
     time.sleep(0.7)
 
 
+@pytest.fixture
+def hangs_in_teardown():
+    yield
+    time.sleep(30)
+
+
 def test_passes():
     pass
 
@@ -29,6 +35,10 @@ def test_hangs():
 
 def test_phases_share_one_limit(slow_setup):
     time.sleep(0.7)
+
+
+def test_fails_then_hangs_in_teardown(hangs_in_teardown):
+    assert False
 '''
 
 
@@ -45,13 +55,22 @@ def _run(tmp_path: Path, *args: str, limit: str = "1") -> subprocess.CompletedPr
 
 
 def test_hung_case_dumps_its_stack_and_exits(tmp_path):
-    result = _run(tmp_path, "-k", "passes or hangs")
+    result = _run(tmp_path, "-k", "passes or test_hangs")
 
-    assert result.returncode != 0
+    assert result.returncode == 1
     assert "Timeout (0:00:01)!" in result.stderr
     assert "most recent call first" in result.stderr
-    line = SAMPLE.splitlines().index("    time.sleep(30)") + 1
+    line = SAMPLE.splitlines().index("def test_hangs():") + 2
     assert f'test_sample.py", line {line} in test_hangs' in result.stderr
+
+
+def test_teardown_after_a_failed_call_is_still_limited(tmp_path):
+    result = _run(tmp_path, "-k", "teardown")
+
+    assert result.returncode == 1
+    # Re-armed with what is left of the case's budget, not a fresh limit.
+    assert "Timeout (0:00:00." in result.stderr
+    assert "in hangs_in_teardown" in result.stderr
 
 
 def test_one_limit_covers_setup_and_call_together(tmp_path):

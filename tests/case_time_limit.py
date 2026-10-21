@@ -2,7 +2,8 @@
 
 One timer covers a case's setup, call and teardown together, so a hang shows
 where it is stuck in seconds instead of when an outer timeout kills the run.
-The exit is immediate, so a hung case leaves no timing record.
+The exit is immediate, so a hung case leaves no timing record. Under --pdb
+the limit stops once a phase fails, so a debugging session is not killed.
 
 faulthandler has one pending timer, which pytest's own faulthandler_timeout
 also uses; that option is refused rather than letting one silently replace
@@ -13,6 +14,7 @@ from __future__ import annotations
 import faulthandler
 import os
 import sys
+import time
 
 import pytest
 
@@ -37,14 +39,25 @@ class CaseTimeLimit:
     def __init__(self, seconds: float, fileno: int):
         self.seconds = seconds
         self.fileno = fileno
+        self.deadline: float | None = None
 
     @pytest.hookimpl(wrapper=True)
     def pytest_runtest_protocol(self, item):
+        self.deadline = time.monotonic() + self.seconds
         faulthandler.dump_traceback_later(self.seconds, exit=True, file=self.fileno)
         try:
             return (yield)
         finally:
+            self.deadline = None
             faulthandler.cancel_dump_traceback_later()
+
+    @pytest.hookimpl(trylast=True)
+    def pytest_exception_interact(self, node, call, report):
+        # pytest's faulthandler plugin cancels the timer when a phase fails;
+        # re-arm it with the case's remaining budget so teardown stays covered.
+        if self.deadline is not None and not node.config.option.usepdb:
+            faulthandler.dump_traceback_later(
+                max(self.deadline - time.monotonic(), 0.001), exit=True, file=self.fileno)
 
     def pytest_unconfigure(self, config):
         os.close(self.fileno)

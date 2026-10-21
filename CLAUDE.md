@@ -34,8 +34,9 @@ reset the public schema. Install the Gitleaks version pinned in
 `.github/workflows/test.yml`, then run `python scripts/check_public_tree.py`
 before opening a pull request.
 
-Each test case, setup and teardown included, has a 60 second limit; a longer
-case dumps every thread's stack and stops the run.
+Each test case, setup and teardown included, has a 60 second limit (not
+enforced under `--pdb` once a phase fails); a longer case dumps every thread's
+stack and stops the run.
 
 Every test carries one tier marker. Put pure logic, rendering and validation
 in `unit`; `db` is for SQL, row-level security, persistence, commits and
