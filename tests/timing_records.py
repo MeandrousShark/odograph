@@ -2,7 +2,9 @@
 
 Off unless ODOGRAPH_TIMING_RECORDS names an output file. Each line is
 flushed as it is written, so a shard stopped by its timeout still leaves the
-cases it finished. Records:
+cases it finished, and the case it stopped in, as ``interrupted``. Recording
+never fails the suite: an error opening, writing or instrumenting turns it
+off with a message on stderr. Records:
 
 - ``header``: format, revisions, shard, CI run and runner environment
 - ``collection``: collection time and case counts
@@ -13,7 +15,9 @@ cases it finished. Records:
 
 Spans are inclusive elapsed time, so nested spans (a reset inside a
 bootstrap) are not additive, and spans of concurrent coroutines in one case
-can sum past its wall time.
+can sum past its wall time. Spans recorded from worker threads are not
+synchronized, so their counts can be slightly low under contention, and a
+thread that outlives its case records into the next one or nowhere.
 """
 from __future__ import annotations
 
@@ -118,8 +122,10 @@ def _outcome(reports: dict) -> str:
         return "failed"
     if any(report.failed for report in reports.values()):
         return "error"
-    if call is not None and hasattr(call, "wasxfail"):
-        return "xfailed" if call.skipped else "xpassed"
+    xfail = next((report for report in (call, reports.get("setup"))
+                  if report is not None and hasattr(report, "wasxfail")), None)
+    if xfail is not None:
+        return "xfailed" if xfail.skipped else "xpassed"
     if any(report.skipped for report in reports.values()):
         return "skipped"
     return "passed"
@@ -131,6 +137,7 @@ class TimingRecorder:
         self.started = time.perf_counter()
         self.common = {"shard": shard, "head": head}
         self.tiers: dict[str, str | None] = {}
+        self.current: str | None = None
         self.reports: dict = {}
         self.shared_fixtures: list[str] = []
         self.cases = 0
@@ -151,9 +158,25 @@ class TimingRecorder:
         })
 
     def write(self, kind: str, fields: dict) -> None:
+        if self.file is None:
+            return
         record = {"kind": kind, **self.common, **fields}
-        self.file.write(json.dumps(record, sort_keys=True) + "\n")
-        self.file.flush()
+        try:
+            self.file.write(json.dumps(record, sort_keys=True) + "\n")
+            self.file.flush()
+        except OSError as error:
+            self.disable(error)
+
+    def disable(self, error: BaseException) -> None:
+        global _spans
+        _spans = None
+        sys.stderr.write(f"timing records disabled: {error!r}\n")
+        file, self.file = self.file, None
+        if file is not None:
+            try:
+                file.close()
+            except OSError:
+                pass
 
     @pytest.hookimpl(hookwrapper=True)
     def pytest_collection(self, session):
@@ -174,7 +197,10 @@ class TimingRecorder:
 
     def pytest_runtest_logstart(self, nodeid, location):
         global _spans
+        if self.file is None:
+            return
         _spans = {}
+        self.current = nodeid
         self.reports = {}
         self.shared_fixtures = []
 
@@ -186,12 +212,16 @@ class TimingRecorder:
         self.reports[report.when] = report
 
     def pytest_runtest_logfinish(self, nodeid, location):
+        self.write_case(nodeid, _outcome(self.reports))
+
+    def write_case(self, nodeid: str, outcome: str) -> None:
         global _spans
         spans, _spans = _spans or {}, None
+        self.current = None
         fields = {
             "nodeid": nodeid,
             "tier": self.tiers.get(nodeid),
-            "outcome": _outcome(self.reports),
+            "outcome": outcome,
             "spans": {name: [count, round(seconds, 6)]
                       for name, (count, seconds) in sorted(spans.items())},
         }
@@ -204,12 +234,16 @@ class TimingRecorder:
         self.cases += 1
 
     def pytest_sessionfinish(self, session, exitstatus):
+        if self.current is not None:
+            self.write_case(self.current, "interrupted")
         self.write("session", {
             "exitstatus": int(exitstatus),
             "cases": self.cases,
             "seconds": round(time.perf_counter() - self.started, 6),
         })
-        self.file.close()
+        if self.file is not None:
+            self.file.close()
+            self.file = None
 
 
 def _wrap_method(owner, attribute: str, name: str) -> None:
@@ -278,6 +312,14 @@ def activate(config) -> None:
     if not path:
         return
     root = Path(str(config.rootpath))
-    recorder = TimingRecorder(config, Path(path), shard, head or _git_head(root))
-    _install_spans()
+    try:
+        recorder = TimingRecorder(config, Path(path), shard, head or _git_head(root))
+    except Exception as error:  # Measurement must never fail the suite.
+        sys.stderr.write(f"timing records disabled: {error!r}\n")
+        return
+    try:
+        _install_spans()
+    except Exception as error:
+        recorder.disable(error)
+        return
     config.pluginmanager.register(recorder, "odograph-timing-records")
