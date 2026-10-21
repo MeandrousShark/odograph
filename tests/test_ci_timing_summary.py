@@ -274,4 +274,3 @@ def test_oversized_summary_is_truncated(tmp_path, monkeypatch):
 
     assert len(text.encode()) < 250
     assert text.endswith("Summary truncated.\n")
-
