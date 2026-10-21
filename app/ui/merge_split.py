@@ -10,7 +10,10 @@ from app.detector.lock import lock_detector
 from app.detector.runner import load_trip_points
 from app.merge import TripSpan, plan_merge_selected
 
-from app.ui._common import CATEGORIES, _fetch_trip, _parse_vehicle_form, _path_distance_m, _poke_snap_worker
+from app.ui._common import (
+    CATEGORIES, _fetch_trip, _parse_vehicle_form, _path_distance_m, _poke_snap_worker,
+    refuse_in_progress_trips,
+)
 
 
 def _blank_fallback(form_value: str, survivor, by_start, index: int) -> str | None:
@@ -115,6 +118,7 @@ async def _merge_trips_core(
         devices = {r[1] for r in rows}
         if len(devices) > 1:
             raise HTTPException(status_code=400, detail="Selected trips must all be from the same device")
+        await refuse_in_progress_trips(conn, trip_ids)
         device = next(iter(devices))
         label = rows[0][5]
         selected = [TripSpan(id=r[0], started_at=r[3], ended_at=r[4]) for r in rows]
@@ -352,6 +356,7 @@ def register_split(router: APIRouter) -> None:
                     raise HTTPException(status_code=400, detail="Only detected trips can be split")
                 if imported:
                     raise HTTPException(status_code=400, detail="Imported trips have no location points to split")
+                await refuse_in_progress_trips(conn, [trip_id])
                 cur = await conn.execute(
                     "SELECT 1 FROM points WHERE account_id = %s AND id = %s AND tracking_device_id = %s "
                     "AND recorded_at > %s AND recorded_at < %s",

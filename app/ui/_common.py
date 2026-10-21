@@ -432,6 +432,33 @@ def _month_page_url(
     )
 
 
+IN_PROGRESS_DETAIL = "This trip is still in progress. Try again once it ends."
+
+
+async def refuse_in_progress_trips(conn, trip_ids: list[int]) -> None:
+    """Refuse an edit to a trip whose end the detector has not settled.
+
+    A trip ending at an arrival the detector has only provisionally accepted,
+    or kept while the drive goes on, can still grow: a discard override over
+    it could later hide the longer real trip, and a merge or split of it has
+    no settled trip to produce. Such a trip is its device's latest detected
+    trip and has no persisted stay at its end. Callers hold the detector lock.
+    """
+    cur = await conn.execute(
+        "SELECT 1 FROM trips t WHERE t.account_id = %s AND t.id = ANY(%s) "
+        "AND t.source = 'detected' AND NOT t.imported "
+        "AND NOT EXISTS (SELECT 1 FROM stays s WHERE s.account_id = t.account_id "
+        " AND s.tracking_device_id = t.tracking_device_id AND s.started_at = t.ended_at) "
+        "AND NOT EXISTS (SELECT 1 FROM trips l WHERE l.account_id = t.account_id "
+        " AND l.tracking_device_id = t.tracking_device_id AND l.source = 'detected' "
+        " AND NOT l.imported AND l.started_at > t.started_at) "
+        "LIMIT 1",
+        (account_id(conn), trip_ids),
+    )
+    if await cur.fetchone():
+        raise HTTPException(status_code=409, detail=IN_PROGRESS_DETAIL)
+
+
 async def _fetch_trip(pool, trip_id: int) -> dict:
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)

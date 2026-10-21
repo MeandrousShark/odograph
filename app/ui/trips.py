@@ -52,6 +52,7 @@ from app.ui._common import (
     _url_with_filters,
     normalize_trip_label,
     parse_date_range,
+    refuse_in_progress_trips,
 )
 from app.ui.manual import (
     MANUAL_ROUTE_UNAVAILABLE_NOTICE,
@@ -215,6 +216,7 @@ async def _delete_trip_in(conn, trip_id: int) -> tuple[datetime, int]:
     if source == "manual" or imported:
         await conn.execute("DELETE FROM trips WHERE id = %s AND account_id = %s", (trip_id, account_id(conn)))
     else:
+        await refuse_in_progress_trips(conn, [trip_id])
         await conn.execute(
             "INSERT INTO trip_boundary_overrides "
             "(account_id, tracking_device_id, device, kind, range_start, range_end) "
