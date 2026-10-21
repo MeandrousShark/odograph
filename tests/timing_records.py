@@ -23,8 +23,9 @@ import json
 import os
 import platform
 import subprocess
+import sys
 import time
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 
 import pytest
@@ -211,6 +212,60 @@ class TimingRecorder:
         self.file.close()
 
 
+def _wrap_method(owner, attribute: str, name: str) -> None:
+    setattr(owner, attribute, timed(name)(getattr(owner, attribute)))
+
+
+def _install_spans() -> None:
+    """Span shared setup outside tests/conftest.py, for the session.
+
+    Only names looked up at call time are patched; conftest spans its own
+    helpers and the names it binds at import.
+    """
+    import jinja2
+    from fastapi import FastAPI
+    from psycopg_pool import AsyncConnectionPool
+    import app.main
+
+    _wrap_method(AsyncConnectionPool, "open", "pool_open")
+    _wrap_method(AsyncConnectionPool, "close", "pool_close")
+    _wrap_method(jinja2.Environment, "compile", "template_compile")
+    _wrap_method(jinja2.Template, "render", "template_render")
+    _wrap_method(app.main, "create_app", "create_app")
+
+    original_init = FastAPI.__init__
+
+    def init(app, *args, **kwargs):
+        lifespan = kwargs.get("lifespan")
+        if lifespan is not None:
+            kwargs["lifespan"] = _timed_lifespan(lifespan)
+        original_init(app, *args, **kwargs)
+
+    FastAPI.__init__ = init
+
+
+def _timed_lifespan(lifespan):
+    if inspect.isasyncgenfunction(lifespan):
+        lifespan = asynccontextmanager(lifespan)
+
+    @asynccontextmanager
+    async def run(app):
+        manager = lifespan(app)
+        with span("app_startup"):
+            state = await manager.__aenter__()
+        try:
+            yield state
+        except BaseException:
+            with span("app_shutdown"):
+                if not await manager.__aexit__(*sys.exc_info()):
+                    raise
+        else:
+            with span("app_shutdown"):
+                await manager.__aexit__(None, None, None)
+
+    return run
+
+
 def activate(config) -> None:
     """Record timings when ODOGRAPH_TIMING_RECORDS is set.
 
@@ -224,4 +279,5 @@ def activate(config) -> None:
         return
     root = Path(str(config.rootpath))
     recorder = TimingRecorder(config, Path(path), shard, head or _git_head(root))
+    _install_spans()
     config.pluginmanager.register(recorder, "odograph-timing-records")

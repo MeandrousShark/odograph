@@ -57,6 +57,23 @@ def test_recording_is_not_inherited():
     assert not {key for key in os.environ if key.startswith("ODOGRAPH_TIMING_")}
 
 
+def test_shared_setup_spans():
+    from contextlib import asynccontextmanager
+
+    import jinja2
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    jinja2.Environment().from_string("{{ x }}").render(x=1)
+
+    @asynccontextmanager
+    async def lifespan(app):
+        yield
+
+    with TestClient(FastAPI(lifespan=lifespan)):
+        pass
+
+
 def test_deselected():
     pass
 '''
@@ -69,7 +86,7 @@ def test_records_every_case_with_header_collection_and_session(tmp_path):
         "def pytest_configure(config):\n    timing_records.activate(config)\n")
     (tmp_path / "test_sample.py").write_text(SAMPLE)
     records = tmp_path / "out" / "timing.jsonl"
-    env = {**os.environ, "PYTHONPATH": str(ROOT / "tests"),
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join((str(ROOT / "tests"), str(ROOT))),
            "ODOGRAPH_TIMING_RECORDS": str(records),
            "ODOGRAPH_TIMING_SHARD": "db-2", "ODOGRAPH_TIMING_HEAD": "abc123"}
     result = subprocess.run(
@@ -80,7 +97,7 @@ def test_records_every_case_with_header_collection_and_session(tmp_path):
 
     lines = [json.loads(line) for line in records.read_text().splitlines()]
     assert [line["kind"] for line in lines] == (
-        ["header", "collection"] + ["case"] * 6 + ["session"])
+        ["header", "collection"] + ["case"] * 7 + ["session"])
     assert all(line["shard"] == "db-2" and line["head"] == "abc123" for line in lines)
 
     header = lines[0]
@@ -89,7 +106,7 @@ def test_records_every_case_with_header_collection_and_session(tmp_path):
     assert {"python", "logical_cpus", "cpu_model", "image_version"} <= set(header["environment"])
 
     collection = lines[1]
-    assert (collection["collected"], collection["deselected"], collection["selected"]) == (7, 1, 6)
+    assert (collection["collected"], collection["deselected"], collection["selected"]) == (8, 1, 7)
     assert collection["seconds"] >= 0
 
     cases = {line["nodeid"].split("::")[1]: line for line in lines[2:-1]}
@@ -100,6 +117,7 @@ def test_records_every_case_with_header_collection_and_session(tmp_path):
         "test_expected_failure": "xfailed",
         "test_setup_error": "error",
         "test_recording_is_not_inherited": "passed",
+        "test_shared_setup_spans": "passed",
     }
     assert cases["test_passes"]["tier"] == "unit"
     assert cases["test_fails"]["tier"] == "db"
@@ -113,9 +131,11 @@ def test_records_every_case_with_header_collection_and_session(tmp_path):
     assert count == 2 and seconds >= 0.02
     assert passes["call"] >= seconds
     assert cases["test_setup_error"]["call"] is None
+    assert {"template_compile", "template_render", "app_startup", "app_shutdown"} <= set(
+        cases["test_shared_setup_spans"]["spans"])
 
     assert lines[-1]["exitstatus"] == 1
-    assert lines[-1]["cases"] == 6
+    assert lines[-1]["cases"] == 7
 
 
 def test_span_records_nothing_outside_a_recorded_case(monkeypatch):
