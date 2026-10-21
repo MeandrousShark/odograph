@@ -36,6 +36,7 @@ from app.account_context import (
     CONTROL_ROLE, RUNTIME_ROLE, AccountPool, AccountPrincipal, account_id,
 )
 from app.role_setup import RolePools, role_conninfo
+import timing_records
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 LATEST_SCHEMA_VERSION = max(int(path.name.split("_", 1)[0]) for path in MIGRATIONS_DIR.glob("*.sql"))
@@ -73,6 +74,10 @@ _seed_snapshot = SeedSnapshot()
 # current set has grown past this baseline, so the leak fails loudly in the
 # test that caused it rather than as an unrelated failure elsewhere.
 _schema_object_baseline: set[str] = set()
+
+
+def pytest_configure(config) -> None:
+    timing_records.activate(config)
 
 
 @pytest.fixture(autouse=True)
@@ -248,6 +253,7 @@ async def _restore_seed_snapshot(
         await conn.execute("SELECT setval(%s,%s,%s)", ("public." + sequence, value, called))
 
 
+@timing_records.timed("provision_roles")
 async def provision_test_roles(pool) -> None:
     """Provision the real restricted roles on a freshly migrated test schema."""
     from app.application_roles import prepare_application_roles
@@ -259,6 +265,7 @@ async def _is_provisioned(conn) -> bool:
     return (await cur.fetchone())[0]
 
 
+@timing_records.timed("reset_db")
 async def reset_db(pool) -> None:
     """Truncate every table in schema public except spatial_ref_sys and
     schema_migrations, then restore the rows a fresh migration run seeds.
@@ -286,6 +293,7 @@ async def reset_db(pool) -> None:
         await _restore_seed_snapshot(conn, _seed_snapshot)
 
 
+@timing_records.timed("schema_drop")
 async def drop_and_recreate_schema(pool) -> None:
     """Bare DROP SCHEMA/CREATE SCHEMA, with no migration replay.
 
@@ -301,13 +309,15 @@ async def drop_and_recreate_schema(pool) -> None:
         await conn.execute("DROP SCHEMA IF EXISTS odograph_service CASCADE; DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
 
 
+@timing_records.timed("schema_replay")
 async def full_schema_reset(pool) -> None:
     """Drop, recreate, and replay every migration from scratch.
 
     Same allowlisted callers as drop_and_recreate_schema above.
     """
     await drop_and_recreate_schema(pool)
-    await run_migrations(pool)
+    with timing_records.span("migrations"):
+        await run_migrations(pool)
     async with pool.connection() as conn:
         for filename in ("account_bootstrap.sql", "account_admission.sql", "tracking_admission.sql"):
             await conn.execute((Path(__file__).resolve().parents[1] / "scripts" / "sql" / filename).read_text())
@@ -467,6 +477,7 @@ async def provisioned_role_pools(pool):
         await close_restricted_role_pools(pool)
 
 
+@timing_records.timed("account_bootstrap")
 async def bootstrap_test_account(pool, *, owner_id: int = 41, email="development@localhost.invalid") -> FixtureAccountPool:
     """Create a real owner explicitly; no production default owner is added.
 
@@ -479,7 +490,9 @@ async def bootstrap_test_account(pool, *, owner_id: int = 41, email="development
         await conn.execute("SELECT setval(pg_get_serial_sequence('accounts','id'), %s, false)", (owner_id,))
         # Existing personal fixtures name their default vehicle explicitly as 1.
         await conn.execute("SELECT setval(pg_get_serial_sequence('vehicles','id'), 1, false)")
-        account = await create_admin(conn, email, hash_password("test-password"))
+        with timing_records.span("hash_password"):
+            password_hash = hash_password("test-password")
+        account = await create_admin(conn, email, password_hash)
     return await account_pool(pool, account["id"], account["is_enabled"], account["auth_version"])
 
 
@@ -571,6 +584,7 @@ _OPS_MODULE_STEMS = {
     "test_security_workflow",
     "test_stale_module_references",
     "test_test_db_script",
+    "test_timing_records",
     "test_upgrade_check_script",
     "test_verify_image_script",
     "test_version_identity",

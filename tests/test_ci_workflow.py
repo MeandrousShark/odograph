@@ -56,6 +56,11 @@ def test_ci_runs_full_suite_on_main_pushes_and_pull_requests_with_postgis(tmp_pa
     )
     suite = steps["Run test shard"]
     assert suite.get("continue-on-error", "false") == "false"
+    assert suite["env"] == {
+        "ODOGRAPH_TIMING_RECORDS": "${{ runner.temp }}/pytest-timing.jsonl",
+        "ODOGRAPH_TIMING_SHARD": "${{ matrix.shard }}",
+        "ODOGRAPH_TIMING_HEAD": "${{ github.event.pull_request.head.sha || github.sha }}",
+    }
     script = suite["run"]
     assert script.splitlines()[0] == "set -euo pipefail"
     supervised = shlex.split(script.replace("\\\n", "").split("; then", 1)[0])
@@ -85,10 +90,21 @@ def test_ci_runs_full_suite_on_main_pushes_and_pull_requests_with_postgis(tmp_pa
         "if-no-files-found": "warn",
     }
     assert job["steps"].index(retained) > job["steps"].index(suite)
+    timing = steps["Retain test timing records"]
+    assert timing.get("continue-on-error", "false") == "false"
+    assert timing["if"] == "always()"
+    assert timing["timeout-minutes"] == "2"
+    assert is_pinned(timing["uses"], "actions/upload-artifact")
+    assert timing["with"] == {
+        "name": "pytest-timing-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.event_name }}-${{ matrix.shard }}",
+        "path": "${{ runner.temp }}/pytest-timing.jsonl",
+        "retention-days": "90",
+        "if-no-files-found": "warn",
+    }
     assert [
         step for step in job["steps"]
         if step.get("uses", "").startswith("actions/upload-artifact@")
-    ] == [retained]
+    ] == [retained, timing]
 
     # Exercise the extracted shell with synthetic suite output and exit status.
     runner = tmp_path / "timeout"
