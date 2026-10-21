@@ -26,13 +26,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from fastapi.templating import Jinja2Templates
 import jinja2
 import psycopg
 from psycopg import sql
 from psycopg_pool import AsyncConnectionPool
 import pytest
 
-import app.main
 from app.db import MIGRATIONS_DIR, make_pool, run_migrations
 from app.local_auth import hash_password
 from app.account_context import (
@@ -108,7 +108,7 @@ class MemoryBytecodeCache(jinja2.BytecodeCache):
 template_bytecode_cache = MemoryBytecodeCache()
 
 
-class _CachedTemplates(app.main.Jinja2Templates):
+class _CachedTemplates(Jinja2Templates):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.env.bytecode_cache = template_bytecode_cache
@@ -122,6 +122,10 @@ def _shared_template_bytecode():
     globals carry config (time zone, version, tiles, thresholds). Only
     compiled code, which does not depend on them, is shared.
     """
+    # Imported here: app.main configures logging at import, which must not
+    # happen before pytest installs its log handlers.
+    import app.main
+
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(app.main, "Jinja2Templates", _CachedTemplates)
         yield
