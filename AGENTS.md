@@ -34,6 +34,16 @@ reset the public schema. Install the Gitleaks version pinned in
 `.github/workflows/test.yml`, then run `python scripts/check_public_tree.py`
 before opening a pull request.
 
+Each test case, setup and teardown included, has a 60 second limit; a longer
+case dumps every thread's stack and stops the run.
+
+Every test carries one tier marker. Put pure logic, rendering and validation
+in `unit`; `db` is for SQL, row-level security, persistence, commits and
+concurrency; `ops` is for scripts, workflows, Compose, the Dockerfile and
+release tooling. Run an exhaustive input matrix once, at the cheapest layer
+that catches the regression. Review applies these rules to new tests; existing
+tests move only when a change touches them.
+
 ## Load-bearing behavior
 
 - Keep `detect()` pure and do not casually bump `DETECTOR_VERSION`.

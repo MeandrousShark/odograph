@@ -35,6 +35,16 @@ CI splits the suite into parallel jobs, each with its own database: one runs
 `ODOGRAPH_DB_SHARD=K/N`. Without that variable every test is selected, so a
 bare `.venv/bin/pytest` still runs the full suite.
 
+Each test case, setup and teardown included, has a 60 second limit. A case
+that runs longer dumps every thread's stack to stderr and stops the run.
+
+Every test carries one tier marker. Pure logic, rendering and validation
+belong in `unit`; `db` is for SQL, row-level security, persistence, commits
+and concurrency; `ops` is for scripts, workflows, Compose, the Dockerfile and
+release tooling. Run an exhaustive input matrix once, at the cheapest layer
+that catches the regression. Review applies these rules to new tests; existing
+tests move only when a change touches them.
+
 Never point tests at real data. The database test suite resets its public
 schema. Install the Gitleaks version pinned in `.github/workflows/test.yml`,
 then run `python scripts/check_public_tree.py` before opening a pull request.
