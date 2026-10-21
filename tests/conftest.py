@@ -26,11 +26,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import jinja2
 import psycopg
 from psycopg import sql
 from psycopg_pool import AsyncConnectionPool
 import pytest
 
+import app.main
 from app.db import MIGRATIONS_DIR, make_pool, run_migrations
 from app.local_auth import hash_password
 from app.account_context import (
@@ -79,6 +81,50 @@ _schema_object_baseline: set[str] = set()
 
 def pytest_configure(config) -> None:
     timing_records.activate(config)
+
+
+class MemoryBytecodeCache(jinja2.BytecodeCache):
+    """Compiled templates kept for the session, keyed by name and file.
+
+    A stored entry is used only while its source checksum matches, so an
+    edited template compiles again.
+    """
+
+    def __init__(self):
+        self.entries: dict[str, tuple[str, Any]] = {}
+
+    def load_bytecode(self, bucket) -> None:
+        entry = self.entries.get(bucket.key)
+        if entry is not None and entry[0] == bucket.checksum:
+            bucket.code = entry[1]
+
+    def dump_bytecode(self, bucket) -> None:
+        self.entries[bucket.key] = (bucket.checksum, bucket.code)
+
+    def clear(self) -> None:
+        self.entries.clear()
+
+
+template_bytecode_cache = MemoryBytecodeCache()
+
+
+class _CachedTemplates(app.main.Jinja2Templates):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.env.bytecode_cache = template_bytecode_cache
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _shared_template_bytecode():
+    """Share compiled templates across the fresh environments tests build.
+
+    Each make_templates() call still gets its own environment, because its
+    globals carry config (time zone, version, tiles, thresholds). Only
+    compiled code, which does not depend on them, is shared.
+    """
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(app.main, "Jinja2Templates", _CachedTemplates)
+        yield
 
 
 @pytest.fixture(autouse=True)
