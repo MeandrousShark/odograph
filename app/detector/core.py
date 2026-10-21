@@ -6,7 +6,7 @@ which is what makes the synthetic-track unit tests meaningful.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 EARTH_RADIUS_M = 6_371_000.0
@@ -28,6 +28,7 @@ class Point:
     accuracy_m: float | None = None
     velocity_kmh: float | None = None
     id: int | None = None  # DB id; None for synthetic points
+    trigger: str | None = None  # OwnTracks report trigger, such as "c" or "v"
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,12 @@ class Params:
     # 2.0 m/s = 7.2 km/h sits above hiking/brisk-walking pace but well below
     # any driving, including slow city traffic.
     walk_max_speed_ms: float = 2.0
+    # A trailing cluster holding one of these report triggers (OwnTracks "c"
+    # region and "v" iOS visit fixes) that spans at least
+    # arrival_min_duration_s is a provisional stay: the phone often goes quiet
+    # about two minutes after arriving, long before stay_min_duration_s.
+    arrival_triggers: frozenset[str] = frozenset({"c", "v"})
+    arrival_min_duration_s: float = 60.0
 
 
 @dataclass
@@ -55,6 +62,10 @@ class Stay:
     first_idx: int  # indices into the filtered point list
     last_idx: int
     point_count: int
+    # Ends the trip into it but is not persisted: the runner rewinds to
+    # persisted stays, and one that later proves not to be the end must not
+    # become the start of the next window.
+    provisional: bool = False
 
 
 @dataclass
@@ -244,6 +255,40 @@ def _merge_boundary_splits(pts: list[Point], stays: list[Stay], params: Params) 
     return merged
 
 
+def trailing_arrival_stay(pts: list[Point], stays: list[Stay], params: Params) -> Stay | None:
+    """The trailing cluster as a provisional stay, when it shows arrival.
+
+    The cluster is anchored as _stationary_ranges anchors one: the first
+    point after the last stay whose radius run reaches the newest point, so a
+    later real stay over the same points usually starts at the same point and
+    the trip's end does not move. Only the newest points can qualify, so any
+    track with a later departure detects exactly as without this rule.
+    """
+    n = len(pts)
+    start = stays[-1].last_idx + 1 if stays else 0
+    if not params.arrival_triggers or n - start < 2:
+        return None
+    last = pts[-1]
+    for i in range(start, n - 1):
+        if _dist(pts[i], last) > params.stay_radius_m:
+            continue
+        if all(_dist(pts[i], pts[j]) <= params.stay_radius_m for j in range(i + 1, n)):
+            break
+    else:
+        return None
+    span = (last.t - pts[i].t).total_seconds()
+    if not params.arrival_min_duration_s <= span < params.stay_min_duration_s:
+        return None
+    if not any(p.trigger in params.arrival_triggers for p in pts[i:]):
+        return None
+    if stays:
+        # Never left: the same stay, which _merge_boundary_splits would join.
+        seg = pts[stays[-1].last_idx: i + 1]
+        if sum(_dist(a, b) for a, b in zip(seg, seg[1:])) <= params.stay_radius_m:
+            return None
+    return replace(_build_stay(pts, i, n - 1), provisional=True)
+
+
 def _apply_overrides(pts: list[Point], stays: list[Stay], overrides: list[Override]) -> list[Stay]:
     """Merge/split overrides, applied strictly after find_stays()'s full
     output, including its internal _merge_boundary_splits jitter-merge,
@@ -342,13 +387,17 @@ def _apply_discard_overrides(trips: list[Trip], overrides: list[Override]) -> li
 def detect(
     points: list[Point], params: Params, overrides: list[Override] | None = None
 ) -> tuple[list[Stay], list[Trip]]:
-    """filter -> cluster stays -> apply merge/split overrides -> assemble
-    trips. Input order is irrelevant. `overrides` defaults to None so every
-    existing call site (the synthetic-track tests included) is unaffected."""
+    """filter -> cluster stays -> trailing arrival stay -> apply merge/split
+    overrides -> assemble trips. Input order is irrelevant. `overrides`
+    defaults to None so every existing call site (the synthetic-track tests
+    included) is unaffected."""
     overrides = overrides or []
     pinned_ids = frozenset(o.point_id for o in overrides if o.kind == "force" and o.point_id is not None)
     pts = filter_points(points, params, pinned_ids)
     stays = find_stays(pts, params)
+    arrival = trailing_arrival_stay(pts, stays, params)
+    if arrival is not None:
+        stays.append(arrival)
     if overrides:
         stays = _apply_overrides(pts, stays, overrides)
     trips = assemble_trips(pts, stays, params)

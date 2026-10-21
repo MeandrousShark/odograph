@@ -70,6 +70,13 @@ async def _insert_trip(
             "ST_SetSRID(ST_MakePoint(-122.29,47.6),4326)::geography,id FROM trips WHERE id=%s",
             (trip_id, trip_id),
         )
+        # The runner persists the stay each detected trip ends at; without
+        # it the newest trip would read as still in progress.
+        await conn.execute(
+            "INSERT INTO stays(account_id,tracking_device_id,device,started_at,ended_at,centroid,point_count) "
+            "SELECT account_id,tracking_device_id,device,ended_at,ended_at,"
+            "ST_SetSRID(ST_MakePoint(-122.29,47.6),4326)::geography,1 FROM trips WHERE id=%s",
+            (trip_id,))
     return trip_id
 
 
