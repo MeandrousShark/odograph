@@ -199,7 +199,7 @@ jobs:
   # jobs keeps earlier attempts' passing shards; the script takes the newest
   # attempt of each shard.
   timing-summary:
-    if: always()
+    if: ${{ !cancelled() }}
     needs: suite
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -214,13 +214,16 @@ jobs:
         with:
           python-version: "3.13"
       - name: Download this run's timing records
+        id: current
         continue-on-error: true
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: pytest-timing-${{ github.run_id }}-*
           path: ${{ runner.temp }}/timing-current
       - name: Download main timing baselines
+        id: baselines
         continue-on-error: true
+        timeout-minutes: 5
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
@@ -235,10 +238,15 @@ jobs:
               --dir "$baselines/$run" || echo "no timing records for run $run"
           done
       - name: Summarize test timing
+        env:
+          CURRENT_DOWNLOAD: ${{ steps.current.outcome }}
+          BASELINE_DOWNLOAD: ${{ steps.baselines.outcome }}
         run: |
           set -euo pipefail
           python scripts/ci_timing_summary.py --current "$RUNNER_TEMP/timing-current" \
-            --baseline "$RUNNER_TEMP/timing-baselines" >> "$GITHUB_STEP_SUMMARY"
+            --baseline "$RUNNER_TEMP/timing-baselines" \
+            --current-download "$CURRENT_DOWNLOAD" --baseline-download "$BASELINE_DOWNLOAD" \
+            >> "$GITHUB_STEP_SUMMARY"
 
   public-tree:
     runs-on: ubuntu-latest

@@ -310,11 +310,23 @@ def render_shards(current: list[Shard], baselines: list[Shard]) -> list[str]:
     return lines
 
 
-def render(current_dir: Path, baseline_dirs: list[Path]) -> str:
+def download_notes(downloads: dict[str, str | None]) -> list[str]:
+    """A note per download step whose outcome was given and was not success."""
+    return [
+        f"> The {name} download failed (outcome: {outcome or 'unknown'}), so missing "
+        f"records below may be a download failure rather than absent data."
+        for name, outcome in downloads.items() if outcome is not None and outcome != "success"
+    ]
+
+
+def render(current_dir: Path, baseline_dirs: list[Path],
+           downloads: dict[str, str | None] | None = None) -> str:
     problems: list[str] = []
     current = load(current_dir, problems)
     baselines = [shard for directory in baseline_dirs for shard in load(directory, problems)]
     lines = ["## Test timing", ""]
+    for note in download_notes(downloads or {}):
+        lines += [note, ""]
     if not current:
         lines.append("No timing records were found for this run.")
     else:
@@ -346,8 +358,14 @@ def main(argv: list[str] | None = None) -> int:
                             help="directory of this run's timing records")
         parser.add_argument("--baseline", type=Path, action="append", default=[],
                             help="directory of candidate baseline records; repeatable")
+        # Step outcomes, so a failed download is not read as absent data.
+        parser.add_argument("--current-download", metavar="OUTCOME",
+                            help="outcome of the step that downloaded this run's records")
+        parser.add_argument("--baseline-download", metavar="OUTCOME",
+                            help="outcome of the step that downloaded baseline records")
         args = parser.parse_args(argv)
-        text = render(args.current, args.baseline)
+        text = render(args.current, args.baseline, {
+            "current run": args.current_download, "baseline": args.baseline_download})
     except (Exception, SystemExit) as error:
         text = (f"## Test timing\n\nThe timing summary failed: "
                 f"`{type(error).__name__}: {describe(error)}`\n")

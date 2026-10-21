@@ -227,13 +227,35 @@ def test_os_errors_name_the_record_but_never_the_runner_path(tmp_path, monkeypat
     assert str(tmp_path) not in output
 
 
+def test_failed_downloads_are_named_not_read_as_missing_data(tmp_path, capsys):
+    write(tmp_path / "current", header(run_id="300"), [case("a", 1.0)])
+
+    assert summary.main(["--current", str(tmp_path / "current"),
+                         "--baseline", str(tmp_path / "absent"),
+                         "--current-download", "success", "--baseline-download", "failure"]) == 0
+    output = capsys.readouterr().out
+    assert "> The baseline download failed (outcome: failure)" in output
+    assert "current run download failed" not in output
+    assert "no compatible baseline (missing)" in output
+
+    assert summary.main(["--current", str(tmp_path / "absent"),
+                         "--current-download", "failure", "--baseline-download", ""]) == 0
+    output = capsys.readouterr().out
+    assert "> The current run download failed (outcome: failure)" in output
+    assert "> The baseline download failed (outcome: unknown)" in output
+    assert "No timing records were found for this run." in output
+
+    assert summary.main(["--current", str(tmp_path / "current")]) == 0
+    assert "download failed" not in capsys.readouterr().out
+
+
 def test_no_current_records_still_writes_a_summary(tmp_path, capsys):
     assert summary.main(["--current", str(tmp_path / "absent")]) == 0
     assert capsys.readouterr().out == "## Test timing\n\nNo timing records were found for this run.\n"
 
 
 def test_errors_are_reported_in_the_summary_and_exit_zero(tmp_path, monkeypatch, capsys):
-    def explode(current, baselines):
+    def explode(*args):
         raise RuntimeError("broken record")
     monkeypatch.setattr(summary, "render", explode)
 

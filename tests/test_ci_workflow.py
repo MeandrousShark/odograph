@@ -260,7 +260,8 @@ def test_ci_timing_summary_reports_without_gating(tmp_path):
     workflow = load_workflow()
     job = workflow["jobs"]["timing-summary"]
 
-    assert job["if"] == "always()"
+    # Runs after failed shards, but a superseded, cancelled run spends no runner.
+    assert job["if"] == "${{ !cancelled() }}"
     assert job["needs"] == "suite"
     assert job["permissions"] == {"contents": "read", "actions": "read"}
     assert int(job["timeout-minutes"]) <= 15
@@ -271,17 +272,28 @@ def test_ci_timing_summary_reports_without_gating(tmp_path):
     steps = {step.get("name"): step for step in job["steps"]}
     current = steps["Download this run's timing records"]
     assert is_pinned(current["uses"], "actions/download-artifact")
+    assert current["id"] == "current"
     assert current["continue-on-error"] == "true"
     assert current["with"] == {
         "pattern": "pytest-timing-${{ github.run_id }}-*",
         "path": "${{ runner.temp }}/timing-current",
     }
     baselines = steps["Download main timing baselines"]
+    assert baselines["id"] == "baselines"
     assert baselines["continue-on-error"] == "true"
+    assert baselines["timeout-minutes"] == "5"
     assert baselines["env"] == {"GH_TOKEN": "${{ github.token }}",
                                 "REPOSITORY": "${{ github.repository }}"}
     summary = steps["Summarize test timing"]
-    assert "python scripts/ci_timing_summary.py" in summary["run"]
+    assert summary["env"] == {"CURRENT_DOWNLOAD": "${{ steps.current.outcome }}",
+                              "BASELINE_DOWNLOAD": "${{ steps.baselines.outcome }}"}
+    assert "${{" not in summary["run"]
+    assert shlex.split(summary["run"].replace("\\\n", ""))[3:] == [
+        "python", "scripts/ci_timing_summary.py", "--current", "$RUNNER_TEMP/timing-current",
+        "--baseline", "$RUNNER_TEMP/timing-baselines",
+        "--current-download", "$CURRENT_DOWNLOAD", "--baseline-download", "$BASELINE_DOWNLOAD",
+        ">>", "$GITHUB_STEP_SUMMARY",
+    ]
     assert '>> "$GITHUB_STEP_SUMMARY"' in summary["run"]
     order = [current, baselines, summary]
     assert sorted(order, key=job["steps"].index) == order
