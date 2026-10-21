@@ -202,6 +202,31 @@ def test_unreadable_records_are_listed_without_runner_paths(tmp_path):
     assert str(tmp_path) not in text
 
 
+def test_os_errors_name_the_record_but_never_the_runner_path(tmp_path, monkeypatch, capsys):
+    write(tmp_path, header(), [case("a", 1.0)])
+    original_open = Path.open
+
+    def denied(path, *args, **kwargs):
+        if path.suffix == ".jsonl":
+            raise PermissionError(13, "Permission denied", str(path))
+        return original_open(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "open", denied)
+
+    text = summary.render(tmp_path, [])
+
+    assert "- pytest-timing-200-1-db-1/pytest-timing.jsonl: Permission denied" in text
+    assert str(tmp_path) not in text
+
+    def unlisted(directory, pattern):
+        raise FileNotFoundError(2, "No such file or directory", str(tmp_path / "gone"))
+    monkeypatch.setattr(Path, "rglob", unlisted)
+
+    assert summary.main(["--current", str(tmp_path)]) == 0
+    output = capsys.readouterr().out
+    assert "`FileNotFoundError: No such file or directory`" in output
+    assert str(tmp_path) not in output
+
+
 def test_no_current_records_still_writes_a_summary(tmp_path, capsys):
     assert summary.main(["--current", str(tmp_path / "absent")]) == 0
     assert capsys.readouterr().out == "## Test timing\n\nNo timing records were found for this run.\n"

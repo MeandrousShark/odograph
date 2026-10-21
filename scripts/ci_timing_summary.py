@@ -97,6 +97,13 @@ def read_shard(path: Path, source: str) -> Shard:
     return shard
 
 
+def describe(error: BaseException) -> str:
+    """An error message without file names: OSError's str() carries absolute paths."""
+    if isinstance(error, OSError):
+        return error.strerror or type(error).__name__
+    return str(error)
+
+
 def load(directory: Path, problems: list[str]) -> list[Shard]:
     """Every shard under `directory`, keeping the newest attempt of each run's shard."""
     newest: dict[tuple[str, str], Shard] = {}
@@ -108,7 +115,7 @@ def load(directory: Path, problems: list[str]) -> list[Shard]:
         try:
             shard = read_shard(path, source)
         except (OSError, ValueError) as error:
-            problems.append(f"{source}: {error}")
+            problems.append(f"{source}: {describe(error)}")
             continue
         if shard.bad_lines:
             problems.append(f"{source}: skipped {shard.bad_lines} unreadable lines")
@@ -343,7 +350,7 @@ def main(argv: list[str] | None = None) -> int:
         text = render(args.current, args.baseline)
     except (Exception, SystemExit) as error:
         text = (f"## Test timing\n\nThe timing summary failed: "
-                f"`{type(error).__name__}: {error}`\n")
+                f"`{type(error).__name__}: {describe(error)}`\n")
     sys.stdout.write(text)
     return 0
 
