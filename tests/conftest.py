@@ -36,6 +36,7 @@ from app.account_context import (
     CONTROL_ROLE, RUNTIME_ROLE, AccountPool, AccountPrincipal, account_id,
 )
 from app.role_setup import RolePools, role_conninfo
+import timing_records
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 LATEST_SCHEMA_VERSION = max(int(path.name.split("_", 1)[0]) for path in MIGRATIONS_DIR.glob("*.sql"))
@@ -73,6 +74,10 @@ _seed_snapshot = SeedSnapshot()
 # current set has grown past this baseline, so the leak fails loudly in the
 # test that caused it rather than as an unrelated failure elsewhere.
 _schema_object_baseline: set[str] = set()
+
+
+def pytest_configure(config) -> None:
+    timing_records.activate(config)
 
 
 @pytest.fixture(autouse=True)
@@ -571,6 +576,7 @@ _OPS_MODULE_STEMS = {
     "test_security_workflow",
     "test_stale_module_references",
     "test_test_db_script",
+    "test_timing_records",
     "test_upgrade_check_script",
     "test_verify_image_script",
     "test_version_identity",
