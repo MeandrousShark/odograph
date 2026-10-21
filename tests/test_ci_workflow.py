@@ -71,7 +71,7 @@ def test_ci_runs_full_suite_on_main_pushes_and_pull_requests_with_postgis(tmp_pa
         "set", "-euo", "pipefail", "if",
         "timeout", "--signal=INT", "--kill-after=15s", "15m",
         "python", "-m", "pytest", "-m", "$PYTEST_MARKER", "-vv", "--durations=25",
-        "-o", "faulthandler_timeout=120", ">", "$RUNNER_TEMP/pytest-shard.log", "2>&1",
+        ">", "$RUNNER_TEMP/pytest-shard.log", "2>&1",
     ]
     assert "tee" not in script and "PIPESTATUS" not in script
     preview = script.split("\n  suite_status=$?\nfi\n", 1)[1]

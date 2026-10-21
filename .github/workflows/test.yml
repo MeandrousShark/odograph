@@ -152,7 +152,7 @@ jobs:
         run: |
           set -euo pipefail
           if timeout --signal=INT --kill-after=15s 15m \
-            python -m pytest -m "$PYTEST_MARKER" -vv --durations=25 -o faulthandler_timeout=120 \
+            python -m pytest -m "$PYTEST_MARKER" -vv --durations=25 \
             > "$RUNNER_TEMP/pytest-shard.log" 2>&1; then
             suite_status=0
           else
