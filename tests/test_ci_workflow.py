@@ -1,8 +1,11 @@
+import functools
+import json
 import os
 from pathlib import Path
 import shlex
 import subprocess
 import sys
+import tempfile
 
 import yaml
 from workflow_actions import is_pinned
@@ -192,15 +195,41 @@ def test_ci_shards_split_the_suite_into_not_db_and_every_db_shard():
     ]
 
 
+def _selections() -> list[tuple[str, str]]:
+    rows = [(row["marker"], row["db_shard"]) for row in shard_matrix()]
+    return list(dict.fromkeys([*rows, ("db", ""), ("not db", "")]))
+
+
+@functools.cache
+def _session_collection() -> dict[tuple[str, str], list[str]]:
+    """Collect the suite once and replay every CI selection over it.
+
+    A full collection costs seconds, and the partition and serial-timeout
+    checks need one per shard. tests/collection_selections.py runs each
+    shard's real selection hooks in the same process instead.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        output = Path(directory) / "selections.json"
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider",
+             "-p", "collection_selections"],
+            cwd=ROOT,
+            env={**os.environ, "ODOGRAPH_DB_SHARD": "",
+                 "PYTHONPATH": os.pathsep.join(filter(None, [str(ROOT / "tests"), os.environ.get("PYTHONPATH")])),
+                 "ODOGRAPH_COLLECTION_SELECTIONS": json.dumps(_selections()),
+                 "ODOGRAPH_COLLECTION_SELECTIONS_OUTPUT": str(output)},
+            capture_output=True, text=True, timeout=120,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        selected = json.loads(output.read_text())
+    collection = {("", ""): [line for line in result.stdout.splitlines() if "::" in line]}
+    for row in selected:
+        collection[(row["marker"], row["db_shard"])] = row["nodeids"]
+    return collection
+
+
 def _collect(marker: str | None, db_shard: str) -> list[str]:
-    selection = ["-m", marker] if marker else []
-    result = subprocess.run(
-        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider", *selection],
-        cwd=ROOT, env={**os.environ, "ODOGRAPH_DB_SHARD": db_shard},
-        capture_output=True, text=True, timeout=120,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    return [line for line in result.stdout.splitlines() if "::" in line]
+    return list(_session_collection()[(marker or "", db_shard)])
 
 
 def test_ci_shards_partition_the_real_collection():
