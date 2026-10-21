@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 import re
 import time
@@ -31,8 +32,13 @@ TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS")
 
 
+@functools.cache
+def _routes():
+    return tuple(auth.make_router().routes)
+
+
 def _endpoint(path: str, method: str):
-    for route in auth.make_router().routes:
+    for route in _routes():
         if route.path == path and method in route.methods:
             return route.endpoint
     raise AssertionError(f"missing route {method} {path}")

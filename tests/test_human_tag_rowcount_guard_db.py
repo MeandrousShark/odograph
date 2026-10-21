@@ -13,6 +13,7 @@ both `_apply_human_tag` branches and both HTTP callers.
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -36,8 +37,13 @@ TZ = timezone.utc
 BASE = datetime(2026, 1, 1, 9, tzinfo=TZ)
 
 
+@functools.cache
+def _routes():
+    return tuple(make_router().routes)
+
+
 def _endpoint(path: str, method: str):
-    for route in make_router().routes:
+    for route in _routes():
         if getattr(route, "path", None) == path and method in route.methods:
             return route.endpoint
     raise AssertionError(f"route missing: {method} {path}")

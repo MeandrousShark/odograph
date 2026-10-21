@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -26,8 +27,13 @@ ADMIN_EMAIL = "admin@example.com"
 ADMIN_PASSWORD = "correct horse battery staple"
 
 
+@functools.cache
+def _routes():
+    return tuple(make_router().routes)
+
+
 def _endpoint(path: str, method: str):
-    for route in make_router().routes:
+    for route in _routes():
         if getattr(route, "path", None) == path and method in route.methods:
             return route.endpoint
     raise AssertionError(f"{method} {path} route missing")

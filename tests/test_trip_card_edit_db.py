@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -28,8 +29,13 @@ USER = {"sub": "test"}
 MALFORMED_WEEK = '2026-07-13"><script>alert(1)</script>'
 
 
+@functools.cache
+def _routes():
+    return tuple(make_router().routes)
+
+
 def _endpoint(path: str, method: str):
-    for route in make_router().routes:
+    for route in _routes():
         if route.path == path and method in route.methods:
             return route.endpoint
     raise AssertionError(f"route missing: {method} {path}")

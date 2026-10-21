@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import os
 from types import SimpleNamespace
@@ -28,8 +29,13 @@ class FakeSnapWorker:
         self.pokes += 1
 
 
+@functools.cache
+def _routes():
+    return tuple(make_router().routes)
+
+
 def _endpoint():
-    for route in make_router().routes:
+    for route in _routes():
         if getattr(route, "path", None) == "/trips/merge_selected":
             return route.endpoint
     raise AssertionError("merge_selected route missing")

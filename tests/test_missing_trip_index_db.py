@@ -8,6 +8,7 @@ FastAPI's dependency injection), same pattern as tests/test_review_db.py.
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -30,8 +31,13 @@ TZ = ZoneInfo("UTC")
 T0 = datetime(2026, 7, 1, 8, 0, 0, tzinfo=TZ)
 
 
+@functools.cache
+def _routes():
+    return tuple(make_router().routes)
+
+
 def _endpoint():
-    for route in make_router().routes:
+    for route in _routes():
         if getattr(route, "path", None) == "/trips/manual" and "GET" in (route.methods or set()):
             return route.endpoint
     raise AssertionError("manual trip page route missing")

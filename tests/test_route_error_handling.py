@@ -8,6 +8,7 @@ scenario below -- both fail before the first query.
 from __future__ import annotations
 
 import asyncio
+import functools
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -19,8 +20,13 @@ from app.ui import make_router
 USER = {"sub": "test"}
 
 
+@functools.cache
+def _routes():
+    return tuple(make_router().routes)
+
+
 def _endpoint(path: str):
-    for route in make_router().routes:
+    for route in _routes():
         if getattr(route, "path", None) == path:
             return route.endpoint
     raise AssertionError(f"route {path} missing")

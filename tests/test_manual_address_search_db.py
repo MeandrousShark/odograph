@@ -7,6 +7,7 @@ tests/test_manual_routed_trip_db.py.
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import os
 from types import SimpleNamespace
@@ -33,8 +34,13 @@ PROVIDER = object()
 COORDS = dict(start_lat="47.60", start_lon="-122.33", end_lat="47.70", end_lon="-122.20")
 
 
+@functools.cache
+def _routes():
+    return tuple(make_router().routes)
+
+
 def _endpoint(path: str, method: str):
-    for route in make_router().routes:
+    for route in _routes():
         if route.path == path and method in route.methods:
             return route.endpoint
     raise AssertionError(f"route missing: {method} {path}")

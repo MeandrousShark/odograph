@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import os
 from types import SimpleNamespace
@@ -20,15 +21,20 @@ pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to ru
 USER = {"sub": "test"}
 
 
+@functools.cache
+def _routes():
+    return tuple(make_router().routes)
+
+
 def _endpoint():
-    for route in make_router().routes:
+    for route in _routes():
         if getattr(route, "path", None) == "/trips/batch_update":
             return route.endpoint
     raise AssertionError("batch_update route missing")
 
 
 def _delete_endpoint():
-    for route in make_router().routes:
+    for route in _routes():
         if getattr(route, "path", None) == "/trips/batch_delete":
             return route.endpoint
     raise AssertionError("batch_delete route missing")

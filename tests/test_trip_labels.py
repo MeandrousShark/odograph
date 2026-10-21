@@ -6,6 +6,7 @@ access happens (see app/ui/manual.py's add_manual_trip).
 from __future__ import annotations
 
 import asyncio
+import functools
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -19,8 +20,13 @@ TZ = ZoneInfo("America/Los_Angeles")
 USER = {"sub": "test"}
 
 
+@functools.cache
+def _routes():
+    return tuple(make_router().routes)
+
+
 def _endpoint(path: str, method: str):
-    for route in make_router().routes:
+    for route in _routes():
         if route.path == path and method in route.methods:
             return route.endpoint
     raise AssertionError(f"route missing: {method} {path}")

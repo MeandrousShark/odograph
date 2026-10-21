@@ -9,6 +9,7 @@ cache miss) live in tests/test_redaction_db.py.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 from types import SimpleNamespace
 from datetime import datetime, timezone
@@ -178,8 +179,13 @@ def test_geocode_worker_cache_miss_never_logs_coordinate(caplog):
 # --- /places/search: a failed autocomplete call never logs the API key or query ---
 
 
+@functools.cache
+def _routes():
+    return tuple(make_router().routes)
+
+
 def _search_places_endpoint():
-    for route in make_router().routes:
+    for route in _routes():
         if getattr(route, "path", None) == "/places/search":
             return route.endpoint
     raise AssertionError("search route missing")

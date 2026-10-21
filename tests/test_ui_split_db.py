@@ -6,6 +6,7 @@ a throwaway Postgres/PostGIS instance.
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 from types import SimpleNamespace
 
@@ -29,8 +30,13 @@ pytestmark = pytest.mark.skipif(
 DEVICE = "SPLITDEV"
 
 
+@functools.cache
+def _routes():
+    return tuple(make_router().routes)
+
+
 def _endpoint(path: str):
-    for route in make_router().routes:
+    for route in _routes():
         if getattr(route, "path", None) == path:
             return route.endpoint
     raise AssertionError(f"route missing: {path}")

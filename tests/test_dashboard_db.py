@@ -9,6 +9,7 @@ real ASGI request for `require_user` to actually fire.
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -38,8 +39,13 @@ UTC = ZoneInfo("UTC")
 LA = ZoneInfo("America/Los_Angeles")
 
 
+@functools.cache
+def _routes():
+    return tuple(make_router().routes)
+
+
 def _endpoint():
-    for route in make_router().routes:
+    for route in _routes():
         if getattr(route, "path", None) == "/" and "GET" in (route.methods or set()):
             return route.endpoint
     raise AssertionError("dashboard route missing")
@@ -49,7 +55,7 @@ DASHBOARD = _endpoint()
 
 
 def _tag_endpoint():
-    for route in make_router().routes:
+    for route in _routes():
         if getattr(route, "path", None) == "/trips/{trip_id}/tag" and "POST" in (route.methods or set()):
             return route.endpoint
     raise AssertionError("dashboard tag route missing")
