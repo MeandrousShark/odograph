@@ -160,3 +160,19 @@ def test_deletes_carry_tag_source_for_the_human_only_tag_loss_warning():
     deletes_by_id = {d.id: d for d in plan.deletes}
     assert deletes_by_id[1].tag_source == "human"
     assert deletes_by_id[2].tag_source == "rule"
+
+
+def test_unmatched_trip_in_the_open_tail_is_kept_not_deleted():
+    """A provisional trip whose arrival stay newer points no longer show as
+    the end waits for the drive's destination instead of being deleted."""
+    existing = [
+        ExistingTrip(id=1, started_at=_ts(0), ended_at=_ts(30)),
+        ExistingTrip(id=2, started_at=_ts(60), ended_at=_ts(80),
+                     category="business", tag_source="human"),
+    ]
+    plan = plan_reconcile(existing, [], open_tail_from=_ts(50))
+    assert [d.id for d in plan.deletes] == [1]
+    assert [k.id for k in plan.kept] == [2]
+
+    plan = plan_reconcile(existing, [(_ts(60), _ts(95))], open_tail_from=_ts(50))
+    assert plan.matches == [(2, 0)] and plan.kept == []

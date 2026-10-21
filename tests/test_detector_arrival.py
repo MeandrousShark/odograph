@@ -83,6 +83,31 @@ def test_region_fix_at_the_newest_moving_point_does_not_end_the_trip():
     assert trips == []
 
 
+def test_marker_before_an_unmarked_stop_does_not_count():
+    """The region fix must be inside the trailing cluster, not just after
+    the last stay."""
+    pts = build_track([Stationary(duration_s=1200), Drive(km=5.0), Stationary(duration_s=120)])
+    stop = next(i for i in range(len(pts) - 1, 0, -1) if (pts[-1].t - pts[i].t).total_seconds() > 150)
+    _, trips = detect(mark(pts, stop - 3, "c"), P)
+    assert trips == []
+
+
+def test_overshoot_and_return_anchors_where_the_real_stay_will():
+    """Passing the destination and coming back: the anchor is the first point
+    whose radius run reaches the newest point, as the later real stay's is."""
+    pts = build_track([
+        Stationary(duration_s=1200), Drive(km=5.0), Drive(km=0.25, speed_kmh=20),
+        Drive(km=0.25, speed_kmh=20, bearing_deg=270), Stationary(duration_s=120),
+    ])
+    pts = mark(pts, -1, "v")
+    early_stays, early_trips = detect(pts, P)
+    later = pts + [replace(pts[-1], t=pts[-1].t + timedelta(hours=1), trigger=None)]
+    late_stays, late_trips = detect(later, P)
+    assert early_stays[-1].provisional
+    assert early_stays[-1].first_idx == late_stays[-1].first_idx
+    assert early_trips == late_trips
+
+
 def test_departure_after_a_short_stop_rejoins_one_trip():
     """A two-minute stop at a region, then driving on: the stop is not the end."""
     first = build_track([Stationary(duration_s=1200), Drive(km=5.0), Stationary(duration_s=120)])
@@ -206,3 +231,17 @@ def test_arrival_rule_only_adds_a_trailing_stay_and_trip():
         if len(new_trips) > len(old_trips):
             assert new_trips[-1].ended_at == new_stays[-1].started_at
     assert added > 10  # the property was exercised, not vacuous
+
+
+def test_tracks_extended_with_a_departure_detect_as_without_the_rule():
+    """The plan's history guarantee: once a later drive leaves the newest
+    cluster, the rule changes nothing, so no reprocessing is needed."""
+    rng = random.Random(7834)
+    for _ in range(300):
+        pts = _random_track(rng)
+        last = pts[-1]
+        departure = build_track(
+            [Drive(km=rng.uniform(0.5, 3.0), speed_kmh=rng.choice((30, 50)), bearing_deg=rng.uniform(0, 360))],
+            start=(last.lat, last.lon), t0=last.t, seed=rng.randrange(1 << 30))[1:]
+        extended = pts + departure
+        assert detect(extended, P) == detect(extended, OFF)

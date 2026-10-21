@@ -534,7 +534,11 @@ class DetectorRunner:
             ExistingTrip(id=r[0], started_at=r[1], ended_at=r[2], category=r[3], tag_source=r[4])
             for r in await cur.fetchall()
         ]
-        plan = plan_reconcile(existing, [(t.started_at, t.ended_at) for t in trips])
+        plan = plan_reconcile(
+            existing, [(t.started_at, t.ended_at) for t in trips],
+            open_tail_from=stays[-1].started_at if stays else None,
+        )
+        kept_ids = [e.id for e in plan.kept]
 
         previous_snap_inputs = await self._load_previous_snap_inputs(conn, existing)
 
@@ -547,8 +551,9 @@ class DetectorRunner:
         # Leaving the point at exactly t0 untouched keeps it pointing at that
         # correct, unchanged preceding trip.
         await conn.execute(
-            "UPDATE points SET trip_id = NULL WHERE account_id = %s AND tracking_device_id = %s AND recorded_at > %s",
-            (owner, device, t0),
+            "UPDATE points SET trip_id = NULL WHERE account_id = %s AND tracking_device_id = %s AND recorded_at > %s "
+            "AND (trip_id IS NULL OR trip_id <> ALL(%s))",
+            (owner, device, t0, kept_ids),
         )
 
         for old in plan.deletes:
@@ -579,15 +584,17 @@ class DetectorRunner:
 
         await resolve_and_autotag(conn, touched_ids)
 
+        persisted_stays = sum(not s.provisional for s in stays)
         self.last_stats = {
-            "points": len(points), "stays": len(stays), "trips": len(trips),
+            "points": len(points), "stays": persisted_stays, "trips": len(trips),
             "updated": len(plan.matches), "new": len(plan.inserts), "deleted": len(plan.deletes),
+            "kept": len(plan.kept),
         }
         log.info(
             "detector: %s from %s: %d pts -> %d stays, %d trips "
-            "(%d updated, %d new, %d deleted)",
-            device, t0.isoformat(), len(points), len(stays), len(trips),
-            len(plan.matches), len(plan.inserts), len(plan.deletes),
+            "(%d updated, %d new, %d deleted, %d kept open)",
+            device, t0.isoformat(), len(points), persisted_stays, len(trips),
+            len(plan.matches), len(plan.inserts), len(plan.deletes), len(plan.kept),
         )
         if full_started is not None:
             log.info(

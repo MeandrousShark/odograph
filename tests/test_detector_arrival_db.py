@@ -130,17 +130,52 @@ def test_driving_on_rejoins_the_trip_in_place(human):
     _run(body)
 
 
+def test_a_run_mid_drive_keeps_the_provisional_trip_for_the_rejoin():
+    """The debounce fires while still driving on from the stop: the open drive
+    has no destination yet, and the provisional trip must survive it."""
+    async def body(raw):
+        pool, device, head = await _provisional_trip(raw)
+        rest = _continue(head, [Drive(km=3.0), Stationary(1800)])
+        split = len(rest) // 4
+        async with pool.connection() as conn:
+            [(trip_id, *_)] = await _trips(conn)
+            await conn.execute(
+                "UPDATE trips SET category='business', tag_source='human' WHERE id=%s", (trip_id,))
+            await _insert(conn, device, rest[:split])
+        assert await DetectorRunner(pool, Params()).run_once()
+        async with pool.connection() as conn:
+            mid = await _trips(conn)
+            await _settle(conn, device)
+        # A later transaction, so the new points' received_at passes now().
+        async with pool.connection() as conn:
+            await _insert(conn, device, rest[split:])
+        assert await DetectorRunner(pool, Params()).run_once()
+        async with pool.connection() as conn:
+            trips = await _trips(conn)
+        assert [t[0] for t in mid] == [trip_id]
+        assert len(trips) == 1
+        rejoined_id, _start, _end, distance, category, tag_source = trips[0]
+        assert rejoined_id == trip_id
+        assert abs(distance - 8000) < 400
+        assert (category, tag_source) == ("business", "human")
+    _run(body)
+
+
 def test_next_fix_an_hour_later_confirms_the_trip_unchanged():
     async def body(raw):
         pool, device, head = await _provisional_trip(raw)
         async with pool.connection() as conn:
             before = await _trips(conn)
+            await conn.execute("UPDATE trips SET snap_status='ok' WHERE id=%s", (before[0][0],))
             await _insert(conn, device, [replace(head[-1], t=head[-1].t + timedelta(hours=1), trigger=None)])
         assert await DetectorRunner(pool, Params()).run_once()
         async with pool.connection() as conn:
             after = await _trips(conn)
             stays = await _stays(conn)
+            snap = (await (await conn.execute(
+                "SELECT snap_status::text FROM trips WHERE id=%s", (after[0][0],))).fetchone())[0]
         assert after == before
+        assert snap == "ok"  # unchanged inputs keep the snap
         assert len(stays) == 2 and stays[1][0] == after[0][2]
     _run(body)
 
