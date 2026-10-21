@@ -97,6 +97,22 @@ def test_delete_merge_and_split_refuse_an_in_progress_trip():
     _run(body)
 
 
+def test_a_trip_kept_while_the_drive_goes_on_is_refused():
+    async def body(raw):
+        pool, runner, device, pts, _settled, in_progress = await _two_trips(raw)
+        drive = build_track([Drive(km=2.0)], start=(pts[-1].lat, pts[-1].lon), t0=pts[-1].t, seed=9)[1:]
+        async with pool.connection() as conn:
+            await conn.execute(
+                "UPDATE detector_state SET last_run_at=now() WHERE account_id=%s AND tracking_device_id=%s",
+                (account_id(conn), device))
+        async with pool.connection() as conn:
+            await _insert(conn, device, drive)
+        assert await runner.run_once()
+        assert runner.last_stats["kept"] == 1
+        await _refused(_endpoint("/trips/{trip_id}/delete")(_request(pool, runner), in_progress, USER))
+    _run(body)
+
+
 def test_a_settled_trip_before_it_can_still_be_deleted():
     async def body(raw):
         pool, runner, _device, _pts, settled, in_progress = await _two_trips(raw)
