@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import time
 import threading
 from contextlib import asynccontextmanager
@@ -16,8 +17,13 @@ from app.password_reset import SecurityMailAdmission
 from security_mail_support import PreparedFakeReceiver, configure_fake_mailer
 
 
+@functools.cache
+def _routes():
+    return tuple(auth.make_router().routes)
+
+
 def _endpoint(path: str, method: str):
-    for route in auth.make_router().routes:
+    for route in _routes():
         if route.path == path and method in route.methods:
             return route.endpoint
     raise AssertionError(f"missing route {method} {path}")

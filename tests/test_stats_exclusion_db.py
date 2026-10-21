@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -24,8 +25,13 @@ UTC = ZoneInfo("UTC")
 USER = {"sub": "test"}
 
 
+@functools.cache
+def _routes():
+    return tuple(make_router().routes)
+
+
 def _endpoint():
-    for route in make_router().routes:
+    for route in _routes():
         if getattr(route, "path", None) == "/stats":
             return route.endpoint
     raise AssertionError("stats route missing")

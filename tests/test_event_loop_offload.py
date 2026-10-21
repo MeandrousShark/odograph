@@ -10,6 +10,7 @@ if it is offloaded (as it now is), the canary keeps ticking throughout.
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import os
 import time
@@ -34,8 +35,13 @@ BLOCK_S = 0.4
 CANARY_INTERVAL_S = 0.02
 
 
+@functools.cache
+def _routes():
+    return tuple(portable_module.make_router().routes)
+
+
 def _endpoint(path: str, method: str):
-    for route in portable_module.make_router().routes:
+    for route in _routes():
         if getattr(route, "path", None) == path and method in (route.methods or set()):
             return route.endpoint
     raise AssertionError(f"route {method} {path} missing")

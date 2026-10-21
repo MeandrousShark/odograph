@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -20,8 +21,13 @@ pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL to ru
 TZ = timezone.utc
 
 
+@functools.cache
+def _routes():
+    return tuple(make_router().routes)
+
+
 def _endpoint(path: str, method: str):
-    for route in make_router().routes:
+    for route in _routes():
         if getattr(route, "path", None) == path and method in (route.methods or set()):
             return route.endpoint
     raise AssertionError(f"{method} route {path} missing")

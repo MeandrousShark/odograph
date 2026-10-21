@@ -7,6 +7,7 @@ Python function directly exercises, so these tests skip straight past it.
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -30,8 +31,13 @@ TZ = ZoneInfo("America/Los_Angeles")
 USER = {"sub": "test"}
 
 
+@functools.cache
+def _routes():
+    return tuple(make_router().routes)
+
+
 def _endpoint(path: str):
-    for route in make_router().routes:
+    for route in _routes():
         if getattr(route, "path", None) == path:
             return route.endpoint
     raise AssertionError(f"route {path} missing")

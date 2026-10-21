@@ -6,6 +6,7 @@ a throwaway Postgres/PostGIS instance.
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 from types import SimpleNamespace
 
@@ -29,8 +30,13 @@ pytestmark = [
 ]
 
 
+@functools.cache
+def _routes():
+    return tuple(ui_router().routes)
+
+
 def _endpoint(path):
-    return next(route.endpoint for route in ui_router().routes if route.path == path)
+    return next(route.endpoint for route in _routes() if route.path == path)
 
 
 def _request(bound, runner):

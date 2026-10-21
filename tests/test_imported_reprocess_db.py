@@ -9,6 +9,7 @@ on without needing a running app or HTTP client.
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 from datetime import timedelta, timezone
 from types import SimpleNamespace
@@ -32,8 +33,13 @@ DEVICE = "TESTDEV"
 TZ = timezone.utc
 
 
+@functools.cache
+def _routes():
+    return tuple(make_router().routes)
+
+
 def _endpoint():
-    for route in make_router().routes:
+    for route in _routes():
         if getattr(route, "path", None) == "/trips/{trip_id}":
             return route.endpoint
     raise AssertionError("trip detail route missing")

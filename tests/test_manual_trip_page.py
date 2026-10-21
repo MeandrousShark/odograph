@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlsplit
@@ -37,8 +38,13 @@ def _render_archive():
     )
 
 
+@functools.cache
+def _routes():
+    return tuple(make_router().routes)
+
+
 def _route(path, method):
-    for route in make_router().routes:
+    for route in _routes():
         if route.path == path and method in (route.methods or set()):
             return route
     raise AssertionError(f"missing {method} {path}")

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+import functools
 from types import SimpleNamespace
 
 from app.auth import require_csrf
@@ -270,8 +271,13 @@ def test_attention_strip_template_disappears_at_zero():
 
 # --- routes ----------------------------------------------------------------
 
+@functools.cache
+def _routes():
+    return tuple(make_router().routes)
+
+
 def _route(path: str):
-    return next(route for route in make_router().routes
+    return next(route for route in _routes()
                 if getattr(route, "path", None) == path and "POST" in route.methods)
 
 

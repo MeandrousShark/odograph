@@ -6,6 +6,7 @@ scoping and database denial of missing-context and cross-account access.
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import os
 from contextlib import asynccontextmanager
@@ -96,8 +97,13 @@ def _bundle(label="Imported"):
     return normalized
 
 
+@functools.cache
+def _routes():
+    return tuple(portable_router().routes)
+
+
 async def _export(bound):
-    endpoint = next(route.endpoint for route in portable_router().routes
+    endpoint = next(route.endpoint for route in _routes()
                     if route.path == "/settings/export/data")
     response = await endpoint(SimpleNamespace(state=SimpleNamespace(account_pool=bound)), user={})
     assert response.status_code == 200

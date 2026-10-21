@@ -26,12 +26,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from fastapi.templating import Jinja2Templates
+import jinja2
 import psycopg
 from psycopg import sql
 from psycopg_pool import AsyncConnectionPool
 import pytest
 
 from app.db import MIGRATIONS_DIR, make_pool, run_migrations
+from app.local_auth import hash_password
 from app.account_context import (
     CONTROL_ROLE, RUNTIME_ROLE, AccountPool, AccountPrincipal, account_id,
 )
@@ -78,6 +81,54 @@ _schema_object_baseline: set[str] = set()
 
 def pytest_configure(config) -> None:
     timing_records.activate(config)
+
+
+class MemoryBytecodeCache(jinja2.BytecodeCache):
+    """Compiled templates kept for the session, keyed by name and file.
+
+    A stored entry is used only while its source checksum matches, so an
+    edited template compiles again.
+    """
+
+    def __init__(self):
+        self.entries: dict[str, tuple[str, Any]] = {}
+
+    def load_bytecode(self, bucket) -> None:
+        entry = self.entries.get(bucket.key)
+        if entry is not None and entry[0] == bucket.checksum:
+            bucket.code = entry[1]
+
+    def dump_bytecode(self, bucket) -> None:
+        self.entries[bucket.key] = (bucket.checksum, bucket.code)
+
+    def clear(self) -> None:
+        self.entries.clear()
+
+
+template_bytecode_cache = MemoryBytecodeCache()
+
+
+class _CachedTemplates(Jinja2Templates):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.env.bytecode_cache = template_bytecode_cache
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _shared_template_bytecode():
+    """Share compiled templates across the fresh environments tests build.
+
+    Each make_templates() call still gets its own environment, because its
+    globals carry config (time zone, version, tiles, thresholds). Only
+    compiled code, which does not depend on them, is shared.
+    """
+    # Imported here: app.main configures logging at import, which must not
+    # happen before pytest installs its log handlers.
+    import app.main
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(app.main, "Jinja2Templates", _CachedTemplates)
+        yield
 
 
 @pytest.fixture(autouse=True)
@@ -477,6 +528,23 @@ async def provisioned_role_pools(pool):
         await close_restricted_role_pools(pool)
 
 
+_password_hash: str | None = None
+
+
+def _fixture_password_hash() -> str:
+    """One real hash of "test-password" per session, at production cost.
+
+    Scrypt is deliberately slow, and every bootstrap paid it again. The hash
+    function is bound at import, so a test that patches it cannot change
+    what later fixtures store.
+    """
+    global _password_hash
+    if _password_hash is None:
+        with timing_records.span("hash_password"):
+            _password_hash = hash_password("test-password")
+    return _password_hash
+
+
 @timing_records.timed("account_bootstrap")
 async def bootstrap_test_account(pool, *, owner_id: int = 41, email="development@localhost.invalid") -> FixtureAccountPool:
     """Create a real owner explicitly; no production default owner is added.
@@ -485,14 +553,11 @@ async def bootstrap_test_account(pool, *, owner_id: int = 41, email="development
     restricted runtime role, where row-level security is enforced.
     """
     from app.accounts import create_admin
-    from app.local_auth import hash_password
     async with pool.connection() as conn:
         await conn.execute("SELECT setval(pg_get_serial_sequence('accounts','id'), %s, false)", (owner_id,))
         # Existing personal fixtures name their default vehicle explicitly as 1.
         await conn.execute("SELECT setval(pg_get_serial_sequence('vehicles','id'), 1, false)")
-        with timing_records.span("hash_password"):
-            password_hash = hash_password("test-password")
-        account = await create_admin(conn, email, password_hash)
+        account = await create_admin(conn, email, _fixture_password_hash())
     return await account_pool(pool, account["id"], account["is_enabled"], account["auth_version"])
 
 

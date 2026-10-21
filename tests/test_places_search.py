@@ -6,6 +6,7 @@ results template.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,8 +23,13 @@ ROOT = Path(__file__).parents[1]
 USER = {"sub": "test"}
 
 
+@functools.cache
+def _routes():
+    return tuple(make_router().routes)
+
+
 def _search_endpoint():
-    for route in make_router().routes:
+    for route in _routes():
         if getattr(route, "path", None) == "/places/search":
             return route.endpoint
     raise AssertionError("search route missing")

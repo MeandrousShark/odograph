@@ -11,6 +11,7 @@ FastAPI's dependency injection), same pattern as tests/test_trip_search_db.py.
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import os
 from datetime import datetime, timedelta
@@ -34,8 +35,13 @@ TZ = ZoneInfo("UTC")
 T0 = datetime(2026, 7, 1, 8, 0, 0, tzinfo=TZ)
 
 
+@functools.cache
+def _routes():
+    return tuple(make_router().routes)
+
+
 def _endpoint(path: str, method: str):
-    for route in make_router().routes:
+    for route in _routes():
         if getattr(route, "path", None) == path and method in (route.methods or set()):
             return route.endpoint
     raise AssertionError(f"route {method} {path} missing")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 from datetime import date
 from decimal import Decimal
@@ -29,8 +30,13 @@ TZ = ZoneInfo("America/Los_Angeles")
 USER = {"sub": "test"}
 
 
+@functools.cache
+def _routes():
+    return tuple(make_router().routes)
+
+
 def _route(path: str, method: str | None = None):
-    for route in make_router().routes:
+    for route in _routes():
         if (
             getattr(route, "path", None) == path
             and (method is None or method in getattr(route, "methods", set()))
