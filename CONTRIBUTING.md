@@ -42,9 +42,12 @@ that runs longer dumps every thread's stack to stderr and stops the run. Under
 Every test carries one tier marker. Pure logic, rendering and validation
 belong in `unit`; `db` is for SQL, row-level security, persistence, commits
 and concurrency; `ops` is for scripts, workflows, Compose, the Dockerfile and
-release tooling. Run an exhaustive input matrix once, at the cheapest layer
-that catches the regression. Review applies these rules to new tests; existing
-tests move only when a change touches them.
+release tooling. A `_db` file suffix marks a test db, a module listed in
+`_OPS_MODULE_STEMS` in `tests/conftest.py` marks it ops, and the rest are
+unit, so a test that starts a subprocess goes in a listed module. Run an
+exhaustive input matrix once, at the cheapest layer that catches the
+regression. Review applies these rules to new tests; existing tests move only
+when a change touches them.
 
 Never point tests at real data. The database test suite resets its public
 schema. Install the Gitleaks version pinned in `.github/workflows/test.yml`,
