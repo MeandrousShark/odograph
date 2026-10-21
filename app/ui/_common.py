@@ -442,13 +442,18 @@ async def refuse_in_progress_trips(conn, trip_ids: list[int]) -> None:
     or kept while the drive goes on, can still grow: a discard override over
     it could later hide the longer real trip, and a merge or split of it has
     no settled trip to produce. Such a trip is its device's latest detected
-    trip and has no persisted stay at its end. Callers hold the detector lock.
+    trip and has no persisted stay at its end. A device that has sent nothing
+    for a day is not waiting on a next fix, so its trip is editable again.
+    Callers hold the detector lock.
     """
     cur = await conn.execute(
         "SELECT 1 FROM trips t WHERE t.account_id = %s AND t.id = ANY(%s) "
         "AND t.source = 'detected' AND NOT t.imported "
         "AND NOT EXISTS (SELECT 1 FROM stays s WHERE s.account_id = t.account_id "
         " AND s.tracking_device_id = t.tracking_device_id AND s.started_at = t.ended_at) "
+        "AND EXISTS (SELECT 1 FROM points p WHERE p.account_id = t.account_id "
+        " AND p.tracking_device_id = t.tracking_device_id "
+        " AND p.received_at > now() - interval '24 hours') "
         "AND NOT EXISTS (SELECT 1 FROM trips l WHERE l.account_id = t.account_id "
         " AND l.tracking_device_id = t.tracking_device_id AND l.source = 'detected' "
         " AND NOT l.imported AND l.started_at > t.started_at) "

@@ -229,6 +229,8 @@ arrival, Odograph shows the trip before the stop is confirmed, and the trip can
 still grow if the drive continues.
 Until the stop is confirmed or a later trip exists, delete, merge and split
 refuse it with "This trip is still in progress. Try again once it ends."
+If the phone sends nothing for 24 hours, the trip stops counting as in
+progress and can be edited.
 
 ### Acknowledging trip warnings
 

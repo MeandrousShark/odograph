@@ -136,6 +136,47 @@ def test_an_older_trip_without_a_stay_row_is_not_in_progress():
     _run(body)
 
 
+async def _age_received(pool, device, age):
+    async with pool.connection() as conn:
+        await conn.execute(
+            "UPDATE points SET received_at = now() - %s WHERE account_id=%s AND tracking_device_id=%s",
+            (age, account_id(conn), device))
+
+
+def test_a_trip_stays_in_progress_until_the_device_has_been_silent_a_day():
+    async def body(raw):
+        pool, runner, device, _pts, _settled, in_progress = await _two_trips(raw)
+        await _age_received(pool, device, timedelta(hours=23))
+        await _refused(_endpoint("/trips/{trip_id}/delete")(_request(pool, runner), in_progress, USER))
+    _run(body)
+
+
+def test_a_trip_of_a_device_silent_over_a_day_can_be_edited():
+    async def body(raw):
+        pool, runner, device, _pts, _settled, in_progress = await _two_trips(raw)
+        await _age_received(pool, device, timedelta(hours=25))
+        response = await _endpoint("/trips/{trip_id}/delete")(_request(pool, runner), in_progress, USER)
+        assert response.status_code == 204
+    _run(body)
+
+
+def test_silence_is_judged_per_device():
+    """Another device's recent points do not keep this device's trip in progress."""
+    async def body(raw):
+        pool, runner, device, _pts, _settled, in_progress = await _two_trips(raw)
+        async with pool.connection() as conn:
+            other = await seed_tracking_device(conn, "tablet")
+            await _insert(conn, other, build_track([Stationary(60)], seed=3))
+        await _age_received(pool, device, timedelta(hours=25))
+        async with pool.connection() as conn:
+            await conn.execute(
+                "UPDATE points SET received_at = now() WHERE account_id=%s AND tracking_device_id=%s",
+                (account_id(conn), other))
+        response = await _endpoint("/trips/{trip_id}/delete")(_request(pool, runner), in_progress, USER)
+        assert response.status_code == 204
+    _run(body)
+
+
 def test_the_trip_can_be_edited_once_its_end_stay_is_settled():
     async def body(raw):
         pool, runner, device, pts, _settled, in_progress = await _two_trips(raw)

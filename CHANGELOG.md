@@ -48,7 +48,7 @@ reproduced here.
   the phone's next report, which could be hours later. Existing
   trips are unchanged and no reprocessing is needed. Until the stop is
   confirmed, delete, merge and split refuse the trip and ask you to try again
-  once it ends. See
+  once it ends, or once the phone has been silent for 24 hours. See
   [A point arrived, but no trip appeared](docs/usage.md#a-point-arrived-but-no-trip-appeared).
 
 ## [1.0.0] - 2026-10-16
