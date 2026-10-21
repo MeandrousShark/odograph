@@ -80,7 +80,7 @@ _schema_object_baseline: set[str] = set()
 
 
 def pytest_configure(config) -> None:
-    timing_records.activate(config)
+    timing_records.activate(config, LATEST_SCHEMA_VERSION)
 
 
 class MemoryBytecodeCache(jinja2.BytecodeCache):
