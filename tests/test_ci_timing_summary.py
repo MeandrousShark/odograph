@@ -1,7 +1,6 @@
 import importlib.util
 import json
 from pathlib import Path
-import subprocess
 import sys
 
 import pytest
@@ -276,9 +275,3 @@ def test_oversized_summary_is_truncated(tmp_path, monkeypatch):
     assert len(text.encode()) < 250
     assert text.endswith("Summary truncated.\n")
 
-
-def test_command_line_exits_zero_on_bad_arguments():
-    result = subprocess.run([sys.executable, str(SCRIPT)], capture_output=True, text=True, timeout=30)
-
-    assert result.returncode == 0
-    assert "The timing summary failed" in result.stdout

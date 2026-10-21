@@ -634,7 +634,6 @@ _OPS_MODULE_STEMS = {
     "test_backup_restore_scripts",
     "test_case_time_limit",
     "test_ci_serial_timeout",
-    "test_ci_timing_summary",
     "test_ci_workflow",
     "test_compose_config",
     "test_dependency_locks",
