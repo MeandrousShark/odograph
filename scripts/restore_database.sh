@@ -169,8 +169,10 @@ classify_app_container_state() {
 case "$compose_program_name" in
     podman-compose)
         # podman-compose ps has no service filter. Its format option is passed
-        # to podman ps, so request service label and container state as fields.
-        if ! app_listing="$($compose_cmd ps --format '{{.Names}}|{{.State}}|{{.Label "io.podman.compose.service"}}' 2>/dev/null)"; then
+        # to podman ps, so request service labels and container state as fields.
+        # podman-compose before 1.5.0 sets only the docker service label, so
+        # read both and resolve them here, where a disagreement fails closed.
+        if ! app_listing="$($compose_cmd ps --format '{{.Names}}|{{.State}}|{{.Label "io.podman.compose.service"}}|{{.Label "com.docker.compose.service"}}' 2>/dev/null)"; then
             echo "error: unable to determine whether the app service is stopped; podman-compose ps failed." >&2
             exit 1
         fi
@@ -178,13 +180,15 @@ case "$compose_program_name" in
             database_service_present=0
             while IFS= read -r app_row; do
                 case "$app_row" in
-                    *'|'*'|'*) ;;
+                    *'|'*'|'*'|'*'|'*) app_state="unknown"; break ;;
+                    *'|'*'|'*'|'*) ;;
                     *) app_state="unknown"; break ;;
                 esac
-                container_name="${app_row%%|*}"
-                state_and_service="${app_row#*|}"
-                container_state="${state_and_service%%|*}"
-                container_service="${state_and_service#*|}"
+                IFS='|' read -r container_name container_state podman_service docker_service <<< "$app_row"
+                if [ -n "$podman_service" ] && [ -n "$docker_service" ] && [ "$podman_service" != "$docker_service" ]; then
+                    app_state="unknown"; break
+                fi
+                container_service="${podman_service:-$docker_service}"
                 case "$container_name" in
                     ""|*[![:alnum:]_.-]*) app_state="unknown"; break ;;
                 esac
