@@ -226,28 +226,37 @@ def test_ci_plans_shards_in_a_read_only_first_job():
     assert plan["env"] == {"PYTHONPATH": "tests",
                            "ODOGRAPH_SHARD_PLAN_OUTPUT": "${{ runner.temp }}/shard-plan.json"}
     assert "${{" not in plan["run"]
-    assert plan["run"].splitlines()[:2] == [
+    assert plan["run"].splitlines()[:8] == [
         "set -euo pipefail",
-        "python -m pytest --collect-only -q -p no:cacheprovider -p shard_plan | tail -n 20",
+        'log="$RUNNER_TEMP/shard-plan.log"',
+        'if python -m pytest --collect-only -q -p no:cacheprovider -p shard_plan > "$log" 2>&1; then',
+        '  tail -n 20 "$log"',
+        "else",
+        "  plan_status=$?",
+        '  tail -c 16384 "$log" || true',
+        '  exit "$plan_status"',
     ]
     assert job["steps"].index(steps["Install test dependencies"]) < job["steps"].index(plan)
 
 
-def _run_plan_step(tmp_path, plan_text: str | None, status: int = 0):
-    """Run the plan step with pytest replaced by one that writes `plan_text`."""
+def _run_plan_step(tmp_path, plan_text: str | None, status: int = 0, lines: int = 1):
+    """Run the plan step with pytest replaced by one that writes `plan_text`
+    and prints `lines` numbered lines after a header."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     python = bin_dir / "python"
     python.write_text(
         '#!/bin/sh\nif [ "$1" = -m ]; then\n'
         '  if [ -n "${CI_TEST_PLAN:-}" ]; then printf "%s" "$CI_TEST_PLAN" > "$ODOGRAPH_SHARD_PLAN_OUTPUT"; fi\n'
-        '  echo "collect-only output"\n  exit "$CI_TEST_STATUS"\nfi\n'
+        '  echo "collect-only output"\n  seq "$CI_TEST_LINES"\n  echo "exit message" >&2\n'
+        '  exit "$CI_TEST_STATUS"\nfi\n'
         f'exec {shlex.quote(sys.executable)} "$@"\n')
     python.chmod(0o755)
     output = tmp_path / "github-output"
     output.write_text("")
     env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
            "GITHUB_OUTPUT": str(output), "CI_TEST_STATUS": str(status),
+           "RUNNER_TEMP": str(tmp_path), "CI_TEST_LINES": str(lines),
            "ODOGRAPH_SHARD_PLAN_OUTPUT": str(tmp_path / "shard-plan.json"),
            "CI_TEST_PLAN": plan_text or ""}
     result = subprocess.run(["bash", "-c", _plan_step()["run"]], env=env,
@@ -260,7 +269,7 @@ def test_ci_plan_step_publishes_the_plugin_plan_as_job_outputs(tmp_path):
     result, outputs = _run_plan_step(tmp_path, json.dumps(plan))
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout == "collect-only output\n"
+    assert result.stdout == "collect-only output\n1\nexit message\n"
     lines = dict(line.split("=", 1) for line in outputs.splitlines())
     assert set(lines) == {"matrix", "digest", "count"}
     assert json.loads(lines["matrix"]) == plan["matrix"]
@@ -269,9 +278,22 @@ def test_ci_plan_step_publishes_the_plugin_plan_as_job_outputs(tmp_path):
     assert f"{plan['count']} shards of 225.0, cap 8" in result.stderr
 
 
+def test_ci_plan_step_shows_twenty_lines_on_success_and_a_long_tail_on_failure(tmp_path):
+    result, _ = _run_plan_step(tmp_path, json.dumps(_session_plan()), lines=5000)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [str(n) for n in range(4982, 5001)] + ["exit message"]
+
+    result, outputs = _run_plan_step(tmp_path, None, status=4, lines=5000)
+    log = (tmp_path / "shard-plan.log").read_text()
+    assert result.returncode == 4 and outputs == ""
+    assert len(log) > 16384 and result.stdout == log[-16384:]
+    assert result.stdout.endswith("5000\nexit message\n")
+
+
 def test_ci_plan_step_fails_on_planner_failure_or_unreadable_plan(tmp_path):
     result, outputs = _run_plan_step(tmp_path, None, status=4)
     assert result.returncode == 4 and outputs == ""
+    assert result.stdout == "collect-only output\n1\nexit message\n"
 
     for broken in ("", "{", "[]", json.dumps({"matrix": {"include": []}})):
         result, outputs = _run_plan_step(tmp_path, broken or " ")

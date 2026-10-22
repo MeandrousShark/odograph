@@ -46,7 +46,14 @@ jobs:
           ODOGRAPH_SHARD_PLAN_OUTPUT: ${{ runner.temp }}/shard-plan.json
         run: |
           set -euo pipefail
-          python -m pytest --collect-only -q -p no:cacheprovider -p shard_plan | tail -n 20
+          log="$RUNNER_TEMP/shard-plan.log"
+          if python -m pytest --collect-only -q -p no:cacheprovider -p shard_plan > "$log" 2>&1; then
+            tail -n 20 "$log"
+          else
+            plan_status=$?
+            tail -c 16384 "$log" || true
+            exit "$plan_status"
+          fi
           python - "$ODOGRAPH_SHARD_PLAN_OUTPUT" >> "$GITHUB_OUTPUT" <<'PY'
           import json
           import sys
