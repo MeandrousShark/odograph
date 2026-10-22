@@ -418,12 +418,12 @@ wait_for_detected_trip() {
 # the default debounce, so the run that ingest triggers can leave its newest
 # points just past the watermark. A restored archive in that state makes the
 # app re-detect the tail on startup, which rewrites stay and trip rows. The
-# watermark is per device from schema 26 on; before that, one row covers all
-# points.
+# watermark is per device from schema 26 on, checked only for devices the
+# detector would run; before that, one row covers all points.
 wait_for_detector_settled() {
     local dir="$1" timeout_s="$2" deadline sql
     if [ "$BASE_SCHEMA_VERSION" -ge 26 ]; then
-        sql="SELECT NOT EXISTS (SELECT 1 FROM points p LEFT JOIN detector_state s ON s.account_id = p.account_id AND s.tracking_device_id = p.tracking_device_id WHERE s.last_run_at IS NULL OR p.received_at > s.last_run_at) AS detector_settled"
+        sql="SELECT NOT EXISTS (SELECT 1 FROM tracking_devices d JOIN detector_state s ON s.account_id = d.account_id AND s.tracking_device_id = d.id JOIN points p ON p.account_id = d.account_id AND p.tracking_device_id = d.id WHERE d.enabled AND d.revoked_at IS NULL AND p.received_at > coalesce(s.last_run_at, '-infinity')) AS detector_settled"
     else
         sql="SELECT s.last_run_at IS NOT NULL AND s.last_run_at >= coalesce((SELECT max(received_at) FROM points), '-infinity') AS detector_settled FROM detector_state s WHERE s.id = 1"
     fi

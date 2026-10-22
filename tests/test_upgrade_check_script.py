@@ -1533,7 +1533,7 @@ def test_detector_settles_after_a_restart_before_the_pre_backup_manifest(
     first_backup = next(i for i, line in enumerate(lines) if line.startswith("child|backup|"))
     first_manifest = next(i for i, line in enumerate(lines) if "jsonb_strip_nulls(to_jsonb(t)" in line)
     assert settled[0] < first_manifest < first_backup
-    per_device = "s.tracking_device_id = p.tracking_device_id" in lines[settled[0]]
+    per_device = "s.tracking_device_id = d.id" in lines[settled[0]]
     assert per_device is owned_schema
     assert ("WHERE s.id = 1" in lines[settled[0]]) is not owned_schema
     assert "[PASS] step 2d: detector restarted" in result.stdout
