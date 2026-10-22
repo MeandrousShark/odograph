@@ -131,6 +131,7 @@ fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+step_info() { echo "[INFO] $1"; }
 step_pass() { echo "[PASS] $1"; }
 step_fail() { echo "[FAIL] $1" >&2; exit 1; }
 
@@ -411,6 +412,37 @@ wait_for_detected_trip() {
         sleep 5
     done
     return 1
+}
+
+# A detector run stores last_run_at as its start time minus a margin equal to
+# the default debounce, so the run that ingest triggers can leave its newest
+# points just past the watermark. A restored archive in that state makes the
+# app re-detect the tail on startup, which rewrites stay and trip rows. The
+# watermark is per device from schema 26 on; before that, one row covers all
+# points.
+wait_for_detector_settled() {
+    local dir="$1" timeout_s="$2" deadline sql
+    if [ "$BASE_SCHEMA_VERSION" -ge 26 ]; then
+        sql="SELECT NOT EXISTS (SELECT 1 FROM points p LEFT JOIN detector_state s ON s.account_id = p.account_id AND s.tracking_device_id = p.tracking_device_id WHERE s.last_run_at IS NULL OR p.received_at > s.last_run_at) AS detector_settled"
+    else
+        sql="SELECT s.last_run_at IS NOT NULL AND s.last_run_at >= coalesce((SELECT max(received_at) FROM points), '-infinity') AS detector_settled FROM detector_state s WHERE s.id = 1"
+    fi
+    deadline=$(( $(date +%s) + timeout_s ))
+    while :; do
+        [ "$(db_query "$dir" "$sql")" = t ] && return 0
+        [ "$(date +%s)" -lt "$deadline" ] || return 1
+        sleep 2
+    done
+}
+
+print_detector_watermark() {
+    local dir="$1" step="$2" line
+    while IFS= read -r line; do
+        step_info "$step: detector_state $line"
+    done < <(db_query "$dir" "SELECT to_jsonb(s) FROM detector_state s ORDER BY 1" || true)
+    while IFS= read -r line; do
+        step_info "$step: newest received_at $line"
+    done < <(db_query "$dir" "SELECT device, max(received_at) FROM points GROUP BY 1 ORDER BY 1" || true)
 }
 
 env_value() {
@@ -1078,9 +1110,19 @@ step2_seed() {
     wait_for_detected_trip "$BASE_DIR" test 240 \
         || step_fail "step 2: no detected trip appeared for device 'test' within the debounce window"
     step_pass "step 2c: a real detected trip (with points/geometry) captured via send_test_track.sh"
+
+    # The detector runs once on startup, now a full margin after the newest
+    # point, so the archive in step 4 cannot make a restored app rewrite rows.
+    compose_base stop app >/dev/null
+    compose_base up -d app >/dev/null
+    wait_for_healthz 120 || step_fail "step 2: app did not come back healthy after the detector restart"
+    wait_for_detector_settled "$BASE_DIR" 60 \
+        || step_fail "step 2d: detector watermark is behind a received point after restart; a restored archive would re-detect the tail"
+    step_pass "step 2d: detector restarted and its watermark covers every received point"
 }
 
 step3_manifest_before() {
+    print_detector_watermark "$BASE_DIR" "step 3"
     capture_manifest "$BASE_DIR" "$SCRATCH/manifest-before.txt"
     step_pass "step 3: captured the semantic manifest before backup"
 }
@@ -1259,6 +1301,7 @@ step8_rollback() {
     mig="$(migration_count "$BASE_DIR")"
     [ "$v" = "$mig" ] || step_fail "step 8: schema_version ($v) does not equal the base release's migration count ($mig)"
 
+    print_detector_watermark "$BASE_DIR" "step 8a"
     capture_manifest "$BASE_DIR" "$SCRATCH/manifest-after-rollback.txt"
     # Compared against the PRE-ingest baseline, not manifest-after-ingest:
     # the archive being restored here predates step 6's post-restore ingest

@@ -61,6 +61,10 @@ def _install_repo(
     # Fake Compose/curl never open a server. A real development site or
     # independent upgrade drill must not change these orchestration tests.
     source = source.replace(_extract_function(source, "port_in_use"), "port_in_use() { return 1; }")
+    # The fake answers at once; a failing settle check must not poll for a minute.
+    settle_call = 'wait_for_detector_settled "$BASE_DIR" 60'
+    assert settle_call in source
+    source = source.replace(settle_call, 'wait_for_detector_settled "$BASE_DIR" 0')
     _write_executable(scripts_dir / "upgrade_check.sh", source)
     if no_bootstrap:
         bootstrap_env = "'POSTGRES_PASSWORD=fake' 'INGEST_PASSWORD=fake'"
@@ -218,6 +222,10 @@ case "${1-}" in
                 exit 0
                 ;;
             *"python -m app.application_roles verify"*) exit 0 ;;
+            *"AS detector_settled"*)
+                if [ "${FAKE_DETECTOR_UNSETTLED:-}" = 1 ]; then printf '%s\n' f; else printf '%s\n' t; fi
+                exit 0
+                ;;
             *"python -m app.manage_account list-accounts"*)
                 printf 'ID\tLOGIN EMAIL\tROLE\tSTATUS\tEMAIL\n'
                 printf '3\tother@example.invalid\tmember\tenabled\tverified\n'
@@ -374,6 +382,7 @@ def _run(
     auth_fault: str = "",
     modern_auth: bool = False,
     owned_schema: bool = False,
+    detector_unsettled: bool = False,
 ) -> tuple[subprocess.CompletedProcess, Path, Path, Path]:
     bin_dir = tmp_path / "bin"
     scratch_root = tmp_path / "scratch"
@@ -493,6 +502,7 @@ def _run(
         "FAKE_AUTH_FAULT": auth_fault,
         "FAKE_MODERN_AUTH": "1" if modern_auth else "",
         "FAKE_SCHEMA_VERSION": "26" if owned_schema else "1",
+        "FAKE_DETECTOR_UNSETTLED": "1" if detector_unsettled else "",
         "FAKE_SIGNUP_EMAIL": str(tmp_path / "signup-email"),
         "FAKE_ISSUANCE_SCRIPT": str(tmp_path / "issuance.py"),
         "FAKE_DB_EVENTS": str(tmp_path / "db-events"),
@@ -1496,6 +1506,59 @@ def test_schema26_base_uses_the_seed_account_and_issued_device_logins(tmp_path, 
     for secret in ("synthetic-track-secret", "synthetic-restore-secret"):
         assert secret not in result.stdout + result.stderr + log.read_text()
     assert list(scratch.glob("upgrade_check.*")) == []
+
+
+@pytest.mark.parametrize("frontend", ["docker", "podman"])
+@pytest.mark.parametrize("owned_schema", [False, True])
+def test_detector_settles_after_a_restart_before_the_pre_backup_manifest(
+    tmp_path, frontend, owned_schema
+):
+    repo, base_ref, candidate_ref = _install_repo(
+        tmp_path, modern_auth=owned_schema, owned_schema=owned_schema
+    )
+    result, log, _, _ = _run(
+        repo, ["--base", base_ref, "--candidate", candidate_ref], tmp_path,
+        frontend=frontend, fail_up=False, modern_auth=owned_schema, owned_schema=owned_schema,
+    )
+    assert result.returncode == 0, result.stderr
+    lines = log.read_text().splitlines()
+    detected = next(i for i, line in enumerate(lines) if "source = 'detected'" in line)
+    settled = [i for i, line in enumerate(lines) if "AS detector_settled" in line]
+    assert len(settled) == 1
+    base_app = [i for i, line in enumerate(lines)
+                if line.startswith("compose|") and "/base/" in line
+                and (line.endswith(" stop app") or line.endswith(" up -d app"))]
+    stop, up = [i for i in base_app if detected < i < settled[0]]
+    assert lines[stop].endswith(" stop app") and lines[up].endswith(" up -d app")
+    first_backup = next(i for i, line in enumerate(lines) if line.startswith("child|backup|"))
+    first_manifest = next(i for i, line in enumerate(lines) if "jsonb_strip_nulls(to_jsonb(t)" in line)
+    assert settled[0] < first_manifest < first_backup
+    per_device = "s.tracking_device_id = p.tracking_device_id" in lines[settled[0]]
+    assert per_device is owned_schema
+    assert ("WHERE s.id = 1" in lines[settled[0]]) is not owned_schema
+    assert "[PASS] step 2d: detector restarted" in result.stdout
+    for step in ("step 3", "step 8a"):
+        assert f"[INFO] {step}: detector_state " in result.stdout
+        assert f"[INFO] {step}: newest received_at " in result.stdout
+    assert result.stdout.index("[INFO] step 3:") < result.stdout.index("[PASS] step 3:")
+    assert result.stdout.index("[INFO] step 8a:") < result.stdout.index("[PASS] step 8a:")
+
+
+@pytest.mark.parametrize("owned_schema", [False, True])
+def test_detector_watermark_behind_a_point_fails_step_2d_before_backup(tmp_path, owned_schema):
+    repo, base_ref, candidate_ref = _install_repo(
+        tmp_path, modern_auth=owned_schema, owned_schema=owned_schema
+    )
+    result, log, _, _ = _run(
+        repo, ["--base", base_ref, "--candidate", candidate_ref], tmp_path,
+        fail_up=False, modern_auth=owned_schema, owned_schema=owned_schema,
+        detector_unsettled=True,
+    )
+    assert result.returncode != 0
+    assert "[FAIL] step 2d: detector watermark is behind a received point after restart" in result.stderr
+    assert "[PASS] step 2d" not in result.stdout
+    assert "step 3" not in result.stdout
+    assert not any(line.startswith("child|") for line in log.read_text().splitlines())
 
 
 @pytest.mark.parametrize("count,enabled", [(1, True), (2, True), (1, False), (0, True)])
