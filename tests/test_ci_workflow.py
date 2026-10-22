@@ -71,7 +71,7 @@ def test_ci_runs_full_suite_on_main_pushes_and_pull_requests_with_postgis(tmp_pa
         "set", "-euo", "pipefail", "if",
         "timeout", "--signal=INT", "--kill-after=15s", "15m",
         "python", "-m", "pytest", "-m", "$PYTEST_MARKER", "-vv", "--durations=25",
-        "-o", "faulthandler_timeout=120", ">", "$RUNNER_TEMP/pytest-shard.log", "2>&1",
+        ">", "$RUNNER_TEMP/pytest-shard.log", "2>&1",
     ]
     assert "tee" not in script and "PIPESTATUS" not in script
     preview = script.split("\n  suite_status=$?\nfi\n", 1)[1]
@@ -256,6 +256,71 @@ def test_ci_aggregate_check_passes_only_when_every_shard_passed():
         assert completed.returncode == status, result
 
 
+def test_ci_timing_summary_reports_without_gating(tmp_path):
+    workflow = load_workflow()
+    job = workflow["jobs"]["timing-summary"]
+
+    # Runs after failed shards, but a superseded, cancelled run spends no runner.
+    assert job["if"] == "${{ !cancelled() }}"
+    assert job["needs"] == "suite"
+    assert job["permissions"] == {"contents": "read", "actions": "read"}
+    assert int(job["timeout-minutes"]) <= 15
+    assert workflow["jobs"]["test"]["needs"] == "suite"
+    assert all("timing-summary" not in str(other.get("needs", ""))
+               for name, other in workflow["jobs"].items() if name != "timing-summary")
+
+    steps = {step.get("name"): step for step in job["steps"]}
+    current = steps["Download this run's timing records"]
+    assert is_pinned(current["uses"], "actions/download-artifact")
+    assert current["id"] == "current"
+    assert current["continue-on-error"] == "true"
+    assert current["with"] == {
+        "pattern": "pytest-timing-${{ github.run_id }}-*",
+        "path": "${{ runner.temp }}/timing-current",
+    }
+    baselines = steps["Download main timing baselines"]
+    assert baselines["id"] == "baselines"
+    assert baselines["continue-on-error"] == "true"
+    assert baselines["timeout-minutes"] == "5"
+    assert baselines["env"] == {"GH_TOKEN": "${{ github.token }}",
+                                "REPOSITORY": "${{ github.repository }}"}
+    summary = steps["Summarize test timing"]
+    assert summary["env"] == {"CURRENT_DOWNLOAD": "${{ steps.current.outcome }}",
+                              "BASELINE_DOWNLOAD": "${{ steps.baselines.outcome }}"}
+    assert "${{" not in summary["run"]
+    assert shlex.split(summary["run"].replace("\\\n", ""))[3:] == [
+        "python", "scripts/ci_timing_summary.py", "--current", "$RUNNER_TEMP/timing-current",
+        "--baseline", "$RUNNER_TEMP/timing-baselines",
+        "--current-download", "$CURRENT_DOWNLOAD", "--baseline-download", "$BASELINE_DOWNLOAD",
+        ">>", "$GITHUB_STEP_SUMMARY",
+    ]
+    assert '>> "$GITHUB_STEP_SUMMARY"' in summary["run"]
+    order = [current, baselines, summary]
+    assert sorted(order, key=job["steps"].index) == order
+
+    # Run the baseline download against a fake gh: one run's artifacts are gone.
+    log = tmp_path / "gh.log"
+    gh = tmp_path / "gh"
+    gh.write_text(
+        '#!/bin/sh\necho "$*" >> "$CI_TEST_LOG"\n'
+        'case "$1" in api) printf "30\\n20\\n" ;; run) [ "$5" != 20 ] ;; esac\n')
+    gh.chmod(0o755)
+    env = {**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+           "RUNNER_TEMP": str(tmp_path), "CI_TEST_LOG": str(log),
+           "REPOSITORY": "owner/repo", "GH_TOKEN": "token"}
+    result = subprocess.run(["bash", "-c", baselines["run"]], env=env,
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "no timing records for run 20\n"
+    target = tmp_path / "timing-baselines"
+    assert log.read_text().splitlines() == [
+        "api --jq .workflow_runs[].id repos/owner/repo/actions/workflows/test.yml/runs"
+        "?branch=main&event=push&status=success&per_page=15",
+        f"run download --repo owner/repo 30 --pattern pytest-timing-* --dir {target}/30",
+        f"run download --repo owner/repo 20 --pattern pytest-timing-* --dir {target}/20",
+    ]
+
+
 def test_ci_installs_pinned_gitleaks_before_pytest():
     workflow = load_workflow()
     job_steps = workflow["jobs"]["suite"]["steps"]
@@ -324,7 +389,7 @@ def test_ci_disables_durability_on_its_own_service_container_before_pytest(tmp_p
 
 def test_ci_public_tree_is_an_explicit_unprivileged_gate():
     workflow = load_workflow()
-    assert set(workflow["jobs"]) == {"suite", "test", "public-tree"}
+    assert set(workflow["jobs"]) == {"suite", "test", "timing-summary", "public-tree"}
     job = workflow["jobs"]["public-tree"]
     assert job["runs-on"] == "ubuntu-latest"
     steps = {step.get("name"): step for step in job["steps"]}

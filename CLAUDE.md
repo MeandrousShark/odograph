@@ -34,6 +34,20 @@ reset the public schema. Install the Gitleaks version pinned in
 `.github/workflows/test.yml`, then run `python scripts/check_public_tree.py`
 before opening a pull request.
 
+Each test case, setup and teardown included, has a 60 second limit (not
+enforced under `--pdb` once a phase fails); a longer case dumps every thread's
+stack and stops the run.
+
+Every test carries one tier marker. Put pure logic, rendering and validation
+in `unit`; `db` is for SQL, row-level security, persistence, commits and
+concurrency; `ops` is for scripts, workflows, Compose, the Dockerfile and
+release tooling. A `_db` file suffix marks a test db, a module listed in
+`_OPS_MODULE_STEMS` in `tests/conftest.py` marks it ops, and the rest are
+unit, so a test that starts a subprocess goes in a listed module. Run an
+exhaustive input matrix once, at the cheapest layer that catches the
+regression. Review applies these rules to new tests; existing tests move only
+when a change touches them.
+
 ## Load-bearing behavior
 
 - Keep `detect()` pure and do not casually bump `DETECTOR_VERSION`.

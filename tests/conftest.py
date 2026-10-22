@@ -39,6 +39,7 @@ from app.account_context import (
     CONTROL_ROLE, RUNTIME_ROLE, AccountPool, AccountPrincipal, account_id,
 )
 from app.role_setup import RolePools, role_conninfo
+import case_time_limit
 import timing_records
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -80,7 +81,8 @@ _schema_object_baseline: set[str] = set()
 
 
 def pytest_configure(config) -> None:
-    timing_records.activate(config)
+    timing_records.activate(config, LATEST_SCHEMA_VERSION)
+    case_time_limit.activate(config)
 
 
 class MemoryBytecodeCache(jinja2.BytecodeCache):
@@ -630,6 +632,7 @@ _TIER_MARKER_NAMES = {"unit", "ops", "db"}
 _OPS_MODULE_STEMS = {
     "test_archive_client_js",
     "test_backup_restore_scripts",
+    "test_case_time_limit",
     "test_ci_serial_timeout",
     "test_ci_workflow",
     "test_compose_config",

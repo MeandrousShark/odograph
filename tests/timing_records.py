@@ -6,7 +6,8 @@ cases it finished, and the case it stopped in, as ``interrupted``. Recording
 never fails the suite: an error opening, writing or instrumenting turns it
 off with a message on stderr. Records:
 
-- ``header``: format, revisions, shard, CI run and runner environment
+- ``header``: format, revisions, schema version, shard, CI run and runner
+  environment
 - ``collection``: collection time and case counts
 - ``case``: node id, tier, outcome, setup/call/teardown seconds, spans, and
   any module- or session-scoped fixtures first set up in that case's setup
@@ -34,7 +35,8 @@ from pathlib import Path
 
 import pytest
 
-FORMAT_VERSION = 1
+# 2 added the header's schema_version.
+FORMAT_VERSION = 2
 _ENV_RECORDS = "ODOGRAPH_TIMING_RECORDS"
 _ENV_SHARD = "ODOGRAPH_TIMING_SHARD"
 _ENV_HEAD = "ODOGRAPH_TIMING_HEAD"
@@ -132,7 +134,8 @@ def _outcome(reports: dict) -> str:
 
 
 class TimingRecorder:
-    def __init__(self, config, path: Path, shard: str, head: str | None):
+    def __init__(self, config, path: Path, shard: str, head: str | None,
+                 schema_version: int | None = None):
         self.config = config
         self.started = time.perf_counter()
         self.common = {"shard": shard, "head": head}
@@ -148,6 +151,7 @@ class TimingRecorder:
         self.write("header", {
             "format": FORMAT_VERSION,
             "checkout": _git_head(root),
+            "schema_version": schema_version,
             "markexpr": config.option.markexpr,
             "db_shard": os.environ.get("ODOGRAPH_DB_SHARD", ""),
             "event": os.environ.get("GITHUB_EVENT_NAME"),
@@ -300,8 +304,11 @@ def _timed_lifespan(lifespan):
     return run
 
 
-def activate(config) -> None:
+def activate(config, schema_version: int | None = None) -> None:
     """Record timings when ODOGRAPH_TIMING_RECORDS is set.
+
+    `schema_version` is the latest migration number, so a comparison only
+    pairs runs that tested the same schema.
 
     The variables are removed once read so pytest subprocesses that tests
     start do not also record into the same file.
@@ -313,7 +320,8 @@ def activate(config) -> None:
         return
     root = Path(str(config.rootpath))
     try:
-        recorder = TimingRecorder(config, Path(path), shard, head or _git_head(root))
+        recorder = TimingRecorder(config, Path(path), shard, head or _git_head(root),
+                                  schema_version)
     except Exception as error:  # Measurement must never fail the suite.
         sys.stderr.write(f"timing records disabled: {error!r}\n")
         return

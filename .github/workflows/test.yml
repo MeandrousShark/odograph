@@ -152,7 +152,7 @@ jobs:
         run: |
           set -euo pipefail
           if timeout --signal=INT --kill-after=15s 15m \
-            python -m pytest -m "$PYTEST_MARKER" -vv --durations=25 -o faulthandler_timeout=120 \
+            python -m pytest -m "$PYTEST_MARKER" -vv --durations=25 \
             > "$RUNNER_TEMP/pytest-shard.log" 2>&1; then
             suite_status=0
           else
@@ -193,6 +193,60 @@ jobs:
         env:
           SUITE_RESULT: ${{ needs.suite.result }}
         run: test "$SUITE_RESULT" = success
+
+  # Reporting only: kept out of the test job's needs so it never gates a
+  # merge. Every attempt of this run is downloaded because a rerun of failed
+  # jobs keeps earlier attempts' passing shards; the script takes the newest
+  # attempt of each shard.
+  timing-summary:
+    if: ${{ !cancelled() }}
+    needs: suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+      - name: Download this run's timing records
+        id: current
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: pytest-timing-${{ github.run_id }}-*
+          path: ${{ runner.temp }}/timing-current
+      - name: Download main timing baselines
+        id: baselines
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          baselines="$RUNNER_TEMP/timing-baselines"
+          mkdir -p "$baselines"
+          runs="$(gh api --jq '.workflow_runs[].id' \
+            "repos/$REPOSITORY/actions/workflows/test.yml/runs?branch=main&event=push&status=success&per_page=15")"
+          for run in $runs; do
+            gh run download --repo "$REPOSITORY" "$run" --pattern 'pytest-timing-*' \
+              --dir "$baselines/$run" || echo "no timing records for run $run"
+          done
+      - name: Summarize test timing
+        env:
+          CURRENT_DOWNLOAD: ${{ steps.current.outcome }}
+          BASELINE_DOWNLOAD: ${{ steps.baselines.outcome }}
+        run: |
+          set -euo pipefail
+          python scripts/ci_timing_summary.py --current "$RUNNER_TEMP/timing-current" \
+            --baseline "$RUNNER_TEMP/timing-baselines" \
+            --current-download "$CURRENT_DOWNLOAD" --baseline-download "$BASELINE_DOWNLOAD" \
+            >> "$GITHUB_STEP_SUMMARY"
 
   public-tree:
     runs-on: ubuntu-latest

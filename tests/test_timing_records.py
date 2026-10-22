@@ -115,7 +115,7 @@ def _write_sample(tmp_path: Path, sample: str) -> None:
     (tmp_path / "pytest.ini").write_text("[pytest]\nmarkers =\n    unit\n    db\n")
     (tmp_path / "conftest.py").write_text(
         "import timing_records\n\n\n"
-        "def pytest_configure(config):\n    timing_records.activate(config)\n")
+        "def pytest_configure(config):\n    timing_records.activate(config, 57)\n")
     (tmp_path / "test_sample.py").write_text(sample)
 
 
@@ -142,6 +142,7 @@ def test_records_every_case_with_header_collection_and_session(tmp_path):
 
     header = lines[0]
     assert header["format"] == timing_records.FORMAT_VERSION
+    assert header["schema_version"] == 57
     assert header["markexpr"] == ""
     assert {"python", "logical_cpus", "cpu_model", "image_version"} <= set(header["environment"])
 
