@@ -29,15 +29,17 @@ HEADROOM = 2.0
 
 # Jobs that run pytest without a selection and must stay inside the budget.
 GUARDED_JOBS = {("release.yml", "test"), ("release-preflight.yml", "quality")}
-# Jobs that run pytest sharded by marker; they fail loudly on every PR.
+# Jobs that run pytest sharded by the planner; they fail loudly on every PR.
 SHARDED_JOBS = {("test.yml", "suite")}
 
 # GitHub's default when a job sets no timeout-minutes.
 DEFAULT_TIMEOUT_MINUTES = 360
-SHARD_VARIABLES = ("PYTEST_MARKER", "ODOGRAPH_DB_SHARD")
+SHARD_VARIABLES = ("ODOGRAPH_SHARD",)
 # Options that narrow what pytest runs, plus anything that looks like a path.
 SELECTION_OPTION = re.compile(r"^(-m|-k|--deselect|--ignore|--lf|--last-failed|--sw|--stepwise)")
 PATH_ARGUMENT = re.compile(r"(::|\.py\b|(^|/)tests?(/|$))")
+# Collecting runs no case, so it costs nothing against a run budget.
+COLLECT_ONLY = {"--collect-only", "--co"}
 
 
 def estimate_minutes(db_cases: int, other_cases: int) -> float:
@@ -85,10 +87,12 @@ def pytest_invocations(script: str) -> list[list[str]]:
 
 
 def job_pytest_invocations(job: dict) -> list[list[str]]:
+    """Every pytest command in the job that runs cases."""
     return [
         args
         for step in job.get("steps", [])
         for args in pytest_invocations(step.get("run", ""))
+        if not COLLECT_ONLY & set(args)
     ]
 
 
@@ -97,7 +101,7 @@ def is_unselected(args: list[str]) -> bool:
 
 
 def job_kind(job: dict) -> str | None:
-    """None without pytest; "serial" for an unselected, unsharded run; else "other"."""
+    """None without a pytest run; "serial" for an unselected, unsharded run; else "other"."""
     invocations = job_pytest_invocations(job)
     if not invocations:
         return None
@@ -158,9 +162,15 @@ def guarded_workflows(timeout: str) -> dict[str, dict]:
     return {
         "release.yml": {"jobs": {"test": serial_job(timeout)}},
         "release-preflight.yml": {"jobs": {"quality": serial_job(timeout, "python -m pytest")}},
-        "test.yml": {"jobs": {"suite": {"timeout-minutes": "20", "steps": [{
-            "run": 'python -m pytest -m "$PYTEST_MARKER" -vv > "$RUNNER_TEMP/pytest-shard.log" 2>&1',
-        }]}}},
+        "test.yml": {"jobs": {
+            "plan": {"timeout-minutes": "10", "steps": [{
+                "run": "python -m pytest --collect-only -q -p shard_plan | tail -n 20",
+            }]},
+            "suite": {"timeout-minutes": "20", "env": {"ODOGRAPH_SHARD": "${{ matrix.spec }}"},
+                      "steps": [{
+                          "run": 'python -m pytest -vv > "$RUNNER_TEMP/pytest-shard.log" 2>&1',
+                      }]},
+        }},
     }
 
 
@@ -237,6 +247,26 @@ def test_missing_guarded_job_fails_instead_of_passing_vacuously():
     [problem] = check_workflows(workflows, 1187, 3334)
 
     assert "release.yml" in problem and "no longer runs" in problem
+
+
+@pytest.mark.parametrize("command", [
+    "python -m pytest --collect-only -q -p shard_plan",
+    "pytest --co -q",
+    "python -m pytest --collect-only -q | tail -n 20\npython -m pytest --co",
+])
+def test_collect_only_job_runs_no_suite(command):
+    job = serial_job("1", command)
+
+    assert job_kind(job) is None
+    workflows = guarded_workflows("50")
+    workflows["extra.yml"] = {"jobs": {"plan": job}}
+    assert check_workflows(workflows, 1187, 3334) == []
+
+
+def test_collect_only_step_does_not_hide_a_serial_run_in_the_same_job():
+    job = serial_job("1", "python -m pytest --collect-only -q\npython -m pytest -q")
+
+    assert job_kind(job) == "serial"
 
 
 def test_sharded_suite_job_is_not_held_to_the_serial_budget():

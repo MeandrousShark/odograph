@@ -47,9 +47,9 @@ class _FakeItem:
 
 
 def test_case_with_two_explicit_tiers_is_refused_at_collection(monkeypatch):
-    # CI shards run `-m "not db"` and `-m db` separately, so the session-wide
+    # Each CI shard runs only part of the suite, so the session-wide
     # check above never sees every case; the collection hook must refuse it.
-    monkeypatch.delenv("ODOGRAPH_DB_SHARD", raising=False)
+    monkeypatch.delenv("ODOGRAPH_SHARD", raising=False)
     items = [_FakeItem("tests/test_x.py::test_ok"), _FakeItem("tests/test_x.py::test_both", "unit", "db")]
 
     with pytest.raises(pytest.exit.Exception, match="test_both has more than one tier marker"):
