@@ -176,7 +176,7 @@ async def _verify(database_url, first, version=1):
 def test_application_archive_preserves_rows_credentials_sequences_and_restricted_sessions(tmp_path):
     clusters = _Clusters()
     try:
-        source, target = clusters.start(), clusters.start()
+        source, target = clusters.start_many(2)
         _assert_pg16_clients(source)
         first, runtime_info = asyncio.run(_seed(source.database_url))
         with psycopg.connect(source.database_url) as conn:

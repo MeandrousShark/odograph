@@ -6,6 +6,7 @@ import pytest
 from app.application_roles import MIGRATIONS_DIR
 from app.storage_limits import (
     GIB,
+    LOCK_TIMEOUT_S,
     MIN_CUSTOM_LIMIT_BYTES,
     limit_gib,
     max_custom_gib,
@@ -44,3 +45,7 @@ def test_display_values_round_trip_and_never_exceed_the_budget():
         assert max_custom_gib(stored - 1) < gib
     assert max_custom_gib(0) == Decimal("0.00")
     assert str(max_custom_gib(10 * GIB)) == "10.00"
+
+
+def test_production_storage_limit_lock_timeout_stays_five_seconds():
+    assert LOCK_TIMEOUT_S == 5.0

@@ -171,11 +171,11 @@ db_container_running() {
 
 wait_for_db_ready() {
     local attempt
-    for ((attempt = 0; attempt < 30; attempt++)); do
+    for ((attempt = 0; attempt < 150; attempt++)); do
         if podman exec "$DB_CONTAINER" pg_isready -h 127.0.0.1 -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1; then
             return 0
         fi
-        sleep 1
+        sleep 0.2
     done
     echo "error: QA database did not become ready: $DB_CONTAINER" >&2
     exit 1
@@ -250,7 +250,7 @@ host_is_loopback() {
 
 wait_for_app_ready() {
     local attempt
-    for ((attempt = 0; attempt < 30; attempt++)); do
+    for ((attempt = 0; attempt < 150; attempt++)); do
         if ! uvicorn_pid_running; then
             echo "error: uvicorn exited before becoming ready; see $LOG_FILE" >&2
             tail -n 40 "$LOG_FILE" >&2 || true
@@ -268,7 +268,7 @@ except Exception:
 " 2>/dev/null; then
             return 0
         fi
-        sleep 1
+        sleep 0.2
     done
     echo "error: uvicorn did not become ready on port $APP_PORT; see $LOG_FILE" >&2
     exit 1
@@ -321,9 +321,9 @@ stop_uvicorn() {
     pid="$(cat "$PID_FILE")"
     echo "Stopping uvicorn (pid $pid)..."
     kill "$pid" 2>/dev/null || true
-    for ((attempt = 0; attempt < 10; attempt++)); do
+    for ((attempt = 0; attempt < 50; attempt++)); do
         kill -0 "$pid" 2>/dev/null || break
-        sleep 1
+        sleep 0.2
     done
     if kill -0 "$pid" 2>/dev/null; then
         kill -9 "$pid" 2>/dev/null || true

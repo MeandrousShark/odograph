@@ -63,7 +63,8 @@ SYNTHETIC_ENV_KEYS=(
 DRILL_PORT=8077
 DEFAULT_HEALTH_TIMEOUT=3600
 DB_READY_TIMEOUT=300
-POLL_INTERVAL=2
+# Seam for tests; the operator default stays 2 seconds.
+POLL_INTERVAL="${REHEARSE_POLL_INTERVAL:-2}"
 HEALTHZ_PROBE="import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status==200 else 1)"
 
 usage() {
@@ -130,6 +131,11 @@ if [ -z "$ARCHIVE" ] || [ -z "$CANDIDATE_REF" ]; then
 fi
 if [[ ! "$HEALTH_TIMEOUT" =~ ^[1-9][0-9]{0,6}$ ]]; then
     echo "error: --health-timeout must be a positive whole number of seconds" >&2
+    usage
+fi
+
+if [[ ! "$POLL_INTERVAL" =~ ^([0-9]+(\.[0-9]+)?|\.[0-9]+)$ ]] || [[ "$POLL_INTERVAL" =~ ^[0.]*$ ]]; then
+    echo "error: REHEARSE_POLL_INTERVAL must be a positive number of seconds" >&2
     usage
 fi
 

@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import psycopg
@@ -221,8 +222,15 @@ def test_command_waits_for_the_account_detector_lock_without_a_lock_timeout(comm
         thread = threading.Thread(
             target=lambda: result.setdefault("code", reprocess_detector.main(["--account", str(OWNER)])))
         thread.start()
-        # Longer than the serving 1s lock timeout, so a bounded wait would fail.
-        thread.join(2.5)
+        deadline = time.monotonic() + 10
+        while not holder.execute(
+                "SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND NOT granted "
+                "AND classid=%s AND objsubid=2 AND pid <> pg_backend_pid()",
+                (DETECTOR_ACCOUNT_LOCK_CLASS_ID,)).fetchone()[0]:
+            assert time.monotonic() < deadline, "command never waited on the detector lock"
+            time.sleep(0.02)
+        # Still waiting past the serving 1 s lock timeout, so a bounded wait would fail.
+        thread.join(1.3)
         assert thread.is_alive()
         holder.rollback()
         thread.join(30)

@@ -98,13 +98,22 @@ def test_cleanup_removes_only_containers_with_both_ownership_labels(tmp_path):
 
 @pytest.mark.parametrize("failure", [{"FAKE_READY_EXIT": "1"}, {"FAKE_PORT_EXIT": "7"}])
 def test_failed_start_removes_the_container_and_its_anonymous_volumes(tmp_path, failure):
-    result = _run(tmp_path, "start", "task-42", **failure)
+    result = _run(tmp_path, "start", "task-42", TEST_DB_READY_ATTEMPTS="3", **failure)
 
     assert result.returncode != 0
     assert "TEST_DATABASE_URL" not in result.stdout
     lines = (tmp_path / "podman.log").read_text().splitlines()
     assert lines.count("rm -f --volumes owned-container") == 1
     assert not any(line.startswith("volume ") for line in lines)
+
+
+@pytest.mark.parametrize("attempts", ["0", "1.5", "-1", "many"])
+def test_rejects_ready_attempts_that_are_not_positive_whole_numbers(tmp_path, attempts):
+    result = _run(tmp_path, "start", "task-42", TEST_DB_READY_ATTEMPTS=attempts)
+
+    assert result.returncode == 1
+    assert "TEST_DB_READY_ATTEMPTS must be" in result.stderr
+    assert not (tmp_path / "podman.log").exists()
 
 
 def test_rejects_task_ids_that_cannot_be_used_safely_in_labels(tmp_path):

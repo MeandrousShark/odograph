@@ -7,6 +7,7 @@ import time
 
 import pytest
 
+from app import account_lifecycle
 from app.accounts import create_admin
 from app.db import make_pool
 from conftest import provisioned_role_pools, reset_db
@@ -14,6 +15,22 @@ from tests.test_admin_routes_db import _app, _client
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="requires disposable PostGIS")
+SHORT_LOCK_TIMEOUT_S = 0.4
+
+
+async def _wait_until_blocked(holder, timeout=10):
+    """Return once another backend waits on a lock held by `holder`."""
+    deadline = time.monotonic() + timeout
+    while True:
+        # pg_locks is read live, unlike pg_stat_activity inside a transaction.
+        cur = await holder.execute(
+            "SELECT count(*) FROM pg_locks WHERE NOT granted "
+            "AND pg_backend_pid() = ANY(pg_blocking_pids(pid))",
+        )
+        if (await cur.fetchone())[0]:
+            return
+        assert time.monotonic() < deadline, "request never waited on the held lock"
+        await asyncio.sleep(0.02)
 
 
 async def _scenario(callback):
@@ -168,7 +185,14 @@ def test_second_admin_transition_invalidates_the_target_and_rejects_stale_calls(
     asyncio.run(_scenario(check))
 
 
-def test_disable_returns_when_target_row_is_locked_without_changing_state():
+def test_production_lock_timeout_stays_five_seconds():
+    assert account_lifecycle.LOCK_TIMEOUT_S == 5.0
+    assert account_lifecycle._lock_timeout() == "5000ms"
+
+
+def test_disable_returns_when_target_row_is_locked_without_changing_state(monkeypatch):
+    monkeypatch.setattr(account_lifecycle, "LOCK_TIMEOUT_S", SHORT_LOCK_TIMEOUT_S)
+
     async def check(owner, pools, admin):
         async with owner.connection() as conn:
             member_id = (await (await conn.execute(
@@ -193,11 +217,12 @@ def test_disable_returns_when_target_row_is_locked_without_changing_state():
                         f"/admin/accounts/{member_id}/disable",
                         data={"csrf_token": "route-csrf"},
                     ))
-                    await asyncio.sleep(0.2)
+                    await _wait_until_blocked(lock_conn)
                     assert not pending.done()
-                    response = await asyncio.wait_for(pending, timeout=7.5)
+                    response = await asyncio.wait_for(pending, timeout=5)
                     elapsed = time.monotonic() - started
-                    assert 4.0 <= elapsed < 7.5
+                    # The real lock wait elapsed, at the shortened timeout rather than 5 s.
+                    assert SHORT_LOCK_TIMEOUT_S <= elapsed < 3.0
                     assert response.status_code == 409
                     assert "Account access could not be changed" in response.text
 

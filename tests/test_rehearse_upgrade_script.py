@@ -783,7 +783,7 @@ def test_role_contract_failure_is_a_failed_rehearsal(tmp_path):
 
 
 def test_startup_timeout_stops_the_app_and_still_counts(tmp_path):
-    run = _run(tmp_path, ["--health-timeout", "1"], FAKE_HEALTH="never")
+    run = _run(tmp_path, ["--health-timeout", "1"], FAKE_HEALTH="never", REHEARSE_POLL_INTERVAL="0.2")
 
     assert run.result.returncode == 1
     assert "startup: timed out after 1s\n" in run.summary

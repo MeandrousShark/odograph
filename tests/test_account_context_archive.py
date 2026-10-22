@@ -12,6 +12,7 @@ import os
 import re
 import secrets
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -115,7 +116,7 @@ class _Clusters:
         self._task_ids: list[str] = []
         self._podman_checked = False
 
-    def start(self) -> _Cluster:
+    def _check_podman(self) -> None:
         if not self._podman_checked:
             try:
                 preflight = _run(["podman", "info"])
@@ -125,9 +126,21 @@ class _Clusters:
                 detail = preflight.stderr.decode(errors="replace").strip()
                 pytest.skip(f"podman unavailable: {detail}")
         self._podman_checked = True
+
+    def _new_task_id(self) -> str:
         task_id = f"p0-archive-{os.getpid()}-{secrets.token_hex(4)}"
         self._task_ids.append(task_id)
-        return _start_cluster(task_id)
+        return task_id
+
+    def start_many(self, count: int) -> list[_Cluster]:
+        """Start independent fresh clusters concurrently, in task-ID order."""
+        self._check_podman()
+        # Register every ID first so close() also removes clusters that did
+        # start when a sibling start fails.
+        task_ids = [self._new_task_id() for _ in range(count)]
+        with ThreadPoolExecutor(max_workers=count) as executor:
+            futures = [executor.submit(_start_cluster, task_id) for task_id in task_ids]
+        return [future.result() for future in futures]
 
     def close(self) -> None:
         failures = []
@@ -433,9 +446,7 @@ def test_real_pg16_archive_reconstructs_roles_grants_sequences_and_isolation(tmp
     """A complete archive is recoverable without retaining source passwords."""
     clusters = _Clusters()
     try:
-        source = clusters.start()
-        failed_target = clusters.start()
-        target = clusters.start()
+        source, failed_target, target = clusters.start_many(3)
         _assert_pg16_clients(source)
 
         asyncio.run(create_p0_fixture(source.database_url))

@@ -1,6 +1,7 @@
 """Administrator storage limit editor over protected control-role functions."""
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
 from decimal import ROUND_HALF_EVEN, Decimal
@@ -18,6 +19,8 @@ MIN_CUSTOM_LIMIT_GIB = Decimal("0.01")
 MIN_CUSTOM_LIMIT_BYTES = int(MIN_CUSTOM_LIMIT_GIB * GIB)
 # At most nine whole digits keeps the byte count inside bigint.
 _GIB_RE = re.compile(r"[0-9]{1,9}(\.[0-9]{1,2})?")
+# A module constant so tests can shorten the real lock wait.
+LOCK_TIMEOUT_S = 5.0
 
 
 class StorageLimitUnavailable(ValueError):
@@ -116,7 +119,8 @@ async def set_account_storage_limit(
         raise StorageLimitUnavailable()
     try:
         async with conn.transaction():
-            await conn.execute("SET LOCAL lock_timeout = '5s'")
+            await conn.execute("SELECT set_config('lock_timeout', %s, true)",
+                               (f"{max(1, math.ceil(LOCK_TIMEOUT_S * 1000))}ms",))
             await conn.execute("SET LOCAL statement_timeout = '15s'")
             cur = await conn.execute(
                 "SELECT public.storage_set_account_grant(%s,%s,%s,%s,%s)",
