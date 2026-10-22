@@ -54,11 +54,12 @@ case "$cmd" in
         elif [[ " $* " == *" --quiet "* ]]; then
             printf '%s\n' "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         else
-            printf 'project-db-1|running|db\n'
-            printf '%s|%s|%s\n' \
+            printf 'project-db-1|running|db|db\n'
+            printf '%s|%s|%s|%s\n' \
                 "${FAKE_APP_NAME:-project-app-1}" \
                 "${FAKE_APP_STATE:-exited}" \
-                "${FAKE_APP_SERVICE:-app}"
+                "${FAKE_APP_SERVICE:-app}" \
+                "${FAKE_APP_DOCKER_SERVICE-${FAKE_APP_SERVICE:-app}}"
         fi
         exit 0
         ;;
@@ -1475,8 +1476,8 @@ def test_restore_corrupt_archive_refused_before_pg_restore_dash_d(tmp_path):
 @pytest.mark.parametrize(
     "app_listing",
     [
-        "project-app-1|running|app",
-        "custom-container-name|running|app",
+        "project-app-1|running|app|app",
+        "custom-container-name|running|app|app",
     ],
 )
 def test_restore_refuses_when_app_is_running(tmp_path, app_listing):
@@ -1489,7 +1490,7 @@ def test_restore_refuses_when_app_is_running(tmp_path, app_listing):
     env = restore_env(
         bin_dir,
         log_path,
-        FAKE_PS_OUTPUT=f"project-db-1|running|db\n{app_listing}",
+        FAKE_PS_OUTPUT=f"project-db-1|running|db|db\n{app_listing}",
     )
     result = run_script(restore_script, [str(archive)], tmp_path, env)
 
@@ -1508,14 +1509,14 @@ def test_restore_refuses_when_app_is_running(tmp_path, app_listing):
 @pytest.mark.parametrize(
     ("ps_exit", "ps_output", "expected_error"),
     [
-        ("17", "project-app-1|exited|app", "podman-compose ps failed"),
-        ("0", "db-container|running|db\nproject-app-1 image command app Exited (0)", "structured container state"),
-        ("0", "db-container|running|db\nproject-app-1|paused|app", "structured container state"),
-        ("0", "db-container|running|db\nproject-app-1|restarting|app", "structured container state"),
-        ("0", "db-container|running|db\nproject-app-1|paused|app|Exited", "structured container state"),
-        ("0", "db-container|running|db\ncontainer Exited command|paused|app", "structured container state"),
-        ("0", "db-container|not-a-state|db", "structured container state"),
-        ("0", "db-container|running|db\nproject-app-1|running|app", "appears to be running"),
+        ("17", "project-app-1|exited|app|app", "podman-compose ps failed"),
+        ("0", "db-container|running|db|db\nproject-app-1 image command app Exited (0)", "structured container state"),
+        ("0", "db-container|running|db|db\nproject-app-1|paused|app|app", "structured container state"),
+        ("0", "db-container|running|db|db\nproject-app-1|restarting|app|app", "structured container state"),
+        ("0", "db-container|running|db|db\nproject-app-1|paused|app|app|Exited", "structured container state"),
+        ("0", "db-container|running|db|db\ncontainer Exited command|paused|app|app", "structured container state"),
+        ("0", "db-container|not-a-state|db|db", "structured container state"),
+        ("0", "db-container|running|db|db\nproject-app-1|running|app|app", "appears to be running"),
         ("0", "", "structured container state"),
     ],
     ids=[
@@ -1562,8 +1563,8 @@ def test_restore_podman_structured_status_fails_before_sql(
 @pytest.mark.parametrize(
     "app_listing",
     [
-        "db-container|running|db\ncustom-app-container|exited|app",
-        "db-container|running|db",
+        "db-container|running|db|db\ncustom-app-container|exited|app|app",
+        "db-container|running|db|db",
     ],
     ids=["stopped-app", "db-only-target"],
 )
@@ -1589,6 +1590,130 @@ def test_restore_accepts_stopped_or_absent_podman_app(tmp_path, app_listing):
     log = read_log(log_path)
     assert any(line.startswith("ps ") for line in log)
     assert any("psql -X --single-transaction" in line for line in exec_lines(log_path))
+
+
+def _podman_restore(tmp_path, ps_output):
+    _, restore_script = install_scripts(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    compose_cmd = str(install_podman_compose_fake(bin_dir))
+    log_path = tmp_path / "fake.log"
+    archive, _ = write_archive_with_sidecar(
+        tmp_path / "d", "mileage-x.dump", FAKE_ARCHIVE_BYTES
+    )
+    env = base_env(bin_dir, log_path, compose_cmd=compose_cmd, FAKE_PS_OUTPUT=ps_output)
+    result = run_script(restore_script, [str(archive)], tmp_path, env)
+    return result, log_path
+
+
+# podman-compose 1.3.0 and 1.4.0 set only com.docker.compose.service.
+@pytest.mark.parametrize(
+    "ps_output",
+    [
+        "db-container|running||db",
+        "db-container|running||db\ncustom-app|exited||app",
+        "db-container|running||db\ncustom-app|created||app",
+        "db-container|running||db\ncustom-app|configured||app",
+        "db-container|running||db\ncustom-app|stopped||app",
+    ],
+    ids=["db-only", "exited-app", "created-app", "configured-app", "stopped-app"],
+)
+def test_restore_accepts_podman_docker_label_only(tmp_path, ps_output):
+    result, log_path = _podman_restore(tmp_path, ps_output)
+
+    assert result.returncode == 0, result.stderr
+    assert any("psql -X --single-transaction" in line for line in exec_lines(log_path))
+
+
+def test_restore_accepts_podman_label_only(tmp_path):
+    result, log_path = _podman_restore(
+        tmp_path, "db-container|running|db|\ncustom-app|exited|app|"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert any("psql -X --single-transaction" in line for line in exec_lines(log_path))
+
+
+@pytest.mark.parametrize(
+    ("ps_output", "expected_error"),
+    [
+        ("db-container|running||db\ncustom-app|running||app", "appears to be running"),
+        ("db-container|running||db\ncustom-app|paused||app", "structured container state"),
+        ("db-container|running||db\ncustom-app|restarting||app", "structured container state"),
+        ("db-container|running||db\ncustom-app|not-a-state||app", "structured container state"),
+    ],
+    ids=["running", "paused", "restarting", "unknown-state"],
+)
+def test_restore_refuses_podman_docker_label_only_app(tmp_path, ps_output, expected_error):
+    result, log_path = _podman_restore(tmp_path, ps_output)
+
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+    assert not any("psql" in line for line in exec_lines(log_path))
+    assert not any("pg_restore" in line for line in exec_lines(log_path))
+
+
+@pytest.mark.parametrize(
+    "ps_output",
+    [
+        "db-container|running||\ncustom-app|exited||",
+        "db-container|running|db|db\ncustom-app|exited||",
+        "db-container|running|db|db\ncustom-app|exited|app|other",
+        "db-container|running|db|db\ncustom-app|exited|app|app|extra",
+        "db-container|running|db|db\ncustom-app|exited|app",
+        "db-container|running|db|db\ncustom-app|exited|ap p|",
+        "db-container|running|db|db\ncustom-app|exited||ap p",
+        "db-container|running|db|db\ncustom-app|exited|ap$p|ap$p",
+        "db-container|running|db|db\ncustom-app|exited||ap$p",
+    ],
+    ids=[
+        "both-empty",
+        "app-both-empty",
+        "labels-differ",
+        "fifth-field",
+        "missing-field",
+        "bad-podman-label",
+        "bad-docker-label",
+        "bad-both-labels-symbol",
+        "bad-docker-label-symbol",
+    ],
+)
+def test_restore_podman_service_labels_fail_closed(tmp_path, ps_output):
+    result, log_path = _podman_restore(tmp_path, ps_output)
+
+    assert result.returncode != 0
+    assert "structured container state" in result.stderr
+    assert not any("psql" in line for line in exec_lines(log_path))
+    assert not any("pg_restore" in line for line in exec_lines(log_path))
+
+
+def test_restore_podman_ps_requests_both_service_labels(tmp_path):
+    result, log_path = _podman_restore(tmp_path, "db-container|running|db|db")
+
+    assert result.returncode == 0, result.stderr
+    ps_lines = [line for line in read_log(log_path) if line.startswith("ps ")]
+    assert ps_lines
+    assert any(
+        "io.podman.compose.service" in line and "com.docker.compose.service" in line
+        for line in ps_lines
+    )
+
+
+def test_restore_podman_default_fake_rows_use_both_labels(tmp_path):
+    # Default fake rows (no FAKE_PS_OUTPUT) carry both labels, 1.6.0 style.
+    _, restore_script = install_scripts(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_path = tmp_path / "fake.log"
+    archive, _ = write_archive_with_sidecar(
+        tmp_path / "d", "mileage-x.dump", FAKE_ARCHIVE_BYTES
+    )
+    env = restore_env(bin_dir, log_path, FAKE_APP_STATE="running")
+
+    result = run_script(restore_script, [str(archive)], tmp_path, env)
+
+    assert result.returncode != 0
+    assert "app service appears to be running" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -1648,8 +1773,8 @@ def test_restore_docker_inspect_state_fails_closed(tmp_path, overrides, expected
         ("docker", {"FAKE_COMPOSE_SERVICES": "db"}),
         ("docker", {"FAKE_PS_OUTPUT": ""}),
         ("docker", {"FAKE_INSPECT_STATUS": "exited"}),
-        ("podman-compose", {"FAKE_PS_OUTPUT": "db-container|running|db"}),
-        ("podman-compose", {"FAKE_PS_OUTPUT": "db-container|running|db\ncustom-app|exited|app"}),
+        ("podman-compose", {"FAKE_PS_OUTPUT": "db-container|running|db|db"}),
+        ("podman-compose", {"FAKE_PS_OUTPUT": "db-container|running|db|db\ncustom-app|exited|app|app"}),
     ],
     ids=["docker-db-only", "docker-uncreated-app", "docker-stopped-app", "podman-db-only", "podman-stopped-app"],
 )
