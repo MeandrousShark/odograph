@@ -122,7 +122,8 @@ def _write_sample(tmp_path: Path, sample: str) -> None:
 def _run_sample(tmp_path: Path, records: Path) -> subprocess.CompletedProcess:
     env = {**os.environ, "PYTHONPATH": os.pathsep.join((str(ROOT / "tests"), str(ROOT))),
            "ODOGRAPH_TIMING_RECORDS": str(records),
-           "ODOGRAPH_TIMING_SHARD": "db-2", "ODOGRAPH_TIMING_HEAD": "abc123"}
+           "ODOGRAPH_TIMING_SHARD": "db-2", "ODOGRAPH_TIMING_HEAD": "abc123",
+           "ODOGRAPH_SHARD": "2/6"}
     return subprocess.run(
         [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-q",
          "-k", "not deselected"],
@@ -144,6 +145,7 @@ def test_records_every_case_with_header_collection_and_session(tmp_path):
     assert header["format"] == timing_records.FORMAT_VERSION
     assert header["schema_version"] == 57
     assert header["markexpr"] == ""
+    assert header["shard_spec"] == "2/6" and "db_shard" not in header
     assert {"python", "logical_cpus", "cpu_model", "image_version"} <= set(header["environment"])
 
     collection = lines[1]
