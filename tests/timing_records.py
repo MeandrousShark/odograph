@@ -35,8 +35,8 @@ from pathlib import Path
 
 import pytest
 
-# 2 added the header's schema_version.
-FORMAT_VERSION = 2
+# 2 added the header's schema_version; 3 replaced db_shard with shard_spec.
+FORMAT_VERSION = 3
 _ENV_RECORDS = "ODOGRAPH_TIMING_RECORDS"
 _ENV_SHARD = "ODOGRAPH_TIMING_SHARD"
 _ENV_HEAD = "ODOGRAPH_TIMING_HEAD"
@@ -153,7 +153,7 @@ class TimingRecorder:
             "checkout": _git_head(root),
             "schema_version": schema_version,
             "markexpr": config.option.markexpr,
-            "db_shard": os.environ.get("ODOGRAPH_DB_SHARD", ""),
+            "shard_spec": os.environ.get("ODOGRAPH_SHARD", ""),
             "event": os.environ.get("GITHUB_EVENT_NAME"),
             "ref": os.environ.get("GITHUB_REF"),
             "run_id": os.environ.get("GITHUB_RUN_ID"),

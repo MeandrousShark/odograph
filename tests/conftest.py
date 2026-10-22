@@ -40,6 +40,7 @@ from app.account_context import (
 )
 from app.role_setup import RolePools, role_conninfo
 import case_time_limit
+import suite_cost
 import timing_records
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -660,52 +661,57 @@ _OPS_MODULE_STEMS = {
 }
 
 
-def db_shard_files(weights: dict[str, int], count: int) -> list[set[str]]:
-    """Split test files into `count` disjoint shards by db case count.
-
-    Heaviest file first onto the lightest shard, ties broken by path, so
-    every CI shard job computes the same partition from its own collection.
-    """
-    loads = [0] * count
-    shards: list[set[str]] = [set() for _ in range(count)]
-    for path in sorted(weights, key=lambda path: (-weights[path], path)):
-        index = loads.index(min(loads))
-        loads[index] += weights[path]
-        shards[index].add(path)
-    return shards
+SHARD_ENV = "ODOGRAPH_SHARD"
+SHARD_DIGEST_ENV = "ODOGRAPH_SHARD_DIGEST"
 
 
-def db_shard_from_env() -> tuple[int, int] | None:
-    """Parse ODOGRAPH_DB_SHARD=K/N; unset or empty means no sharding."""
-    value = os.environ.get("ODOGRAPH_DB_SHARD", "")
+def shard_from_env() -> tuple[int, int] | None:
+    """Parse ODOGRAPH_SHARD=K/N; unset or empty means no sharding."""
+    value = os.environ.get(SHARD_ENV, "")
     if not value:
         return None
-    index, _, count = value.partition("/")
-    if not (index.isdecimal() and count.isdecimal() and 1 <= int(index) <= int(count)):
-        pytest.exit(f"ODOGRAPH_DB_SHARD must be K/N with 1 <= K <= N, got {value!r}",
+    try:
+        return suite_cost.parse_spec(value)
+    except ValueError:
+        pytest.exit(f"{SHARD_ENV} must be K/N with 1 <= K <= N, got {value!r}",
                     returncode=pytest.ExitCode.USAGE_ERROR)
-    return int(index), int(count)
 
 
-def _select_db_shard(config, items: list) -> None:
-    """Keep only this shard's db cases; unit and ops cases are untouched.
+def _select_shard(config, items: list) -> None:
+    """Keep only shard K of the N-way plan over every tier.
 
-    Whole files stay together so file-local ordering and cleanup hold.
+    Whole files stay together so file-local ordering and cleanup hold. CI
+    sets the plan job's collection digest; a shard whose own collection or
+    shard count differs would run a different partition, so it stops.
     """
-    shard = db_shard_from_env()
+    shard = shard_from_env()
     if shard is None:
         return
     index, count = shard
-    db_items = [item for item in items if item.get_closest_marker("db")]
-    weights: dict[str, int] = {}
-    for item in db_items:
-        path = item.nodeid.split("::", 1)[0]
-        weights[path] = weights.get(path, 0) + 1
-    keep = db_shard_files(weights, count)[index - 1]
-    deselected = {item for item in db_items if item.nodeid.split("::", 1)[0] not in keep}
+    weights = suite_cost.file_weights(
+        (item.nodeid, item.get_closest_marker("db") is not None) for item in items)
+    expected = os.environ.get(SHARD_DIGEST_ENV, "")
+    if expected:
+        digest = suite_cost.collection_digest(item.nodeid for item in items)
+        if digest != expected:
+            pytest.exit(f"{SHARD_DIGEST_ENV} is {expected} but this collection's digest is "
+                        f"{digest}; the plan and this shard collected different suites",
+                        returncode=pytest.ExitCode.USAGE_ERROR)
+        try:
+            planned = suite_cost.shard_count(weights)
+        except suite_cost.CapacityError as error:
+            pytest.exit(str(error), returncode=pytest.ExitCode.USAGE_ERROR)
+        if planned != count:
+            pytest.exit(f"{SHARD_ENV} asks for {count} shards but this collection plans "
+                        f"{planned}", returncode=pytest.ExitCode.USAGE_ERROR)
+    if count > len(weights):
+        pytest.exit(f"{SHARD_ENV} asks for {count} shards but only {len(weights)} test "
+                    "files were collected", returncode=pytest.ExitCode.USAGE_ERROR)
+    keep = set(suite_cost.assign(weights, count)[index - 1])
+    deselected = [item for item in items if suite_cost.file_of(item.nodeid) not in keep]
     if deselected:
-        config.hook.pytest_deselected(items=list(deselected))
-        items[:] = [item for item in items if item not in deselected]
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = [item for item in items if suite_cost.file_of(item.nodeid) in keep]
 
 
 def pytest_collection_modifyitems(config, items: list) -> None:
@@ -727,9 +733,9 @@ def pytest_collection_modifyitems(config, items: list) -> None:
     directly (pytest -m unit/-m ops/-m db each selecting the right count)
     rather than relied on implicitly.
 
-    CI runs `-m "not db"` and `-m db` in separate shard jobs, so no single
-    job sees the whole suite; a case with two explicit tiers is refused here
-    rather than only in tests/test_tier_markers.py.
+    Each CI shard job runs only its share of the suite, so no single job
+    sees every case; a case with two explicit tiers is refused here rather
+    than only in tests/test_tier_markers.py.
     """
     for item in items:
         tiers = _TIER_MARKER_NAMES & {mark.name for mark in item.iter_markers()}
@@ -745,7 +751,7 @@ def pytest_collection_modifyitems(config, items: list) -> None:
             item.add_marker(pytest.mark.ops)
         else:
             item.add_marker(pytest.mark.unit)
-    _select_db_shard(config, items)
+    _select_shard(config, items)
 
 
 @pytest.fixture(scope="session", autouse=True)

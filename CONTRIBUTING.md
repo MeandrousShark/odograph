@@ -30,10 +30,15 @@ eval "$(scripts/test_db.sh start contributor)"
 scripts/test_db.sh cleanup contributor
 ```
 
-CI splits the suite into parallel jobs, each with its own database: one runs
-`-m "not db"`, and the others each run a share of `-m db` selected by
-`ODOGRAPH_DB_SHARD=K/N`. Without that variable every test is selected, so a
-bare `.venv/bin/pytest` still runs the full suite.
+CI splits the suite into parallel jobs, each with its own database. A first
+job collects the suite and plans whole test files into shards of about 225
+model-seconds, using the per-case costs in `tests/suite_cost.py`, up to its
+`SHARD_CAP`; a suite past the cap fails the plan with a capacity message.
+Each shard job then runs every tier of its files, selected by
+`ODOGRAPH_SHARD=K/N`, and stops if its own collection differs from the plan.
+`ODOGRAPH_SHARD=2/3 .venv/bin/pytest` runs one share locally. Without that
+variable every test is selected, so a bare `.venv/bin/pytest` still runs the
+full suite.
 
 Each test case, setup and teardown included, has a 60 second limit. A case
 that runs longer dumps every thread's stack to stderr and stops the run. Under
