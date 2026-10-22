@@ -15,17 +15,15 @@ import shlex
 import pytest
 import yaml
 
+from suite_cost import DB_CENTISECONDS, OTHER_CENTISECONDS
 from test_ci_workflow import _collect
 
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 
-# Calibrated from the v1.0.0 release preflight: 1,155 db and 3,247 other cases,
-# suite 1,138 s; these constants estimate 1,165 s. Recheck them when a release
-# run's measured time differs from the estimate by more than 20 percent.
-DB_SECONDS = 0.7
-OTHER_SECONDS = 0.11
+DB_SECONDS = DB_CENTISECONDS / 100
+OTHER_SECONDS = OTHER_CENTISECONDS / 100
 OVERHEAD_MINUTES = 3
 HEADROOM = 2.0
 
