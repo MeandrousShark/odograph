@@ -279,11 +279,13 @@ def test_ci_plan_step_fails_on_planner_failure_or_unreadable_plan(tmp_path):
         assert "digest=" not in outputs
 
 
-def _run_plan_plugin(tmp_path, cases: int, env: dict | None = None):
+def _run_plan_plugin(tmp_path, cases: int, env: dict | None = None, files: int = 1):
+    """Collect `files` db files of `cases` cases each, plus one other case."""
     (tmp_path / "pytest.ini").write_text("[pytest]\nmarkers =\n    db\n")
-    (tmp_path / "test_sample_db.py").write_text(
-        "import pytest\n\npytestmark = pytest.mark.db\n\n\n"
-        f"@pytest.mark.parametrize('n', range({cases}))\ndef test_case(n):\n    pass\n")
+    for index in range(files):
+        (tmp_path / f"test_sample_{index}_db.py").write_text(
+            "import pytest\n\npytestmark = pytest.mark.db\n\n\n"
+            f"@pytest.mark.parametrize('n', range({cases}))\ndef test_case(n):\n    pass\n")
     (tmp_path / "test_other.py").write_text("def test_other():\n    pass\n")
     output = tmp_path / "plan.json"
     result = subprocess.run(
@@ -308,13 +310,13 @@ def test_plan_plugin_plans_a_small_suite_as_one_shard(tmp_path):
 
 
 def test_plan_plugin_stops_with_the_capacity_message_beyond_the_cap(tmp_path):
-    # 2,572 db cases and one other case are 1,800.51 model-seconds, just past
-    # 8 shards of 225.
-    result, output = _run_plan_plugin(tmp_path, 2572)
+    # 2,580 db cases in ten files and one other case are 1,806.11
+    # model-seconds, just past 8 shards of 225.
+    result, output = _run_plan_plugin(tmp_path, 258, files=10)
 
     assert result.returncode == 4
     assert "needs 9 shards of 225 model-seconds, but SHARD_CAP allows 8" in result.stdout
-    assert "1801 model-seconds (30.0 minutes)" in result.stdout
+    assert "1806 model-seconds (30.1 minutes)" in result.stdout
     assert not output.exists()
 
 

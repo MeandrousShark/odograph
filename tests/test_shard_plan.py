@@ -92,7 +92,8 @@ def test_one_budget_past_the_cap_fails_naming_the_estimate():
     assert f"({(SHARD_CAP + 1) * BUDGET / 6000:.1f} minutes)" in message
     assert f"needs {SHARD_CAP + 1} shards of {BUDGET // 100} model-seconds" in message
     assert f"SHARD_CAP allows {SHARD_CAP}" in message
-    assert "tests/suite_cost.py" in message
+    assert "SHARD_CAP in tests/suite_cost.py" in message
+    assert "SHARD_CAP in the test job of .github/workflows/test.yml" in message
 
 
 def test_just_past_the_cap_already_fails():
@@ -105,6 +106,17 @@ def test_shard_count_never_exceeds_the_file_count():
 
     assert shard_count(weights) == 2
     assert [sorted(shard) for shard in assign(weights, 2)] == [["tests/test_big.py"], ["tests/test_small.py"]]
+
+
+def test_one_huge_file_plans_one_shard_without_a_capacity_error():
+    assert shard_count({"tests/test_huge_db.py": 10 * BUDGET}) == 1
+
+
+def test_capacity_counts_only_achievable_shards():
+    weights = _synthetic(20 * BUDGET, files=SHARD_CAP + 1)
+
+    with pytest.raises(CapacityError, match=f"needs {SHARD_CAP + 1} shards"):
+        shard_count(weights)
 
 
 def test_empty_collection_is_refused():
@@ -212,7 +224,8 @@ def test_selection_stops_when_the_shard_count_differs_from_the_plan(monkeypatch)
 
 def test_selection_stops_on_capacity_when_planning_against_a_digest(monkeypatch):
     monkeypatch.setattr(suite_cost, "BUDGET", 1)
+    monkeypatch.setattr(suite_cost, "SHARD_CAP", 2)
     digest = suite_cost.collection_digest(FAKE_NODEIDS)
 
-    with pytest.raises(pytest.exit.Exception, match="SHARD_CAP allows 8"):
-        _select(monkeypatch, "1/8", digest)
+    with pytest.raises(pytest.exit.Exception, match="needs 4 shards .* SHARD_CAP allows 2"):
+        _select(monkeypatch, "1/2", digest)

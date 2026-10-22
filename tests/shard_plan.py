@@ -28,6 +28,7 @@ def pytest_deselected(items) -> None:
 
 
 def build_plan(items) -> dict:
+    """The shard plan for collected items, as the plan job publishes it."""
     cases = [(item.nodeid, item.get_closest_marker("db") is not None) for item in items]
     weights = suite_cost.file_weights(cases)
     count = suite_cost.shard_count(weights)

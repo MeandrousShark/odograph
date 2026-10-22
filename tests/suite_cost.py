@@ -4,7 +4,9 @@ Costs are integer centiseconds so sums and tie-breaks reproduce exactly in
 every job that plans from its own collection. Stdlib only: the planner runs
 in a collect-only job and inside every shard's collection.
 
-To grow CI capacity, change BUDGET or SHARD_CAP here.
+To grow CI capacity, change BUDGET or SHARD_CAP here. SHARD_CAP is also
+written in the `test` job of .github/workflows/test.yml, and a test keeps the
+two equal.
 """
 from __future__ import annotations
 
@@ -29,10 +31,12 @@ class CapacityError(Exception):
 
 
 def case_cost(is_db: bool) -> int:
+    """Model cost of one case in centiseconds."""
     return DB_CENTISECONDS if is_db else OTHER_CENTISECONDS
 
 
 def file_of(nodeid: str) -> str:
+    """The test file path a node id belongs to."""
     return nodeid.split("::", 1)[0]
 
 
@@ -46,6 +50,7 @@ def file_weights(cases: Iterable[tuple[str, bool]]) -> dict[str, int]:
 
 
 def collection_digest(nodeids: Iterable[str]) -> str:
+    """sha256 of the node ids, sorted so collection order never changes it."""
     return hashlib.sha256("\n".join(sorted(nodeids)).encode()).hexdigest()
 
 
@@ -54,15 +59,17 @@ def shard_count(weights: dict[str, int]) -> int:
     if not weights:
         raise ValueError("no test files to plan")
     total = sum(weights.values())
-    needed = max(1, ceil(total / BUDGET))
+    # Whole files cannot split, so more shards than files cannot help.
+    needed = min(max(1, ceil(total / BUDGET)), len(weights))
     if needed > SHARD_CAP:
         raise CapacityError(
             f"the suite is estimated at {total / 100:.0f} model-seconds "
             f"({total / 6000:.1f} minutes), which needs {needed} shards of "
             f"{BUDGET / 100:.0f} model-seconds, but SHARD_CAP allows {SHARD_CAP}. "
-            "Raise BUDGET or SHARD_CAP in tests/suite_cost.py if the CI account "
-            "has room, or make the suite cheaper.")
-    return min(needed, len(weights))
+            "If the CI account has room, raise BUDGET or SHARD_CAP in "
+            "tests/suite_cost.py, and keep SHARD_CAP in the test job of "
+            ".github/workflows/test.yml equal to it; otherwise make the suite cheaper.")
+    return needed
 
 
 def assign(weights: dict[str, int], count: int) -> list[list[str]]:
