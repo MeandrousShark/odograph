@@ -256,7 +256,7 @@ def load_drill_workflow(uses: str) -> dict:
 
 
 def test_drill_bases_are_the_supported_releases():
-    assert json.loads(DRILL_BASES.read_text()) == ["v0.10.2", "v0.11.0", "v0.11.1", "v0.11.3"]
+    assert json.loads(DRILL_BASES.read_text()) == ["v1.0.0"]
 
 
 def test_preflight_and_published_drills_call_the_base_matrix_with_exact_candidate():
@@ -295,7 +295,7 @@ def test_preflight_and_published_drills_call_the_base_matrix_with_exact_candidat
     )
 
 
-def test_upgrade_drill_workflow_runs_every_base_with_database_image_migration():
+def test_upgrade_drill_workflow_runs_every_base_and_selects_migration_mode():
     drill_workflow = load_drill_workflow(load_workflow()["jobs"]["source-upgrade-drill"]["uses"])
     triggers = drill_workflow["on"]
 
@@ -356,7 +356,8 @@ def test_upgrade_drill_workflow_runs_every_base_with_database_image_migration():
     assert "set -euo pipefail" in run
     assert 'args=(--base "$BASE" --candidate "$REVISION")' in run
     assert 'args+=(--candidate-image "$CANDIDATE_IMAGE")' in run
-    assert '"${args[@]}" --database-image-migration' in run
+    assert 'args+=(--database-image-migration)' in run
+    assert '"${args[@]}" --database-image-migration' not in run
     assert 'COMPOSE_CMD="docker compose" scripts/upgrade_check.sh' in run
     assert 'tee "evidence/upgrade-drill-${BASE}.txt"' in run
 

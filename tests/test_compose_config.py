@@ -72,7 +72,7 @@ def test_contributor_override_restores_a_project_scoped_source_build():
 
     assert app == {
         "build": ".",
-        "image": "${COMPOSE_PROJECT_NAME}_app:dev",
+        "image": "${COMPOSE_PROJECT_NAME:-odograph}_app:dev",
     }
 
 
