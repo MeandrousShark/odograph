@@ -27,15 +27,6 @@ case "$TASK_ID" in
         ;;
 esac
 
-# Readiness attempts, 0.2 s apart; tests of the failure path lower it.
-READY_ATTEMPTS="${TEST_DB_READY_ATTEMPTS:-150}"
-case "$READY_ATTEMPTS" in
-    ""|*[!0-9]*|0)
-        echo "error: TEST_DB_READY_ATTEMPTS must be a positive whole number." >&2
-        exit 1
-        ;;
-esac
-
 case "$ACTION" in
     start|cleanup) ;;
     *) usage ;;
@@ -54,6 +45,16 @@ if [ "$ACTION" = cleanup ]; then
     done <<< "$container_ids"
     exit 0
 fi
+
+# Readiness attempts, 0.2 s apart; tests of the failure path lower it. A
+# leading zero is refused because bash arithmetic would read it as octal.
+READY_ATTEMPTS="${TEST_DB_READY_ATTEMPTS:-150}"
+case "$READY_ATTEMPTS" in
+    *[!0-9]*|0*)
+        echo "error: TEST_DB_READY_ATTEMPTS must be a positive whole number." >&2
+        exit 1
+        ;;
+esac
 
 # Disposable data is never worth durability: skip fsync and full-page writes.
 # The image entrypoint passes leading "-c" arguments through to postgres.

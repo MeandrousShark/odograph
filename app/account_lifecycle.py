@@ -6,7 +6,7 @@ from collections.abc import Mapping
 
 from psycopg import Error
 
-# A module constant so tests can shorten the real lock wait.
+# Production waits 5 s for a row lock; a test seam so tests can shorten it.
 LOCK_TIMEOUT_S = 5.0
 
 

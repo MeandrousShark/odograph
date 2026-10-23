@@ -7,6 +7,7 @@ from app.application_roles import MIGRATIONS_DIR
 from app.storage_limits import (
     GIB,
     LOCK_TIMEOUT_S,
+    _lock_timeout,
     MIN_CUSTOM_LIMIT_BYTES,
     limit_gib,
     max_custom_gib,
@@ -49,3 +50,4 @@ def test_display_values_round_trip_and_never_exceed_the_budget():
 
 def test_production_storage_limit_lock_timeout_stays_five_seconds():
     assert LOCK_TIMEOUT_S == 5.0
+    assert _lock_timeout() == "5000ms"

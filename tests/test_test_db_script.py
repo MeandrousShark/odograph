@@ -107,13 +107,19 @@ def test_failed_start_removes_the_container_and_its_anonymous_volumes(tmp_path, 
     assert not any(line.startswith("volume ") for line in lines)
 
 
-@pytest.mark.parametrize("attempts", ["0", "1.5", "-1", "many"])
+@pytest.mark.parametrize("attempts", ["0", "00", "08", "1.5", "-1", "many"])
 def test_rejects_ready_attempts_that_are_not_positive_whole_numbers(tmp_path, attempts):
     result = _run(tmp_path, "start", "task-42", TEST_DB_READY_ATTEMPTS=attempts)
 
     assert result.returncode == 1
     assert "TEST_DB_READY_ATTEMPTS must be" in result.stderr
     assert not (tmp_path / "podman.log").exists()
+
+
+def test_cleanup_ignores_the_readiness_attempts_setting(tmp_path):
+    result = _run(tmp_path, "cleanup", "task-42", TEST_DB_READY_ATTEMPTS="many")
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_rejects_task_ids_that_cannot_be_used_safely_in_labels(tmp_path):

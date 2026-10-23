@@ -19,8 +19,12 @@ MIN_CUSTOM_LIMIT_GIB = Decimal("0.01")
 MIN_CUSTOM_LIMIT_BYTES = int(MIN_CUSTOM_LIMIT_GIB * GIB)
 # At most nine whole digits keeps the byte count inside bigint.
 _GIB_RE = re.compile(r"[0-9]{1,9}(\.[0-9]{1,2})?")
-# A module constant so tests can shorten the real lock wait.
+# Production waits 5 s for a row lock; a test seam so tests can shorten it.
 LOCK_TIMEOUT_S = 5.0
+
+
+def _lock_timeout() -> str:
+    return f"{max(1, math.ceil(LOCK_TIMEOUT_S * 1000))}ms"
 
 
 class StorageLimitUnavailable(ValueError):
@@ -119,8 +123,7 @@ async def set_account_storage_limit(
         raise StorageLimitUnavailable()
     try:
         async with conn.transaction():
-            await conn.execute("SELECT set_config('lock_timeout', %s, true)",
-                               (f"{max(1, math.ceil(LOCK_TIMEOUT_S * 1000))}ms",))
+            await conn.execute("SELECT set_config('lock_timeout', %s, true)", (_lock_timeout(),))
             await conn.execute("SET LOCAL statement_timeout = '15s'")
             cur = await conn.execute(
                 "SELECT public.storage_set_account_grant(%s,%s,%s,%s,%s)",
