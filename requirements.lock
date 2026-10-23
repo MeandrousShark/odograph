@@ -13,7 +13,7 @@ annotated-doc==0.0.4
 annotated-types==0.7.0
 anyio==4.14.2
 Authlib==1.7.2
-certifi==2026.6.17
+certifi==2026.10.19
 cffi==2.1.0
 click==8.4.2
 cryptography==50.0.0

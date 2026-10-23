@@ -19,7 +19,7 @@ services:
     # pulls the exact release tag below and verifies its signature, and `up`
     # then uses only that local image. Contributors who want a source build
     # add compose.build.override.yml.
-    image: ghcr.io/meandrousshark/odograph:v1.0.0
+    image: ghcr.io/meandrousshark/odograph:v1.1.0
     pull_policy: never
     depends_on:
       db:
