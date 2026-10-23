@@ -209,18 +209,23 @@ each, and runs the HTTPS authentication smoke: health, protected settings,
 administrator signup, Secure session cookie, and authenticated version and
 revision checks. The application image, application smoke, and PostGIS
 database remain native on each runner. The preflight also runs the source
-upgrade and rollback drill with Docker Compose, using the database-image
-migration mode because the rendered database image is part of the candidate
-release contract.
+upgrade and rollback drill with Docker Compose. The drill uses the
+database-image migration mode only for a base whose database image differs
+from the candidate's, because the rendered database image is part of the
+candidate release contract.
 
 The drill lives in the reusable `Upgrade drill` workflow
 (`.github/workflows/upgrade-drill.yml`). It reads its base releases from
 `scripts/upgrade_drill_bases.json` and drills from each one as a separate
-matrix job, with the exact revision as `--candidate` and
-`--database-image-migration`. Besides both preflight modes, it runs on pull
-requests that change migrations, the drill script, the bases file, the backup
-or restore scripts, or the workflow itself. To drill any branch or tag on
-demand:
+matrix job, with the exact revision as `--candidate`. For each base the
+workflow compares the `db` service image line in `compose.yaml` at the base
+and at the revision, and passes `--database-image-migration` only when they
+differ. When they match it runs the standard mode, because the script rejects
+the migration flag for an unchanged database image. The comparison reads the
+literal image line, so keep the `db` image a literal reference. Besides both
+preflight modes, it runs on pull requests that change migrations, the drill
+script, the bases file, the backup or restore scripts, or the workflow itself.
+To drill any branch or tag on demand:
 
 ```sh
 gh workflow run upgrade-drill.yml --ref "$REF"
@@ -228,9 +233,8 @@ gh workflow run upgrade-drill.yml --ref "$REF"
 
 When the supported base releases change, update the bases file.
 
-The v1.0.0 release itself drills from the supported 0.x bases in the bases
-file. From the first release after v1.0.0, the bases are v1.0.0 and the
-previous release, and the 0.x bases are removed. At each release prep, update
+The bases file lists v1.0.0. From the first release after v1.0.0, the bases
+are v1.0.0 and the previous release. At each release prep, update
 `scripts/upgrade_drill_bases.json` and its exact-list test in
 `tests/test_release_preflight.py` to match.
 
@@ -253,7 +257,7 @@ nonempty SPDX package list. Native AMD64 and ARM64 jobs pull their child by
 digest, check its platform and release identity, and run the same HTTPS smoke.
 The published upgrade and rollback drill runs the same base matrix with Docker
 Compose, the exact checked-out revision as `--candidate`, the exact OCI index
-digest as `--candidate-image`, and `--database-image-migration`.
+digest as `--candidate-image`, and the same per-base migration mode selection.
 
 The automated preflight and published verification use Docker Compose. Run the
 equivalent Podman Compose drill in the artifact upgrade section below before
@@ -450,14 +454,13 @@ Every release is drilled from each base tag in
 runs this drill with Docker Compose for every base, through
 `.github/workflows/upgrade-drill.yml`: against the candidate source in
 `preflight` mode and against the published image in `verify-published` mode.
-For v1.0.0 the bases are v0.10.2, v0.11.0, v0.11.1 and v0.11.3; every
-published v0.10.x and v0.11.x release is schema 25, so v0.10.0 and v0.11.2
-share these upgrade paths. Later 1.x releases drill from v1.0.0 and the
-previous release. In addition, run the drill manually with Podman Compose from
-the newest base. For v1.0.0 that is v0.11.3, and because the database image
-also changes, use the [database image migration
-drill](#database-image-migration-drill) mode. `--base` and `--candidate` are
-both required even when the candidate application comes from an image:
+The bases are v1.0.0 and, from the first release after it, the previous
+release. In addition, run the drill manually with Podman Compose from the
+newest base. Add the [database image migration
+drill](#database-image-migration-drill) option only when the candidate's `db`
+image differs from the base's, as the workflow does; the script rejects it for
+an unchanged image. `--base` and `--candidate` are both required even when the
+candidate application comes from an image:
 
 ```sh
 COMPOSE_CMD="docker compose" scripts/upgrade_check.sh \

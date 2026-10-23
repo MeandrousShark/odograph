@@ -19,6 +19,7 @@
 #
 # Env vars:
 #   COMPOSE_CMD   override compose command autodetection, e.g. "podman-compose"
+#                 (the frontend only: no -p option; the project name is set by this script)
 set -euo pipefail
 
 HEALTH_PORT=8077
@@ -202,6 +203,10 @@ step_pass "preconditions: base/candidate refs resolve, compose command is '$comp
 
 STAMP="$(date +%s)"
 PROJECT="mtdrill${STAMP}"
+# Pin the project name for every Compose frontend, so image tags, container
+# names and the cleanup patterns agree. It replaces an inherited value, and
+# backup/restore children inherit it. COMPOSE_CMD must not contain -p.
+export COMPOSE_PROJECT_NAME="$PROJECT"
 SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/upgrade_check.XXXXXX")"
 BASE_DIR="$SCRATCH/base/$PROJECT"
 CAND_DIR="$SCRATCH/cand/$PROJECT"
@@ -795,6 +800,7 @@ import os
 from app.account_context import AccountPool, AccountPrincipal, control_connection
 from app.accounts import get_account_by_email
 from app.application_roles import application_role_pools
+from app.capacity import AdmissionManager
 from app.tracking import create_device
 
 async def main():
@@ -804,10 +810,13 @@ async def main():
             count = (await (await conn.execute("SELECT count(*) FROM accounts")).fetchone())[0]
             if count != 1 or account is None or not account["is_enabled"]:
                 raise RuntimeError("tracker issuance requires the sole synthetic development account")
-        pool = AccountPool(pools.runtime, AccountPrincipal(
-            account["id"], account["is_enabled"], account["auth_version"]))
-        async with pool.connection() as conn:
-            issued = [await create_device(conn, label) for label in ("test", "postrestore-check")]
+        principal = AccountPrincipal(
+            account["id"], account["is_enabled"], account["auth_version"])
+        pool = AccountPool(pools.runtime, principal)
+        # Issuing a credential does blocking work that needs an operation owner.
+        async with AdmissionManager().operation("background", principal=principal):
+            async with pool.connection() as conn:
+                issued = [await create_device(conn, label) for label in ("test", "postrestore-check")]
         print(json.dumps([[item.username, item.secret] for item in issued]))
 
 asyncio.run(main())

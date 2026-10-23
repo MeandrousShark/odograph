@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -116,6 +117,7 @@ def _install_repo(
         scripts_dir / "backup_database.sh",
         "#!/usr/bin/env bash\nset -u\n"
         "printf 'child|backup|%s|%s|%s\\n' \"$PWD\" \"${COMPOSE_FILE:-}\" \"${COMPOSE_CMD:-}\" >> \"$FAKE_LOG\"\n"
+        "printf 'project|child|%s\\n' \"${COMPOSE_PROJECT_NAME-unset}\" >> \"$FAKE_LOG\"\n"
         "while [ \"$#\" -gt 0 ]; do\n"
         "  if [ \"$1\" = --output ]; then : > \"$2\"; exit 0; fi\n"
         "  shift\n"
@@ -126,6 +128,7 @@ def _install_repo(
         scripts_dir / "restore_database.sh",
         "#!/usr/bin/env bash\n"
         "printf 'child|restore|%s|%s|%s\\n' \"$PWD\" \"${COMPOSE_FILE:-}\" \"${COMPOSE_CMD:-}\" >> \"$FAKE_LOG\"\n"
+        "printf 'project|child|%s\\n' \"${COMPOSE_PROJECT_NAME-unset}\" >> \"$FAKE_LOG\"\n"
         "exit 0",
     )
     (repo / "compose.build.override.yml").write_text(
@@ -157,6 +160,7 @@ def _install_repo_with_db_service_drift(tmp_path: Path) -> tuple[Path, str, str]
 _COMPOSE_BODY = r"""
 original="$*"
 printf 'compose|%s|%s\n' "$PWD" "$original" >> "$FAKE_LOG"
+printf 'project|compose|%s\n' "${COMPOSE_PROJECT_NAME-unset}" >> "$FAKE_LOG"
 
 while [ "${1-}" = "-f" ]; do
     [ "$#" -ge 2 ] || exit 90
@@ -383,6 +387,7 @@ def _run(
     modern_auth: bool = False,
     owned_schema: bool = False,
     detector_unsettled: bool = False,
+    extra_env: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess, Path, Path, Path]:
     bin_dir = tmp_path / "bin"
     scratch_root = tmp_path / "scratch"
@@ -514,6 +519,9 @@ def _run(
         "FAKE_UP_EXIT": "42" if fail_up else "0",
         "TMPDIR": str(scratch_root),
     }
+    # The drill sets its own project name; only a test may inherit one.
+    env.pop("COMPOSE_PROJECT_NAME", None)
+    env.update(extra_env or {})
     result = subprocess.run(
         ["bash", str(repo / "scripts" / "upgrade_check.sh"), *args],
         cwd=repo,
@@ -1483,6 +1491,159 @@ def test_backup_restore_children_use_the_parent_compose_file_set(tmp_path, front
         assert command == ("docker compose" if frontend == "docker" else "podman-compose")
 
 
+@pytest.mark.parametrize("frontend", ["docker", "podman"])
+@pytest.mark.parametrize("inherited", [None, "unrelated"])
+def test_drill_pins_the_project_name_for_compose_calls_and_children(tmp_path, frontend, inherited):
+    repo, base_ref, candidate_ref = _install_repo(tmp_path, candidate_db_image="db:native")
+    result, log, _, _ = _run(
+        repo, ["--base", base_ref, "--candidate", candidate_ref, "--database-image-migration"],
+        tmp_path, frontend=frontend, fail_up=False,
+        extra_env={"COMPOSE_PROJECT_NAME": inherited} if inherited else None,
+    )
+    assert result.returncode == 0, result.stderr
+    lines = log.read_text().splitlines()
+    compose_names = [line.split("|")[2] for line in lines if line.startswith("project|compose|")]
+    child_names = [line.split("|")[2] for line in lines if line.startswith("project|child|")]
+    stamped = (tmp_path / "project-name").read_text().strip()
+
+    # The very first compose call already sees the name, not just later ones.
+    first = next(i for i, line in enumerate(lines) if line.startswith("compose|"))
+    assert lines[first + 1] == f"project|compose|{stamped}"
+    assert re.fullmatch(r"mtdrill\d+", stamped)
+    assert compose_names and len(child_names) == 7
+    assert set(compose_names) == set(child_names) == {stamped}
+    assert "unrelated" not in log.read_text()
+
+
+def test_drill_exports_the_project_name_right_after_defining_it():
+    source = UPGRADE_SCRIPT.read_text()
+    define = 'PROJECT="mtdrill${STAMP}"\n'
+    assert source.count(define) == 1
+    after = source.split(define, 1)[1]
+    export = 'export COMPOSE_PROJECT_NAME="$PROJECT"\n'
+    # Only comments may sit between the definition and the export.
+    between = after.split(export, 1)[0].splitlines()
+    assert all(line.startswith("#") for line in between)
+
+
+def test_build_override_image_defaults_the_project_name():
+    text = (REPO_ROOT / "compose.build.override.yml").read_text()
+    image = yaml.safe_load(text)["services"]["app"]["image"]
+    assert image == "${COMPOSE_PROJECT_NAME:-odograph}_app:dev"
+
+    def render(env):
+        return re.sub(
+            r"\$\{(\w+):-([^}]*)\}", lambda match: env.get(match[1]) or match[2], image
+        )
+
+    valid_reference = re.compile(r"[a-z0-9]+(?:[._-][a-z0-9]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}")
+    assert render({}) == "odograph_app:dev"
+    assert render({"COMPOSE_PROJECT_NAME": ""}) == "odograph_app:dev"
+    assert render({"COMPOSE_PROJECT_NAME": "mtdrill123"}) == "mtdrill123_app:dev"
+    for env in ({}, {"COMPOSE_PROJECT_NAME": "mtdrill123"}):
+        assert valid_reference.fullmatch(render(env))
+
+
+def _drill_workflow_run_script() -> str:
+    workflow = yaml.load(
+        (REPO_ROOT / ".github" / "workflows" / "upgrade-drill.yml").read_text(),
+        Loader=yaml.BaseLoader,
+    )
+    steps = workflow["jobs"]["drill"]["steps"]
+    return next(step for step in steps if step.get("name") == "Run upgrade and rollback drill")["run"]
+
+
+def _drill_workflow_refs(tmp_path: Path, base_db: str, candidate_db: str):
+    """A repo whose two commits carry the real compose.yaml with chosen db images.
+
+    A value starting with "!" selects a malformed variant that keeps the db
+    service itself: "!no-image" drops only its image line, "!null-image" leaves
+    a comment where the value should be, and "!no-image-next-header-comment"
+    drops the image and adds a comment to the following service's header so a
+    line scanner would read that service's image.
+    """
+    real = (REPO_ROOT / "compose.yaml").read_text()
+    match = re.search(r"^(  db:\n(?:(?!  \S).*\n)*?)    image: (\S+)\n", real, re.M)
+    assert match, "compose.yaml must keep an image line in its db service"
+    assert "\n  app:\n" in real
+
+    def compose(db_image):
+        if db_image == "!no-image":
+            return real.replace(match[0], match[1])
+        if db_image == "!null-image":
+            return real.replace(match[0], match[1] + "    image: #disabled\n")
+        if db_image == "!no-image-next-header-comment":
+            return real.replace(match[0], match[1]).replace(
+                "\n  app:\n", "\n  app: # application\n", 1
+            )
+        return real.replace(match[0], match[1] + f"    image: {db_image}\n")
+
+    repo = tmp_path / "workflow-repo"
+    (repo / "scripts").mkdir(parents=True)
+    _write_executable(
+        repo / "scripts" / "upgrade_check.sh",
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" > \"$ARGS_FILE\"\n"
+        "printf 'compose_cmd=%s\\n' \"${COMPOSE_CMD-}\" >> \"$ARGS_FILE\"",
+    )
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "Upgrade Test")
+    _git(repo, "config", "user.email", "upgrade@example.test")
+    (repo / "compose.yaml").write_text(compose(base_db))
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "base")
+    base = _git(repo, "rev-parse", "HEAD")
+    (repo / "compose.yaml").write_text(compose(candidate_db))
+    _git(repo, "commit", "-qam", "candidate", "--allow-empty")
+    return repo, base, _git(repo, "rev-parse", "HEAD")
+
+
+def _run_drill_workflow_step(repo: Path, base: str, revision: str, tmp_path: Path, candidate_image=""):
+    script = _write_executable(tmp_path / "drill-step.sh", "#!/usr/bin/env bash\n" + _drill_workflow_run_script())
+    args_file = tmp_path / "drill-args"
+    result = subprocess.run(
+        ["bash", str(script)], cwd=repo, capture_output=True, text=True, timeout=30,
+        env={**os.environ, "BASE": base, "REVISION": revision,
+             "CANDIDATE_IMAGE": candidate_image, "ARGS_FILE": str(args_file),
+             # The workflow's setup-python provides `python` with PyYAML; here
+             # it is the interpreter running the suite.
+             "PATH": f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}"},
+    )
+    return result, args_file
+
+
+@pytest.mark.parametrize("candidate_image", ["", "registry.example.test/odograph@sha256:" + "a" * 64])
+@pytest.mark.parametrize(
+    ("base_db", "candidate_db", "migration"),
+    [("db:one", "db:one", False), ("db:one", "db:two", True)],
+)
+def test_drill_workflow_passes_migration_mode_only_for_a_changed_db_image(
+    tmp_path, base_db, candidate_db, migration, candidate_image
+):
+    repo, base, revision = _drill_workflow_refs(tmp_path, base_db, candidate_db)
+    result, args_file = _run_drill_workflow_step(repo, base, revision, tmp_path, candidate_image)
+    assert result.returncode == 0, result.stderr
+    args, compose_cmd = args_file.read_text().splitlines()
+    assert compose_cmd == "compose_cmd=docker compose"
+    expected = f"--base {base} --candidate {revision}"
+    if candidate_image:
+        expected += f" --candidate-image {candidate_image}"
+    if migration:
+        expected += " --database-image-migration"
+    assert args == expected
+    assert (tmp_path / "workflow-repo" / "evidence" / f"upgrade-drill-{base}.txt").exists()
+
+
+@pytest.mark.parametrize("malformed", ["!no-image", "!null-image", "!no-image-next-header-comment"])
+@pytest.mark.parametrize("side", ["base", "candidate"])
+def test_drill_workflow_fails_closed_when_a_ref_has_no_db_image(tmp_path, side, malformed):
+    base_db, candidate_db = ("db:one", malformed) if side == "candidate" else (malformed, "db:one")
+    repo, base, revision = _drill_workflow_refs(tmp_path, base_db, candidate_db)
+    result, args_file = _run_drill_workflow_step(repo, base, revision, tmp_path)
+    assert result.returncode != 0
+    assert "could not read the db image" in result.stderr
+    assert not args_file.exists()
+
+
 @pytest.mark.parametrize("issuance_fails", [False, True])
 def test_schema26_base_uses_the_seed_account_and_issued_device_logins(tmp_path, issuance_fails):
     repo, base_ref, candidate_ref = _install_repo(tmp_path, modern_auth=True, owned_schema=True)
@@ -1563,12 +1724,13 @@ def test_detector_watermark_behind_a_point_fails_step_2d_before_backup(tmp_path,
 
 @pytest.mark.parametrize("count,enabled", [(1, True), (2, True), (1, False), (0, True)])
 def test_tracking_issuance_refuses_any_other_account_state(monkeypatch, capsys, count, enabled):
-    from app import account_context, accounts, application_roles, tracking
+    from app import account_context, accounts, application_roles, capacity, tracking
 
     program = _extract_function(UPGRADE_SCRIPT.read_text(), "issue_synthetic_tracking_credentials")
     program = program.split("<<'PYEOF'\n", 1)[1].split("\nPYEOF", 1)[0]
     control, runtime, scoped = object(), object(), object()
     created = []
+    owners = []
 
     class Connection:
         async def execute(self, statement):
@@ -1603,6 +1765,13 @@ def test_tracking_issuance_refuses_any_other_account_state(monkeypatch, capsys, 
 
     async def create_device(conn, label):
         assert conn is scoped
+        # The real contract: blocking serving work needs an operation owner.
+        owner = capacity.current_owner()
+        assert owner is not None
+        assert owner.lane == "background"
+        assert owner.principal == account_context.AccountPrincipal(41, True, 3)
+        assert await capacity.owned_thread(lambda: label) == label
+        owners.append(owner)
         created.append(label)
         return SimpleNamespace(username="odograph_" + label, secret="synthetic-secret")
 
@@ -1615,6 +1784,8 @@ def test_tracking_issuance_refuses_any_other_account_state(monkeypatch, capsys, 
     if count == 1 and enabled:
         exec(compile(program, "drill-tracking-issuance", "exec"), {})
         assert created == ["test", "postrestore-check"]
+        assert len(owners) == 2 and owners[0] is owners[1]
+        assert capacity.current_owner() is None
         assert "odograph_test" in capsys.readouterr().out
     else:
         with pytest.raises(RuntimeError, match="sole synthetic development account"):

@@ -95,12 +95,37 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p evidence
+          # The literal db image of a ref's compose.yaml, empty when absent.
+          db_image() {
+            git show "$1:compose.yaml" | python -c '
+          import sys, yaml
+          doc = yaml.safe_load(sys.stdin)
+          db = ((doc.get("services") or {}).get("db")) if isinstance(doc, dict) else None
+          image = db.get("image") if isinstance(db, dict) else None
+          if isinstance(image, str) and image.strip():
+              print(image.strip())
+          '
+          }
+          base_db="$(db_image "$BASE" || true)"
+          candidate_db="$(db_image "$REVISION" || true)"
+          if [ -z "$base_db" ] || [ -z "$candidate_db" ]; then
+            echo "error: could not read the db image from compose.yaml at $BASE and $REVISION" >&2
+            exit 1
+          fi
           args=(--base "$BASE" --candidate "$REVISION")
           if [ -n "$CANDIDATE_IMAGE" ]; then
             args+=(--candidate-image "$CANDIDATE_IMAGE")
           fi
+          # Migration mode applies only when the db image changed; the script
+          # rejects the flag for an unchanged image.
+          if [ "$base_db" != "$candidate_db" ]; then
+            echo "db image changed ($base_db -> $candidate_db): database image migration mode"
+            args+=(--database-image-migration)
+          else
+            echo "db image unchanged ($base_db): standard mode"
+          fi
           COMPOSE_CMD="docker compose" scripts/upgrade_check.sh \
-            "${args[@]}" --database-image-migration | \
+            "${args[@]}" | \
             tee "evidence/upgrade-drill-${BASE}.txt"
       - name: Upload upgrade drill evidence
         if: always()

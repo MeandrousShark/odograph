@@ -462,7 +462,9 @@ even after a passing rehearsal.
    podman-compose -f compose.yaml -f compose.build.override.yml up -d --build
    ```
 
-   This is not the normal operator upgrade path.
+   The source build is tagged `<project>_app:dev`, or `odograph_app:dev` when
+   no project name is set, so it never replaces the pinned release tag. This
+   is not the normal operator upgrade path.
 
 5. **Keep the pre-upgrade archive** (`backups/pre-upgrade.dump` from step 2,
    plus its `.sha256` and `.manifest`) until the new release has run through
