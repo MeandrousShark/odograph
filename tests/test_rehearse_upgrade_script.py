@@ -782,8 +782,20 @@ def test_role_contract_failure_is_a_failed_rehearsal(tmp_path):
     assert "FAIL: python -m app.application_roles verify failed" in run.summary
 
 
+@pytest.mark.parametrize("interval", ["0", "0.0", ".0", "1.", "1e1", "-1", "abc"])
+def test_poll_interval_rejects_values_that_are_not_positive_seconds(interval):
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "--archive", "x", "--candidate", "HEAD"],
+        capture_output=True, text=True, timeout=10,
+        env={**os.environ, "REHEARSE_POLL_INTERVAL": interval},
+    )
+
+    assert result.returncode != 0
+    assert "REHEARSE_POLL_INTERVAL must be a positive number of seconds" in result.stderr
+
+
 def test_startup_timeout_stops_the_app_and_still_counts(tmp_path):
-    run = _run(tmp_path, ["--health-timeout", "1"], FAKE_HEALTH="never")
+    run = _run(tmp_path, ["--health-timeout", "1"], FAKE_HEALTH="never", REHEARSE_POLL_INTERVAL="0.2")
 
     assert run.result.returncode == 1
     assert "startup: timed out after 1s\n" in run.summary

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 
 import pytest
 
@@ -10,6 +11,7 @@ from app import admin as admin_module
 from app.accounts import create_admin
 from app.db import make_pool
 from conftest import provisioned_role_pools, reset_db
+from tests.test_admin_lifecycle_routes_db import SHORT_LOCK_TIMEOUT_S, _wait_until_blocked
 from tests.test_admin_routes_db import _app, _client
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -210,17 +212,26 @@ def test_storage_limit_route_reports_lock_timeout_and_deadlock_as_busy(monkeypat
 
     from app import storage_limits
 
+    monkeypatch.setattr(storage_limits, "LOCK_TIMEOUT_S", SHORT_LOCK_TIMEOUT_S)
+
     async def check(owner, pools, admin, members):
         first, _second = members
         app = _app(pools)
         form = {"csrf_token": "route-csrf", "limit_mode": "unlimited"}
         async with await _client(app) as client:
             await client.post(f"/test/session/{admin['id']}/1")
-            # The setter waits for the policy row past its 5 s lock timeout.
+            # The setter waits for the policy row past its shortened lock timeout.
             async with owner.connection() as holder:
                 async with holder.transaction():
                     await holder.execute("SELECT 1 FROM storage_policy WHERE id=1 FOR UPDATE")
-                    busy = await client.post(f"/admin/accounts/{first}/storage-limit", data=form)
+                    started = time.monotonic()
+                    pending = asyncio.create_task(
+                        client.post(f"/admin/accounts/{first}/storage-limit", data=form))
+                    await _wait_until_blocked(holder)
+                    assert not pending.done()
+                    busy = await asyncio.wait_for(pending, timeout=5)
+                    elapsed = time.monotonic() - started
+            assert SHORT_LOCK_TIMEOUT_S <= elapsed < 3.0
             assert busy.status_code == 503
             assert "Storage limits are busy. Try again." in busy.text
             assert await _grant(owner, first) == ("default", GIB)

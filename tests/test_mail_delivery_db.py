@@ -39,7 +39,9 @@ def _mailer(relay, recipient="you@example.com"):
                   "odograph@example.invalid", recipient)
 
 
-def _deadline(monkeypatch, seconds=3):
+def _deadline(monkeypatch, seconds=1.5):
+    # Headroom for a cold helper to reach the relay on a loaded runner, so
+    # the deadline still fires in the stalled SMTP phase, not at launch.
     from app import smtp_supervisor
 
     monkeypatch.setattr(smtp_supervisor, "TRANSPORT_TIMEOUT_S", seconds)

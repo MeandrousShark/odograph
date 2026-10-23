@@ -1,14 +1,22 @@
 """Restricted administrator account lifecycle operations."""
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 
 from psycopg import Error
+
+# Production waits 5 s for a row lock; a test seam so tests can shorten it.
+LOCK_TIMEOUT_S = 5.0
 
 
 class AccountLifecycleUnavailable(ValueError):
     def __init__(self):
         super().__init__("Account lifecycle operation unavailable.")
+
+
+def _lock_timeout() -> str:
+    return f"{max(1, math.ceil(LOCK_TIMEOUT_S * 1000))}ms"
 
 
 def _admin_identity(admin_user: Mapping) -> tuple[int, int]:
@@ -34,7 +42,7 @@ async def set_account_enabled(
         raise AccountLifecycleUnavailable()
     try:
         async with conn.transaction():
-            await conn.execute("SET LOCAL lock_timeout = '5s'")
+            await conn.execute("SELECT set_config('lock_timeout', %s, true)", (_lock_timeout(),))
             await conn.execute("SET LOCAL statement_timeout = '15s'")
             cur = await conn.execute(
                 "SELECT public.admin_set_account_enabled(%s,%s,%s,%s)",
@@ -76,7 +84,7 @@ async def _deletion_operation(conn, admin_user: Mapping, target_account_id: int,
     parameters = (actor_id, auth_version, target_account_id, *values)
     try:
         async with conn.transaction():
-            await conn.execute("SET LOCAL lock_timeout = '5s'")
+            await conn.execute("SELECT set_config('lock_timeout', %s, true)", (_lock_timeout(),))
             await conn.execute("SET LOCAL statement_timeout = '15s'")
             cur = await conn.execute(
                 f"SELECT public.{function}({','.join(['%s'] * len(parameters))})", parameters,

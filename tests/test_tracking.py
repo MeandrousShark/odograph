@@ -12,15 +12,18 @@ from fastapi import FastAPI
 
 from app import ingest
 from app.account_context import AccountPrincipal
-from app.capacity import owned_thread
+from app.capacity import AdmissionManager, owned_thread
 from app.tracking import IssuedCredential, TrackingUnavailable
 
 
-def _app():
+def _app(**capacity):
     app = FastAPI()
     app.state.config = SimpleNamespace(
         ingest_username="legacy", ingest_password="test-only-secret", ingest_max_body_bytes=1000,
+        **{"capacity_" + name: value for name, value in capacity.items()},
     )
+    if capacity:
+        app.state.capacity = AdmissionManager(app.state.config)
     app.state.control_pool = None
     app.state.ingest_limiter = ingest.FailedAuthLimiter(10, 60)
     app.include_router(ingest.make_router())
@@ -139,7 +142,8 @@ def test_blocked_shared_ip_retains_valid_sender_for_retry_without_verification_o
 
 def test_auth_saturation_and_request_cancellation_hold_slots_until_threads_finish(monkeypatch):
     async def run():
-        app = _app()
+        # The test does not prove the admission wait length, so keep it short.
+        app = _app(auth_ingest_wait_s=0.05)
         limiter = app.state.ingest_limiter
         loop = asyncio.get_running_loop()
         entered = {name: asyncio.Event() for name in ("first", "second")}

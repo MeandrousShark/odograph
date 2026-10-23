@@ -46,6 +46,16 @@ if [ "$ACTION" = cleanup ]; then
     exit 0
 fi
 
+# Readiness attempts, 0.2 s apart; tests of the failure path lower it. A
+# leading zero is refused because bash arithmetic would read it as octal.
+READY_ATTEMPTS="${TEST_DB_READY_ATTEMPTS:-150}"
+case "$READY_ATTEMPTS" in
+    *[!0-9]*|0*)
+        echo "error: TEST_DB_READY_ATTEMPTS must be a positive whole number." >&2
+        exit 1
+        ;;
+esac
+
 # Disposable data is never worth durability: skip fsync and full-page writes.
 # The image entrypoint passes leading "-c" arguments through to postgres.
 container_name="odograph-testdb-${TASK_ID}-${RANDOM}${RANDOM}"
@@ -61,7 +71,9 @@ cleanup_failed_start() {
 }
 trap cleanup_failed_start EXIT
 
-for ((attempt = 0; attempt < 30; attempt++)); do
+# Poll often so a fast start is not padded by a whole second; the default
+# 150 x 0.2 s keeps the 30 s ceiling.
+for ((attempt = 0; attempt < READY_ATTEMPTS; attempt++)); do
     if podman exec "$container_id" pg_isready -h 127.0.0.1 -U mileage -d mileage >/dev/null 2>&1; then
         host_port="$(podman port "$container_id" 5432/tcp | sed -n 's/^127\.0\.0\.1:\([0-9][0-9]*\)$/\1/p')"
         if [ -n "$host_port" ]; then
@@ -70,7 +82,7 @@ for ((attempt = 0; attempt < 30; attempt++)); do
             exit 0
         fi
     fi
-    sleep 1
+    sleep 0.2
 done
 
 echo "error: disposable database did not become ready: $container_name" >&2

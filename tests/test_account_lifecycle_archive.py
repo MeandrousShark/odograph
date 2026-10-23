@@ -294,9 +294,7 @@ async def _assert_restored_state(database_url, first, actor, cookie, proofs, *, 
 def test_real_archive_restores_deletion_state_without_reviving_sessions_or_signup(tmp_path):
     clusters = _Clusters()
     try:
-        source = clusters.start()
-        before_target = clusters.start()
-        after_target = clusters.start()
+        source, before_target, after_target = clusters.start_many(3)
         _assert_pg16_clients(source)
         first, actor, cookie, proofs = asyncio.run(_seed_source(source.database_url))
         before = tmp_path / "before-purge.dump"
