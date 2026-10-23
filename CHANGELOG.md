@@ -9,6 +9,14 @@ reproduced here.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-23
+
+### Security
+
+- Update the bundled certifi CA store to 2026.10.19, which removes the
+  compromised eMudhra intermediates under `emSign ECC Root CA - G3`
+  (PYSEC-2026-4320).
+
 ### Added
 
 - Administrators can set each member's storage limit in **Accounts**: follow
@@ -50,6 +58,38 @@ reproduced here.
   confirmed, delete, merge and split refuse the trip and ask you to try again
   once it ends, or once the phone has been silent for 24 hours. See
   [A point arrived, but no trip appeared](docs/usage.md#a-point-arrived-but-no-trip-appeared).
+- `scripts/restore_database.sh` no longer refuses every full restore under
+  podman-compose 1.3.0 and 1.4.0, which set only the Docker Compose service
+  label.
+
+### Migrations
+
+- Migration 046 (`rewrite`) makes existing administrator grants unlimited and
+  every member grant follow the instance default. Usage counters and stored
+  data are unchanged.
+- Migration 047 (`rewrite`) adds the protected functions behind the storage
+  limit editor and makes each restart apply the sub-limit defaults to custom
+  accounts.
+- See [Upgrading from 1.0](docs/upgrading.md#upgrading-from-10) for their
+  operator impact.
+
+### Supported upgrade path
+
+- `v1.0.0` may upgrade directly to 1.1. A 0.x installation first upgrades to
+  `v1.0.0`; see [Upgrading to 1.0](docs/upgrading.md#upgrading-to-10).
+- Prior-release artifact upgrade gate: release preflight ran the Docker
+  Compose upgrade drill from `v1.0.0` to this release before it was tagged.
+
+### Breaking changes
+
+- Storage limits are off unless `STORAGE_ACCOUNT_LIMIT_BYTES` is set. To keep
+  the 1.0 member limits, set `STORAGE_ACCOUNT_LIMIT_BYTES=2147483648` before
+  upgrading.
+- Startup refuses `STORAGE_RAW_LIMIT_BYTES` or
+  `STORAGE_ENHANCEMENT_LIMIT_BYTES` without `STORAGE_ACCOUNT_LIMIT_BYTES`.
+- Rollback across migration 046 or 047 restores the verified pre-upgrade
+  backup and loses every write made after it. See
+  [Rollback](docs/upgrading.md#rollback).
 
 ## [1.0.0] - 2026-10-16
 
