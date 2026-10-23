@@ -16,6 +16,10 @@ reproduced here.
 - Update the bundled certifi CA store to 2026.10.19, which removes the
   compromised eMudhra intermediates under `emSign ECC Root CA - G3`
   (PYSEC-2026-4320).
+- Rebuild the native PostGIS database image with `libexpat1`
+  `2.5.0-1+deb12u5` (CVE-2025-59375, CVE-2026-77214) and `gosu` built with
+  Go 1.27.3 (CVE-2026-111943). PostgreSQL 16.15 and PostGIS 3.6.4 are
+  unchanged.
 
 ### Added
 
@@ -75,13 +79,20 @@ reproduced here.
 
 ### Supported upgrade path
 
-- `v1.0.0` may upgrade directly to 1.1. A 0.x installation first upgrades to
-  `v1.0.0`; see [Upgrading to 1.0](docs/upgrading.md#upgrading-to-10).
+- `v1.0.0` may upgrade directly to 1.1 through the database-image migration
+  below. A 0.x installation first upgrades to `v1.0.0`; see
+  [Upgrading to 1.0](docs/upgrading.md#upgrading-to-10).
 - Prior-release artifact upgrade gate: release preflight ran the Docker
-  Compose upgrade drill from `v1.0.0` to this release before it was tagged.
+  Compose upgrade drill from `v1.0.0` to this release in database-image
+  migration mode before it was tagged.
 
 ### Breaking changes
 
+- The `db` service moves to the rebuilt PostGIS image, so every 1.0
+  installation upgrades through
+  [Upgrading the PostGIS database image](docs/upgrading.md#upgrading-the-postgis-database-image):
+  a verified backup restored into a fresh project and volume. Do not run
+  `up -d` against the existing project for this upgrade.
 - Storage limits are off unless `STORAGE_ACCOUNT_LIMIT_BYTES` is set. To keep
   the 1.0 member limits, set `STORAGE_ACCOUNT_LIMIT_BYTES=2147483648` before
   upgrading.
