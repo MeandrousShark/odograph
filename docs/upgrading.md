@@ -39,8 +39,9 @@ described in [Rollback](#rollback) below.
 
 When a target release's `compose.yaml` uses the signed native PostgreSQL
 16.15/PostGIS 3.6.4 index
-`ghcr.io/meandrousshark/odograph-postgis@sha256:c4c1184f0c4d899f65c3df9ea6d296c3a3a5f1b233090651ac49429b4e2100b4`,
-an installation that still uses the older `postgis/postgis:16-3.4` image must
+`ghcr.io/meandrousshark/odograph-postgis@sha256:06b6d9eee52766e4b77f748a962612c8ef00343adba7c5ea09261bc223d1aa56`,
+an installation on any other database image, such as the older
+`postgis/postgis:16-3.4` image or the native index Odograph 1.0 pinned, must
 be treated as a database-image migration. A normal `docker compose up -d`
 against the existing project is not the migration procedure.
 
