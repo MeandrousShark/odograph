@@ -3,4 +3,6 @@ services:
     build: .
     # Keep a source build from replacing the pinned release image in the
     # local image store, where a later canonical install could reuse it.
-    image: ${COMPOSE_PROJECT_NAME}_app:dev
+    # Some Compose versions do not supply a project name for interpolation,
+    # so fall back to "odograph" rather than render an invalid tag.
+    image: ${COMPOSE_PROJECT_NAME:-odograph}_app:dev
