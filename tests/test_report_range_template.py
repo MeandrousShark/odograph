@@ -39,7 +39,7 @@ def _render(name: str, **context) -> str:
     return templates.env.get_template(name).render(**context)
 
 
-def test_report_summary_partial_renders_metrics_rates_and_caveats():
+def test_report_summary_renders_metrics_and_rates_and_notes_render_caveats():
     report = AnnualReport(
         year=2026,
         business_m=2 * MILE,
@@ -65,6 +65,9 @@ def test_report_summary_partial_renders_metrics_rates_and_caveats():
     ):
         assert expected in body
     assert "Rates applied: $0.6700/mi Jan-Jun, $0.7000/mi Jul-Dec" in body
+    # Caveats moved out of the summary into the notes section at the end.
+    assert "still unclassified" not in body
+    body = _render("_report_notes.html", report=report)
     assert "4 trip(s) still unclassified" in body
     assert "5 business trip(s) have no purpose recorded." in body
     assert "1 trip(s) have a recording gap; distance may under-read." in body
@@ -74,11 +77,12 @@ def test_report_summary_partial_renders_metrics_rates_and_caveats():
     assert '<a href="/settings">Add one</a>.' in body
 
     other_caveat_body = _render(
-        "_report_summary.html",
+        "_report_notes.html",
         report=AnnualReport(
             year=2026, trip_count=1, caveats=ReportCaveats(gap_trips=1)
         ),
     )
+    assert "1 trip(s) have a recording gap" in other_caveat_body
     assert 'href="/settings"' not in other_caveat_body
 
 
@@ -314,3 +318,60 @@ def test_report_sections_are_single_cards_with_consistent_headings():
     assert ".report-page .report-section, .stats-page .stats-section {" in css
     for removed in (".report-coverage {", ".report-expense-comparison {"):
         assert removed not in css
+
+
+def test_report_caveats_merge_into_one_notes_section_at_the_end():
+    report = build_annual_report([{**_trip(1), "source": "manual"}], RATES, TZ, 2026)
+    body = _full_annual(report=report)
+    report_line = "1 trip(s) were entered manually."
+    comparison_line = "The larger estimate is informational, not a filing recommendation"
+    provisional_line = "Provisional comparisons use GPS-detected total miles"
+
+    assert body.count('<section class="report-notes"') == 1
+    assert "report-caveats" not in body
+    notes = body[body.index('<section class="report-notes"'):]
+    notes = notes[:notes.index("</section>")]
+    assert '<h2 id="report-notes-heading">Review before filing</h2>' in notes
+    for expected in (
+        report_line, comparison_line, provisional_line,
+        'href="https://www.irs.gov/publications/p463"',
+        'href="https://www.irs.gov/publications/p946"',
+    ):
+        assert expected in notes
+        assert body.count(expected) == 1
+    # Last thing on the page, after the comparison table.
+    assert body.index("report-expense-comparison") < body.index('<section class="report-notes"')
+    assert body.index("</section>", body.index('<section class="report-notes"')) > body.rindex("</table>")
+
+    css = (Path(__file__).parents[1] / "static/style.css").read_text()
+    assert ".report-page .report-notes {" in css
+    assert ".report-caveats" not in css
+
+
+def test_report_notes_show_comparison_caveats_even_without_trips():
+    body = _full_annual(report=build_annual_report([], RATES, TZ, 2026))
+    assert "No trips recorded in 2026." in body
+    assert body.count('<section class="report-notes"') == 1
+    assert "The larger estimate is informational" in body
+
+
+def test_report_notes_absent_without_caveats():
+    body = _full_annual(expense_report=SimpleNamespace(comparisons=[]))
+    assert "By month" in body
+    assert "report-notes" not in body
+    assert "Review before filing" not in body
+
+
+def test_range_report_notes_hold_report_caveats_only():
+    report = build_range_report(
+        [{**_trip(4), "source": "manual"}], RATES, TZ, date(2026, 4, 1), date(2026, 6, 30)
+    )
+    body = _render(
+        "report_range.html", report=report, user=USER, csrf="token",
+        expense_report=SimpleNamespace(comparisons=[_comparison()]),
+    )
+    assert body.count('<section class="report-notes"') == 1
+    assert "1 trip(s) were entered manually." in body
+    assert "The larger estimate is informational" not in body
+    assert "irs.gov" not in body
+    assert body.index('<section class="report-section') < body.index('<section class="report-notes"')

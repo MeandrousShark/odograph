@@ -1946,9 +1946,6 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 .summary-tile > strong { font-size: 1.25rem; font-variant-numeric: tabular-nums; }
 .summary-tile > small { color: var(--fg-muted); font-size: .75rem; overflow-wrap: anywhere; }
 .summary-tile-total { padding-top: var(--space-2); border-top: 3px solid var(--accent-primary); }
-.report-caveats { border: 1px solid var(--warn); border-radius: 6px; padding: .5rem .75rem;
-                   margin: 1rem 0; font-size: .85rem; }
-.report-caveats ul { margin: .35rem 0 0; padding-left: 1.25rem; }
 
 /* Report pages keep their existing controls, calculations, and table markup
    under .report-page alongside the shared .page wrapper. */
@@ -1966,13 +1963,14 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
   margin: 0 0 var(--space-4); padding: 0 var(--space-1);
   font-size: .85rem; font-variant-numeric: tabular-nums;
 }
-.report-page .report-caveats {
-  margin: var(--space-4) 0 var(--space-5); padding: var(--space-3) var(--space-4);
-  border-color: color-mix(in srgb, var(--warn) 65%, var(--border));
+.report-page .report-notes {
+  margin: 0 0 var(--space-5); padding: var(--space-3) var(--space-4); font-size: .85rem;
+  border: 1px solid color-mix(in srgb, var(--warn) 65%, var(--border));
   border-left: 3px solid var(--warn); border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--warn) 8%, var(--surface));
 }
-.report-page .report-caveats ul { margin: var(--space-2) 0 0; }
+.report-page .report-notes h2 { margin: 0; font-size: inherit; }
+.report-page .report-notes ul { margin: var(--space-2) 0 0; padding-left: 1.25rem; }
 /* Each report section is the one card (shared with .stats-section below), so
    the wrapper inside it only scrolls. */
 .report-page .table-wrapper { max-width: 100%; overscroll-behavior-inline: contain; }

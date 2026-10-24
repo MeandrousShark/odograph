@@ -1,0 +1,24 @@
+{# Every caveat the report has, in one section at the end. Shared by
+   report.html and report_range.html. Only the annual page shows the expense
+   comparison, so only it passes note_comparisons. #}
+{% set report_caveats = report.trip_count and report.caveats.any %}
+{% set comparisons = note_comparisons | default([]) %}
+{% if report_caveats or comparisons %}
+<section class="report-notes" aria-labelledby="report-notes-heading">
+  <h2 id="report-notes-heading">Review before filing</h2>
+  <ul>
+    {% if report_caveats %}
+    {% for line in caveat_lines(report.caveats, report.year) %}
+    <li>{{ line }}{% if loop.last and report.caveats.missing_rate %} <a href="/settings">Add one</a>.{% endif %}</li>
+    {% endfor %}
+    {% endif %}
+    {% if comparisons %}
+    {% for line in comparison_caveat_lines(comparisons) %}<li>{{ line }}</li>{% endfor %}
+    {% endif %}
+  </ul>
+  {% if comparisons %}
+  <p>See <a href="https://www.irs.gov/publications/p463">IRS Publication 463</a> and
+    <a href="https://www.irs.gov/publications/p946">IRS Publication 946</a>.</p>
+  {% endif %}
+</section>
+{% endif %}

@@ -110,17 +110,10 @@
   </tbody>
 </table>
 </div>
-
-<div class="report-caveats">
-  <strong>Review before filing:</strong>
-  <ul>
-    {% for line in comparison_caveat_lines(expense_report.comparisons) %}<li>{{ line }}</li>{% endfor %}
-  </ul>
-  <p>See <a href="https://www.irs.gov/publications/p463">IRS Publication 463</a> and
-    <a href="https://www.irs.gov/publications/p946">IRS Publication 946</a>.</p>
-</div>
 </section>
 {% endif %}
+
+{% with note_comparisons = expense_report.comparisons %}{% include "_report_notes.html" %}{% endwith %}
 
 </div>
 {% endblock %}
