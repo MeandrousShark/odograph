@@ -33,7 +33,7 @@
       {% endfor %}
     </select>
   </label>
-  <button type="submit">Apply</button>
+  <button class="control control-primary" type="submit">Apply</button>
 </form>
 
 <details class="add-manual" open>
@@ -84,7 +84,7 @@
       </select>
     </label>
     <p class="expense-live-warning" data-expense-warning="not-my-vehicle" role="status" hidden></p>
-    <button type="submit">Add</button>
+    <button class="control control-primary" type="submit">Add</button>
   </form>
 </details>
 
@@ -198,11 +198,30 @@
               </label>
             </div>
             <div class="expense-editor-actions">
-              <button type="submit">Save</button>
-              <button type="button" class="danger" hx-post="/expenses/{{ expense.id }}/delete"
-                      hx-confirm="Delete this expense?">Delete</button>
+              <button class="control control-primary" type="submit">Save</button>
+              <button type="button" class="control control-destructive" aria-haspopup="dialog"
+                      aria-controls="expense-delete-{{ expense.id }}"
+                      data-expense-delete-open="expense-delete-{{ expense.id }}">Delete</button>
             </div>
           </form>
+          {# Outside the edit form: the dialog carries its own form, and forms
+             cannot nest. #}
+          <dialog id="expense-delete-{{ expense.id }}" class="app-dialog"
+                  aria-labelledby="expense-delete-{{ expense.id }}-title"
+                  aria-describedby="expense-delete-{{ expense.id }}-description">
+            <form class="trip-delete-dialog-content">
+              <h2 id="expense-delete-{{ expense.id }}-title">Delete expense?</h2>
+              <p id="expense-delete-{{ expense.id }}-description">
+                This permanently deletes the {{ expense.incurred_on }} {{ category_labels[expense.category] }}
+                expense of {{ expense.amount | usd }}. It cannot be restored.
+              </p>
+              <div class="app-dialog-actions">
+                <button type="button" class="control control-secondary" data-expense-delete-cancel autofocus>Cancel</button>
+                <button type="button" class="control control-destructive"
+                        hx-post="/expenses/{{ expense.id }}/delete">Delete expense</button>
+              </div>
+            </form>
+          </dialog>
         </div>
       </td>
     </tr>

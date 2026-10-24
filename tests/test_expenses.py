@@ -487,3 +487,69 @@ def test_expense_editor_layout_and_live_warning_metadata_are_rendered():
     assert ".expense-ledger { table-layout: fixed; min-width: 56rem; }" in stylesheet
     assert ".expense-ledger-warnings { width: 15%; }" in stylesheet
     assert ".expense-ledger-actions { width: 11%; }" in stylesheet
+
+
+def _render_expenses_page(expenses):
+    templates = make_templates(SimpleNamespace(display_tz=TZ, app_version="test"))
+    return templates.env.get_template("expenses.html").render(
+        expenses=expenses,
+        trips=[],
+        vehicles=[{"id": 1, "name": "Truck", "active": True, "is_default": True}],
+        selected_year=2026, selected_vehicle="",
+        category_totals={"fuel": Decimal("12")} if expenses else {},
+        ledger_total=Decimal("12") if expenses else Decimal("0"),
+        category_labels=CATEGORY_LABELS, treatment_labels=TREATMENT_LABELS,
+        expense_categories=EXPENSE_CATEGORIES, expense_treatments=EXPENSE_TREATMENTS,
+        expense_conflict_labels=EXPENSE_CONFLICT_LABELS,
+        user={"sub": "test"}, csrf="token",
+    )
+
+
+LEDGER_EXPENSE = {
+    "id": 4, "vehicle_id": 1, "vehicle_name": "Truck",
+    "incurred_on": date(2026, 6, 1), "category": "fuel",
+    "amount": Decimal("12.00"), "treatment": "business_use_allocated",
+    "notes": None, "trip_id": None, "conflicts": [],
+}
+
+
+def test_expense_delete_confirms_in_an_in_page_dialog_outside_the_edit_form():
+    body = _render_expenses_page([LEDGER_EXPENSE])
+
+    assert "hx-confirm" not in body
+    assert (
+        '<button type="button" class="control control-destructive" aria-haspopup="dialog"\n'
+        '                      aria-controls="expense-delete-4"\n'
+        '                      data-expense-delete-open="expense-delete-4">Delete</button>'
+    ) in body
+    dialog = body.split('<dialog id="expense-delete-4" class="app-dialog"', 1)[1].split("</dialog>", 1)[0]
+    assert 'aria-labelledby="expense-delete-4-title"' in dialog
+    assert '<h2 id="expense-delete-4-title">Delete expense?</h2>' in dialog
+    assert "2026-06-01 Fuel" in dialog
+    assert "$12.00" in dialog
+    assert (
+        '<button type="button" class="control control-secondary" data-expense-delete-cancel autofocus>Cancel</button>'
+    ) in dialog
+    # Same request as before the dialog: a POST to the delete route with the
+    # default htmx target, CSRF riding on the body's hx-headers.
+    assert (
+        '<button type="button" class="control control-destructive"\n'
+        '                        hx-post="/expenses/4/delete">Delete expense</button>'
+    ) in dialog
+    assert "hx-target" not in dialog and "hx-swap" not in dialog
+    assert body.count('hx-post="/expenses/4/delete"') == 1
+
+    # Forms cannot nest, so the dialog follows the edit form instead of
+    # sitting inside it.
+    edit_form_end = body.index("</form>", body.index('hx-post="/expenses/4/update"'))
+    assert body.index('data-expense-delete-open="expense-delete-4"') < edit_form_end
+    assert edit_form_end < body.index('<dialog id="expense-delete-4"')
+
+
+def test_base_dialog_handler_opens_and_cancels_the_expense_delete_dialog():
+    source = (Path(__file__).parents[1] / "app/templates/base.html").read_text()
+    handler = source.split("// Destructive actions use in-page native dialogs", 1)[1].split("</script>", 1)[0]
+
+    assert "[data-expense-delete-open]" in handler
+    assert "trigger.dataset.expenseDeleteOpen" in handler
+    assert "[data-expense-delete-cancel]" in handler
