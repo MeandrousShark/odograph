@@ -227,7 +227,7 @@ def test_every_settings_confirmation_is_an_in_page_dialog_with_its_original_requ
     cases = {
         "place-delete-3": ("Delete place &#39;Office&#39;?", "Trips referencing it will show coordinates instead.",
                            "Delete place", "/places/3/delete", None),
-        "rule-delete-4": ("Delete this rule?", "Home and Work trips will no longer be tagged personal by this rule.",
+        "rule-delete-4": ("Delete this rule?", "Side A: Home. Side B: Work. Category: Personal.",
                           "Delete rule", "/rules/4/delete", None),
         "boundary-override-confirm-5": ("Restore this deleted trip?", "Its stored location data will be reprocessed.",
                                         "Restore trip", "/settings/boundary_overrides/5/delete", None),
@@ -286,4 +286,6 @@ def test_base_dialog_handler_opens_and_cancels_generic_dialogs():
     # The existing trip, avatar and expense attributes keep working.
     for name in ("trip-delete", "avatar-remove", "expense-delete"):
         assert f"[data-{name}-open]" in handler and f"[data-{name}-cancel]" in handler
-    assert ".danger {" not in (ROOT / "static/style.css").read_text()
+    css = (ROOT / "static/style.css").read_text()
+    assert ".danger {" not in css
+    assert ".settings-table-actions .app-dialog { text-align: left; }" in css

@@ -360,7 +360,7 @@ document.addEventListener('click', function (event) {
         {{ confirm_trigger("rule-delete-" ~ rule.id, "Delete", "Delete rule") }}
         {% call confirm_dialog("rule-delete-" ~ rule.id, "Delete this rule?", "Delete rule",
                                "/rules/" ~ rule.id ~ "/delete") -%}
-          {{ rule.a_desc }} and {{ rule.b_desc }} trips will no longer be tagged {{ rule.category }} by this rule.
+          Side A: {{ rule.a_desc }}. Side B: {{ rule.b_desc }}. Category: {{ rule.category | capitalize }}.
         {%- endcall %}
       </td>
     </tr>

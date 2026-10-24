@@ -1627,6 +1627,8 @@ details.add-manual .route-mode-option { flex-direction: row; align-items: center
    Workers table) end in a data column, not an action column, and a
    structural last-child selector would reach those too. */
 .settings-table-actions { text-align: right; }
+/* Text alignment inherits into a confirmation dialog opened from the cell. */
+.settings-table-actions .app-dialog { text-align: left; }
 .settings-page .settings-section {
   min-width: 0; margin: 0 0 var(--space-5); padding: var(--space-4) var(--space-5);
   border: 1px solid var(--border); border-radius: var(--radius-lg);
