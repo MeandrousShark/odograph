@@ -36,7 +36,10 @@
   <button class="control control-primary" type="submit">Apply</button>
 </form>
 
-<details class="add-manual" open>
+{# Closed while the ledger has rows to show; open when it is empty so the
+   form is the first thing offered. #}
+<div class="trip-page-disclosures">
+<details class="trip-page-disclosure trip-tools" {{ 'open' if not expenses }}>
   <summary>Add expense</summary>
   <form class="expense-form expense-add" data-expense-form
         data-expense-warning-vehicle="{{ (expense_conflict_labels | default(expense_conflict_labels_default))['vehicle'] }}"
@@ -87,6 +90,7 @@
     <button class="control control-primary" type="submit">Add</button>
   </form>
 </details>
+</div>
 
 {% if expenses %}
 <div class="summary-tiles">

@@ -421,7 +421,8 @@ def test_expenses_template_exposes_shared_presentation_surfaces():
     assert '<h2 id="expenses-page-title" class="page-title-heading">2026 vehicle expense ledger</h2>' in body
     assert '<nav class="year-nav" aria-label="Expenses year">' in body
     assert '<form class="filter-bar expenses-controls" method="get">' in body
-    assert '<details class="add-manual" open>' in body
+    assert '<div class="trip-page-disclosures">' in body
+    assert '<details class="trip-page-disclosure trip-tools" >' in body
     assert '<div class="summary-tiles">' in body
     assert '<div class="table-wrapper expenses-table-wrapper">' in body
 
@@ -553,3 +554,23 @@ def test_base_dialog_handler_opens_and_cancels_the_expense_delete_dialog():
     assert "[data-expense-delete-open]" in handler
     assert "trigger.dataset.expenseDeleteOpen" in handler
     assert "[data-expense-delete-cancel]" in handler
+
+
+def test_add_expense_disclosure_is_closed_with_a_ledger_and_open_when_empty():
+    with_ledger = _render_expenses_page([LEDGER_EXPENSE])
+    empty = _render_expenses_page([])
+
+    disclosure = '<details class="trip-page-disclosure trip-tools" {}>\n  <summary>Add expense</summary>'
+    assert disclosure.format("") in with_ledger
+    assert disclosure.format("open") not in with_ledger
+    assert disclosure.format("open") in empty
+    assert "No expenses recorded for these filters." in empty
+    for body in (with_ledger, empty):
+        add_form = body.split("<summary>Add expense</summary>", 1)[1].split("</details>", 1)[0]
+        assert 'class="expense-form expense-add"' in add_form
+        assert 'hx-post="/expenses"' in add_form
+    assert "add-manual" not in with_ledger
+
+    stylesheet = (Path(__file__).parents[1] / "static/style.css").read_text()
+    assert ".expenses-page details.add-manual" not in stylesheet
+    assert ".expenses-page .trip-page-disclosure > .expense-add {" in stylesheet
