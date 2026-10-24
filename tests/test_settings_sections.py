@@ -133,11 +133,34 @@ def test_phone_jump_menu_is_a_closed_disclosure_of_plain_links():
     assert "open" not in opening
 
     css = (ROOT / "static/style.css").read_text()
-    desktop = css.split("@media (min-width: 761px) {\n  .settings-layout", 1)[1].split("\n}\n", 1)[0]
+    # The side list needs the body at its 1100px cap so the editable tables
+    # still fit beside it; narrower windows get the jump menu.
+    assert "body {" in css and "max-width: 1100px; margin: 0 auto;" in css
+    desktop = css.split("@media (min-width: 1101px) {\n  .settings-layout", 1)[1].split("\n}\n", 1)[0]
     assert ".settings-nav { position: sticky;" in desktop
     assert ".settings-nav-menu { display: none; }" in desktop
-    phone = css.split("@media (max-width: 760px) {\n  .admin-card-table,", 1)[1].split("\n}\n", 1)[0]
-    assert ".settings-nav-list { display: none; }" in phone
+    narrow = css.split("@media (max-width: 1100px) {\n", 1)[1].split("\n}\n", 1)[0]
+    assert narrow.strip() == ".settings-nav-list { display: none; }"
+
+
+def test_settings_headings_step_down_from_topic_to_item_to_h4():
+    css = (ROOT / "static/style.css").read_text()
+    assert ".settings-page .settings-section > h2 { margin: 0 0 var(--space-5); font-size: 1.15rem; }" in css
+    assert (
+        ".settings-page .settings-subsection > h3,\n"
+        ".settings-page .section-disclosure > summary > h3 { font-size: 1rem; font-weight: 600; }"
+    ) in css
+    assert ".settings-page .settings-subsection h4 { margin: var(--space-4) 0 var(--space-2); font-size: .9rem; font-weight: 600; }" in css
+
+
+def test_editable_settings_tables_fit_the_desktop_column_beside_the_nav():
+    # Body 1100px less 2 x 1.5rem padding, a 12rem nav, a 1.25rem gap and the
+    # card's 2 x 1.25rem padding and borders leave about 798px (49.8rem).
+    css = (ROOT / "static/style.css").read_text()
+    for section in ("rates", "vehicles", "odometer-readings", "odometer-intervals",
+                    "places", "rules", "overrides"):
+        rule = css.split(f".settings-table-scroll-{section} .settings-table {{ min-width: ", 1)[1]
+        assert float(rule.split("rem", 1)[0]) <= 49, section
 
 
 def test_inbound_anchors_keep_their_targets():

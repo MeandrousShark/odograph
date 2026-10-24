@@ -1604,10 +1604,10 @@ details.add-manual .route-mode-option { flex-direction: row; align-items: center
 .settings-table-scroll { max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
 .settings-table-scroll-device-fixes .settings-table { min-width: 34rem; }
 .settings-table-scroll-rates .settings-table { min-width: 42rem; }
-.settings-table-scroll-vehicles .settings-table { min-width: 58rem; }
+.settings-table-scroll-vehicles .settings-table { min-width: 46rem; }
 .settings-table-scroll-odometer-readings .settings-table { min-width: 38rem; }
 .settings-table-scroll-odometer-intervals .settings-table { min-width: 48rem; }
-.settings-table-scroll-places .settings-table { min-width: 50rem; }
+.settings-table-scroll-places .settings-table { min-width: 45rem; }
 .settings-table-scroll-rules .settings-table { min-width: 36rem; }
 .settings-table-scroll-overrides .settings-table { min-width: 48rem; }
 .settings-table-scroll-workers .settings-table { min-width: 65rem; }
@@ -1634,8 +1634,12 @@ details.add-manual .route-mode-option { flex-direction: row; align-items: center
   border: 1px solid var(--border); border-radius: var(--radius-lg);
   background: var(--surface); box-shadow: var(--shadow);
 }
-.settings-page .settings-section > h2,
-.settings-page .settings-subsection > h3 { margin-top: 0; }
+/* Topic h2 over item h3 over h4, overriding the small global h2. */
+.settings-page .settings-section > h2 { margin: 0 0 var(--space-5); font-size: 1.15rem; }
+.settings-page .settings-subsection > h3,
+.settings-page .section-disclosure > summary > h3 { font-size: 1rem; font-weight: 600; }
+.settings-page .settings-subsection > h3 { margin: 0 0 var(--space-3); }
+.settings-page .settings-subsection h4 { margin: var(--space-4) 0 var(--space-2); font-size: .9rem; font-weight: 600; }
 .settings-page .settings-subsection > p:last-child { margin-bottom: 0; }
 /* Settings groups its subsections inside one card per topic, so a
    subsection is separated by a rule rather than its own surface. */
@@ -1656,10 +1660,16 @@ details.add-manual .route-mode-option { flex-direction: row; align-items: center
 }
 .settings-nav a:hover { color: var(--accent-hover); background: var(--accent-soft); }
 .settings-nav-menu > ul { margin-top: var(--space-2); }
-@media (min-width: 761px) {
+/* The side list only appears once the body reaches its 1100px cap, where
+   the content column (about 798px) still fits the editable tables; below
+   that the jump menu leaves the full width to them. */
+@media (min-width: 1101px) {
   .settings-layout { grid-template-columns: 12rem minmax(0, 1fr); align-items: start; gap: var(--space-5); }
   .settings-nav { position: sticky; top: var(--space-4); }
   .settings-nav-menu { display: none; }
+}
+@media (max-width: 1100px) {
+  .settings-nav-list { display: none; }
 }
 .settings-page .settings-subsection > .muted,
 .settings-page .settings-section > .muted,
@@ -2823,7 +2833,6 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
   .settings-page .settings-subsection + .section-disclosure {
     margin-top: var(--space-4); padding-top: var(--space-4);
   }
-  .settings-nav-list { display: none; }
   .settings-page details.add-manual { margin-top: var(--space-3); }
   .settings-page details.add-manual form {
     gap: var(--space-2); padding: var(--space-3);
