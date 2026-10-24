@@ -1982,7 +1982,8 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 .report-page .report-table td:first-child { overflow-wrap: anywhere; }
 .report-page .report-month-table { min-width: 36rem; }
 .report-page .report-vehicle-table { min-width: 42rem; }
-.report-page .report-expense-table { min-width: 64rem; }
+/* Fits the section card at a 1280px viewport; narrower screens scroll. */
+.report-page .report-expense-table { min-width: 62rem; }
 .report-coverage ul { margin: 0; padding-left: 1.25rem; color: var(--fg-muted); }
 .report-expense-comparison > p { max-width: 65ch; }
 
