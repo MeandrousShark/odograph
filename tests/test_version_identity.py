@@ -138,8 +138,8 @@ def test_settings_diagnostics_render_all_runtime_versions():
         "detector_version": 2,
     })
 
-    diagnostics = body.split("<h2>Diagnostics</h2>", 1)[1].split(
-        "<h2>Device status</h2>", 1
+    diagnostics = body.split("<h3>Diagnostics</h3>", 1)[1].split(
+        '<h3 id="device-status-heading">Device status</h3>', 1
     )[0]
     assert "App version" in diagnostics
     assert "v0.6.0-rc.1" in diagnostics

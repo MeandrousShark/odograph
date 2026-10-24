@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "_add_place_form.html" import add_place_form %}
+{% from "_confirm_dialog.html" import confirm_dialog, confirm_trigger %}
 {% block title %}Settings: Odograph{% endblock %}
 {% block content %}
 
@@ -12,18 +13,47 @@
   </div>
 </div>
 
+{% set sections = [
+  ("account", "Account and storage", true),
+  ("preferences", "Preferences", true),
+  ("notifications", "Notifications", preferences is defined),
+  ("vehicles-and-rates", "Vehicles and rates", true),
+  ("places-and-rules", "Places and rules", true),
+  ("data", "Data", true),
+  ("system", "System", true),
+] %}
+<div class="settings-layout">
+{# Plain anchor links, so both the desktop list and the phone jump menu
+   work without JavaScript. #}
+<nav class="settings-nav" aria-label="Settings sections">
+  <details class="settings-nav-menu">
+    <summary>Jump to section</summary>
+    <ul>
+      {% for id, label, shown in sections if shown %}<li><a href="#{{ id }}">{{ label }}</a></li>{% endfor %}
+    </ul>
+  </details>
+  <ul class="settings-nav-list">
+    {% for id, label, shown in sections if shown %}<li><a href="#{{ id }}">{{ label }}</a></li>{% endfor %}
+  </ul>
+</nav>
+
+<div class="settings-sections">
+<section class="settings-section" id="account" aria-labelledby="account-section-heading">
+<h2 id="account-section-heading">Account and storage</h2>
+{% set tracking_link %}<p><a href="/settings/tracking">Tracking devices and credentials</a></p>{% endset %}
 {% if user.id %}
-<section class="settings-account-section" aria-labelledby="account-heading">
-<h2 id="account-heading">Account</h2>
+<section class="settings-subsection settings-account-section" aria-labelledby="account-heading">
+<h3 id="account-heading">Account</h3>
 <p><a href="/settings/account">Manage your avatar, login, and password in Account Settings</a>.</p>
+{{ tracking_link }}
 </section>
+{% else %}
+{{ tracking_link }}
 {% endif %}
 
-<p><a href="/settings/tracking">Tracking devices and credentials</a></p>
-
 {% if storage %}
-<section class="settings-section" id="storage-allowance" aria-labelledby="storage-heading">
-<h2 id="storage-heading">Storage allowance</h2>
+<section class="settings-subsection" id="storage-allowance" aria-labelledby="storage-heading">
+<h3 id="storage-heading">Storage allowance</h3>
 <p>This includes saved data and space reserved to turn received location fixes into trips. It differs from the space used by the database on disk.</p>
 {% if storage.account_limit_bytes is none %}<p>This account has no storage limit.</p>{% endif %}
 <div class="storage-allowance-grid">
@@ -56,63 +86,27 @@
 {% endif %}
 </section>
 {% endif %}
+</section>
 
+<section class="settings-section" id="preferences" aria-labelledby="preferences-section-heading">
+<h2 id="preferences-section-heading">Preferences</h2>
 {% if preferences is defined %}
-<section class="settings-section">
-<h2>Time zone and notifications</h2>
+<section class="settings-subsection settings-timezone" aria-labelledby="timezone-heading">
+<h3 id="timezone-heading">Time zone</h3>
 <p class="muted">Your time zone applies to dates, reports, manual entries, and reminder schedules.</p>
-<form class="settings-preferences-form" hx-post="/settings/preferences" hx-swap="none">
+<form class="settings-preferences-form" hx-post="/settings/preferences/timezone" hx-swap="none">
   <label class="settings-preference-field settings-timezone-field">Time zone
     <input name="display_timezone" value="{{ preferences.display_tz }}" required maxlength="128">
   </label>
-  <fieldset class="settings-preference-group">
-    <legend>Notification destinations</legend>
-    <div class="settings-preference-grid">
-      <label class="settings-preference-field">ntfy topic
-        <input name="ntfy_topic" value="{{ preferences.ntfy_topic }}" maxlength="64" pattern="[A-Za-z0-9_\-]{1,64}" title="1 to 64 letters, digits, hyphens or underscores">
-      </label>
-      <label class="settings-preference-field">Email recipients
-        <input name="email_to" value="{{ preferences.email_to }}" maxlength="512">
-      </label>
-    </div>
-    <p class="muted">Leave a destination blank to disable that delivery channel. Delivery also requires the instance's configured provider.</p>
-  </fieldset>
-  <fieldset class="settings-preference-group">
-    <legend>Reminders to receive</legend>
-    <div class="settings-preference-checks">
-      <label><input type="checkbox" name="odometer_reminder_requested" value="1"{% if preferences.odometer_reminder_requested %} checked{% endif %}> ntfy odometer reminders</label>
-      {% for key, label in (("email_weekly_nudge", "Weekly email reminders"), ("email_monthly_summary", "Monthly email summary"), ("email_filing_reminder", "Filing email reminder"), ("email_odometer_reminder", "Odometer email reminders")) %}
-      <label><input type="checkbox" name="{{ key }}" value="1"{% if preferences[key] %} checked{% endif %}> {{ label }}</label>
-      {% endfor %}
-    </div>
-  </fieldset>
-  <fieldset class="settings-preference-group">
-    <legend>Delivery schedule</legend>
-    <div class="settings-preference-grid">
-      <label class="settings-preference-field">Weekly reminder hour
-        <input type="number" name="nudge_weekly_hour" min="0" max="23" value="{{ preferences.nudge_weekly_hour }}">
-      </label>
-      <label class="settings-preference-field">Odometer reminder hour
-        <input type="number" name="odometer_reminder_hour" min="0" max="23" value="{{ preferences.odometer_reminder_hour }}">
-      </label>
-      <label class="settings-preference-field">Email delivery hour
-        <input type="number" name="email_digest_hour" min="0" max="23" value="{{ preferences.email_digest_hour }}">
-      </label>
-      <label class="settings-preference-field">Filing reminder month and day
-        <input name="email_filing_reminder_mmdd" value="{{ preferences.email_filing_reminder_mmdd }}" pattern="[0-9]{2}-[0-9]{2}" maxlength="5">
-      </label>
-    </div>
-    <p class="muted">Hours use your time zone, from 0 (midnight) to 23. Enter the filing date as MM-DD.</p>
-  </fieldset>
   <div class="settings-preference-actions">
-    <button type="submit" class="control control-primary">Save preferences</button>
+    <button type="submit" class="control control-primary">Save time zone</button>
   </div>
 </form>
 </section>
 {% endif %}
 
-<section class="settings-section settings-appearance">
-<h2>Appearance</h2>
+<section class="settings-subsection settings-appearance" aria-labelledby="appearance-heading">
+<h3 id="appearance-heading">Appearance</h3>
 <p class="muted">Follows your device's light/dark setting unless overridden here.
   Applies immediately and is remembered only in this browser.</p>
 
@@ -193,17 +187,70 @@
 })();
 </script>
 </section>
+</section>
 
-<section class="settings-section settings-rates">
-<h2>Mileage rates</h2>
+{% if preferences is defined %}
+<section class="settings-section" id="notifications" aria-labelledby="notifications-section-heading">
+<h2 id="notifications-section-heading">Notifications</h2>
+<form class="settings-preferences-form" hx-post="/settings/preferences/notifications" hx-swap="none">
+  <fieldset class="settings-preference-group">
+    <legend>Notification destinations</legend>
+    <div class="settings-preference-grid">
+      <label class="settings-preference-field">ntfy topic
+        <input name="ntfy_topic" value="{{ preferences.ntfy_topic }}" maxlength="64" pattern="[A-Za-z0-9_\-]{1,64}" title="1 to 64 letters, digits, hyphens or underscores">
+      </label>
+      <label class="settings-preference-field">Email recipients
+        <input name="email_to" value="{{ preferences.email_to }}" maxlength="512">
+      </label>
+    </div>
+    <p class="muted">Leave a destination blank to disable that delivery channel. Delivery also requires the instance's configured provider.</p>
+  </fieldset>
+  <fieldset class="settings-preference-group">
+    <legend>Reminders to receive</legend>
+    <div class="settings-preference-checks">
+      <label><input type="checkbox" name="odometer_reminder_requested" value="1"{% if preferences.odometer_reminder_requested %} checked{% endif %}> ntfy odometer reminders</label>
+      {% for key, label in (("email_weekly_nudge", "Weekly email reminders"), ("email_monthly_summary", "Monthly email summary"), ("email_filing_reminder", "Filing email reminder"), ("email_odometer_reminder", "Odometer email reminders")) %}
+      <label><input type="checkbox" name="{{ key }}" value="1"{% if preferences[key] %} checked{% endif %}> {{ label }}</label>
+      {% endfor %}
+    </div>
+  </fieldset>
+  <fieldset class="settings-preference-group">
+    <legend>Delivery schedule</legend>
+    <div class="settings-preference-grid">
+      <label class="settings-preference-field">Weekly reminder hour
+        <input type="number" name="nudge_weekly_hour" min="0" max="23" value="{{ preferences.nudge_weekly_hour }}">
+      </label>
+      <label class="settings-preference-field">Odometer reminder hour
+        <input type="number" name="odometer_reminder_hour" min="0" max="23" value="{{ preferences.odometer_reminder_hour }}">
+      </label>
+      <label class="settings-preference-field">Email delivery hour
+        <input type="number" name="email_digest_hour" min="0" max="23" value="{{ preferences.email_digest_hour }}">
+      </label>
+      <label class="settings-preference-field">Filing reminder month and day
+        <input name="email_filing_reminder_mmdd" value="{{ preferences.email_filing_reminder_mmdd }}" pattern="[0-9]{2}-[0-9]{2}" maxlength="5">
+      </label>
+    </div>
+    <p class="muted">Hours use your time zone, from 0 (midnight) to 23. Enter the filing date as MM-DD.</p>
+  </fieldset>
+  <div class="settings-preference-actions">
+    <button type="submit" class="control control-primary">Save notifications</button>
+  </div>
+</form>
+</section>
+{% endif %}
+
+<section class="settings-section" id="vehicles-and-rates" aria-labelledby="vehicles-and-rates-section-heading">
+<h2 id="vehicles-and-rates-section-heading">Vehicles and rates</h2>
+<section class="settings-subsection settings-rates" aria-labelledby="rates-heading">
+<h3 id="rates-heading">Mileage rates</h3>
 <p class="muted">Your saved IRS mileage rates are used for deduction estimates
   on trips and reports. Changes here apply to your ledger.</p>
 
 {% include "_rates_table.html" %}
 </section>
 
-<section class="settings-section settings-vehicles">
-<h2>Vehicles</h2>
+<section class="settings-subsection settings-vehicles" aria-labelledby="vehicles-heading">
+<h3 id="vehicles-heading">Vehicles</h3>
 <p class="muted">Trips can be assigned to a vehicle so the deduction can be broken
   out per vehicle on the annual report. Deactivating a vehicle removes it from the
   picker for new trip assignments but leaves it (and its name) on trips already
@@ -221,8 +268,8 @@
 </p>
 </section>
 
-<section class="settings-section settings-odometer">
-<h2>Odometer readings</h2>
+<section class="settings-subsection settings-odometer" aria-labelledby="odometer-heading">
+<h3 id="odometer-heading">Odometer readings</h3>
 <p class="muted">Log a dashboard odometer value now and then to reconcile it against GPS-
   detected distance. This catches driving the tracker missed (dead zones, app not
   running) and supplies the total-miles figure the actual-expense comparison needs.
@@ -230,9 +277,12 @@
 
 {% include "_odometer_table.html" %}
 </section>
+</section>
 
-<section class="settings-section settings-places">
-<h2>Places</h2>
+<section class="settings-section" id="places-and-rules" aria-labelledby="places-and-rules-section-heading">
+<h2 id="places-and-rules-section-heading">Places and rules</h2>
+<section class="settings-subsection settings-places" aria-labelledby="places-heading">
+<h3 id="places-heading">Places</h3>
 <p class="muted">Named locations used to auto-tag trips. Radius is how close (in
   meters) a trip's start/end must be to count as "at" this place.</p>
 
@@ -257,9 +307,11 @@
       <td class="num"><input type="number" name="radius_m" value="{{ place.radius_m | round(0) }}" min="1" style="width:4.5rem"></td>
       <td class="settings-table-actions">
         <button type="button" class="control control-secondary" hx-post="/places/{{ place.id }}/update" hx-include="closest tr">Save</button>
-        <button type="button" class="danger" title="Delete place"
-                hx-post="/places/{{ place.id }}/delete"
-                hx-confirm="Delete place '{{ place.name }}'? Trips referencing it will show coordinates instead.">Delete</button>
+        {{ confirm_trigger("place-delete-" ~ place.id, "Delete", "Delete place") }}
+        {% call confirm_dialog("place-delete-" ~ place.id, "Delete place '" ~ place.name ~ "'?", "Delete place",
+                               "/places/" ~ place.id ~ "/delete") -%}
+          Trips referencing it will show coordinates instead.
+        {%- endcall %}
       </td>
     </tr>
     {% endfor %}
@@ -288,8 +340,8 @@ document.addEventListener('click', function (event) {
 </script>
 </section>
 
-<section class="settings-section settings-rules">
-<h2>Auto-tag rules</h2>
+<section class="settings-subsection settings-rules" aria-labelledby="rules-heading">
+<h3 id="rules-heading">Auto-tag rules</h3>
 <p class="muted">Rules match a trip's start/end locations to auto-set a category
   when neither side has been tagged by hand. Commuting between home and a regular
   workplace is generally not tax-deductible per IRS guidance. That's why the
@@ -305,9 +357,11 @@ document.addEventListener('click', function (event) {
       <td>{{ rule.b_desc }}</td>
       <td>{{ rule.category | capitalize }}</td>
       <td class="settings-table-actions">
-        <button type="button" class="danger" title="Delete rule"
-                hx-post="/rules/{{ rule.id }}/delete"
-                hx-confirm="Delete this rule?">Delete</button>
+        {{ confirm_trigger("rule-delete-" ~ rule.id, "Delete", "Delete rule") }}
+        {% call confirm_dialog("rule-delete-" ~ rule.id, "Delete this rule?", "Delete rule",
+                               "/rules/" ~ rule.id ~ "/delete") -%}
+          {{ rule.a_desc }} and {{ rule.b_desc }} trips will no longer be tagged {{ rule.category }} by this rule.
+        {%- endcall %}
       </td>
     </tr>
     {% endfor %}
@@ -355,7 +409,7 @@ document.addEventListener('click', function (event) {
 </section>
 
 <details class="section-disclosure" id="manual-trip-edits">
-  <summary><h2>Manual trip edits ({{ boundary_overrides | length }})</h2></summary>
+  <summary><h3>Manual trip edits ({{ boundary_overrides | length }})</h3></summary>
   <p class="muted">Undo a merge, split, or deletion you made. These are
     reapplied whenever trips are re-detected.</p>
 
@@ -377,11 +431,19 @@ document.addEventListener('click', function (event) {
         </td>
         <td>{{ o.created_at | local_dt }}</td>
         <td class="settings-table-actions">
-          <button type="button" class="danger" title="{{ 'Restore deleted trip' if o.kind == 'discard' else 'Undo this override' }}"
-                  hx-post="/settings/boundary_overrides/{{ o.id }}/delete"
-                  hx-confirm="{% if o.kind == 'discard' %}Restore this deleted trip? Its stored location data will be reprocessed.{% else %}Undo this merge/split? The affected trips will be re-detected.{% endif %}">
-            {{ 'Restore' if o.kind == 'discard' else 'Undo' }}
-          </button>
+          {% if o.kind == 'discard' %}
+          {{ confirm_trigger("boundary-override-confirm-" ~ o.id, "Restore", "Restore deleted trip") }}
+          {% call confirm_dialog("boundary-override-confirm-" ~ o.id, "Restore this deleted trip?", "Restore trip",
+                                 "/settings/boundary_overrides/" ~ o.id ~ "/delete") -%}
+            Its stored location data will be reprocessed.
+          {%- endcall %}
+          {% else %}
+          {{ confirm_trigger("boundary-override-confirm-" ~ o.id, "Undo", "Undo this override") }}
+          {% call confirm_dialog("boundary-override-confirm-" ~ o.id, "Undo this merge/split?", "Undo edit",
+                                 "/settings/boundary_overrides/" ~ o.id ~ "/delete") -%}
+            The affected trips will be re-detected.
+          {%- endcall %}
+          {% endif %}
         </td>
       </tr>
       {% endfor %}
@@ -419,9 +481,10 @@ document.addEventListener('click', function (event) {
   });
 })();
 </script>
+</section>
 
-<section class="settings-section settings-data">
-<h2>Data export / import</h2>
+<section class="settings-section settings-data" id="data" aria-labelledby="data-section-heading">
+<h2 id="data-section-heading">Data</h2>
 <p class="muted">Export your ledger as one JSON file: vehicles, places, auto-tag
   rules, mileage rates, trips, expenses, odometer readings, time zone, and
   default-vehicle preference. It excludes route geometry, raw location points,
@@ -439,10 +502,12 @@ document.addEventListener('click', function (event) {
 </form>
 </section>
 
+<section class="settings-section" id="system" aria-labelledby="system-section-heading">
+<h2 id="system-section-heading">System</h2>
 {% if user.is_admin %}
-<section class="settings-section settings-diagnostics">
+<section class="settings-subsection settings-diagnostics">
 <details class="section-disclosure" id="diagnostics">
-  <summary><h2>Diagnostics</h2></summary>
+  <summary><h3>Diagnostics</h3></summary>
 
   {% if diagnostics is defined %}
   <dl class="diagnostics-list">
@@ -454,7 +519,7 @@ document.addEventListener('click', function (event) {
 
   {% if diagnostics_report is defined and diagnostics_report %}
   {% set report = diagnostics_report %}
-  <h3>Database</h3>
+  <h4>Database</h4>
   <dl class="diagnostics-list">
     <div><dt>Connectivity</dt>
       <dd>{{ "ok" if report.database.ok else "FAILED (" ~ report.database.error_type ~ ")" }}</dd></div>
@@ -463,7 +528,7 @@ document.addEventListener('click', function (event) {
     {% endfor %}
   </dl>
 
-  <h3>Migrations</h3>
+  <h4>Migrations</h4>
   <p class="muted">Applied vs. the migrations shipped in this image.</p>
   <dl class="diagnostics-list">
     <div><dt>Status</dt><dd>{{ report.migrations.status }}</dd></div>
@@ -473,7 +538,7 @@ document.addEventListener('click', function (event) {
   </dl>
 
   {% if report.storage %}
-  <h3>Instance logical grants</h3>
+  <h4>Instance logical grants</h4>
   {% if report.storage.ok %}
   <dl class="diagnostics-list">
     {% for key, label in (("instance_budget_bytes", "Instance budget"), ("instance_reserve_bytes", "Unallocated reserve"), ("total_grants_bytes", "Funded account allowances")) %}
@@ -486,7 +551,7 @@ document.addEventListener('click', function (event) {
   {% else %}<p>Grant status unavailable ({{ report.storage.error_type }}).</p>{% endif %}
   {% endif %}
 
-  <h3>Workers</h3>
+  <h4>Workers</h4>
   <p class="muted">State lives in this process's memory only and resets on every restart;
     timestamps below are since process start, not since the worker was first enabled.</p>
   <div class="settings-table-scroll settings-table-scroll-workers">
@@ -526,7 +591,7 @@ document.addEventListener('click', function (event) {
   </ul>
   {% endfor %}
 
-  <h3>Configuration presence</h3>
+  <h4>Configuration presence</h4>
   <p class="muted">Whether a setting is present, never its value.</p>
   <dl class="diagnostics-list">
     {% for key, value in report.config_presence.items() | sort %}
@@ -534,7 +599,7 @@ document.addEventListener('click', function (event) {
     {% endfor %}
   </dl>
 
-  <h3>Connectivity</h3>
+  <h4>Connectivity</h4>
   <p class="muted">OSRM, the geocoder, ntfy, and SMTP are only probed when you click below;
     never automatically, so an outage here never becomes background traffic against a
     third-party service.</p>
@@ -550,8 +615,8 @@ document.addEventListener('click', function (event) {
 </section>
 {% endif %}
 
-<section class="settings-section">
-  <h2>Device status</h2>
+<section class="settings-subsection settings-device-status" aria-labelledby="device-status-heading">
+  <h3 id="device-status-heading">Device status</h3>
   <p class="muted">Newest location fix received from each device that has posted to
     <code>/ingest</code>, and how many it has sent in total. This is the fastest way to tell
     whether a phone is actually reaching this instance. No coordinates are shown here.</p>
@@ -576,6 +641,9 @@ document.addEventListener('click', function (event) {
   <p class="muted">No location fixes received yet.</p>
   {% endif %}
 </section>
+</section>
+</div>
+</div>
 
 </div>
 {% endblock %}

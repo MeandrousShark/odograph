@@ -1514,7 +1514,6 @@ details.add-manual .route-mode-option { flex-direction: row; align-items: center
 .expense-live-warning { color: var(--danger); font-size: .75rem; line-height: 1.3; }
 .expense-editor-field .expense-live-warning { margin: 0; }
 .expense-add .expense-live-warning { flex: 1 1 100%; margin: -.25rem 0 0; }
-.danger { color: var(--danger); }
 .trip-delete-trigger {
   min-height: var(--control-height); padding: 0 var(--space-3); white-space: nowrap;
   color: var(--bg); background: var(--danger); border: 1px solid var(--danger);
@@ -1628,16 +1627,39 @@ details.add-manual .route-mode-option { flex-direction: row; align-items: center
    Workers table) end in a data column, not an action column, and a
    structural last-child selector would reach those too. */
 .settings-table-actions { text-align: right; }
-.settings-page .settings-account-section,
-.settings-page .settings-section,
-.settings-page > .section-disclosure {
+.settings-page .settings-section {
   min-width: 0; margin: 0 0 var(--space-5); padding: var(--space-4) var(--space-5);
   border: 1px solid var(--border); border-radius: var(--radius-lg);
   background: var(--surface); box-shadow: var(--shadow);
 }
-.settings-page .settings-account-section > h2,
-.settings-page .settings-section > h2 { margin-top: 0; }
-.settings-page .settings-account-section p:last-child { margin-bottom: 0; }
+.settings-page .settings-section > h2,
+.settings-page .settings-subsection > h3 { margin-top: 0; }
+.settings-page .settings-subsection > p:last-child { margin-bottom: 0; }
+/* Settings groups its subsections inside one card per topic, so a
+   subsection is separated by a rule rather than its own surface. */
+.settings-page .settings-subsection { min-width: 0; }
+.settings-page .settings-subsection + .settings-subsection,
+.settings-page .settings-subsection + .section-disclosure {
+  margin-top: var(--space-5); padding-top: var(--space-5); border-top: 1px solid var(--border);
+}
+.settings-page .settings-preferences-form > .settings-preference-group:first-child {
+  padding-top: 0; border-top: 0;
+}
+.settings-layout { display: grid; gap: var(--space-4); min-width: 0; }
+.settings-sections { min-width: 0; }
+.settings-nav ul { margin: 0; padding: 0; list-style: none; }
+.settings-nav a {
+  display: flex; align-items: center; min-height: var(--control-height);
+  padding: 0 var(--space-3); border-radius: var(--radius-sm); color: var(--fg); text-decoration: none;
+}
+.settings-nav a:hover { color: var(--accent-hover); background: var(--accent-soft); }
+.settings-nav-menu > ul { margin-top: var(--space-2); }
+@media (min-width: 761px) {
+  .settings-layout { grid-template-columns: 12rem minmax(0, 1fr); align-items: start; gap: var(--space-5); }
+  .settings-nav { position: sticky; top: var(--space-4); }
+  .settings-nav-menu { display: none; }
+}
+.settings-page .settings-subsection > .muted,
 .settings-page .settings-section > .muted,
 .settings-page #rates-table > .muted { max-width: 72ch; }
 .settings-page .settings-table-scroll { margin-top: var(--space-4); }
@@ -1647,14 +1669,16 @@ details.add-manual .route-mode-option { flex-direction: row; align-items: center
 .settings-page .settings-table select { max-width: 100%; }
 .settings-page details.add-manual { margin: var(--space-4) 0 0; }
 .settings-page details.add-manual > summary,
-.settings-page .section-disclosure > summary {
+.settings-page .section-disclosure > summary,
+.settings-nav-menu > summary {
   display: list-item; list-style-position: inside; width: fit-content; max-width: 100%;
   min-height: var(--control-height); padding: 0 var(--space-3); border: 1px solid var(--control-border);
   border-radius: var(--radius-sm); background: var(--control-bg); color: var(--control-fg);
   box-shadow: var(--control-shadow);
 }
 .settings-page details.add-manual > summary:hover,
-.settings-page .section-disclosure > summary:hover {
+.settings-page .section-disclosure > summary:hover,
+.settings-nav-menu > summary:hover {
   border-color: var(--accent-hover); background: var(--accent-soft);
 }
 .settings-page details.add-manual[open] > summary { margin-bottom: var(--space-3); }
@@ -1910,19 +1934,19 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
   box-shadow: var(--control-shadow);
 }
 .advanced-tools[open] > summary { margin-bottom: var(--space-3); }
-/* For a top-level page section that happens to collapse -- unlike
+/* For a Settings subsection that happens to collapse -- unlike
    .advanced-tools (a control-styled disclosure nested inside a section),
-   this reads as a plain <h2> sibling in the document outline. The <h2> in
+   this reads as a plain <h3> sibling in the document outline. The <h3> in
    the summary carries its own font-size/weight/color, so the margin here
-   stands in for that h2's usual top/bottom margin; the marker/triangle is
+   stands in for that h3's usual top/bottom margin; the marker/triangle is
    left as the browser default, same as every other <details> in this app.
-   The h2's `display: inline` is load-bearing, not a leftover: a block-level
+   The h3's `display: inline` is load-bearing, not a leftover: a block-level
    child of a `display: list-item` summary pushes the marker onto its own
    line above the heading text, so without it the triangle renders orphaned
    on its own row instead of beside "Manual trip edits". */
 .section-disclosure { margin: 1.5rem 0 .25rem; }
 .section-disclosure > summary { cursor: pointer; }
-.section-disclosure > summary > h2 { display: inline; margin: 0; }
+.section-disclosure > summary > h3 { display: inline; margin: 0; }
 .place-naming { margin: .75rem 0; font-size: .9rem; }
 .place-naming p { margin: .35rem 0; }
 /* Advanced trip tools: one row of tool buttons above one shared panel area.
@@ -2790,18 +2814,22 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
   .settings-page .settings-preference-actions button { width: 100%; }
   /* Settings keeps its explanatory copy visible at phone widths because the
      descriptions carry safety and data-retention context for each control. */
-  .settings-page .settings-account-section,
-  .settings-page .settings-section,
-  .settings-page > .section-disclosure {
+  .settings-page .settings-section {
     margin-bottom: var(--space-3); padding: var(--space-3);
   }
+  .settings-page .settings-subsection + .settings-subsection,
+  .settings-page .settings-subsection + .section-disclosure {
+    margin-top: var(--space-4); padding-top: var(--space-4);
+  }
+  .settings-nav-list { display: none; }
   .settings-page details.add-manual { margin-top: var(--space-3); }
   .settings-page details.add-manual form {
     gap: var(--space-2); padding: var(--space-3);
   }
   .settings-page details.add-manual fieldset { width: 100%; }
   .settings-page details.add-manual > summary,
-  .settings-page .section-disclosure > summary {
+  .settings-page .section-disclosure > summary,
+  .settings-nav-menu > summary {
     width: 100%; white-space: normal; text-align: left;
   }
   .settings-page .settings-appearance .theme-picker {

@@ -264,7 +264,7 @@ def test_settings_workers_note_lists_deferred_detector_devices_for_admins_only(m
         return response.json()['body']
     body = asyncio.run(run())
     if is_admin and deferred:
-        assert '<h3>Workers</h3>' in body
+        assert '<h4>Workers</h4>' in body
         assert 'Detector: 2 devices' in body
         assert 'exceeds <code>DETECTOR_TURN_MAX_POINTS</code>' in body
         assert '<code>python -m app.reprocess_detector --account ID</code>' in body
@@ -272,4 +272,4 @@ def test_settings_workers_note_lists_deferred_detector_devices_for_admins_only(m
     else:
         assert 'reprocess_detector' not in body and 'deferred because' not in body
     if not is_admin:
-        assert '<h3>Workers</h3>' not in body
+        assert '<h4>Workers</h4>' not in body

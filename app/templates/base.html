@@ -220,16 +220,17 @@
     // Destructive actions use in-page native dialogs instead of the browser's
     // confirm prompt. Delegation keeps the same behavior for trip cards and
     // review cards inserted later by htmx, as well as the account avatar
-    // control and the expense ledger's delete controls. Native dialog handles
+    // control, the expense ledger's delete controls and the generic
+    // [data-dialog-open] confirmations on Settings. Native dialog handles
     // Escape; the one-shot close listener restores focus to the triggering
     // control for both Escape and explicit Cancel buttons.
     document.addEventListener("click", function (event) {
       var trigger = event.target.closest(
-        "[data-trip-delete-open], [data-avatar-remove-open], [data-expense-delete-open]"
+        "[data-trip-delete-open], [data-avatar-remove-open], [data-expense-delete-open], [data-dialog-open]"
       );
       if (trigger) {
         var dialogId = trigger.dataset.tripDeleteOpen || trigger.dataset.avatarRemoveOpen
-          || trigger.dataset.expenseDeleteOpen;
+          || trigger.dataset.expenseDeleteOpen || trigger.dataset.dialogOpen;
         var dialog = document.getElementById(dialogId);
         if (!dialog || typeof dialog.showModal !== "function") return;
         dialog.addEventListener("close", function () {
@@ -240,7 +241,7 @@
       }
 
       var cancel = event.target.closest(
-        "[data-trip-delete-cancel], [data-avatar-remove-cancel], [data-expense-delete-cancel]"
+        "[data-trip-delete-cancel], [data-avatar-remove-cancel], [data-expense-delete-cancel], [data-dialog-cancel]"
       );
       if (cancel) cancel.closest("dialog")?.close("cancel");
     });
