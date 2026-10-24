@@ -1,5 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Expenses: Odograph{% endblock %}
+{% block head %}
+  <script src="/static/expenses.js"></script>
+{% endblock %}
 {% block content %}
 
 <div class="page expenses-page">
@@ -236,57 +239,5 @@
 {% else %}
 <p class="empty">No expenses recorded for these filters.</p>
 {% endif %}
-
-<script nonce="{{ csp_nonce }}">
-function updateExpenseWarnings(form) {
-  const tripSelect = form.querySelector('[name="trip_id"]');
-  const vehicleSelect = form.querySelector('[name="vehicle_id"]');
-  const dateInput = form.querySelector('[name="incurred_on"]');
-  const option = tripSelect && tripSelect.options[tripSelect.selectedIndex];
-  const linkedTrip = option && option.value !== '';
-  const vehicleMismatch = linkedTrip && option.dataset.tripVehicleId !== vehicleSelect.value;
-  const dateMismatch = linkedTrip && option.dataset.tripDate !== dateInput.value;
-  const notMyVehicle = linkedTrip && option.dataset.tripExclusion === 'not_my_vehicle';
-  const activeWarnings = {
-    vehicle: vehicleMismatch,
-    date: dateMismatch,
-    'not-my-vehicle': notMyVehicle,
-  };
-  form.querySelectorAll('[data-expense-warning]').forEach(function (warning) {
-    const code = warning.dataset.expenseWarning;
-    warning.hidden = !activeWarnings[code];
-    if (activeWarnings[code]) {
-      const labelKey = code === 'not-my-vehicle' ? 'notMyVehicle' : code;
-      warning.textContent = form.dataset['expenseWarning' + labelKey[0].toUpperCase() + labelKey.slice(1)];
-    }
-  });
-}
-
-document.addEventListener('change', function (event) {
-  if (event.target.matches('[data-expense-treatment-select]')) {
-    const categorySelect = event.target;
-    const treatment = categorySelect.closest('form').querySelector('[name="treatment"]');
-    if (categorySelect.value === 'other') {
-      treatment.value = '';
-    } else {
-      treatment.value = (categorySelect.value === 'parking' || categorySelect.value === 'tolls')
-        ? 'fully_business' : 'business_use_allocated';
-    }
-  }
-  if (event.target.matches('[data-expense-form] [name="trip_id"], [data-expense-form] [name="vehicle_id"], [data-expense-form] [name="incurred_on"]')) {
-    updateExpenseWarnings(event.target.closest('[data-expense-form]'));
-  }
-});
-document.querySelectorAll('[data-expense-editor-toggle]').forEach(function (disclosure) {
-  const panel = document.getElementById(disclosure.dataset.expenseEditorToggle);
-  if (!panel) return;
-  const syncPanel = function () {
-    panel.hidden = !disclosure.open;
-  };
-  disclosure.addEventListener('toggle', syncPanel);
-  syncPanel();
-});
-document.querySelectorAll('[data-expense-form]').forEach(updateExpenseWarnings);
-</script>
 </div>
 {% endblock %}

@@ -339,8 +339,10 @@ def test_expense_form_clears_required_treatment_when_other_is_selected():
     )
     assert '<option value="" disabled>Choose treatment…</option>' in body
     assert '<option value="business_use_allocated" selected>Business-use allocated</option>' in body
-    assert "categorySelect.value === 'other'" in body
-    assert "treatment.value = '';" in body
+    # Clearing the treatment for "other" is proven against static/expenses.js
+    # in tests/js/expenses_page.test.js.
+    assert 'data-expense-treatment-select' in body
+    assert '<script src="/static/expenses.js"></script>' in body
 
 
 def test_expenses_page_renders_trip_link_and_conflict_warning():
@@ -476,11 +478,12 @@ def test_expense_editor_layout_and_live_warning_metadata_are_rendered():
     assert 'data-expense-warning="vehicle"' in body
     assert 'data-expense-warning="date"' in body
     assert 'data-expense-warning="not-my-vehicle"' in body
-    assert "updateExpenseWarnings(form)" in body
-    assert "option.dataset.tripVehicleId !== vehicleSelect.value" in body
-    assert "option.dataset.tripDate !== dateInput.value" in body
-    assert "option.dataset.tripExclusion === 'not_my_vehicle'" in body
-    assert "panel.hidden = !disclosure.open" in body
+    # The warning, treatment-default and editor-row behavior lives in
+    # static/expenses.js and is proven by tests/js/expenses_page.test.js; this
+    # guards the seam between it and the page.
+    assert '<script src="/static/expenses.js"></script>' in body
+    template = (Path(__file__).parents[1] / "app/templates/expenses.html").read_text()
+    assert template.count("<script") == 1
     assert ".expense-editor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));" in stylesheet
     assert ".expense-editor-notes { grid-column: 1 / -1; }" in stylesheet
     assert ".expense-editor-actions { display: flex; gap: var(--space-2); }" in stylesheet
