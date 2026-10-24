@@ -24,6 +24,6 @@
                      {% if lon_value is not none %}value="{{ lon_value }}"{% endif %}
                      {% if lat_lon_required %}required{% endif %} style="width:8rem"></label>
   <label>Radius (m) <input type="number" name="radius_m" value="{{ radius_default }}" min="1" style="width:5rem"></label>
-  <button type="submit">{{ submit_label }}</button>
+  <button type="submit" class="control control-secondary">{{ submit_label }}</button>
 </form>
 {%- endmacro %}
