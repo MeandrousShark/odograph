@@ -58,7 +58,7 @@
 {% include "_report_tables.html" %}
 
 {% if odometer_coverage %}
-<section class="report-coverage" aria-labelledby="report-coverage-heading">
+<section class="report-section report-coverage" aria-labelledby="report-coverage-heading">
   <h2 id="report-coverage-heading">Odometer coverage</h2>
   <ul>
     {% for line in odometer_coverage %}
@@ -71,7 +71,7 @@
 {% endif %}
 
 {% if expense_report.comparisons %}
-<section class="report-expense-comparison" aria-labelledby="report-expense-comparison-heading">
+<section class="report-section report-expense-comparison" aria-labelledby="report-expense-comparison-heading">
   <h2 id="report-expense-comparison-heading">Standard vs. actual expense estimate</h2>
 <p class="muted">Parking, tolls, and any other fully-business entries are added outside
   both methods. Shared operating expenses are multiplied by the vehicle's business-use

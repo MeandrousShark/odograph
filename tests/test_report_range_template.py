@@ -5,6 +5,7 @@ Same `make_templates`/`.render()` convention as `tests/test_expenses.py`.
 """
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -250,3 +251,66 @@ def test_report_filters_render_inside_the_shared_closed_disclosure():
 
     css = (Path(__file__).parents[1] / "static/style.css").read_text()
     assert ".report-page .trip-page-disclosure > summary {" in css
+
+
+def _comparison(**overrides):
+    from decimal import Decimal
+
+    from app.expenses import ExpenseComparison
+
+    values = dict(
+        vehicle_id=1, vehicle_name="Truck", business_m=MILE, denominator_m=2 * MILE,
+        denominator_source="gps", provisional=True, invalid_odometer=False,
+        business_pct=Decimal("0.5"), allocated_expenses=Decimal("10.00"),
+        fully_business_expenses=Decimal("2.00"), standard_total=Decimal("0.73"),
+        actual_total=Decimal("7.00"), difference=Decimal("6.27"), larger_estimate="actual",
+    )
+    values.update(overrides)
+    return ExpenseComparison(**values)
+
+
+def _coverage():
+    from app.odometer import VehicleCoverage
+
+    return VehicleCoverage(
+        vehicle_name="Truck", span_start=datetime(2026, 1, 1, tzinfo=TZ),
+        span_end=datetime(2026, 12, 31, tzinfo=TZ), coverage=0.9, gap_m=MILE,
+        fully_bracketed=True,
+    )
+
+
+def _full_annual(**overrides):
+    context = dict(
+        report=build_annual_report([_trip(1), _trip(2, "personal")], RATES, TZ, 2026),
+        odometer_coverage=[_coverage()],
+        expense_report=SimpleNamespace(comparisons=[_comparison()]),
+        user=USER, csrf="token", next_year_disabled=False,
+    )
+    context.update(overrides)
+    return _render("report.html", **context)
+
+
+def test_report_sections_are_single_cards_with_consistent_headings():
+    body = _full_annual()
+    sections = re.findall(r'<section class="report-section ([a-z-]+)"[^>]*>\s*<h2[^>]*>([^<]+)</h2>', body)
+    assert sections == [
+        ("report-month-section", "By month"),
+        ("report-vehicle-section", "By vehicle"),
+        ("report-coverage", "Odometer coverage"),
+        ("report-expense-comparison", "Standard vs. actual expense estimate"),
+    ]
+    assert body.count('<section class="report-section') == len(sections)
+    # Summary first, then the tables.
+    assert body.index('<div class="summary-tiles">') < body.index('<section class="report-section')
+    # Every table sits directly in a section card's scroll wrapper.
+    assert body.count("<table") == body.count('<div class="table-wrapper">') == 3
+
+    css = (Path(__file__).parents[1] / "static/style.css").read_text()
+    wrapper = css[css.index(".report-page .table-wrapper {"):]
+    wrapper = wrapper[:wrapper.index("}")]
+    assert "overscroll-behavior-inline" in wrapper
+    for surface in ("border", "box-shadow", "background"):
+        assert surface not in wrapper
+    assert ".report-page .report-section, .stats-page .stats-section {" in css
+    for removed in (".report-coverage {", ".report-expense-comparison {"):
+        assert removed not in css

@@ -2,6 +2,8 @@
      report_range.html (quarterly/custom range) so the two can't drift on
      markup, for the same rationale as format_rate_periods/caveat_lines being
      single-sourced in app/report.py. Expects `report` in context. -->
+<section class="report-section report-month-section">
+<h2>By month</h2>
 <div class="table-wrapper">
   <table class="report-table report-month-table">
     <thead>
@@ -20,8 +22,10 @@
     </tbody>
   </table>
 </div>
+</section>
 
 {% if report.by_vehicle %}
+<section class="report-section report-vehicle-section">
 <h2>By vehicle</h2>
 <div class="table-wrapper">
   <table class="report-table report-vehicle-table">
@@ -46,4 +50,5 @@
     </tbody>
   </table>
 </div>
+</section>
 {% endif %}
