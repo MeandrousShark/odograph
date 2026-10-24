@@ -25,6 +25,7 @@ TZ = ZoneInfo("UTC")
 
 FOLLOWS_RULES = {
     "account_security.html",
+    "expenses.html",
     "report.html",
     "report_range.html",
     "review.html",
@@ -33,7 +34,6 @@ FOLLOWS_RULES = {
 
 # Page -> the plan 0074 slice that converts its buttons, or "unassigned".
 NOT_YET_MIGRATED = {
-    "expenses.html": "C4",
     "settings.html": "C5",
     "tracking.html": "unassigned",
     "admin_accounts.html": "unassigned",
@@ -187,3 +187,23 @@ def test_report_and_stats_filter_submit_is_the_primary_control(page, label):
     parser.feed(source)
     assert parser.buttons, f"{page} has no buttons to check"
     assert f'<button class="control control-primary" type="submit">{label}</button>' in source
+
+
+def test_expenses_commits_with_primary_controls_and_deletes_with_a_destructive_one():
+    source = _source_with_includes("expenses.html")
+    parser = _ButtonParser()
+    parser.feed(source)
+    by_label = {}
+    for label in ("Apply", "Add", "Save"):
+        match = re.search(rf'<button class="([^"]*)" type="submit">{label}</button>', source)
+        assert match, f"expenses.html has no {label} submit button"
+        by_label[label] = set(match.group(1).split())
+    assert all(classes == {"control", "control-primary"} for classes in by_label.values()), by_label
+
+    destructive = [b for b in parser.buttons if "control-destructive" in b.get("class", "").split()]
+    triggers = [b for b in destructive if "data-expense-delete-open" in b]
+    confirms = [b for b in destructive if b.get("hx-post") == "/expenses/{{ expense.id }}/delete"]
+    assert len(triggers) == 1 and triggers[0]["aria-haspopup"] == "dialog"
+    assert len(confirms) == 1
+    cancels = [b for b in parser.buttons if "data-expense-delete-cancel" in b]
+    assert len(cancels) == 1 and "control-secondary" in cancels[0]["class"].split()
