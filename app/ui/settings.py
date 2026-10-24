@@ -133,6 +133,48 @@ async def _fetch_device_fixes(conn) -> list[dict]:
     return await cur.fetchall()
 
 
+_NOTIFICATION_ASSIGNMENTS = (
+    "ntfy_topic = %s, email_to = %s, nudge_weekly_hour = %s, odometer_reminder_requested = %s, "
+    "odometer_reminder_hour = %s, email_weekly_nudge = %s, email_monthly_summary = %s, "
+    "email_filing_reminder = %s, email_odometer_reminder = %s, email_digest_hour = %s, "
+    "email_filing_reminder_mmdd = %s"
+)
+
+
+def _valid_timezone(display_timezone: str) -> str:
+    timezone_name = display_timezone.strip()
+    try:
+        ZoneInfo(timezone_name)
+    except (ValueError, ZoneInfoNotFoundError):
+        raise HTTPException(status_code=400, detail="Invalid time zone")
+    return timezone_name
+
+
+def _valid_notifications(
+    ntfy_topic: str, email_to: str, nudge_weekly_hour: int, odometer_reminder_requested: str,
+    odometer_reminder_hour: int, email_weekly_nudge: str, email_monthly_summary: str,
+    email_filing_reminder: str, email_odometer_reminder: str, email_digest_hour: int,
+    email_filing_reminder_mmdd: str,
+) -> tuple:
+    """Values in `_NOTIFICATION_ASSIGNMENTS` order."""
+    try:
+        month, day = map(int, email_filing_reminder_mmdd.split("-"))
+        date(2000, month, day)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid reminder month and day")
+    if any(char in email_to or char in ntfy_topic for char in "\r\n"):
+        raise HTTPException(status_code=400, detail="Invalid notification destination")
+    ntfy_topic = ntfy_topic.strip()
+    if ntfy_topic and not is_valid_ntfy_topic(ntfy_topic):
+        raise HTTPException(status_code=400, detail=f"Invalid ntfy topic: {NTFY_TOPIC_HINT}")
+    return (
+        ntfy_topic, email_to.strip(), nudge_weekly_hour, odometer_reminder_requested == "1",
+        odometer_reminder_hour, email_weekly_nudge == "1", email_monthly_summary == "1",
+        email_filing_reminder == "1", email_odometer_reminder == "1", email_digest_hour,
+        f"{month:02d}-{day:02d}",
+    )
+
+
 def register(router: APIRouter) -> None:
         @router.get("/settings")
         async def settings_page(request: Request, user: dict = Depends(require_user)):
@@ -199,32 +241,67 @@ def register(router: APIRouter) -> None:
             email_filing_reminder_mmdd: str = Form("01-15", max_length=5),
             user: dict = Depends(require_user),
         ):
-            timezone_name = display_timezone.strip()
-            try:
-                ZoneInfo(timezone_name)
-            except (ValueError, ZoneInfoNotFoundError):
-                raise HTTPException(status_code=400, detail="Invalid time zone")
-            try:
-                month, day = map(int, email_filing_reminder_mmdd.split("-"))
-                date(2000, month, day)
-            except (ValueError, TypeError):
-                raise HTTPException(status_code=400, detail="Invalid reminder month and day")
-            if any(char in email_to or char in ntfy_topic for char in "\r\n"):
-                raise HTTPException(status_code=400, detail="Invalid notification destination")
-            ntfy_topic = ntfy_topic.strip()
-            if ntfy_topic and not is_valid_ntfy_topic(ntfy_topic):
-                raise HTTPException(status_code=400, detail=f"Invalid ntfy topic: {NTFY_TOPIC_HINT}")
+            timezone_name = _valid_timezone(display_timezone)
+            notifications = _valid_notifications(
+                ntfy_topic, email_to, nudge_weekly_hour, odometer_reminder_requested,
+                odometer_reminder_hour, email_weekly_nudge, email_monthly_summary,
+                email_filing_reminder, email_odometer_reminder, email_digest_hour,
+                email_filing_reminder_mmdd,
+            )
             async with request.state.account_pool.connection() as conn:
                 await conn.execute(
-                    "UPDATE account_settings SET display_tz = %s, ntfy_topic = %s, email_to = %s, "
-                    "nudge_weekly_hour = %s, odometer_reminder_requested = %s, odometer_reminder_hour = %s, "
-                    "email_weekly_nudge = %s, email_monthly_summary = %s, email_filing_reminder = %s, "
-                    "email_odometer_reminder = %s, email_digest_hour = %s, email_filing_reminder_mmdd = %s, "
+                    f"UPDATE account_settings SET display_tz = %s, {_NOTIFICATION_ASSIGNMENTS}, "
                     "updated_at = now() WHERE account_id = %s",
-                    (timezone_name, ntfy_topic, email_to.strip(), nudge_weekly_hour,
-                     odometer_reminder_requested == "1", odometer_reminder_hour,
-                     email_weekly_nudge == "1", email_monthly_summary == "1", email_filing_reminder == "1",
-                     email_odometer_reminder == "1", email_digest_hour, f"{month:02d}-{day:02d}", account_id(conn)),
+                    (timezone_name, *notifications, account_id(conn)),
+                )
+            request.state._capacity_mutation_committed = True
+            return _redirect_back(request)
+
+        # Settings shows time zone and notifications as separate forms, so each
+        # saves only its own columns; the combined route above stays for
+        # existing clients.
+        @router.post("/settings/preferences/timezone", dependencies=[Depends(require_csrf)])
+        async def update_timezone(
+            request: Request,
+            display_timezone: str = Form(..., max_length=128),
+            user: dict = Depends(require_user),
+        ):
+            timezone_name = _valid_timezone(display_timezone)
+            async with request.state.account_pool.connection() as conn:
+                await conn.execute(
+                    "UPDATE account_settings SET display_tz = %s, updated_at = now() WHERE account_id = %s",
+                    (timezone_name, account_id(conn)),
+                )
+            request.state._capacity_mutation_committed = True
+            return _redirect_back(request)
+
+        @router.post("/settings/preferences/notifications", dependencies=[Depends(require_csrf)])
+        async def update_notifications(
+            request: Request,
+            ntfy_topic: str = Form("", max_length=200),
+            email_to: str = Form("", max_length=512),
+            nudge_weekly_hour: int = Form(18, ge=0, le=23),
+            odometer_reminder_requested: str = Form(""),
+            odometer_reminder_hour: int = Form(9, ge=0, le=23),
+            email_weekly_nudge: str = Form(""),
+            email_monthly_summary: str = Form(""),
+            email_filing_reminder: str = Form(""),
+            email_odometer_reminder: str = Form(""),
+            email_digest_hour: int = Form(9, ge=0, le=23),
+            email_filing_reminder_mmdd: str = Form("01-15", max_length=5),
+            user: dict = Depends(require_user),
+        ):
+            notifications = _valid_notifications(
+                ntfy_topic, email_to, nudge_weekly_hour, odometer_reminder_requested,
+                odometer_reminder_hour, email_weekly_nudge, email_monthly_summary,
+                email_filing_reminder, email_odometer_reminder, email_digest_hour,
+                email_filing_reminder_mmdd,
+            )
+            async with request.state.account_pool.connection() as conn:
+                await conn.execute(
+                    f"UPDATE account_settings SET {_NOTIFICATION_ASSIGNMENTS}, "
+                    "updated_at = now() WHERE account_id = %s",
+                    (*notifications, account_id(conn)),
                 )
             request.state._capacity_mutation_committed = True
             return _redirect_back(request)
