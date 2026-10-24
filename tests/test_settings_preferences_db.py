@@ -85,11 +85,19 @@ async def _scenario():
             page = await client.get("/settings")
             headers = {"X-CSRF-Token": CSRF_RE.search(page.text).group(1)}
 
-            seeded = await client.post(
+            # The combined route the old single form posted to is gone.
+            combined = await client.post(
                 "/settings/preferences", headers=headers,
-                data={"display_timezone": "Pacific/Auckland", **SEEDED_NOTIFICATIONS},
+                data={"display_timezone": "UTC", **SEEDED_NOTIFICATIONS},
             )
-            assert seeded.status_code == 204
+            assert combined.status_code in (404, 405)
+
+            for url, data in (
+                ("/settings/preferences/timezone", {"display_timezone": "Pacific/Auckland"}),
+                ("/settings/preferences/notifications", SEEDED_NOTIFICATIONS),
+            ):
+                seeded = await client.post(url, headers=headers, data=data)
+                assert seeded.status_code == 204, url
             settings, auto_assign = await _settings(pool)
             assert str(settings.display_tz) == "Pacific/Auckland"
             assert _notifications(settings) == SEEDED_VALUES

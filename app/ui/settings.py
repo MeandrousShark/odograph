@@ -224,42 +224,6 @@ def register(router: APIRouter) -> None:
                 },
             )
 
-        @router.post("/settings/preferences", dependencies=[Depends(require_csrf)])
-        async def update_preferences(
-            request: Request,
-            display_timezone: str = Form(..., max_length=128),
-            ntfy_topic: str = Form("", max_length=200),
-            email_to: str = Form("", max_length=512),
-            nudge_weekly_hour: int = Form(18, ge=0, le=23),
-            odometer_reminder_requested: str = Form(""),
-            odometer_reminder_hour: int = Form(9, ge=0, le=23),
-            email_weekly_nudge: str = Form(""),
-            email_monthly_summary: str = Form(""),
-            email_filing_reminder: str = Form(""),
-            email_odometer_reminder: str = Form(""),
-            email_digest_hour: int = Form(9, ge=0, le=23),
-            email_filing_reminder_mmdd: str = Form("01-15", max_length=5),
-            user: dict = Depends(require_user),
-        ):
-            timezone_name = _valid_timezone(display_timezone)
-            notifications = _valid_notifications(
-                ntfy_topic, email_to, nudge_weekly_hour, odometer_reminder_requested,
-                odometer_reminder_hour, email_weekly_nudge, email_monthly_summary,
-                email_filing_reminder, email_odometer_reminder, email_digest_hour,
-                email_filing_reminder_mmdd,
-            )
-            async with request.state.account_pool.connection() as conn:
-                await conn.execute(
-                    f"UPDATE account_settings SET display_tz = %s, {_NOTIFICATION_ASSIGNMENTS}, "
-                    "updated_at = now() WHERE account_id = %s",
-                    (timezone_name, *notifications, account_id(conn)),
-                )
-            request.state._capacity_mutation_committed = True
-            return _redirect_back(request)
-
-        # Settings shows time zone and notifications as separate forms, so each
-        # saves only its own columns; the combined route above stays for
-        # existing clients.
         @router.post("/settings/preferences/timezone", dependencies=[Depends(require_csrf)])
         async def update_timezone(
             request: Request,
