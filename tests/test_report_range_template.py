@@ -229,3 +229,24 @@ def test_report_tables_use_local_horizontal_scroll_wrappers():
     css = (Path(__file__).parents[1] / "static/style.css").read_text()
     assert ".table-wrapper { overflow-x: auto; }" in css
     assert "th:first-child, td:first-child { padding-left: 0; }" in css
+
+
+def test_report_filters_render_inside_the_shared_closed_disclosure():
+    body = _render(
+        "report.html", report=build_annual_report([_trip(1)], RATES, TZ, 2026),
+        odometer_coverage=[], expense_report=SimpleNamespace(comparisons=[]),
+        user=USER, csrf="token", next_year_disabled=False,
+    )
+    start = body.index('<div class="trip-page-disclosures">')
+    end = body.index("</details>", start)
+    disclosure = body[start:end]
+    assert '<details class="trip-page-disclosure trip-tools">' in disclosure
+    assert "<summary>Filters: full year</summary>" in disclosure
+    assert 'class="filter-bar report-controls"' in disclosure
+    assert '/report/range?from=2026-04-01&to=2026-06-30' in disclosure
+    assert '<form class="date-range report-date-range" method="get" action="/report/range">' in disclosure
+    assert body.count("trip-page-disclosure trip-tools") == 1
+    assert "<details class=\"trip-page-disclosure trip-tools\" open" not in body
+
+    css = (Path(__file__).parents[1] / "static/style.css").read_text()
+    assert ".report-page .trip-page-disclosure > summary {" in css

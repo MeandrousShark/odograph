@@ -1953,11 +1953,7 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 /* Report pages keep their existing controls, calculations, and table markup
    under .report-page alongside the shared .page wrapper. */
 .report-page-actions { justify-content: flex-end; }
-.report-controls {
-  align-items: end; gap: var(--space-4); margin-bottom: var(--space-6);
-  padding: var(--space-3) var(--space-4); border: 1px solid var(--border);
-  border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow);
-}
+.report-controls { align-items: end; gap: var(--space-4); }
 .report-controls .report-quarter-field { min-width: 15rem; }
 .report-controls .report-date-range { flex: 1 1 24rem; justify-content: flex-end; }
 .report-controls .report-date-range button { flex: none; }
@@ -2081,7 +2077,7 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
      ("Registration / taxes") wraps rather than overflowing at 320px. */
   .summary-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
   .report-page-actions { width: 100%; justify-content: flex-start; }
-  .report-controls { gap: var(--space-3); padding: var(--space-3); }
+  .report-controls { gap: var(--space-3); }
   .report-controls .report-quarter-field,
   .report-controls .report-date-range { width: 100%; min-width: 0; }
   .report-controls .report-quarter-field .pills { width: 100%; }
@@ -2142,18 +2138,20 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 .table-scroll table { min-width: 40rem; }
 
 /* Stats uses a calm stack of contained surfaces so the charts and rankings
-   keep their own reading areas on wide screens and narrow screens alike. */
+   keep their own reading areas on wide screens and narrow screens alike.
+   Report shares its filter disclosure. */
 .stats-page-actions { justify-content: flex-end; }
-.stats-page .trip-page-disclosures {
+.stats-page .trip-page-disclosures, .report-page .trip-page-disclosures {
   margin-bottom: var(--space-5); padding: var(--space-3) var(--space-4);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--surface); box-shadow: var(--shadow);
 }
-.stats-page .trip-page-disclosure > summary {
+.stats-page .trip-page-disclosure > summary, .report-page .trip-page-disclosure > summary {
   position: static; width: fit-content; margin: 0; padding: var(--space-2) var(--space-3);
 }
-.stats-page .trip-page-disclosure > .filter-bar { margin: var(--space-3) 0 0; }
+.stats-page .trip-page-disclosure > .filter-bar,
+.report-page .trip-page-disclosure > .filter-bar { margin: var(--space-3) 0 0; }
 .stats-page .filter-bar label { min-width: 0; }
 .stats-page .filter-bar select { max-width: 100%; min-width: 0; }
 .stats-page > h2 { margin: 0 0 var(--space-4); font-size: 1.15rem; }
@@ -2605,9 +2603,10 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 
 @media (max-width: 760px) {
   .stats-page-actions { width: 100%; justify-content: flex-start; }
-  .stats-page .trip-page-disclosures { padding: var(--space-3); }
-  .stats-page .trip-page-disclosure > summary { width: 100%; }
-  .stats-page .trip-page-disclosure > .filter-bar { margin-top: var(--space-3); }
+  .stats-page .trip-page-disclosures, .report-page .trip-page-disclosures { padding: var(--space-3); }
+  .stats-page .trip-page-disclosure > summary, .report-page .trip-page-disclosure > summary { width: 100%; }
+  .stats-page .trip-page-disclosure > .filter-bar,
+  .report-page .trip-page-disclosure > .filter-bar { margin-top: var(--space-3); }
   .stats-page .stats-section { padding: var(--space-3); }
   .stats-page .stats-rankings { grid-template-columns: 1fr; gap: var(--space-3); }
   .stats-page .stats-ranking-card { padding: var(--space-3); }
