@@ -332,11 +332,13 @@ Vehicle assignment remains a separate choice on each trip.
 
 ### Personal preferences
 
-In **Settings > Time zone and notifications**, choose the timezone used for display,
-report boundaries, manual entries, and reminder schedules. Save your ntfy topic
-or email recipient, then choose which reminders to receive and their local
-hours. Delivery also requires the operator to configure the corresponding
-ntfy or SMTP transport. These saved preferences take effect without restarting
+In **Settings > Preferences**, choose the timezone used for display, report
+boundaries, manual entries, and reminder schedules, then select **Save time
+zone**. In **Settings > Notifications**, save your ntfy topic or email
+recipient, choose which reminders to receive and their local hours, then
+select **Save notifications**. Each form saves only its own settings.
+Delivery also requires the operator to configure the corresponding ntfy or
+SMTP transport. These saved preferences take effect without restarting
 the app; editing old environment values does not replace them.
 
 ## Recordkeeping
@@ -409,7 +411,7 @@ Use the output that matches the job:
 - **Trips Export, CSV or XLSX:** trips using the current archive filters.
 - **Report, Export XLSX:** the annual or selected-date-range report, including
   report tables and caveats.
-- **Settings, Data export / import, Download export:** a portable JSON bundle
+- **Settings, Data, Download export:** a portable JSON bundle
   containing vehicles, Places, rules, rates, trips, expenses, odometer
   readings, and settings. It excludes raw location points and route geometry.
   Export and import apply to your account only. Import requires a clean target

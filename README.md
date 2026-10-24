@@ -156,8 +156,9 @@ INITIAL_ADMIN_SIGNUP=0
 ```
 
 Use your own [IANA timezone name](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones).
-This sets the first-account suggestion. After setup, **Settings > Time zone and
-notifications** controls the saved timezone and notification preferences.
+This sets the first-account suggestion. After setup, **Settings > Preferences**
+controls the saved timezone and **Settings > Notifications** the notification
+preferences.
 
 That generated file is already a working local-login setup. All three required
 secrets are filled in and every optional integration is switched off. You only
