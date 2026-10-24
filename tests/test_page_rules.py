@@ -25,16 +25,16 @@ TZ = ZoneInfo("UTC")
 
 FOLLOWS_RULES = {
     "account_security.html",
+    "report.html",
     "report_range.html",
     "review.html",
+    "stats.html",
 }
 
 # Page -> the plan 0074 slice that converts its buttons, or "unassigned".
 NOT_YET_MIGRATED = {
-    "report.html": "C3",
     "expenses.html": "C4",
     "settings.html": "C5",
-    "stats.html": "unassigned",
     "tracking.html": "unassigned",
     "admin_accounts.html": "unassigned",
     "trip.html": "unassigned",
@@ -178,3 +178,12 @@ def test_not_yet_migrated_pages_still_break_the_rules(page):
         f"{page} follows the button rules now; move it from NOT_YET_MIGRATED "
         "to FOLLOWS_RULES"
     )
+
+
+@pytest.mark.parametrize("page, label", [("report.html", "View range"), ("stats.html", "Filter")])
+def test_report_and_stats_filter_submit_is_the_primary_control(page, label):
+    source = _source_with_includes(page)
+    parser = _ButtonParser()
+    parser.feed(source)
+    assert parser.buttons, f"{page} has no buttons to check"
+    assert f'<button class="control control-primary" type="submit">{label}</button>' in source

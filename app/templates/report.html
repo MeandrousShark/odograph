@@ -25,21 +25,28 @@
     </div>
   </div>
 
-<div class="filter-bar report-controls">
-  {% set quarter_pills = [] %}
-  {% for q in range(1, 5) %}
-  {% set qstart, qend = quarter_bounds(report.year, q) %}
-  {% set _ = quarter_pills.append({
-    'href': ('/report/range?from=' ~ qstart.isoformat() ~ '&to=' ~ qend.isoformat()) | safe,
-    'text': 'Q' ~ q,
-  }) %}
-  {% endfor %}
-  {{ field_pills('Quarterly / custom range', quarter_pills, 'report-quarter-field') }}
-  <form class="date-range report-date-range" method="get" action="/report/range">
-    <label>From <input type="date" name="from" required></label>
-    <label>To <input type="date" name="to" required></label>
-    <button type="submit">View range</button>
-  </form>
+{# The annual page applies no filter of its own (quarters and custom ranges
+   open the range report), so the closed summary names the full-year scope. #}
+<div class="trip-page-disclosures">
+<details class="trip-page-disclosure trip-tools">
+  <summary>Filters: full year</summary>
+  <div class="filter-bar report-controls">
+    {% set quarter_pills = [] %}
+    {% for q in range(1, 5) %}
+    {% set qstart, qend = quarter_bounds(report.year, q) %}
+    {% set _ = quarter_pills.append({
+      'href': ('/report/range?from=' ~ qstart.isoformat() ~ '&to=' ~ qend.isoformat()) | safe,
+      'text': 'Q' ~ q,
+    }) %}
+    {% endfor %}
+    {{ field_pills('Quarterly / custom range', quarter_pills, 'report-quarter-field') }}
+    <form class="date-range report-date-range" method="get" action="/report/range">
+      <label>From <input type="date" name="from" required></label>
+      <label>To <input type="date" name="to" required></label>
+      <button class="control control-primary" type="submit">View range</button>
+    </form>
+  </div>
+</details>
 </div>
 
 {% if report.trip_count == 0 %}
@@ -51,7 +58,7 @@
 {% include "_report_tables.html" %}
 
 {% if odometer_coverage %}
-<section class="report-coverage" aria-labelledby="report-coverage-heading">
+<section class="report-section report-coverage" aria-labelledby="report-coverage-heading">
   <h2 id="report-coverage-heading">Odometer coverage</h2>
   <ul>
     {% for line in odometer_coverage %}
@@ -64,7 +71,7 @@
 {% endif %}
 
 {% if expense_report.comparisons %}
-<section class="report-expense-comparison" aria-labelledby="report-expense-comparison-heading">
+<section class="report-section report-expense-comparison" aria-labelledby="report-expense-comparison-heading">
   <h2 id="report-expense-comparison-heading">Standard vs. actual expense estimate</h2>
 <p class="muted">Parking, tolls, and any other fully-business entries are added outside
   both methods. Shared operating expenses are multiplied by the vehicle's business-use
@@ -103,17 +110,10 @@
   </tbody>
 </table>
 </div>
-
-<div class="report-caveats">
-  <strong>Review before filing:</strong>
-  <ul>
-    {% for line in comparison_caveat_lines(expense_report.comparisons) %}<li>{{ line }}</li>{% endfor %}
-  </ul>
-  <p>See <a href="https://www.irs.gov/publications/p463">IRS Publication 463</a> and
-    <a href="https://www.irs.gov/publications/p946">IRS Publication 946</a>.</p>
-</div>
 </section>
 {% endif %}
+
+{% with note_comparisons = expense_report.comparisons %}{% include "_report_notes.html" %}{% endwith %}
 
 </div>
 {% endblock %}

@@ -1946,18 +1946,11 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 .summary-tile > strong { font-size: 1.25rem; font-variant-numeric: tabular-nums; }
 .summary-tile > small { color: var(--fg-muted); font-size: .75rem; overflow-wrap: anywhere; }
 .summary-tile-total { padding-top: var(--space-2); border-top: 3px solid var(--accent-primary); }
-.report-caveats { border: 1px solid var(--warn); border-radius: 6px; padding: .5rem .75rem;
-                   margin: 1rem 0; font-size: .85rem; }
-.report-caveats ul { margin: .35rem 0 0; padding-left: 1.25rem; }
 
 /* Report pages keep their existing controls, calculations, and table markup
    under .report-page alongside the shared .page wrapper. */
 .report-page-actions { justify-content: flex-end; }
-.report-controls {
-  align-items: end; gap: var(--space-4); margin-bottom: var(--space-6);
-  padding: var(--space-3) var(--space-4); border: 1px solid var(--border);
-  border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow);
-}
+.report-controls { align-items: end; gap: var(--space-4); }
 .report-controls .report-quarter-field { min-width: 15rem; }
 .report-controls .report-date-range { flex: 1 1 24rem; justify-content: flex-end; }
 .report-controls .report-date-range button { flex: none; }
@@ -1970,18 +1963,17 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
   margin: 0 0 var(--space-4); padding: 0 var(--space-1);
   font-size: .85rem; font-variant-numeric: tabular-nums;
 }
-.report-page .report-caveats {
-  margin: var(--space-4) 0 var(--space-5); padding: var(--space-3) var(--space-4);
-  border-color: color-mix(in srgb, var(--warn) 65%, var(--border));
+.report-page .report-notes {
+  margin: 0 0 var(--space-5); padding: var(--space-3) var(--space-4); font-size: .85rem;
+  border: 1px solid color-mix(in srgb, var(--warn) 65%, var(--border));
   border-left: 3px solid var(--warn); border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--warn) 8%, var(--surface));
 }
-.report-page .report-caveats ul { margin: var(--space-2) 0 0; }
-.report-page .table-wrapper {
-  max-width: 100%; margin: 0 0 var(--space-5); padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border); border-radius: var(--radius-lg);
-  background: var(--surface); box-shadow: var(--shadow); overscroll-behavior-inline: contain;
-}
+.report-page .report-notes h2 { margin: 0; font-size: inherit; }
+.report-page .report-notes ul { margin: var(--space-2) 0 0; padding-left: 1.25rem; }
+/* Each report section is the one card (shared with .stats-section below), so
+   the wrapper inside it only scrolls. */
+.report-page .table-wrapper { max-width: 100%; overscroll-behavior-inline: contain; }
 .report-page .report-table { font-size: .88rem; }
 .report-page .report-table th { padding-top: var(--space-2); padding-bottom: var(--space-2); }
 .report-page .report-table td { padding-top: var(--space-3); padding-bottom: var(--space-3); }
@@ -1990,20 +1982,9 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 .report-page .report-table td:first-child { overflow-wrap: anywhere; }
 .report-page .report-month-table { min-width: 36rem; }
 .report-page .report-vehicle-table { min-width: 42rem; }
-.report-page .report-expense-table { min-width: 64rem; }
-.report-coverage {
-  margin: var(--space-5) 0; padding: var(--space-4);
-  border: 1px solid var(--border); border-radius: var(--radius-md);
-  background: var(--surface); box-shadow: var(--shadow);
-}
-.report-coverage h2 { margin-top: 0; }
+/* Fits the section card at a 1280px viewport; narrower screens scroll. */
+.report-page .report-expense-table { min-width: 62rem; }
 .report-coverage ul { margin: 0; padding-left: 1.25rem; color: var(--fg-muted); }
-.report-expense-comparison {
-  margin-top: var(--space-6); padding-top: var(--space-5);
-  background-image: var(--rule-fade-soft); background-repeat: no-repeat;
-  background-position: top; background-size: 100% 1px;
-}
-.report-expense-comparison h2 { margin-top: 0; }
 .report-expense-comparison > p { max-width: 65ch; }
 
 /* Expenses uses the same page framing as the report while keeping ledger
@@ -2081,7 +2062,7 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
      ("Registration / taxes") wraps rather than overflowing at 320px. */
   .summary-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
   .report-page-actions { width: 100%; justify-content: flex-start; }
-  .report-controls { gap: var(--space-3); padding: var(--space-3); }
+  .report-controls { gap: var(--space-3); }
   .report-controls .report-quarter-field,
   .report-controls .report-date-range { width: 100%; min-width: 0; }
   .report-controls .report-quarter-field .pills { width: 100%; }
@@ -2093,9 +2074,6 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
   .report-controls .report-date-range label { min-width: 0; }
   .report-controls .report-date-range input { width: 100%; min-width: 0; }
   .report-controls .report-date-range button { grid-column: 1 / -1; width: 100%; }
-  .report-page .table-wrapper { padding: var(--space-1) var(--space-2); }
-  .report-coverage { padding: var(--space-3); }
-  .report-expense-comparison { margin-top: var(--space-5); padding-top: var(--space-4); }
 }
 
 .stats-section { margin: 1.5rem 0; }
@@ -2142,18 +2120,20 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 .table-scroll table { min-width: 40rem; }
 
 /* Stats uses a calm stack of contained surfaces so the charts and rankings
-   keep their own reading areas on wide screens and narrow screens alike. */
+   keep their own reading areas on wide screens and narrow screens alike.
+   Report shares its filter disclosure and section cards. */
 .stats-page-actions { justify-content: flex-end; }
-.stats-page .trip-page-disclosures {
+.stats-page .trip-page-disclosures, .report-page .trip-page-disclosures {
   margin-bottom: var(--space-5); padding: var(--space-3) var(--space-4);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--surface); box-shadow: var(--shadow);
 }
-.stats-page .trip-page-disclosure > summary {
+.stats-page .trip-page-disclosure > summary, .report-page .trip-page-disclosure > summary {
   position: static; width: fit-content; margin: 0; padding: var(--space-2) var(--space-3);
 }
-.stats-page .trip-page-disclosure > .filter-bar { margin: var(--space-3) 0 0; }
+.stats-page .trip-page-disclosure > .filter-bar,
+.report-page .trip-page-disclosure > .filter-bar { margin: var(--space-3) 0 0; }
 .stats-page .filter-bar label { min-width: 0; }
 .stats-page .filter-bar select { max-width: 100%; min-width: 0; }
 .stats-page > h2 { margin: 0 0 var(--space-4); font-size: 1.15rem; }
@@ -2161,13 +2141,13 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
   margin: 0; padding: var(--space-5); border: 1px solid var(--border);
   border-radius: var(--radius-md); background: var(--surface); color: var(--fg-muted);
 }
-.stats-page .stats-section {
+.report-page .report-section, .stats-page .stats-section {
   min-width: 0; margin: 0 0 var(--space-5); padding: clamp(var(--space-4), 3vw, var(--space-6));
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--surface); box-shadow: var(--shadow);
 }
-.stats-page .stats-section h2 { margin-top: 0; }
+.report-page .report-section h2, .stats-page .stats-section h2 { margin-top: 0; }
 .stats-page .chart-scroll {
   max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain;
 }
@@ -2605,10 +2585,11 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 
 @media (max-width: 760px) {
   .stats-page-actions { width: 100%; justify-content: flex-start; }
-  .stats-page .trip-page-disclosures { padding: var(--space-3); }
-  .stats-page .trip-page-disclosure > summary { width: 100%; }
-  .stats-page .trip-page-disclosure > .filter-bar { margin-top: var(--space-3); }
-  .stats-page .stats-section { padding: var(--space-3); }
+  .stats-page .trip-page-disclosures, .report-page .trip-page-disclosures { padding: var(--space-3); }
+  .stats-page .trip-page-disclosure > summary, .report-page .trip-page-disclosure > summary { width: 100%; }
+  .stats-page .trip-page-disclosure > .filter-bar,
+  .report-page .trip-page-disclosure > .filter-bar { margin-top: var(--space-3); }
+  .report-page .report-section, .stats-page .stats-section { padding: var(--space-3); }
   .stats-page .stats-rankings { grid-template-columns: 1fr; gap: var(--space-3); }
   .stats-page .stats-ranking-card { padding: var(--space-3); }
 }

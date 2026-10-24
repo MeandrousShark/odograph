@@ -13,14 +13,3 @@
 {% if report.rate_periods %}
 <p class="report-rate-note muted">Rate{{ "s" if report.rate_periods|length > 1 }} applied: {{ format_rate_periods(report.rate_periods) }}</p>
 {% endif %}
-
-{% if report.caveats.any %}
-<div class="report-caveats">
-  <strong>Review before filing:</strong>
-  <ul>
-    {% for line in caveat_lines(report.caveats, report.year) %}
-    <li>{{ line }}{% if loop.last and report.caveats.missing_rate %} <a href="/settings">Add one</a>.{% endif %}</li>
-    {% endfor %}
-  </ul>
-</div>
-{% endif %}

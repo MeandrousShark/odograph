@@ -5,6 +5,7 @@ Same `make_templates`/`.render()` convention as `tests/test_expenses.py`.
 """
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -38,7 +39,7 @@ def _render(name: str, **context) -> str:
     return templates.env.get_template(name).render(**context)
 
 
-def test_report_summary_partial_renders_metrics_rates_and_caveats():
+def test_report_summary_renders_metrics_and_rates_and_notes_render_caveats():
     report = AnnualReport(
         year=2026,
         business_m=2 * MILE,
@@ -64,6 +65,9 @@ def test_report_summary_partial_renders_metrics_rates_and_caveats():
     ):
         assert expected in body
     assert "Rates applied: $0.6700/mi Jan-Jun, $0.7000/mi Jul-Dec" in body
+    # Caveats moved out of the summary into the notes section at the end.
+    assert "still unclassified" not in body
+    body = _render("_report_notes.html", report=report)
     assert "4 trip(s) still unclassified" in body
     assert "5 business trip(s) have no purpose recorded." in body
     assert "1 trip(s) have a recording gap; distance may under-read." in body
@@ -73,11 +77,12 @@ def test_report_summary_partial_renders_metrics_rates_and_caveats():
     assert '<a href="/settings">Add one</a>.' in body
 
     other_caveat_body = _render(
-        "_report_summary.html",
+        "_report_notes.html",
         report=AnnualReport(
             year=2026, trip_count=1, caveats=ReportCaveats(gap_trips=1)
         ),
     )
+    assert "1 trip(s) have a recording gap" in other_caveat_body
     assert 'href="/settings"' not in other_caveat_body
 
 
@@ -229,3 +234,144 @@ def test_report_tables_use_local_horizontal_scroll_wrappers():
     css = (Path(__file__).parents[1] / "static/style.css").read_text()
     assert ".table-wrapper { overflow-x: auto; }" in css
     assert "th:first-child, td:first-child { padding-left: 0; }" in css
+
+
+def test_report_filters_render_inside_the_shared_closed_disclosure():
+    body = _render(
+        "report.html", report=build_annual_report([_trip(1)], RATES, TZ, 2026),
+        odometer_coverage=[], expense_report=SimpleNamespace(comparisons=[]),
+        user=USER, csrf="token", next_year_disabled=False,
+    )
+    start = body.index('<div class="trip-page-disclosures">')
+    end = body.index("</details>", start)
+    disclosure = body[start:end]
+    assert '<details class="trip-page-disclosure trip-tools">' in disclosure
+    assert "<summary>Filters: full year</summary>" in disclosure
+    assert 'class="filter-bar report-controls"' in disclosure
+    assert '/report/range?from=2026-04-01&to=2026-06-30' in disclosure
+    assert '<form class="date-range report-date-range" method="get" action="/report/range">' in disclosure
+    assert body.count("trip-page-disclosure trip-tools") == 1
+    assert "<details class=\"trip-page-disclosure trip-tools\" open" not in body
+
+    css = (Path(__file__).parents[1] / "static/style.css").read_text()
+    assert ".report-page .trip-page-disclosure > summary {" in css
+
+
+def _comparison(**overrides):
+    from decimal import Decimal
+
+    from app.expenses import ExpenseComparison
+
+    values = dict(
+        vehicle_id=1, vehicle_name="Truck", business_m=MILE, denominator_m=2 * MILE,
+        denominator_source="gps", provisional=True, invalid_odometer=False,
+        business_pct=Decimal("0.5"), allocated_expenses=Decimal("10.00"),
+        fully_business_expenses=Decimal("2.00"), standard_total=Decimal("0.73"),
+        actual_total=Decimal("7.00"), difference=Decimal("6.27"), larger_estimate="actual",
+    )
+    values.update(overrides)
+    return ExpenseComparison(**values)
+
+
+def _coverage():
+    from app.odometer import VehicleCoverage
+
+    return VehicleCoverage(
+        vehicle_name="Truck", span_start=datetime(2026, 1, 1, tzinfo=TZ),
+        span_end=datetime(2026, 12, 31, tzinfo=TZ), coverage=0.9, gap_m=MILE,
+        fully_bracketed=True,
+    )
+
+
+def _full_annual(**overrides):
+    context = dict(
+        report=build_annual_report([_trip(1), _trip(2, "personal")], RATES, TZ, 2026),
+        odometer_coverage=[_coverage()],
+        expense_report=SimpleNamespace(comparisons=[_comparison()]),
+        user=USER, csrf="token", next_year_disabled=False,
+    )
+    context.update(overrides)
+    return _render("report.html", **context)
+
+
+def test_report_sections_are_single_cards_with_consistent_headings():
+    body = _full_annual()
+    sections = re.findall(r'<section class="report-section ([a-z-]+)"[^>]*>\s*<h2[^>]*>([^<]+)</h2>', body)
+    assert sections == [
+        ("report-month-section", "By month"),
+        ("report-vehicle-section", "By vehicle"),
+        ("report-coverage", "Odometer coverage"),
+        ("report-expense-comparison", "Standard vs. actual expense estimate"),
+    ]
+    assert body.count('<section class="report-section') == len(sections)
+    # Summary first, then the tables.
+    assert body.index('<div class="summary-tiles">') < body.index('<section class="report-section')
+    # Every table sits directly in a section card's scroll wrapper.
+    assert body.count("<table") == body.count('<div class="table-wrapper">') == 3
+
+    css = (Path(__file__).parents[1] / "static/style.css").read_text()
+    wrapper = css[css.index(".report-page .table-wrapper {"):]
+    wrapper = wrapper[:wrapper.index("}")]
+    assert "overscroll-behavior-inline" in wrapper
+    for surface in ("border", "box-shadow", "background"):
+        assert surface not in wrapper
+    assert ".report-page .report-section, .stats-page .stats-section {" in css
+    for removed in (".report-coverage {", ".report-expense-comparison {"):
+        assert removed not in css
+
+
+def test_report_caveats_merge_into_one_notes_section_at_the_end():
+    report = build_annual_report([{**_trip(1), "source": "manual"}], RATES, TZ, 2026)
+    body = _full_annual(report=report)
+    report_line = "1 trip(s) were entered manually."
+    comparison_line = "The larger estimate is informational, not a filing recommendation"
+    provisional_line = "Provisional comparisons use GPS-detected total miles"
+
+    assert body.count('<section class="report-notes"') == 1
+    assert "report-caveats" not in body
+    notes = body[body.index('<section class="report-notes"'):]
+    notes = notes[:notes.index("</section>")]
+    assert '<h2 id="report-notes-heading">Review before filing</h2>' in notes
+    for expected in (
+        report_line, comparison_line, provisional_line,
+        'href="https://www.irs.gov/publications/p463"',
+        'href="https://www.irs.gov/publications/p946"',
+    ):
+        assert expected in notes
+        assert body.count(expected) == 1
+    # Last thing on the page, after the comparison table.
+    assert body.index("report-expense-comparison") < body.index('<section class="report-notes"')
+    assert body.index("</section>", body.index('<section class="report-notes"')) > body.rindex("</table>")
+
+    css = (Path(__file__).parents[1] / "static/style.css").read_text()
+    assert ".report-page .report-notes {" in css
+    assert ".report-caveats" not in css
+
+
+def test_report_notes_show_comparison_caveats_even_without_trips():
+    body = _full_annual(report=build_annual_report([], RATES, TZ, 2026))
+    assert "No trips recorded in 2026." in body
+    assert body.count('<section class="report-notes"') == 1
+    assert "The larger estimate is informational" in body
+
+
+def test_report_notes_absent_without_caveats():
+    body = _full_annual(expense_report=SimpleNamespace(comparisons=[]))
+    assert "By month" in body
+    assert "report-notes" not in body
+    assert "Review before filing" not in body
+
+
+def test_range_report_notes_hold_report_caveats_only():
+    report = build_range_report(
+        [{**_trip(4), "source": "manual"}], RATES, TZ, date(2026, 4, 1), date(2026, 6, 30)
+    )
+    body = _render(
+        "report_range.html", report=report, user=USER, csrf="token",
+        expense_report=SimpleNamespace(comparisons=[_comparison()]),
+    )
+    assert body.count('<section class="report-notes"') == 1
+    assert "1 trip(s) were entered manually." in body
+    assert "The larger estimate is informational" not in body
+    assert "irs.gov" not in body
+    assert body.index('<section class="report-section') < body.index('<section class="report-notes"')
