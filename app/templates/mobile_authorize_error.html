@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}{{ heading }}: Odograph{% endblock %}
+{% block content %}
+<div class="card auth-card">
+  <div class="page-title auth-page-title">
+    <div>
+      <h2 class="page-title-heading">{{ heading }}</h2>
+    </div>
+  </div>
+  <div class="notice notice-danger form-error-summary" role="alert">{{ message }}</div>
+  <p class="muted">Return to the Odograph app and start sign-in again.</p>
+</div>
+{% endblock %}

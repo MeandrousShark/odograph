@@ -17,7 +17,7 @@ from starlette.datastructures import MutableHeaders
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.staticfiles import StaticFiles
 
-from app import admin, api_v1, auth, ingest, portable, ui
+from app import admin, api_v1, auth, ingest, mobile_routes, portable, ui
 from app.api_errors import is_api_path, register_api_errors
 from app.api_v1 import WebSessionMiddleware
 from app.auth import AuthRedirect
@@ -166,7 +166,7 @@ class SecurityHeadersMiddleware:
                     "/invite", "/invite/oidc", "/settings/account/oidc/link",
                     "/settings/account/oidc/reauth", "/settings/account/email/confirm",
                     "/forgot-password", "/reset-password",
-                ) or scope.get("path", "").startswith("/admin/"):
+                ) or scope.get("path", "").startswith(("/admin/", "/mobile/")):
                     headers["Cache-Control"] = "no-store, private"
                     headers["Referrer-Policy"] = "no-referrer"
             await send(message)
@@ -479,6 +479,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         "password reset request identifier", cfg.login_auth_max_failures, cfg.login_auth_window_s)
     app.state.reset_validation_limiter = AttemptLimiter(
         "password reset validation", cfg.login_auth_max_failures, cfg.login_auth_window_s)
+    # A signed-out browser can store a pending mobile authorization, so each
+    # start counts, with the password reset request thresholds.
+    app.state.mobile_authorize_limiter = AttemptLimiter(
+        "mobile authorization client", cfg.login_auth_max_failures, cfg.login_auth_window_s)
     app.state.security_mail = SecurityMailAdmission(capacity=capacity,
         spool_root=cfg.preparation_spool_dir)
     app.state.password_reset_queue = None
@@ -530,6 +534,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     app.include_router(admin.make_router())
     app.include_router(portable.make_router())
     app.include_router(api_v1.make_router())
+    app.include_router(mobile_routes.make_router())
     app.mount("/static", RevalidatingStaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
     return app

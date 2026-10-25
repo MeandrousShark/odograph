@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Return to the app: Odograph</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="card auth-card">
+    <h1>Return to the Odograph app</h1>
+    <p>{{ message }}</p>
+    <p><a id="mobile-callback-link" class="control control-primary auth-submit" href="{{ callback_url }}">Return to the app</a></p>
+    <p class="muted">If the app does not open automatically, use the link above.</p>
+  </main>
+  <script nonce="{{ csp_nonce }}">
+    window.location.assign(document.getElementById("mobile-callback-link").href);
+  </script>
+</body>
+</html>

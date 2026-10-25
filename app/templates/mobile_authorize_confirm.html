@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Sign in to the app: Odograph{% endblock %}
+{% block content %}
+<div class="card auth-card">
+  <div class="page-title auth-page-title">
+    <div>
+      <h2 class="page-title-heading">Sign in to the Odograph app</h2>
+      <p class="page-title-subtitle">Signed in as <strong>{{ user.name }}</strong> ({{ account_email }}).</p>
+    </div>
+  </div>
+
+  <p>Device: <strong>{{ review.device_label }}</strong></p>
+
+  {% if review.at_limit %}
+  <div class="notice notice-danger form-error-summary" role="alert">
+    This account already has {{ grant_limit }} signed-in apps, the most it can have.
+    Sign one out from <a href="/settings/account">Account Settings</a>, then sign in again from the app.
+  </div>
+  <form method="post" action="/mobile/authorize/confirm" class="auth-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <button type="submit" name="decision" value="deny" class="control control-primary auth-submit">Return to the app</button>
+  </form>
+  {% else %}
+  {% if review.replaces %}
+  <p>This ends the earlier sign-in from <strong>{{ review.replaces.device_label }}</strong>,
+    created {{ review.replaces.created_at | local_dt('%b %-d, %Y') }}.</p>
+  {% endif %}
+  <p>Approve only if you started this sign-in from the Odograph app on this device. The app will see the same trips and settings as this account.</p>
+  <form method="post" action="/mobile/authorize/confirm" class="auth-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <button type="submit" name="decision" value="approve" class="control control-primary auth-submit">Approve</button>
+    <button type="submit" name="decision" value="deny" class="control control-secondary auth-submit">Deny</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}
