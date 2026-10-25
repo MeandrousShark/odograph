@@ -14,7 +14,7 @@ from starlette.responses import RedirectResponse
 from app.account_context import control_connection
 from app.api_grants import ACTIVE_GRANT_LIMIT, normalize_device_label, valid_public_id
 from app.auth import check_form_csrf, require_user, _ensure_csrf
-from app.capacity_routes import AdmissionRoute, busy_response
+from app.capacity_routes import AdmissionRoute, busy_response, capacity_policy
 from app.ingest import client_ip
 from app.mobile_authorization import (
     AUTHORIZE_PATH, CONFIRM_PATH, COOKIE_NAME, REQUEST_SECONDS, approve_request, callback_url,
@@ -69,6 +69,7 @@ def make_router() -> APIRouter:
     router = APIRouter(route_class=AdmissionRoute, dependencies=[Depends(_require_mobile_signin)])
 
     @router.get(AUTHORIZE_PATH)
+    @capacity_policy("auth_interactive")
     async def authorize(request: Request):
         client_id = _single(request, "client_id")
         redirect_uri = _single(request, "redirect_uri")
