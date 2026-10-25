@@ -349,7 +349,7 @@ class AdmissionRoute(APIRoute):
         except (CapacityBusy, TimeoutError, PreparationBusy, PreparationResourceError):
             if response_started:
                 raise
-            if getattr(request.state, '_capacity_mutation_committed', False):
+            if not is_api_path(request.url.path) and getattr(request.state, '_capacity_mutation_committed', False):
                 response = Response(status_code=204, headers={'HX-Refresh': 'true'})
                 await response(scope, receive, send)
             else:

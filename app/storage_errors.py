@@ -3,6 +3,7 @@ from fastapi import Request
 from psycopg import errors
 from starlette.responses import JSONResponse
 
+from app.api_errors import error_response, is_api_path
 from app.storage import is_storage_capacity_error
 
 
@@ -11,6 +12,8 @@ def register_storage_errors(app):
     async def storage_refusal(request: Request, exc: errors.RaiseException):
         if not is_storage_capacity_error(exc):
             raise exc
+        if is_api_path(request.url.path):
+            return error_response("storage_full")
         return JSONResponse(
             {"detail": "Storage is full. This change wasn't saved. Your existing data is still available. "
                        "Export a copy before removing data, or ask an administrator for more space."},
