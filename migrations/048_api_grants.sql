@@ -38,8 +38,11 @@ ALTER TABLE public.api_grants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.api_grants FORCE ROW LEVEL SECURITY;
 
 -- Lifetimes: access tokens last 15 minutes. A grant idle-expires 60 days
--- after the later of its creation and its last use. At most 10 active grants
--- per account; a sign-in that replaces one of them is net zero.
+-- after the later of its creation and its last use. A grant is active while
+-- it is not revoked, not idle-expired and issued at the account's current
+-- auth_version; any other grant can never authenticate again and is deleted
+-- here. At most 10 active grants per account; a sign-in that replaces one of
+-- them is net zero.
 CREATE FUNCTION public.api_grant_create(
     input_account_id bigint, input_auth_version bigint, input_public_id text,
     input_device_label text, input_access_digest text, input_refresh_digest text,
@@ -53,7 +56,8 @@ DECLARE
     replaced_id bigint;
     active_count bigint;
 BEGIN
-    IF input_public_id IS NULL OR input_public_id !~ '^[A-Za-z0-9_-]{22}$'
+    IF input_account_id IS NULL OR input_auth_version IS NULL
+       OR input_public_id IS NULL OR input_public_id !~ '^[A-Za-z0-9_-]{22}$'
        OR input_device_label IS NULL OR input_device_label = ''
        OR pg_catalog.char_length(input_device_label) > 64
        OR input_access_digest IS NULL OR input_access_digest !~ '^[0-9a-f]{64}$'
@@ -62,7 +66,9 @@ BEGIN
         RETURN QUERY SELECT 'unavailable'::text, NULL::timestamptz;
         RETURN;
     END IF;
-    SELECT * INTO account_row FROM public.accounts a WHERE a.id = input_account_id FOR UPDATE;
+    -- Serializes grant creation with auth_version changes without blocking
+    -- foreign key checks on the account row.
+    SELECT * INTO account_row FROM public.accounts a WHERE a.id = input_account_id FOR NO KEY UPDATE;
     IF NOT FOUND OR NOT account_row.is_enabled OR account_row.auth_version <> input_auth_version THEN
         RETURN QUERY SELECT 'unavailable'::text, NULL::timestamptz;
         RETURN;
@@ -71,16 +77,17 @@ BEGIN
     DELETE FROM public.api_grants g
     WHERE g.account_id = input_account_id
       AND (g.revoked_at IS NOT NULL
+           OR g.issued_auth_version <> account_row.auth_version
            OR GREATEST(g.created_at, COALESCE(g.last_used_at, g.created_at))
               <= checked_at - interval '60 days');
+    -- Every remaining grant of the account is active.
     IF input_replaces IS NOT NULL THEN
         SELECT g.id INTO replaced_id FROM public.api_grants g
         WHERE g.account_id = input_account_id AND g.public_id = input_replaces
-          AND g.revoked_at IS NULL
         FOR UPDATE;
     END IF;
     SELECT pg_catalog.count(*) INTO active_count FROM public.api_grants g
-    WHERE g.account_id = input_account_id AND g.revoked_at IS NULL;
+    WHERE g.account_id = input_account_id;
     IF active_count - (CASE WHEN replaced_id IS NULL THEN 0 ELSE 1 END) >= 10 THEN
         RETURN QUERY SELECT 'grant_limit_reached'::text, NULL::timestamptz;
         RETURN;
@@ -194,9 +201,12 @@ $body$;
 
 -- Bearer check. Accepts the current access token or the previous one until
 -- its own expiry. Writes last_used_at at most once a minute and marks the
--- current generation seen once; otherwise it only reads.
+-- current generation seen once; otherwise it only reads. The result is
+-- 'valid', 'unknown' when no grant holds the digest, or 'invalid' when one
+-- does but cannot authenticate (expired, revoked, idle, stale version or
+-- disabled account), so callers can tell guessing from an outdated token.
 CREATE FUNCTION public.api_grant_authenticate(input_access_digest text)
-RETURNS TABLE (result_account_id bigint, result_auth_version bigint, result_public_id text)
+RETURNS TABLE (result text, result_account_id bigint, result_auth_version bigint, result_public_id text)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp
 AS $body$
 DECLARE
@@ -207,11 +217,13 @@ DECLARE
     mark_used boolean;
 BEGIN
     IF input_access_digest IS NULL OR input_access_digest !~ '^[0-9a-f]{64}$' THEN
+        RETURN QUERY SELECT 'unknown'::text, NULL::bigint, NULL::bigint, NULL::text;
         RETURN;
     END IF;
     SELECT * INTO grant_row FROM public.api_grants g
     WHERE g.access_digest = input_access_digest OR g.previous_access_digest = input_access_digest;
     IF NOT FOUND THEN
+        RETURN QUERY SELECT 'unknown'::text, NULL::bigint, NULL::bigint, NULL::text;
         RETURN;
     END IF;
     checked_at := pg_catalog.clock_timestamp();
@@ -222,6 +234,7 @@ BEGIN
         -- Writing: decide again on the locked row, which a refresh may have rotated.
         SELECT * INTO grant_row FROM public.api_grants g WHERE g.id = grant_row.id FOR UPDATE;
         IF NOT FOUND THEN
+            RETURN QUERY SELECT 'invalid'::text, NULL::bigint, NULL::bigint, NULL::text;
             RETURN;
         END IF;
         checked_at := pg_catalog.clock_timestamp();
@@ -230,6 +243,7 @@ BEGIN
         ELSIF grant_row.previous_access_digest = input_access_digest THEN
             matched_current := false;
         ELSE
+            RETURN QUERY SELECT 'invalid'::text, NULL::bigint, NULL::bigint, NULL::text;
             RETURN;
         END IF;
     END IF;
@@ -241,6 +255,7 @@ BEGIN
        OR NOT EXISTS (SELECT 1 FROM public.accounts a
                       WHERE a.id = grant_row.account_id AND a.is_enabled
                         AND a.auth_version = grant_row.issued_auth_version) THEN
+        RETURN QUERY SELECT 'invalid'::text, NULL::bigint, NULL::bigint, NULL::text;
         RETURN;
     END IF;
     mark_seen := matched_current AND NOT grant_row.current_seen;
@@ -251,7 +266,7 @@ BEGIN
             last_used_at = CASE WHEN mark_used THEN checked_at ELSE g.last_used_at END
         WHERE g.id = grant_row.id;
     END IF;
-    RETURN QUERY SELECT grant_row.account_id, grant_row.issued_auth_version, grant_row.public_id;
+    RETURN QUERY SELECT 'valid'::text, grant_row.account_id, grant_row.issued_auth_version, grant_row.public_id;
 END
 $body$;
 

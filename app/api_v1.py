@@ -3,17 +3,19 @@
 Authentication is `Authorization: Bearer` only. API paths never see the
 browser session cookie (see WebSessionMiddleware), so a browser cannot be
 used to make a cookie-authenticated API request, and no CORS headers are
-sent. Every failed bearer check returns the same 401 and counts toward the
+sent. Every failed bearer check returns the same 401; checks that look like
+guessing (a token no grant holds, or a malformed header) count toward the
 per-client failure limiter.
 """
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, Request
 from psycopg import errors
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import JSONResponse
 
@@ -21,7 +23,7 @@ from app.account_context import control_connection
 from app.accounts import get_account
 from app.api_errors import ApiError, ApiErrorEnvelope, FIELD_REQUIRED, FIELD_UNSUPPORTED, is_api_path
 from app.api_grants import (
-    ACCESS_TOKEN_SECONDS, authenticate_access_token, format_instant, refresh_grant, token_digest,
+    ACCESS_TOKEN_SECONDS, check_access_token, format_instant, refresh_grant, token_digest,
 )
 from app.auth import _bind_account
 from app.capacity_routes import AdmissionRoute, capacity_policy
@@ -65,6 +67,10 @@ def _limiter(request: Request) -> FailedAuthLimiter:
     return request.app.state.api_auth_limiter
 
 
+def _rate_limited(limiter: FailedAuthLimiter) -> ApiError:
+    return ApiError("rate_limited", headers={"Retry-After": str(math.ceil(limiter.window_s))})
+
+
 def _bearer_token(request: Request) -> str | None:
     values = request.headers.getlist("authorization")
     if len(values) != 1:
@@ -79,30 +85,34 @@ async def require_api_user(request: Request) -> ApiUser:
     limiter = _limiter(request)
     ip = client_ip(request)
     if limiter.blocked(ip):
-        raise ApiError("rate_limited")
+        raise _rate_limited(limiter)
     token = _bearer_token(request)
     principal = account = None
+    known = False
     if token_digest(token) is not None:
         async with control_connection(request.app.state.control_pool) as conn:
-            principal = await authenticate_access_token(conn, token)
+            check = await check_access_token(conn, token)
+            principal, known = check.principal, check.known
             if principal is not None:
                 account = await get_account(conn, principal.account_id)
+    # Only guesses count toward the limiter: an expired or otherwise outdated
+    # token of a real grant is normal client behavior. The 401 is identical.
     if (principal is None or account is None or not account["is_enabled"]
             or account["auth_version"] != principal.auth_version):
-        limiter.record_failure(ip)
+        if not known:
+            limiter.record_failure(ip)
         raise ApiError("invalid_token", headers=BEARER_HEADERS)
     try:
         user = await _bind_account(request, account)
     except errors.InsufficientPrivilege:
         # Disabled or signed out between the grant check and admission.
-        limiter.record_failure(ip)
         raise ApiError("invalid_token", headers=BEARER_HEADERS) from None
     return ApiUser(user, account, principal.grant_id)
 
 
 class TokenRequest(BaseModel):
     grant_type: str
-    refresh_token: str | None = None
+    refresh_token: str | None = Field(default=None, repr=False)
 
 
 class TokenResponse(BaseModel):
@@ -157,7 +167,7 @@ def make_router() -> APIRouter:
         limiter = _limiter(request)
         ip = client_ip(request)
         if limiter.blocked(ip):
-            raise ApiError("rate_limited")
+            raise _rate_limited(limiter)
         if body.grant_type != "refresh_token":
             raise ApiError("validation_failed", fields={"grant_type": FIELD_UNSUPPORTED})
         if body.refresh_token is None:

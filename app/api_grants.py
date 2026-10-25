@@ -65,11 +65,11 @@ def normalize_device_label(value) -> str:
     surrogate or private-use characters, trimmed to 64 characters."""
     if not isinstance(value, str):
         return DEFAULT_DEVICE_LABEL
-    text = unicodedata.normalize("NFC", value)
-    text = "".join(char for char in text
+    # Strip first so a removed character cannot block composition.
+    text = "".join(char for char in value
                    if unicodedata.category(char) not in _DISALLOWED_DISPLAY_NAME_CATEGORIES)
-    text = text.strip()[:DEVICE_LABEL_MAX_LENGTH].strip()
-    return text or DEFAULT_DEVICE_LABEL
+    text = unicodedata.normalize("NFC", text).strip()[:DEVICE_LABEL_MAX_LENGTH].strip()
+    return unicodedata.normalize("NFC", text) or DEFAULT_DEVICE_LABEL
 
 
 def format_instant(value: datetime) -> str:
@@ -136,18 +136,32 @@ async def refresh_grant(conn, refresh_token) -> RefreshOutcome:
     return RefreshOutcome(None)
 
 
-async def authenticate_access_token(conn, access_token) -> GrantPrincipal | None:
+@dataclass(frozen=True)
+class AccessCheck:
+    principal: GrantPrincipal | None
+    # The token belongs to a grant, current or previous generation, even
+    # though it no longer authenticates: an outdated token, not a guess.
+    known: bool
+
+
+async def check_access_token(conn, access_token) -> AccessCheck:
     digest = token_digest(access_token)
     if digest is None:
-        return None
+        return AccessCheck(None, False)
     async with conn.transaction():
         cur = await conn.execute(
-            "SELECT result_account_id, result_auth_version, result_public_id "
+            "SELECT result, result_account_id, result_auth_version, result_public_id "
             "FROM public.api_grant_authenticate(%s)",
             (digest,),
         )
-        row = await cur.fetchone()
-    return GrantPrincipal(*row) if row is not None else None
+        result, account_id, auth_version, public_id = await cur.fetchone()
+    if result == "valid":
+        return AccessCheck(GrantPrincipal(account_id, auth_version, public_id), True)
+    return AccessCheck(None, result == "invalid")
+
+
+async def authenticate_access_token(conn, access_token) -> GrantPrincipal | None:
+    return (await check_access_token(conn, access_token)).principal
 
 
 async def revoke_grant(conn, account_id: int, public_id: str) -> bool:

@@ -14,11 +14,12 @@ from psycopg import errors
 from starlette.responses import Response
 
 from app.accounts import create_admin, get_account, replace_password, sign_out_everywhere
-from app.account_lifecycle import set_account_enabled
+from app.account_lifecycle import purge_account, request_account_deletion, set_account_enabled
 from app.api_errors import ERRORS, register_api_errors
 from app.api_grants import (
     ACCESS_TOKEN_SECONDS, ACTIVE_GRANT_LIMIT, DEFAULT_DEVICE_LABEL, GrantLimitReached,
-    authenticate_access_token, create_grant, refresh_grant, revoke_grant, token_digest,
+    authenticate_access_token, check_access_token, create_grant, refresh_grant, revoke_grant,
+    token_digest,
 )
 from app.api_v1 import WebSessionMiddleware, make_router
 from app.db import make_pool
@@ -455,38 +456,176 @@ def test_me_and_token_routes_end_to_end():
     _run(check)
 
 
-def test_bearer_failures_are_uniform_whatever_the_cause_and_rate_limited():
+def test_outdated_grant_tokens_get_the_uniform_401_without_counting_as_guesses():
     async def check(owner, pools, account):
         member = await _add_member(owner)
         expired = await _mint(pools, account["id"])
         revoked = await _mint(pools, account["id"])
+        idle = await _mint(pools, account["id"])
         disabled = await _mint(pools, member)
-        stale = await _mint(pools, account["id"])
+        rotated = await _mint(pools, account["id"])
         await _sql(owner, "UPDATE api_grants SET access_expires_at=now()-interval '1 second' "
                           "WHERE public_id=%s", (expired.grant_id,))
         async with pools.control.connection() as conn:
             await revoke_grant(conn, account["id"], revoked.grant_id)
+        await _sql(owner, "UPDATE api_grants SET created_at=now()-interval '61 days' "
+                          "WHERE public_id=%s", (idle.grant_id,))
         await _sql(owner, "UPDATE accounts SET is_enabled=false WHERE id=%s", (member,))
-        tokens = [secrets.token_urlsafe(32), expired.access_token, revoked.access_token,
-                  disabled.access_token, stale.refresh_token]
-        limiter = FailedAuthLimiter(len(tokens) + 2, 900)
+        # A previous-generation access token past its own expiry.
+        (await _refresh(pools, rotated.refresh_token)).tokens
+        await _sql(owner, "UPDATE api_grants SET previous_access_expires_at=now()-interval '1 second' "
+                          "WHERE public_id=%s", (rotated.grant_id,))
+        outdated = [expired.access_token, revoked.access_token, idle.access_token,
+                    disabled.access_token, rotated.access_token]
+        limiter = FailedAuthLimiter(3, 900)
         async with _client(_app(pools, limiter)) as client:
-            responses = [await client.get("/api/v1/me", headers=_bearer(token)) for token in tokens]
+            responses = []
+            for _ in range(4):
+                for token in outdated:
+                    responses.append(await client.get("/api/v1/me", headers=_bearer(token)))
+            assert {response.status_code for response in responses} == {401}
+            refreshed = await client.post("/api/v1/auth/token", json={
+                "grant_type": "refresh_token", "refresh_token": expired.refresh_token})
+            assert refreshed.status_code == 200
+            responses.append(await client.get("/api/v1/me", headers=_bearer(secrets.token_urlsafe(32))))
             responses.append(await client.get("/api/v1/me"))
             for response in responses:
                 assert response.status_code == 401
                 assert response.content == responses[0].content
                 assert response.headers["www-authenticate"] == "Bearer"
-            refused = await client.post("/api/v1/auth/token", json={
-                "grant_type": "refresh_token", "refresh_token": disabled.refresh_token})
-            assert refused.status_code == 400
-            limited = await client.get("/api/v1/me", headers=_bearer(stale.access_token))
+                assert "retry-after" not in response.headers
+    _run(check)
+
+
+def test_stale_version_tokens_do_not_count_as_guesses():
+    async def check(owner, pools, account):
+        issued = await _mint(pools, account["id"])
+        async with pools.control.connection() as conn:
+            assert await sign_out_everywhere(conn, account["id"], expected_auth_version=1)
+        async with _client(_app(pools, FailedAuthLimiter(2, 900))) as client:
+            for _ in range(5):
+                response = await client.get("/api/v1/me", headers=_bearer(issued.access_token))
+                assert response.status_code == 401
+    _run(check)
+
+
+def test_unknown_tokens_are_rate_limited_with_retry_after():
+    async def check(owner, pools, account):
+        issued = await _mint(pools, account["id"])
+        async with _client(_app(pools, FailedAuthLimiter(3, 900))) as client:
+            failures = [await client.get("/api/v1/me", headers=_bearer(secrets.token_urlsafe(32)))
+                        for _ in range(3)]
+            assert all(response.status_code == 401 for response in failures)
+            assert len({response.content for response in failures}) == 1
+            limited = await client.get("/api/v1/me", headers=_bearer(issued.access_token))
             assert limited.status_code == 429
+            assert limited.headers["retry-after"] == "900"
             assert limited.json()["error"]["code"] == "rate_limited"
-            assert (await client.post("/api/v1/auth/token", json={
-                "grant_type": "refresh_token", "refresh_token": stale.refresh_token})).status_code == 429
+            token = await client.post("/api/v1/auth/token", json={
+                "grant_type": "refresh_token", "refresh_token": issued.refresh_token})
+            assert token.status_code == 429 and token.headers["retry-after"] == "900"
+        async with _client(_app(pools, FailedAuthLimiter(2, 900))) as client:
+            # Refresh invalid_grant still counts.
+            for _ in range(2):
+                assert (await client.post("/api/v1/auth/token", json={
+                    "grant_type": "refresh_token", "refresh_token": secrets.token_urlsafe(32)})).status_code == 400
+            assert (await client.get("/api/v1/me", headers=_bearer(issued.access_token))).status_code == 429
         # Rate limiting revoked nothing.
-        assert (await _grant(owner, stale.grant_id))[0] is None
+        assert (await _grant(owner, issued.grant_id))[0] is None
+    _run(check)
+
+
+def test_access_check_tells_outdated_tokens_from_unknown_ones():
+    async def check(owner, pools, account):
+        issued = await _mint(pools, account["id"])
+        async with pools.control.connection() as conn:
+            assert (await check_access_token(conn, issued.access_token)).principal is not None
+            unknown = await check_access_token(conn, secrets.token_urlsafe(32))
+            assert unknown.principal is None and not unknown.known
+            malformed = await check_access_token(conn, "short")
+            assert malformed.principal is None and not malformed.known
+            await revoke_grant(conn, account["id"], issued.grant_id)
+            revoked = await check_access_token(conn, issued.access_token)
+            assert revoked.principal is None and revoked.known
+    _run(check)
+
+
+def test_auth_version_bump_frees_the_grant_limit_and_stale_grants_are_deleted():
+    async def check(owner, pools, account):
+        stale = [await _mint(pools, account["id"]) for _ in range(ACTIVE_GRANT_LIMIT)]
+        async with pools.control.connection() as conn:
+            assert await sign_out_everywhere(conn, account["id"], expected_auth_version=1)
+        fresh = [await _mint(pools, account["id"], 2) for _ in range(ACTIVE_GRANT_LIMIT)]
+        assert all(fresh)
+        async with owner.connection() as conn:
+            remaining = {row[0] for row in await (await conn.execute(
+                "SELECT public_id FROM api_grants")).fetchall()}
+        assert remaining == {issued.grant_id for issued in fresh}
+        # A replaces id naming a stale grant is not one of this account's
+        # active grants, so it makes no room.
+        with pytest.raises(GrantLimitReached):
+            await _mint(pools, account["id"], 2, replaces=stale[0].grant_id)
+        for issued in fresh:
+            assert await _authenticate(pools, issued.access_token) is not None
+    _run(check)
+
+
+def test_replaces_naming_a_stale_version_grant_is_ignored_below_the_limit():
+    async def check(owner, pools, account):
+        stale = await _mint(pools, account["id"])
+        async with pools.control.connection() as conn:
+            assert await sign_out_everywhere(conn, account["id"], expected_auth_version=1)
+        kept = await _mint(pools, account["id"], 2)
+        issued = await _mint(pools, account["id"], 2, replaces=stale.grant_id)
+        assert issued is not None
+        assert (await _grant(owner, kept.grant_id))[0] is None
+        assert await _grant(owner, stale.grant_id) is None
+    _run(check)
+
+
+def test_null_account_or_version_never_mints():
+    async def check(owner, pools, account):
+        digest_a, digest_b = token_digest(secrets.token_urlsafe(32)), token_digest(secrets.token_urlsafe(32))
+        async with pools.control.connection() as conn:
+            for account_id, version in ((account["id"], None), (None, 1), (None, None)):
+                row = await (await conn.execute(
+                    "SELECT result FROM public.api_grant_create(%s,%s,%s,%s,%s,%s,%s)",
+                    (account_id, version, secrets.token_urlsafe(16), "Phone", digest_a, digest_b, None),
+                )).fetchone()
+                assert row == ("unavailable",)
+        async with owner.connection() as conn:
+            assert await (await conn.execute("SELECT count(*) FROM api_grants")).fetchone() == (0,)
+    _run(check)
+
+
+def test_admin_purge_removes_the_accounts_grants():
+    async def check(owner, pools, account):
+        member = await _add_member(owner)
+        reused = await _mint(pools, member)
+        kept = await _mint(pools, account["id"])
+        rotated = (await _refresh(pools, reused.refresh_token)).tokens
+        assert await _authenticate(pools, rotated.access_token) is not None
+        assert (await _refresh(pools, reused.refresh_token)).reuse_detected
+        await _mint(pools, member, label="Tablet")
+        async with pools.control.connection() as conn:
+            actor = dict(await get_account(conn, account["id"]))
+            assert await request_account_deletion(
+                conn, actor, member, email=MEMBER_EMAIL, acknowledge=True) == "scheduled"
+        await _sql(owner, "UPDATE accounts SET deletion_deadline=clock_timestamp()-interval '1 second' "
+                          "WHERE id=%s", (member,))
+        async with pools.control.connection() as conn:
+            actor = dict(await get_account(conn, account["id"]))
+            assert await purge_account(conn, actor, member, email=MEMBER_EMAIL, confirm=True,
+                                       verified_password_hash=actor["password_hash"]) == "purged"
+        async with owner.connection() as conn:
+            assert await (await conn.execute("SELECT id FROM accounts WHERE id=%s", (member,))).fetchone() is None
+            assert await (await conn.execute(
+                "SELECT public_id FROM api_grants")).fetchall() == [(kept.grant_id,)]
+            actions = [row[0] for row in await (await conn.execute(
+                "SELECT action FROM account_security_audit WHERE target_account_id=%s ORDER BY id",
+                (member,))).fetchall()]
+        assert actions[0] == "api_grant_refresh_reuse" and actions[-1] == "purge_account"
+        assert await _authenticate(pools, kept.access_token) is not None
     _run(check)
 
 
