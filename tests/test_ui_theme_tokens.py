@@ -167,10 +167,10 @@ def test_settings_has_exact_independent_theme_and_accent_choices():
 def test_settings_links_to_the_renamed_account_settings_destination():
     body = _render_settings()
     account_start = body.index(
-        '<section class="settings-account-section" aria-labelledby="account-heading">'
+        '<section class="settings-subsection settings-account-section" aria-labelledby="account-heading">'
     )
     account_end = body.index("</section>", account_start)
-    appearance = body.index("<h2>Appearance</h2>")
+    appearance = body.index('<h3 id="appearance-heading">Appearance</h3>')
     appearance_description = body.index(
         "Follows your device's light/dark setting", appearance
     )
@@ -187,8 +187,8 @@ def test_settings_account_section_is_available_to_every_real_account():
     for user in ({"id": 2, "name": "Tester", "is_admin": False}, None):
         body = _render_settings(user)
         assert ("settings-account-section" in body) is (user is not None)
-        assert ("<h2 id=\"account-heading\">Account</h2>" in body) is (user is not None)
-        appearance = body.index("<h2>Appearance</h2>")
+        assert ("<h3 id=\"account-heading\">Account</h3>" in body) is (user is not None)
+        appearance = body.index('<h3 id="appearance-heading">Appearance</h3>')
         description = body.index("Follows your device's light/dark setting", appearance)
         theme = body.index('<fieldset class="theme-picker" id="theme-picker">', appearance)
         assert appearance < description < theme
@@ -201,16 +201,22 @@ def test_settings_uses_the_secondary_page_header_and_keeps_sections_in_order():
     assert '<div class="page-title page-header">' in body
     assert '<p class="page-title-eyebrow">Settings</p>' in body
     labels = (
-        '<section class="settings-account-section"',
-        '<section class="settings-section settings-appearance">',
-        '<section class="settings-section settings-rates">',
-        '<section class="settings-section settings-vehicles">',
-        '<section class="settings-section settings-odometer">',
-        '<section class="settings-section settings-places">',
-        '<section class="settings-section settings-rules">',
+        '<section class="settings-section" id="account"',
+        '<section class="settings-subsection settings-account-section"',
+        '<section class="settings-section" id="preferences"',
+        '<section class="settings-subsection settings-appearance"',
+        '<section class="settings-section" id="vehicles-and-rates"',
+        '<section class="settings-subsection settings-rates"',
+        '<section class="settings-subsection settings-vehicles"',
+        '<section class="settings-subsection settings-odometer"',
+        '<section class="settings-section" id="places-and-rules"',
+        '<section class="settings-subsection settings-places"',
+        '<section class="settings-subsection settings-rules"',
         '<details class="section-disclosure" id="manual-trip-edits">',
-        '<section class="settings-section settings-data">',
-        '<section class="settings-section settings-diagnostics">',
+        '<section class="settings-section settings-data" id="data"',
+        '<section class="settings-section" id="system"',
+        '<section class="settings-subsection settings-diagnostics">',
+        '<section class="settings-subsection settings-device-status"',
     )
     positions = [body.index(label) for label in labels]
     assert positions == sorted(positions)

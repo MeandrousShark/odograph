@@ -1,0 +1,22 @@
+{# In-page confirmation for a destructive htmx action, opened by the
+   delegated [data-dialog-open] handler in base.html. The confirm button
+   carries the action's original request; the caller block is the
+   description. #}
+{% macro confirm_trigger(dialog_id, label, title) -%}
+<button type="button" class="control control-destructive" title="{{ title }}" aria-haspopup="dialog"
+        aria-controls="{{ dialog_id }}" data-dialog-open="{{ dialog_id }}">{{ label }}</button>
+{%- endmacro %}
+
+{% macro confirm_dialog(dialog_id, title, confirm_label, action, target=none, swap=none) -%}
+<dialog id="{{ dialog_id }}" class="app-dialog"
+        aria-labelledby="{{ dialog_id }}-title" aria-describedby="{{ dialog_id }}-description">
+  <form class="trip-delete-dialog-content">
+    <h2 id="{{ dialog_id }}-title">{{ title }}</h2>
+    <p id="{{ dialog_id }}-description">{{ caller() }}</p>
+    <div class="app-dialog-actions">
+      <button type="button" class="control control-secondary" data-dialog-cancel autofocus>Cancel</button>
+      <button type="button" class="control control-destructive" hx-post="{{ action }}"{% if target %} hx-target="{{ target }}"{% endif %}{% if swap %} hx-swap="{{ swap }}"{% endif %}>{{ confirm_label }}</button>
+    </div>
+  </form>
+</dialog>
+{%- endmacro %}

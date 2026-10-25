@@ -19,11 +19,11 @@
     <p>Copy these values into OwnTracks using HTTP mode. The password is shown only here, once.
       Save it before leaving this page. Replacing a password immediately stops the old one.</p>
     <p><label>URL <input readonly value="{{ ingest_url }}" autocomplete="off" spellcheck="false" id="tracking-setup-url"></label>
-      <button type="button" class="link-button" data-copy-target="tracking-setup-url">Copy</button></p>
+      <button type="button" class="control control-secondary" data-copy-target="tracking-setup-url">Copy</button></p>
     <p><label>User <input readonly value="{{ issued.username }}" autocomplete="off" spellcheck="false" id="tracking-setup-username"></label>
-      <button type="button" class="link-button" data-copy-target="tracking-setup-username">Copy</button></p>
+      <button type="button" class="control control-secondary" data-copy-target="tracking-setup-username">Copy</button></p>
     <p><label>Password <input readonly value="{{ issued.secret }}" autocomplete="off" spellcheck="false" id="tracking-setup-password"></label>
-      <button type="button" class="link-button" data-copy-target="tracking-setup-password">Copy</button></p>
+      <button type="button" class="control control-secondary" data-copy-target="tracking-setup-password">Copy</button></p>
     <p id="tracking-copy-status" class="muted" role="status" aria-live="polite"></p>
     <p class="muted">Your device keeps its trip history when its password changes.
       A tracker label can be reused by other devices without mixing their trips.</p>
@@ -35,7 +35,7 @@
     <form method="post" action="/settings/tracking/devices">
       <input type="hidden" name="csrf_token" value="{{ csrf }}">
       <label>Device name <input name="label" required maxlength="100" placeholder="My phone"></label>
-      <button type="submit">Create device</button>
+      <button type="submit" class="control control-primary">Create device</button>
     </form>
   </section>
 
@@ -52,7 +52,7 @@
         Changing its username or URL clears queued locations.</p>
       <form method="post" action="/settings/tracking/devices/{{ device.id }}/convert">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <button type="submit">Give this device its own password</button>
+        <button type="submit" class="control control-secondary">Give this device its own password</button>
       </form>
       {% endif %}
       {% for credential in credentials if credential.tracking_device_id == device.id %}
@@ -63,17 +63,17 @@
       <p class="muted">Access revoked.</p>
       <form method="post" action="/settings/tracking/credentials/{{ credential.public_id }}/rotate">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <button type="submit">Create replacement password</button>
+        <button type="submit" class="control control-secondary">Create replacement password</button>
       </form>
       {% else %}
       <p>User: <code>{{ credential.basic_username }}</code></p>
       <form method="post" action="/settings/tracking/credentials/{{ credential.public_id }}/rotate">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <button type="submit">Replace password</button>
+        <button type="submit" class="control control-secondary">Replace password</button>
       </form>
       <form method="post" action="/settings/tracking/credentials/{{ credential.public_id }}/revoke">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <button type="submit">Revoke access</button>
+        <button type="submit" class="control control-destructive">Revoke access</button>
       </form>
       {% endif %}
       {% endfor %}
@@ -94,7 +94,7 @@
       Revoking it stops all remaining legacy uploads and keeps their recorded history.</p>
     <form method="post" action="/settings/tracking/credentials/{{ credential.public_id }}/revoke">
       <input type="hidden" name="csrf_token" value="{{ csrf }}">
-      <button type="submit">Revoke shared login</button>
+      <button type="submit" class="control control-destructive">Revoke shared login</button>
     </form>
     {% endif %}
   </section>

@@ -1,6 +1,7 @@
+{% from "_confirm_dialog.html" import confirm_dialog, confirm_trigger %}
 <div id="odometer-table">
 {% for entry in odometer %}
-<h3>{{ entry.vehicle.name }}{% if not entry.vehicle.active %} <span class="muted">(inactive)</span>{% endif %}</h3>
+<h4>{{ entry.vehicle.name }}{% if not entry.vehicle.active %} <span class="muted">(inactive)</span>{% endif %}</h4>
 {% if entry.readings %}
 <div class="settings-table-scroll settings-table-scroll-odometer-readings">
 <table class="settings-table">
@@ -12,10 +13,11 @@
       <td class="num">{{ r.odometer_m | mi }}</td>
       <td>{{ r.note or '' }}</td>
       <td class="settings-table-actions">
-        <button type="button" class="danger" title="Delete reading"
-                hx-post="/settings/odometer/{{ r.id }}/delete"
-                hx-target="#odometer-table" hx-swap="outerHTML"
-                hx-confirm="Delete this reading? Add a corrected one instead of editing.">Delete</button>
+        {{ confirm_trigger("odometer-delete-" ~ r.id, "Delete", "Delete reading") }}
+        {% call confirm_dialog("odometer-delete-" ~ r.id, "Delete this reading?", "Delete reading",
+                               "/settings/odometer/" ~ r.id ~ "/delete", "#odometer-table", "outerHTML") -%}
+          Add a corrected one instead of editing.
+        {%- endcall %}
       </td>
     </tr>
     {% endfor %}

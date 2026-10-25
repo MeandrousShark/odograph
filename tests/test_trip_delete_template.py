@@ -202,13 +202,17 @@ def test_manual_trip_edits_summary_shows_the_count():
     assert "Manual trip edits (2)" in body
 
 
-def test_manual_trip_edits_heading_is_an_h2_in_the_document_outline():
-    # Regression: an earlier revision used a bare <summary> with no <h2>,
+def test_manual_trip_edits_heading_is_an_h3_in_the_document_outline():
+    # Regression: an earlier revision used a bare <summary> with no heading,
     # which dropped the section from the document outline entirely and made
-    # it look like a control belonging to the preceding section.
+    # it look like a control belonging to the preceding section. It is an h3
+    # under the Places and rules h2.
     body = _render_settings([_override(1, "suppress")])
 
-    assert "<summary><h2>Manual trip edits (1)</h2></summary>" in body
+    assert "<summary><h3>Manual trip edits (1)</h3></summary>" in body
+    topic = body.index('<h2 id="places-and-rules-section-heading">Places and rules</h2>')
+    assert topic < body.index("<summary><h3>Manual trip edits (1)</h3></summary>")
+    assert body.index("<summary><h3>Manual trip edits (1)</h3></summary>") < body.index('<section class="settings-section settings-data" id="data"')
 
 
 def test_manual_trip_edits_section_is_collapsed_by_default():

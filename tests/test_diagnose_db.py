@@ -88,9 +88,9 @@ async def _scenario():
             assert "up_to_date" in body  # every shipped migration just ran
             assert ">retention<" in body
             assert ">detector<" in body  # absent from app.state -- reports disabled
-            diagnostics = body.split("<h2>Diagnostics</h2>", 1)[1]
-            workers_section = diagnostics.split("<h3>Workers</h3>", 1)[1].split(
-                "<h3>Configuration presence</h3>", 1
+            diagnostics = body.split("<h3>Diagnostics</h3>", 1)[1]
+            workers_section = diagnostics.split("<h4>Workers</h4>", 1)[1].split(
+                "<h4>Configuration presence</h4>", 1
             )[0]
             assert "detector" in workers_section
             detector_row = workers_section.split("<td>detector</td>", 1)[1].split("</tr>", 1)[0]

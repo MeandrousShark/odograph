@@ -1,3 +1,4 @@
+{% from "_confirm_dialog.html" import confirm_dialog, confirm_trigger %}
 <div id="vehicles-table">
 <div class="settings-table-scroll settings-table-scroll-vehicles">
 <table class="settings-table">
@@ -23,10 +24,11 @@
         {% if v.active %}
         <button type="button" class="control control-secondary" hx-post="/settings/vehicles/{{ v.id }}/update" hx-include="closest tr"
                 hx-target="#vehicles-table" hx-swap="outerHTML">Save</button>
-        <button type="button" class="danger" title="Deactivate vehicle"
-                hx-post="/settings/vehicles/{{ v.id }}/deactivate"
-                hx-target="#vehicles-table" hx-swap="outerHTML"
-                hx-confirm="Deactivate '{{ v.name }}'? It stays on trips already using it, but drops out of the picker for new trips.">Deactivate</button>
+        {{ confirm_trigger("vehicle-deactivate-" ~ v.id, "Deactivate", "Deactivate vehicle") }}
+        {% call confirm_dialog("vehicle-deactivate-" ~ v.id, "Deactivate '" ~ v.name ~ "'?", "Deactivate vehicle",
+                               "/settings/vehicles/" ~ v.id ~ "/deactivate", "#vehicles-table", "outerHTML") -%}
+          It stays on trips already using it, but drops out of the picker for new trips.
+        {%- endcall %}
         {% else %}
           <span class="muted">inactive</span>
         {% endif %}

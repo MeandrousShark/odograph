@@ -4,7 +4,8 @@ nothing uses hx-confirm.
 Every content page (a template using the shared .page wrapper) is registered
 in exactly one of FOLLOWS_RULES or NOT_YET_MIGRATED. Pages are checked on their
 template source plus the partials they include, since most need
-database-shaped context to render; Account Settings is also checked rendered.
+database-shaped context to render; Account Settings and Settings are also
+checked rendered.
 A page listed in NOT_YET_MIGRATED must still break the rules; once it is clean
 the guard below fails until the entry moves, so the list can only shrink.
 """
@@ -13,6 +14,7 @@ from __future__ import annotations
 import re
 from html.parser import HTMLParser
 from pathlib import Path
+from datetime import datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -25,18 +27,18 @@ TZ = ZoneInfo("UTC")
 
 FOLLOWS_RULES = {
     "account_security.html",
+    "admin_accounts.html",
     "expenses.html",
     "report.html",
     "report_range.html",
     "review.html",
+    "settings.html",
     "stats.html",
+    "tracking.html",
 }
 
 # Page -> the plan 0074 slice that converts its buttons, or "unassigned".
 NOT_YET_MIGRATED = {
-    "settings.html": "C5",
-    "tracking.html": "unassigned",
-    "admin_accounts.html": "unassigned",
     "trip.html": "unassigned",
 }
 
@@ -113,6 +115,7 @@ def _account_security_variants():
 # Rendered pages that follow the rules today.
 RENDERED_PAGES = {
     "account_security.html": _account_security_variants,
+    "settings.html": lambda: {"every row kind": _render_settings()},
 }
 
 
@@ -207,3 +210,94 @@ def test_expenses_commits_with_primary_controls_and_deletes_with_a_destructive_o
     assert len(confirms) == 1
     cancels = [b for b in parser.buttons if "data-expense-delete-cancel" in b]
     assert len(cancels) == 1 and "control-secondary" in cancels[0]["class"].split()
+
+
+def _buttons(page: str) -> list[dict[str, str]]:
+    parser = _ButtonParser()
+    parser.feed(_source_with_includes(page))
+    return parser.buttons
+
+
+def _labelled(page: str) -> dict[str, set[str]]:
+    source = _source_with_includes(page)
+    return {
+        label.strip(): set(classes.split())
+        for classes, label in re.findall(r'<button[^>]*class="([^"]*)"[^>]*>([^<{]+)</button>', source)
+    }
+
+
+def test_settings_saves_with_primary_controls_and_confirms_destructive_actions_in_dialogs():
+    labels = _labelled("settings.html")
+    for label in ("Save time zone", "Save notifications"):
+        assert labels[label] == {"control", "control-primary"}, label
+
+    parser = _ButtonParser()
+    parser.feed(_render_settings())
+    triggers = [b for b in parser.buttons if "data-dialog-open" in b]
+    cancels = [b for b in parser.buttons if "data-dialog-cancel" in b]
+    # Place, rule, restore, undo, vehicle deactivate and odometer delete.
+    assert len(triggers) == 6
+    assert len(cancels) == 6
+    for trigger in triggers:
+        assert set(trigger["class"].split()) == {"control", "control-destructive"}
+        assert trigger["aria-haspopup"] == "dialog"
+        assert trigger["aria-controls"] == trigger["data-dialog-open"]
+        assert "hx-post" not in trigger
+    confirms = [b for b in parser.buttons if "hx-post" in b and "control-destructive" in b["class"].split()]
+    assert sorted(b["hx-post"] for b in confirms) == [
+        "/places/3/delete", "/rules/4/delete",
+        "/settings/boundary_overrides/5/delete", "/settings/boundary_overrides/6/delete",
+        "/settings/odometer/8/delete", "/settings/vehicles/7/deactivate",
+    ]
+
+
+def _render_settings():
+    when = datetime(2026, 7, 1, 9, tzinfo=TZ)
+    vehicle = {"id": 7, "name": "Truck", "make": None, "model": None, "plate": None,
+               "active": True, "is_default": False}
+    return _templates().env.get_template("settings.html").render(
+        user={"id": 1, "name": "admin", "is_admin": True}, csrf="token",
+        preferences=SimpleNamespace(
+            display_tz="UTC", ntfy_topic="", email_to="", odometer_reminder_requested=False,
+            email_weekly_nudge=False, email_monthly_summary=False, email_filing_reminder=False,
+            email_odometer_reminder=False, nudge_weekly_hour=18, odometer_reminder_hour=9,
+            email_digest_hour=9, email_filing_reminder_mmdd="01-15",
+        ),
+        rates=[], vehicles=[vehicle],
+        odometer=[{"vehicle": vehicle, "intervals": [],
+                   "readings": [{"id": 8, "recorded_at": when, "odometer_m": 1609.344, "note": None}]}],
+        places=[{"id": 3, "name": "Office", "kind": "work", "lat": 1.0, "lon": 2.0, "radius_m": 150}],
+        rules=[{"id": 4, "a_desc": "Home", "b_desc": "Work", "category": "personal"}],
+        boundary_overrides=[
+            {"id": 5, "device": "phone", "kind": "discard", "range_start": when,
+             "range_end": when, "point_id": None, "created_at": when},
+            {"id": 6, "device": "phone", "kind": "suppress", "range_start": when,
+             "range_end": when, "point_id": None, "created_at": when},
+        ],
+        device_fixes=[], geocode_enabled=False,
+    )
+
+
+def test_tracking_buttons_use_shared_controls():
+    labels = _labelled("tracking.html")
+    assert labels["Create device"] == {"control", "control-primary"}
+    for label in ("Revoke access", "Revoke shared login"):
+        assert labels[label] == {"control", "control-destructive"}, label
+    for label in ("Copy", "Replace password", "Create replacement password",
+                  "Give this device its own password"):
+        assert labels[label] == {"control", "control-secondary"}, label
+    assert len(_buttons("tracking.html")) == 9
+
+
+def test_admin_accounts_buttons_use_shared_controls():
+    labels = _labelled("admin_accounts.html")
+    for label in ("Create invitation", "Save storage limit"):
+        assert labels[label] == {"control", "control-primary"}, label
+    for label in ("Disable", "Revoke", "Permanently purge account",
+                  "Disable account and start the 30-day deletion window"):
+        assert labels[label] == {"control", "control-destructive"}, label
+    for label in ("Copy link", "Copy token", "Re-enable", "Queue password recovery",
+                  "Resend with a new token", "Cancel deletion and re-enable",
+                  "Reauthenticate with OIDC for this purge"):
+        assert labels[label] == {"control", "control-secondary"}, label
+    assert len(_buttons("admin_accounts.html")) == 13

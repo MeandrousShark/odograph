@@ -223,8 +223,13 @@ async def _http_scenario(spool_root):
                 cur = await raw.execute("SELECT count(*) FROM trips")
                 assert (await cur.fetchone())[0] == 2
             response = await client.post(
-                "/settings/preferences", headers={"X-CSRF-Token": "test-csrf"},
-                data={"display_timezone": "Pacific/Auckland", "email_to": "alpha@example.test", "email_monthly_summary": "1"},
+                "/settings/preferences/timezone", headers=csrf_headers,
+                data={"display_timezone": "Pacific/Auckland"},
+            )
+            assert response.status_code == 204
+            response = await client.post(
+                "/settings/preferences/notifications", headers=csrf_headers,
+                data={"email_to": "alpha@example.test", "email_monthly_summary": "1"},
             )
             assert response.status_code == 204
             async with apool.connection() as conn:
@@ -233,16 +238,16 @@ async def _http_scenario(spool_root):
             assert settings.email_to == "alpha@example.test"
             for topic in ("a?click=x", "../x", "a/b", "a" * 65, "a b"):
                 response = await client.post(
-                    "/settings/preferences", headers=csrf_headers,
-                    data={"display_timezone": "UTC", "ntfy_topic": topic},
+                    "/settings/preferences/notifications", headers=csrf_headers,
+                    data={"ntfy_topic": topic},
                 )
                 assert response.status_code == 400, topic
                 assert response.json()["detail"].startswith("Invalid ntfy topic:")
             async with apool.connection() as conn:
                 assert (await load_account_settings(conn)).ntfy_topic == ""
             response = await client.post(
-                "/settings/preferences", headers=csrf_headers,
-                data={"display_timezone": "Pacific/Auckland", "ntfy_topic": " alerts_1-x ",
+                "/settings/preferences/notifications", headers=csrf_headers,
+                data={"ntfy_topic": " alerts_1-x ",
                       "email_to": "alpha@example.test", "email_monthly_summary": "1"},
             )
             assert response.status_code == 204

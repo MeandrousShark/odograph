@@ -22,14 +22,14 @@
   <label class="admin-copy-field">Invitation link
     <input id="admin-invitation-link" value="{{ invite_result.link }}" readonly>
   </label>
-  <button type="button" class="control" data-copy-target="admin-invitation-link">Copy link</button>
+  <button type="button" class="control control-secondary" data-copy-target="admin-invitation-link">Copy link</button>
   {% else %}
   <p class="muted">A full invitation link is unavailable because the instance URL is not configured. Share the token manually at the invitation page.</p>
   {% endif %}
   <label class="admin-copy-field">One-time invitation token
     <input id="admin-invitation-token" value="{{ invite_result.token }}" readonly>
   </label>
-  <button type="button" class="control" data-copy-target="admin-invitation-token">Copy token</button>
+  <button type="button" class="control control-secondary" data-copy-target="admin-invitation-token">Copy token</button>
   <p id="admin-copy-status" role="status" aria-live="polite">If copying is unavailable, select and copy the field above.</p>
   <p><a href="/admin/accounts">Return to Accounts</a></p>
 </section>
@@ -79,12 +79,12 @@
           {% if account.is_enabled %}
           <form method="post" action="/admin/accounts/{{ account.id }}/disable">
             <input type="hidden" name="csrf_token" value="{{ csrf }}">
-            <button type="submit" class="control">Disable</button>
+            <button type="submit" class="control control-destructive">Disable</button>
           </form>
           {% elif not account.deletion_deadline %}
           <form method="post" action="/admin/accounts/{{ account.id }}/enable">
             <input type="hidden" name="csrf_token" value="{{ csrf }}">
-            <button type="submit" class="control">Re-enable</button>
+            <button type="submit" class="control control-secondary">Re-enable</button>
           </form>
           {% endif %}
           {% elif account.id == user.id %}<span class="muted">Current account</span>{% endif %}
@@ -108,7 +108,7 @@
           {% if account.email_verified and account.is_enabled %}
           <form method="post" action="/admin/accounts/{{ account.id }}/recovery">
             <input type="hidden" name="csrf_token" value="{{ csrf }}">
-            <button type="submit" class="control">Queue password recovery</button>
+            <button type="submit" class="control control-secondary">Queue password recovery</button>
           </form>
           {% elif not account.email_verified %}<span class="muted">Use host-local recovery</span>
           {% else %}<span class="muted">Account disabled</span>{% endif %}
@@ -135,7 +135,7 @@
                   <input type="number" name="account_gib" step="0.01" min="0.01" max="{{ storage.max_gib }}" inputmode="decimal"{% if storage.custom_gib %} value="{{ storage.custom_gib }}"{% endif %}>
                 </label>
                 <p>{% if storage.max_gib == "0.00" %}The instance storage budget has no room for a custom limit on this account.{% else %}Up to {{ storage.max_gib }} GiB fits the instance storage budget for this account.{% endif %} Leave the size empty unless the limit is custom. Lowering a limit keeps existing data; new data is refused while usage is above it.</p>
-                <button type="submit" class="control">Save storage limit</button>
+                <button type="submit" class="control control-primary">Save storage limit</button>
               </form>
             </div>
           </details>
@@ -253,13 +253,13 @@
           <form method="post" action="/admin/invitations/{{ invitation.id }}/resend">
             <input type="hidden" name="csrf_token" value="{{ csrf }}">
             <label><input type="checkbox" name="send_email" value="1"> Send email</label>
-            <button type="submit" class="control">Resend with a new token</button>
+            <button type="submit" class="control control-secondary">Resend with a new token</button>
           </form>
           {% endif %}
           {% if invitation.status == "Open" %}
           <form method="post" action="/admin/invitations/{{ invitation.id }}/revoke">
             <input type="hidden" name="csrf_token" value="{{ csrf }}">
-            <button type="submit" class="control">Revoke</button>
+            <button type="submit" class="control control-destructive">Revoke</button>
           </form>
           {% endif %}
         </td>

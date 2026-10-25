@@ -176,11 +176,11 @@ version-specific; recovery does not depend on clients honoring `Retry-After`.
 
 ## Personal preferences
 
-**Settings > Time zone and notifications** owns the timezone, notification destinations,
-notification choices, and local delivery hours. Mileage rates and default
-vehicle behavior are also account-owned settings. Display, report boundaries,
-manual trip and odometer input, and reminder schedules use the saved account
-timezone.
+**Settings > Preferences** owns the timezone, and **Settings > Notifications**
+owns notification destinations, notification choices, and local delivery
+hours. Mileage rates and default vehicle behavior are also account-owned
+settings. Display, report boundaries, manual trip and odometer input, and
+reminder schedules use the saved account timezone.
 
 On upgrade, the existing account receives the effective values of `DISPLAY_TZ`,
 `NTFY_TOPIC`, the personal `EMAIL_*` settings, reminder hours/switches, and
