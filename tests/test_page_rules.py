@@ -98,6 +98,15 @@ def _render_account_security(**overrides):
     return _templates().env.get_template("account_security.html").render(**context)
 
 
+_SIGNED_IN_APPS = [
+    SimpleNamespace(public_id="A" * 22, device_label="Phone",
+                    created_at=datetime(2026, 10, 1, tzinfo=TZ), last_used_at=None),
+    SimpleNamespace(public_id="B" * 22, device_label="Tablet",
+                    created_at=datetime(2026, 10, 2, tzinfo=TZ),
+                    last_used_at=datetime(2026, 10, 3, tzinfo=TZ)),
+]
+
+
 def _account_security_variants():
     linked = {"email": "a@example.com", "display_name": "A"}
     return {
@@ -109,6 +118,7 @@ def _account_security_variants():
         "provider available": _render_account_security(oidc_configured=True),
         "no password": _render_account_security(has_password=False, oidc_configured=True),
         "verified email": _render_account_security(account_email_verified=True),
+        "signed-in apps": _render_account_security(signed_in_apps=_SIGNED_IN_APPS),
     }
 
 
@@ -135,6 +145,18 @@ def test_account_security_covers_the_avatar_remove_dialog_buttons():
     cancel = [b for b in parser.buttons if "data-avatar-remove-cancel" in b]
     assert len(cancel) == 1
     assert "control" in cancel[0]["class"].split()
+
+
+def test_signed_in_app_revoke_controls_are_destructive_dialog_buttons():
+    parser = _ButtonParser()
+    parser.feed(_render_account_security(signed_in_apps=_SIGNED_IN_APPS))
+    openers = [b for b in parser.buttons if b.get("data-dialog-open", "").startswith("signed-in-app-revoke-")]
+    cancels = [b for b in parser.buttons if "data-dialog-cancel" in b]
+    confirms = [b for b in parser.buttons if b.get("type") == "submit"
+                and "control-destructive" in b.get("class", "").split()]
+    assert len(openers) == 2 and all("control-destructive" in b["class"].split() for b in openers)
+    assert len(cancels) == 2 and all("control-secondary" in b["class"].split() for b in cancels)
+    assert len(confirms) >= 2
 
 
 def _source_with_includes(name: str, seen: set[str] | None = None) -> str:

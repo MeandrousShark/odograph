@@ -224,6 +224,44 @@
   Password input stays in the terminal or protected standard input.</p>
 </section>
 
+<section class="account-security-section" aria-labelledby="signed-in-apps-heading">
+  <h4 id="signed-in-apps-heading">Signed-in apps</h4>
+  {% if signed_in_apps %}
+  <p class="muted">Apps signed in to this account. Revoke one to sign it out; it can sign in again with your approval.</p>
+  <ul class="signed-in-apps">
+    {% for app_grant in signed_in_apps %}
+    <li class="signed-in-app">
+      <div class="signed-in-app-details">
+        <strong class="signed-in-app-label">{{ app_grant.device_label }}</strong>
+        <span class="muted">Signed in {{ app_grant.created_at | local_dt }}</span>
+        <span class="muted">{% if app_grant.last_used_at %}Last used {{ app_grant.last_used_at | local_dt }}{% else %}Never used{% endif %}</span>
+      </div>
+      <button type="button" class="control control-destructive"
+              aria-haspopup="dialog" aria-controls="signed-in-app-revoke-{{ loop.index }}"
+              data-dialog-open="signed-in-app-revoke-{{ loop.index }}">Revoke</button>
+      <dialog id="signed-in-app-revoke-{{ loop.index }}" class="app-dialog"
+              aria-labelledby="signed-in-app-revoke-{{ loop.index }}-title"
+              aria-describedby="signed-in-app-revoke-{{ loop.index }}-description">
+        <form method="post" action="/settings/account/signed-in-apps/revoke"
+              class="trip-delete-dialog-content">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <input type="hidden" name="grant_id" value="{{ app_grant.public_id }}">
+          <h2 id="signed-in-app-revoke-{{ loop.index }}-title">Revoke this app?</h2>
+          <p id="signed-in-app-revoke-{{ loop.index }}-description">{{ app_grant.device_label }} will be signed out and must be approved again to sign back in.</p>
+          <div class="app-dialog-actions">
+            <button type="button" class="control control-secondary" data-dialog-cancel autofocus>Cancel</button>
+            <button type="submit" class="control control-destructive">Revoke app</button>
+          </div>
+        </form>
+      </dialog>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">No apps are signed in to this account.</p>
+  {% endif %}
+</section>
+
 {% if can_sign_out_everywhere %}
 <section class="account-security-section" aria-labelledby="sign-out-everywhere-heading">
   <h4 id="sign-out-everywhere-heading">Sign out everywhere</h4>
