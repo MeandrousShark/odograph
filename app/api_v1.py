@@ -20,7 +20,9 @@ from starlette.responses import JSONResponse
 from app.account_context import control_connection
 from app.accounts import get_account
 from app.api_errors import ApiError, ApiErrorEnvelope, FIELD_REQUIRED, FIELD_UNSUPPORTED, is_api_path
-from app.api_grants import ACCESS_TOKEN_SECONDS, authenticate_access_token, format_instant, refresh_grant
+from app.api_grants import (
+    ACCESS_TOKEN_SECONDS, authenticate_access_token, format_instant, refresh_grant, token_digest,
+)
 from app.auth import _bind_account
 from app.capacity_routes import AdmissionRoute, capacity_policy
 from app.detector.runner import DETECTOR_VERSION
@@ -80,7 +82,7 @@ async def require_api_user(request: Request) -> ApiUser:
         raise ApiError("rate_limited")
     token = _bearer_token(request)
     principal = account = None
-    if token is not None:
+    if token_digest(token) is not None:
         async with control_connection(request.app.state.control_pool) as conn:
             principal = await authenticate_access_token(conn, token)
             if principal is not None:
