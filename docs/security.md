@@ -100,15 +100,17 @@ Every network-reachable route, and what actually guards it:
   `MOBILE_SIGNIN=1`. The signed-in browser must approve each sign-in on a
   confirmation page, which uses the usual CSRF token.
 - **`/api/v1`**: the mobile app's API, always served. `/api/v1/capabilities`
-  is unauthenticated and reports only the product name, API versions and
-  whether new sign-in is available. Every other route needs a bearer token
-  from a revocable grant, whose tokens are stored only as digests and are
-  separate from browser sessions. Exchanging an authorization code for a
-  grant is refused unless `MOBILE_SIGNIN=1`; existing grants keep working
-  when it is off. Each grant appears under **Signed-in apps** in Account
-  Settings, where you can revoke it. Sign out everywhere, a password change or
-  reset, a login-email change, linking or unlinking a provider and disabling
-  an account all end every grant. See
+  is unauthenticated and reports only the product name, API versions, the
+  authorization and token paths, and whether new sign-in is available.
+  `/api/v1/auth/token` takes a one-time authorization code with its verifier,
+  or a refresh token, in the request body; the code exchange is refused unless
+  `MOBILE_SIGNIN=1`. Every other route needs a bearer token from a revocable
+  grant. Grant tokens are stored only as digests and are separate from browser
+  sessions; existing grants keep working when `MOBILE_SIGNIN` is off. Each
+  grant appears under **Signed-in apps** in Account Settings, where you can
+  revoke it. Sign out everywhere, a password change or reset, a login-email
+  change, linking or unlinking a provider and disabling an account all end
+  every grant. See
   [Mobile app sign-in and signed-in apps](accounts.md#mobile-app-sign-in-and-signed-in-apps).
 - **`/signup`**: reachable only when `INITIAL_ADMIN_SIGNUP=1`, no account
   exists, and development auth bypass is off. The first successful transaction

@@ -21,7 +21,7 @@ reproduced here.
   disabling an account sign out every app.
 - `/api/v1` foundation endpoints for the mobile app: capabilities (public),
   the signed-in account, token exchange and refresh, and sign-out. Apart from
-  capabilities and token exchange they accept a bearer token only.
+  capabilities and the token endpoint they accept a bearer token only.
 
 ### Migrations
 
