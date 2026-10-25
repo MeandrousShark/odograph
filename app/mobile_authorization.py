@@ -23,7 +23,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from urllib.parse import urlencode
 
+import psycopg
+from psycopg_pool import PoolTimeout
+
 from app.account_context import control_connection
+from app.capacity import CapacityBusy
 from app.api_grants import (
     ACTIVE_GRANT_LIMIT, IssuedTokens, create_grant, token_digest, valid_public_id,
 )
@@ -116,14 +120,19 @@ async def live_request(conn, cookie_value) -> datetime | None:
 async def signed_in_destination(request, default: str = "/") -> str:
     """Where a successful browser login goes: the confirm page while mobile
     sign-in is on and this browser holds a live pending request, else
-    `default`. Nothing in the URL selects it."""
+    `default`. Nothing in the URL selects it. A failed lookup never fails
+    the login it follows."""
     if not mobile_signin_enabled(request):
         return default
     value = request.cookies.get(COOKIE_NAME)
     if token_digest(value) is None:
         return default
-    async with control_connection(request.app.state.control_pool) as conn:
-        live = await live_request(conn, value)
+    try:
+        async with control_connection(request.app.state.control_pool) as conn:
+            live = await live_request(conn, value)
+    except (psycopg.Error, PoolTimeout, CapacityBusy):
+        log.warning("mobile authorization lookup failed after login; continuing without it")
+        return default
     return CONFIRM_PATH if live is not None else default
 
 
