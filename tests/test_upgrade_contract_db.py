@@ -553,7 +553,7 @@ def test_warning_ack_upgrade_keeps_contract_without_reprovisioning(monkeypatch, 
             await prepare_application_roles(TEST_DB)
             async with pool.connection() as conn:
                 assert await (await conn.execute(
-                    "SELECT MAX(version) FROM schema_migrations")).fetchone() == (49,)
+                    "SELECT MAX(version) FROM schema_migrations")).fetchone() == (50,)
                 assert await (await conn.execute(
                     "SELECT row_to_json(t)::text FROM trips t WHERE id=%s", (trip_id,))).fetchone() == (trip_before,)
                 assert await (await conn.execute(
@@ -698,6 +698,52 @@ def test_mobile_authorization_upgrade_keeps_contract_without_reprovisioning(monk
                 await conn.execute("DELETE FROM accounts WHERE id=42")
                 assert await (await conn.execute(
                     "SELECT count(*) FROM mobile_authorization_codes")).fetchone() == (0,)
+        finally:
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
+            await pool.close()
+    asyncio.run(scenario())
+
+
+def test_api_grant_list_upgrade_keeps_contract_without_reprovisioning(monkeypatch, tmp_path):
+    async def scenario():
+        pool = make_pool(TEST_DB)
+        await pool.open(wait=True)
+        try:
+            await drop_and_recreate_schema(pool)
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR",
+                                _migration_dir(tmp_path, "before_api_grant_list", through=49))
+            await run_migrations(pool)
+            await prepare_application_roles(TEST_DB)
+            async with pool.connection() as conn:
+                await conn.execute(
+                    "INSERT INTO accounts(id,email,password_hash,is_admin) "
+                    "VALUES(42,'upgrade-list@example.invalid','unused',true)")
+                await conn.execute(
+                    "INSERT INTO api_grants(account_id,public_id,device_label,issued_auth_version,"
+                    "access_digest,refresh_digest,access_expires_at) "
+                    "SELECT 42,%s,'Phone',auth_version,%s,%s,now() FROM accounts WHERE id=42",
+                    ("a" * 22, "b" * 64, "c" * 64))
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
+            await run_migrations(pool)
+
+            async def forbidden_reprovision(conn):
+                raise AssertionError("upgrade must validate rather than provision")
+
+            monkeypatch.setattr(application_roles, "_provision", forbidden_reprovision)
+            await prepare_application_roles(TEST_DB)
+            async with application_roles.application_role_pools(TEST_DB) as roles:
+                async with roles.control.connection() as conn:
+                    rows = await (await conn.execute(
+                        "SELECT result_public_id,result_device_label,result_last_used_at "
+                        "FROM public.api_grant_list(42)")).fetchall()
+                    assert rows == [("a" * 22, "Phone", None)]
+                async with roles.runtime.connection() as conn:
+                    with pytest.raises(errors.InsufficientPrivilege):
+                        await conn.execute("SELECT * FROM public.api_grant_list(42)")
+            async with pool.connection() as conn:
+                assert await (await conn.execute(
+                    "SELECT MAX(version) FROM schema_migrations")).fetchone() == (50,)
+                assert await (await conn.execute("SELECT public.storage_usage_consistent()")).fetchone() == (True,)
         finally:
             monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
             await pool.close()

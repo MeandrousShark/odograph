@@ -164,6 +164,23 @@ async def authenticate_access_token(conn, access_token) -> GrantPrincipal | None
     return (await check_access_token(conn, access_token)).principal
 
 
+@dataclass(frozen=True)
+class SignedInApp:
+    public_id: str
+    device_label: str
+    created_at: datetime
+    last_used_at: datetime | None
+
+
+async def list_active_grants(conn, account_id: int) -> list[SignedInApp]:
+    """Display fields of the account's active grants, newest first. Never
+    digests."""
+    cur = await conn.execute(
+        "SELECT result_public_id, result_device_label, result_created_at, "
+        "result_last_used_at FROM public.api_grant_list(%s)", (account_id,))
+    return [SignedInApp(*row) for row in await cur.fetchall()]
+
+
 async def revoke_grant(conn, account_id: int, public_id: str) -> bool:
     """Revoke one grant of this account. Idempotent; True only when this call
     revoked it."""

@@ -285,6 +285,12 @@ MOBILE_AUTHORIZATION_FUNCTION_SPECS = tuple(
 )
 MOBILE_AUTHORIZATION_FUNCTIONS = tuple(spec.signature for spec in MOBILE_AUTHORIZATION_FUNCTION_SPECS)
 FUNCTION_SPECS += MOBILE_AUTHORIZATION_FUNCTION_SPECS
+API_GRANT_LIST_FUNCTION_SPECS = (
+    FunctionSpec("public.api_grant_list(bigint)", CONTROL_ROLE, "050_api_grant_list.sql", MIGRATE_ROLE,
+                 True, "sql", "s"),
+)
+API_GRANT_LIST_FUNCTIONS = tuple(spec.signature for spec in API_GRANT_LIST_FUNCTION_SPECS)
+FUNCTION_SPECS += API_GRANT_LIST_FUNCTION_SPECS
 FUNCTIONS = {spec.signature: spec.caller for spec in FUNCTION_SPECS}
 FUNCTION_OWNERS = {spec.signature: spec.owner for spec in FUNCTION_SPECS}
 # Superseded by migration 034 but never dropped. A --no-privileges restore
@@ -299,6 +305,8 @@ STATE_TABLES = ("managed_role_state", "recovery_metadata")
 def _contract_function_specs(schema_version: int) -> tuple[FunctionSpec, ...]:
     specs = []
     for spec in FUNCTION_SPECS:
+        if schema_version < 50 and spec.signature in API_GRANT_LIST_FUNCTIONS:
+            continue
         if schema_version < 49 and spec.signature in MOBILE_AUTHORIZATION_FUNCTIONS:
             continue
         if schema_version < 48 and spec.signature in API_GRANT_FUNCTIONS:
@@ -422,7 +430,7 @@ def _account_control_update_columns(schema_version: int) -> tuple[str, ...]:
                  if schema_version >= 43 or column != "display_name")
 
 
-def _policy_contract(schema_version: int = 49) -> dict[tuple[str, str], tuple[str, str, str | None, str | None]]:
+def _policy_contract(schema_version: int = 50) -> dict[tuple[str, str], tuple[str, str, str | None, str | None]]:
     expression = "account_id = NULLIF(current_setting('app.account_id'::text,true),''::text)::bigint"
     policies = {(table, "account_isolation"): (RUNTIME_ROLE, "ALL", expression, expression)
                 for table in OWNED_TABLES + PROTECTED_TABLES
@@ -487,7 +495,8 @@ async def _provision(conn) -> None:
                             and (schema_version >= 42 or table not in S2_TABLES)
                             and (schema_version >= 41 or table not in GEOCODE_TABLES))
     contract_functions = {signature: caller for signature, caller in FUNCTIONS.items()
-                          if (schema_version >= 49 or signature not in MOBILE_AUTHORIZATION_FUNCTIONS)
+                          if (schema_version >= 50 or signature not in API_GRANT_LIST_FUNCTIONS)
+                          and (schema_version >= 49 or signature not in MOBILE_AUTHORIZATION_FUNCTIONS)
                           and (schema_version >= 48 or signature not in API_GRANT_FUNCTIONS)
                           and (schema_version >= 47 or signature not in LIMIT_EDITOR_FUNCTIONS)
                           and (schema_version >= 44 or signature not in WARNING_ACK_FUNCTIONS)
@@ -608,7 +617,8 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
                             and (schema_version >= 42 or table not in S2_TABLES)
                             and (schema_version >= 41 or table not in GEOCODE_TABLES))
     contract_functions = {signature: caller for signature, caller in FUNCTIONS.items()
-                          if (schema_version >= 49 or signature not in MOBILE_AUTHORIZATION_FUNCTIONS)
+                          if (schema_version >= 50 or signature not in API_GRANT_LIST_FUNCTIONS)
+                          and (schema_version >= 49 or signature not in MOBILE_AUTHORIZATION_FUNCTIONS)
                           and (schema_version >= 48 or signature not in API_GRANT_FUNCTIONS)
                           and (schema_version >= 47 or signature not in LIMIT_EDITOR_FUNCTIONS)
                           and (schema_version >= 44 or signature not in WARNING_ACK_FUNCTIONS)
@@ -1231,6 +1241,7 @@ async def prepare_application_roles(database_url: str, *, restoring: bool = Fals
                     await _check_contract_functions_exist(
                         conn, (spec.signature for spec in FUNCTION_SPECS
                                if spec.signature in FUNCTIONS and spec.source not in FUNCTION_FILES
+                               and (schema_version >= 50 or spec.signature not in API_GRANT_LIST_FUNCTIONS)
                                and (schema_version >= 49 or spec.signature not in MOBILE_AUTHORIZATION_FUNCTIONS)
                                and (schema_version >= 48 or spec.signature not in API_GRANT_FUNCTIONS)
                                and (schema_version >= 47 or spec.signature not in LIMIT_EDITOR_FUNCTIONS)
