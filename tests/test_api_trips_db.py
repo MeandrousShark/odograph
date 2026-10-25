@@ -397,3 +397,27 @@ def test_api_routes_authenticate_by_bearer_never_by_cookie():
         assert response.status_code == 405
         assert response.json() == _envelope("method_not_allowed")
     _run(check)
+
+
+def test_token_body_cap_and_revoke_keep_api_semantics():
+    async def check(state):
+        # The token route's admission body cap answers in the envelope.
+        oversized = b'{"grant_type": "refresh_token", "refresh_token": "' + b"x" * 70000 + b'"}'
+        response = await state.client.post("/api/v1/auth/token", content=oversized,
+                                           headers={"content-type": "application/json"})
+        assert response.status_code == 413
+        assert response.json() == _envelope("payload_too_large")
+        response = await state.client.get("/api/v1/auth/token")
+        assert response.status_code == 405
+        assert response.json() == _envelope("method_not_allowed")
+        # Revoke is bearer-only: the signed-in browser session cannot reach it.
+        assert state.cookie
+        response = await state.client.post("/api/v1/auth/revoke")
+        assert response.status_code == 401
+        assert response.json() == _envelope("invalid_token")
+        token = state.tokens[state.owner]
+        assert (await state.client.post("/api/v1/auth/revoke", headers=_bearer(token))).status_code == 204
+        response = await _get(state, "/api/v1/trips")
+        assert response.status_code == 401
+        assert (await _get(state, "/api/v1/trips", OTHER)).status_code == 200
+    _run(check)
