@@ -1,6 +1,7 @@
 """Route-level checks for protected OIDC method changes."""
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
 import asyncio
 import functools
 import time
@@ -113,6 +114,7 @@ def _account_page_lookups(monkeypatch):
     monkeypatch.setattr(auth, "get_account", account)
     monkeypatch.setattr(auth, "get_identity_for_account", no_identity)
     monkeypatch.setattr(auth, "is_current_email_verified", unverified)
+    monkeypatch.setattr(auth, "list_active_grants", AsyncMock(return_value=[]))
 
 
 def _assert_rejected(request, response, status_code, *, page="login.html",
@@ -363,6 +365,7 @@ def test_oidc_email_reauth_is_not_started_without_delivery_configuration(monkeyp
     monkeypatch.setattr(auth, "get_account", get_account)
     monkeypatch.setattr(auth, "get_identity_for_account", identity)
     monkeypatch.setattr(auth, "is_current_email_verified", unverified)
+    monkeypatch.setattr(auth, "list_active_grants", AsyncMock(return_value=[]))
 
     response = asyncio.run(_endpoint("/settings/account/oidc/reauth", "POST")(
         request, action=auth.PURPOSE_CHANGE, target="new@example.com",
@@ -568,6 +571,7 @@ def test_method_routes_hold_bounded_verification_after_cancellation(monkeypatch,
     monkeypatch.setattr(auth, "verify_password", verify)
     monkeypatch.setattr(auth, "get_identity_for_account", identity)
     monkeypatch.setattr(auth, "is_current_email_verified", verified)
+    monkeypatch.setattr(auth, "list_active_grants", AsyncMock(return_value=[]))
     endpoint = _endpoint(path, "POST")
 
     async def call():
@@ -782,6 +786,7 @@ def test_oidc_only_password_post_without_proof_never_hashes(monkeypatch):
     monkeypatch.setattr(auth, "get_account", get_account)
     monkeypatch.setattr(auth, "get_identity_for_account", identity)
     monkeypatch.setattr(auth, "is_current_email_verified", verified)
+    monkeypatch.setattr(auth, "list_active_grants", AsyncMock(return_value=[]))
     monkeypatch.setattr(auth, "hash_password", hash_password)
     endpoint = _endpoint("/settings/account/password", "POST")
     user = {"id": 7, "email": "old@example.com"}
@@ -832,6 +837,7 @@ def test_oidc_only_password_addition_consumes_proof_before_hash(monkeypatch):
     monkeypatch.setattr(auth, "replace_password", replace)
     monkeypatch.setattr(auth, "get_identity_for_account", identity)
     monkeypatch.setattr(auth, "is_current_email_verified", verified)
+    monkeypatch.setattr(auth, "list_active_grants", AsyncMock(return_value=[]))
     monkeypatch.setattr(auth, "owned_thread", to_thread)
 
     response = asyncio.run(_endpoint("/settings/account/password", "POST")(
@@ -884,6 +890,7 @@ def test_oidc_only_email_request_requires_target_bound_proof(monkeypatch):
     monkeypatch.setattr(auth, "issue_email_challenge", issue)
     monkeypatch.setattr(auth, "get_identity_for_account", identity)
     monkeypatch.setattr(auth, "is_current_email_verified", verified)
+    monkeypatch.setattr(auth, "list_active_grants", AsyncMock(return_value=[]))
 
     response = asyncio.run(_endpoint("/settings/account/email/change/request", "POST")(
         request, user={"id": 7, "email": "old@example.com"},

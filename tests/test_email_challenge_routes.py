@@ -1,6 +1,7 @@
 """Focused route coverage for email challenges without a database or SMTP."""
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
 import asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -78,6 +79,7 @@ def _app(monkeypatch, *, smtp_host="smtp.example.com"):
     monkeypatch.setattr(auth, "get_account", fake_get_account)
     monkeypatch.setattr(auth, "_verified_account", fake_verified)
     monkeypatch.setattr(auth, "is_current_email_verified", fake_verified_state)
+    monkeypatch.setattr(auth, "list_active_grants", AsyncMock(return_value=[]))
     monkeypatch.setattr(auth, "email_challenge_send_usable", fake_send_usable)
 
     async def fake_user(request: Request):
