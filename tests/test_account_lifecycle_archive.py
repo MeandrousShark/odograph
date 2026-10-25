@@ -20,6 +20,7 @@ from app.application_roles import (
     prepare_application_restore,
     prepare_application_roles,
 )
+from app.api_grants import authenticate_access_token, create_grant, refresh_grant
 from app.db import make_pool, run_migrations
 from app.oidc_attempts import _digest
 from tests.auth_db_fixtures import auth_config
@@ -88,6 +89,9 @@ async def _seed_source(database_url):
                 )
             actor = {"id": actor_id, "auth_version": 1, "is_admin": True, "is_enabled": True}
             async with roles.control.connection() as conn:
+                grant = await create_grant(conn, actor_id, 1, "Archived phone")
+                assert await authenticate_access_token(conn, grant.access_token) is not None
+            async with roles.control.connection() as conn:
                 assert await request_account_deletion(
                     conn, actor, first["id"], email=first["email"], acknowledge=True,
                 ) == "scheduled"
@@ -104,6 +108,7 @@ async def _seed_source(database_url):
                     ),
                     "reset": secrets.token_urlsafe(32),
                     "dual_id": ids["dual@example.invalid"],
+                    "grant": grant,
                 }
                 assert proofs["invitation"] and proofs["verification"]
                 assert await issue_password_reset(
@@ -248,6 +253,10 @@ async def _assert_restored_state(database_url, first, actor, cookie, proofs, *, 
             assert (await client.get("/admin/accounts")).status_code == 303
             await client.post(f"/test/session/{actor['id']}/{restored_version}")
             assert (await client.get("/admin/accounts")).status_code == 200
+        async with roles.control.connection() as conn:
+            # A grant carried by the archive must not authenticate or refresh.
+            assert await authenticate_access_token(conn, proofs["grant"].access_token) is None
+            assert (await refresh_grant(conn, proofs["grant"].refresh_token)).tokens is None
         async with roles.control.connection() as conn:
             from psycopg.errors import UniqueViolation
 
