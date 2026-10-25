@@ -17,9 +17,9 @@ from app.auth import check_form_csrf, require_user, _ensure_csrf
 from app.capacity_routes import AdmissionRoute, busy_response, capacity_policy
 from app.ingest import client_ip
 from app.mobile_authorization import (
-    AUTHORIZE_PATH, CONFIRM_PATH, COOKIE_NAME, REQUEST_SECONDS, approve_request, callback_url,
-    deny_request, mobile_signin_enabled, registered_callback, review_request, start_request,
-    valid_challenge, valid_state,
+    AUTHORIZE_PATH, CONFIRM_PATH, REQUEST_SECONDS, approve_request, binding_matches, callback_url,
+    cookie_name, decision_binding, deny_request, mobile_signin_enabled, pending_cookie,
+    registered_callback, review_request, start_request, valid_challenge, valid_state,
 )
 
 INVALID_CLIENT_HEADING = "Sign-in request not recognized"
@@ -49,7 +49,7 @@ def _cookie_options(request: Request) -> dict:
 
 
 def _clear_cookie(request: Request, response):
-    response.delete_cookie(COOKIE_NAME, **_cookie_options(request))
+    response.delete_cookie(cookie_name(request), **_cookie_options(request))
     return response
 
 
@@ -91,7 +91,7 @@ def make_router() -> APIRouter:
             return RedirectResponse(callback_url(redirect_uri, **params), status_code=303)
         async with control_connection(request.app.state.control_pool) as conn:
             started = await start_request(
-                conn, previous_cookie=request.cookies.get(COOKIE_NAME), client_id=client_id,
+                conn, previous_cookie=pending_cookie(request), client_id=client_id,
                 redirect_uri=redirect_uri, code_challenge=challenge, state=state,
                 device_label=normalize_device_label(labels[0] if labels else None),
                 replaces=replaces[0] if replaces else None,
@@ -100,21 +100,23 @@ def make_router() -> APIRouter:
             return busy_response(request)
         signed_in = request.app.state.config.dev_no_auth or "account_id" in request.session
         response = RedirectResponse(CONFIRM_PATH if signed_in else "/login", status_code=303)
-        response.set_cookie(COOKIE_NAME, started.cookie_value, max_age=REQUEST_SECONDS,
+        response.set_cookie(cookie_name(request), started.cookie_value, max_age=REQUEST_SECONDS,
                             **_cookie_options(request))
         return response
 
     @router.get(CONFIRM_PATH)
     async def confirm(request: Request, user: dict = Depends(require_user)):
+        cookie = pending_cookie(request)
         async with control_connection(request.app.state.control_pool) as conn:
             review = await review_request(
-                conn, request.cookies.get(COOKIE_NAME), user["id"], request.state.principal.auth_version)
+                conn, cookie, user["id"], request.state.principal.auth_version)
         if review is None:
             return _expired(request, user)
         return request.app.state.templates.TemplateResponse(
             request, "mobile_authorize_confirm.html",
             {"user": user, "csrf": _ensure_csrf(request), "account_email": user["email"],
-             "review": review, "grant_limit": ACTIVE_GRANT_LIMIT},
+             "review": review, "grant_limit": ACTIVE_GRANT_LIMIT,
+             "binding": decision_binding(request, cookie)},
         )
 
     @router.post(CONFIRM_PATH)
@@ -122,15 +124,19 @@ def make_router() -> APIRouter:
         request: Request,
         decision: str = Form(...),
         csrf_token: str = Form(...),
+        binding: str = Form(""),
         user: dict = Depends(require_user),
     ):
         check_form_csrf(request, csrf_token)
         if decision not in ("approve", "deny"):
             raise HTTPException(status_code=400)
+        cookie = pending_cookie(request)
+        if not binding_matches(request, cookie, binding):
+            return _expired(request, user)
         finish = approve_request if decision == "approve" else deny_request
         async with control_connection(request.app.state.control_pool) as conn:
             completion = await finish(
-                conn, request.cookies.get(COOKIE_NAME), user["id"], request.state.principal.auth_version)
+                conn, cookie, user["id"], request.state.principal.auth_version)
         if completion is None:
             return _expired(request, user)
         response = request.app.state.templates.TemplateResponse(

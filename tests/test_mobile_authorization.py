@@ -19,7 +19,7 @@ from app.access_log import QueryStringRedactionFilter
 from app.api_v1 import WebSessionMiddleware
 from app.main import make_templates
 from app.mobile_authorization import (
-    CLIENTS, COOKIE_NAME, Completion, PendingReview, ReplacedGrant, callback_url, pkce_matches,
+    CLIENTS, COOKIE_NAME, HOST_COOKIE_NAME, Completion, PendingReview, ReplacedGrant, callback_url, pkce_matches,
     registered_callback, valid_challenge, valid_state,
 )
 from app.mobile_routes import INVALID_CLIENT_MESSAGE, RATE_LIMITED_MESSAGE, make_router
@@ -294,10 +294,35 @@ def test_a_failed_pending_lookup_falls_back_to_the_default_destination(error_nam
              "CapacityBusy": CapacityBusy("busy")}[error_name]
     cookie = "K" * 43
     request = SimpleNamespace(
-        app=SimpleNamespace(state=SimpleNamespace(config=SimpleNamespace(mobile_signin=True),
+        app=SimpleNamespace(state=SimpleNamespace(config=SimpleNamespace(mobile_signin=True, dev_no_auth=False),
                                                   control_pool=_FailingPool(error))),
-        cookies={COOKIE_NAME: cookie})
+        cookies={HOST_COOKIE_NAME: cookie})
     caplog.set_level(logging.DEBUG)
     assert asyncio.run(signed_in_destination(request)) == "/"
     assert "mobile authorization lookup failed" in caplog.text
     assert cookie not in caplog.text
+
+
+def test_cookie_name_is_host_prefixed_unless_dev_no_auth():
+    from app.mobile_authorization import cookie_name
+    def request(dev):
+        return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+            config=SimpleNamespace(dev_no_auth=dev))))
+    assert cookie_name(request(False)) == "__Host-odograph_mobile_authorization"
+    assert cookie_name(request(True)) == "odograph_mobile_authorization" == COOKIE_NAME
+
+
+def test_decision_binding_is_keyed_and_tied_to_the_cookie():
+    from app.mobile_authorization import binding_matches, decision_binding
+    def request(secret):
+        return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+            config=SimpleNamespace(session_secret=secret))))
+    first, second = "A" * 43, "B" * 43
+    bound = decision_binding(request("one"), first)
+    assert binding_matches(request("one"), first, bound)
+    assert not binding_matches(request("one"), second, bound)
+    assert not binding_matches(request("two"), first, bound)
+    for bad in (None, "", "x" * 64):
+        assert not binding_matches(request("one"), first, bad)
+    assert not binding_matches(request("one"), None, bound)
+    assert not binding_matches(request("one"), "short", bound)

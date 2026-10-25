@@ -9,7 +9,7 @@
     </div>
   </div>
 
-  <p>Device: <strong>{{ review.device_label }}</strong></p>
+  <p>Device name reported by the app: <strong>{{ review.device_label }}</strong></p>
 
   {% if review.at_limit %}
   <div class="notice notice-danger form-error-summary" role="alert">
@@ -18,6 +18,7 @@
   </div>
   <form method="post" action="/mobile/authorize/confirm" class="auth-form">
     <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <input type="hidden" name="binding" value="{{ binding }}">
     <button type="submit" name="decision" value="deny" class="control control-primary auth-submit">Return to the app</button>
   </form>
   {% else %}
@@ -28,6 +29,7 @@
   <p>Approve only if you started this sign-in from the Odograph app on this device. The app will see the same trips and settings as this account.</p>
   <form method="post" action="/mobile/authorize/confirm" class="auth-form">
     <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <input type="hidden" name="binding" value="{{ binding }}">
     <button type="submit" name="decision" value="approve" class="control control-primary auth-submit">Approve</button>
     <button type="submit" name="decision" value="deny" class="control control-secondary auth-submit">Deny</button>
   </form>

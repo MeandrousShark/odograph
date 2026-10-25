@@ -39,7 +39,11 @@ log = logging.getLogger(__name__)
 CLIENTS = {"odograph-ios": "odograph://auth/callback"}
 AUTHORIZE_PATH = "/mobile/authorize"
 CONFIRM_PATH = "/mobile/authorize/confirm"
+# The __Host- prefix needs Secure, Path=/ and no Domain; the plain name is
+# only for DEV_NO_AUTH over plain HTTP.
 COOKIE_NAME = "odograph_mobile_authorization"
+HOST_COOKIE_NAME = "__Host-" + COOKIE_NAME
+_BINDING_PREFIX = b"odograph-mobile-confirm-v1\0"
 # The database owns these; mirrored for responses and tests.
 REQUEST_SECONDS = 10 * 60
 CODE_SECONDS = 60
@@ -117,6 +121,27 @@ async def live_request(conn, cookie_value) -> datetime | None:
         return (await cur.fetchone())[0]
 
 
+def cookie_name(request) -> str:
+    return COOKIE_NAME if request.app.state.config.dev_no_auth else HOST_COOKIE_NAME
+
+
+def pending_cookie(request) -> str | None:
+    return request.cookies.get(cookie_name(request))
+
+
+def decision_binding(request, cookie_value) -> str:
+    """Ties a confirm form to the pending request it showed, so a request
+    swapped in another tab between review and decision is not approved."""
+    key = request.app.state.config.session_secret.encode()
+    return hmac.new(key, _BINDING_PREFIX + str(cookie_value).encode(), hashlib.sha256).hexdigest()
+
+
+def binding_matches(request, cookie_value, submitted) -> bool:
+    if not isinstance(submitted, str) or token_digest(cookie_value) is None:
+        return False
+    return hmac.compare_digest(decision_binding(request, cookie_value), submitted)
+
+
 async def signed_in_destination(request, default: str = "/") -> str:
     """Where a successful browser login goes: the confirm page while mobile
     sign-in is on and this browser holds a live pending request, else
@@ -124,7 +149,7 @@ async def signed_in_destination(request, default: str = "/") -> str:
     the login it follows."""
     if not mobile_signin_enabled(request):
         return default
-    value = request.cookies.get(COOKIE_NAME)
+    value = pending_cookie(request)
     if token_digest(value) is None:
         return default
     try:
