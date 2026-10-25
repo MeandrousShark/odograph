@@ -16,7 +16,7 @@ AS $body$
       AND a.auth_version = g.issued_auth_version
       AND g.revoked_at IS NULL
       AND GREATEST(g.created_at, COALESCE(g.last_used_at, g.created_at))
-          > pg_catalog.clock_timestamp() - interval '60 days'
+          > pg_catalog.now() - interval '60 days'
     ORDER BY g.created_at DESC, g.id DESC
 $body$;
 
