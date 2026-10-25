@@ -8,6 +8,7 @@ else is `validation_failed`, never silently "no filter".
 from __future__ import annotations
 
 import re
+import unicodedata
 from datetime import date, datetime, timedelta
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -153,6 +154,14 @@ def _day(field: str, value: str | None) -> date | None:
         raise _invalid(field) from None
 
 
+def _search(value: str | None) -> str:
+    """The trimmed search term. Control characters, NUL among them, are
+    refused: no stored text holds them, and the database rejects NUL."""
+    if value is not None and any(unicodedata.category(char) == "Cc" for char in value):
+        raise _invalid("q")
+    return (value or "").strip()
+
+
 def _vehicle(value: str | None) -> int | str | None:
     if value is None or value == VEHICLE_FILTER_UNASSIGNED:
         return value
@@ -256,7 +265,7 @@ def make_router() -> APIRouter:
         tz = request.state.config.display_tz
         start, end = _day("from", from_), _day("to", to)
         vehicle_id = _vehicle(vehicle)
-        term = (q or "").strip()
+        term = _search(q)
         digest = filter_digest("trips", {
             "category": category or "", "from": start.isoformat() if start else "",
             "to": end.isoformat() if end else "", "vehicle": "" if vehicle_id is None else str(vehicle_id),
@@ -299,7 +308,7 @@ def make_router() -> APIRouter:
         tz = request.state.config.display_tz
         start, end = _day("from", from_), _day("to", to)
         vehicle_id = _vehicle(vehicle)
-        term = (q or "").strip()
+        term = _search(q)
         digest = filter_digest("review", {
             "from": start.isoformat() if start else "", "to": end.isoformat() if end else "",
             "vehicle": "" if vehicle_id is None else str(vehicle_id), "q": term,

@@ -309,6 +309,8 @@ def test_filters_accept_only_documented_values():
             ({"vehicle": "abc"}, "vehicle"), ({"vehicle": "0"}, "vehicle"),
             ({"vehicle": str(2**63)}, "vehicle"), ({"from": "2026-13-01"}, "from"),
             ({"to": "20260401"}, "to"), ({"limit": "0"}, "limit"), ({"limit": "201"}, "limit"),
+            ({"q": "a\x00b"}, "q"), ({"q": "\x00"}, "q"), ({"q": "tab\there"}, "q"),
+            ({"q": "line\nbreak"}, "q"), ({"q": "del\x7f"}, "q"), ({"q": "c1\x85"}, "q"),
         ):
             response = await _get(state, "/api/v1/trips", **params)
             assert response.status_code == 422, params
@@ -316,6 +318,13 @@ def test_filters_accept_only_documented_values():
             assert list(response.json()["error"]["fields"]) == [field]
         response = await _get(state, "/api/v1/review", vehicle="x")
         assert response.status_code == 422
+        for term in ("\x00", "a\x00b", "x\x1fy"):
+            response = await _get(state, "/api/v1/review", q=term)
+            assert response.status_code == 422, repr(term)
+            assert response.json()["error"]["fields"] == {"q": "This value is not valid."}
+        # Ordinary non-ASCII search text is still accepted.
+        assert (await _get(state, "/api/v1/trips", q="caf\u00e9 \u8eca")).status_code == 200
+        assert (await _get(state, "/api/v1/review", q="caf\u00e9")).status_code == 200
     _run(check)
 
 
