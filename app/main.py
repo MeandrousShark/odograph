@@ -14,11 +14,12 @@ from jinja2 import pass_context
 from fastapi import FastAPI, Request
 from fastapi.templating import Jinja2Templates
 from starlette.datastructures import MutableHeaders
-from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.staticfiles import StaticFiles
 
-from app import admin, auth, ingest, portable, ui
+from app import admin, api_v1, auth, ingest, portable, ui
+from app.api_errors import is_api_path, register_api_errors
+from app.api_v1 import WebSessionMiddleware
 from app.auth import AuthRedirect
 from app.account_context import AccountPrincipal, control_connection
 from app.account_workers import AccountWorker, BackgroundScheduler
@@ -465,6 +466,11 @@ def create_app(config: Config | None = None) -> FastAPI:
     app.state.login_limiter = FailedAuthLimiter(
         cfg.login_auth_max_failures, cfg.login_auth_window_s
     )
+    # Bearer and refresh failures, kept apart from browser login so a
+    # misbehaving app cannot lock its user out of the sign-in that recovers it.
+    app.state.api_auth_limiter = FailedAuthLimiter(
+        cfg.login_auth_max_failures, cfg.login_auth_window_s
+    )
     # Password reset counts every attempt, not only failures, in bounded
     # key maps: a public request never learns whether an account exists.
     app.state.reset_request_client_limiter = AttemptLimiter(
@@ -478,7 +484,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     app.state.password_reset_queue = None
 
     app.add_middleware(
-        SessionMiddleware,
+        WebSessionMiddleware,
         secret_key=cfg.session_secret,
         same_site="lax",
         https_only=not cfg.dev_no_auth,
@@ -505,11 +511,12 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.exception_handler(CapacityBusy)
     async def _capacity_busy(request: Request, exc: CapacityBusy):
-        if getattr(request.state, "_capacity_mutation_committed", False):
+        if not is_api_path(request.url.path) and getattr(request.state, "_capacity_mutation_committed", False):
             return Response(status_code=204, headers={"HX-Refresh": "true"})
         return busy_response(request)
 
     register_storage_errors(app)
+    register_api_errors(app)
 
     @app.get("/healthz")
     async def healthz(request: Request):
@@ -522,6 +529,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     app.include_router(ui.make_router())
     app.include_router(admin.make_router())
     app.include_router(portable.make_router())
+    app.include_router(api_v1.make_router())
     app.mount("/static", RevalidatingStaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
     return app
