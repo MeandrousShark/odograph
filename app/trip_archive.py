@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from psycopg.rows import dict_row
 
 from app.account_context import account_id
-from app.trip_queries import DISPLAY_DISTANCE_SQL, TRIP_COLUMNS, TripFilter
+from app.trip_queries import DISPLAY_DISTANCE_SQL, REPORT_TRIP_COLUMNS, TRIP_COLUMNS, TripFilter
 
 MONTH_AGGREGATE_COLUMNS_SQL = (
     "count(*) AS trip_count, "
@@ -91,7 +91,8 @@ async def fetch_trip_page(
 
     Each page is its own query, with no snapshot: a trip unchanged for the
     whole traversal appears exactly once, while an edit that moves a trip
-    across the cursor can repeat or skip it.
+    across the cursor can repeat or skip it. Rows carry the report
+    projection, without the continuity lookups the web rows render.
     """
     where, params = filters.where(account_id(conn))
     if after is not None:
@@ -99,7 +100,7 @@ async def fetch_trip_page(
         params.extend(after)
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
-        f"SELECT {TRIP_COLUMNS} FROM trips {where} ORDER BY started_at DESC, id DESC LIMIT %s",
+        f"SELECT {REPORT_TRIP_COLUMNS} FROM trips {where} ORDER BY started_at DESC, id DESC LIMIT %s",
         [*params, limit + 1],
     )
     rows = await cur.fetchall()
