@@ -1,0 +1,9 @@
+{
+  "product": "odograph",
+  "api_versions": ["v1"],
+  "authorization": {
+    "authorize_path": "/mobile/authorize",
+    "token_path": "/api/v1/auth/token"
+  },
+  "mobile_signin_available": false
+}
