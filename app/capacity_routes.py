@@ -111,6 +111,7 @@ class AdmissionRoute(APIRoute):
         return self.body_field is not None and isinstance(self.body_field.field_info, FormParameter)
 
     def protected_dependency(self):
+        from app.api_v1 import require_api_user
         from app.auth import require_admin, require_legacy_establishment, require_report_user, require_user
         calls = []
         def visit(dependant):
@@ -118,7 +119,8 @@ class AdmissionRoute(APIRoute):
             for child in dependant.dependencies:
                 visit(child)
         visit(self.dependant)
-        for dependency in (require_admin, require_legacy_establishment, require_report_user, require_user):
+        for dependency in (require_api_user, require_admin, require_legacy_establishment,
+                           require_report_user, require_user):
             if dependency in calls:
                 return dependency
         return None
@@ -284,7 +286,11 @@ class AdmissionRoute(APIRoute):
                              capacity_setting(manager, "capacity_auth_body_timeout_s"))
             else:
                 from app.auth import require_import_user, require_user
-                dependency = require_import_user if importing else (self.protected_dependency() or require_user)
+                dependency = require_import_user if importing else self.protected_dependency()
+                if dependency is None:
+                    # An API path never falls back to the browser session.
+                    from app.api_v1 import require_api_user
+                    dependency = require_api_user if is_api_path(self.path) else require_user
                 user = await _dependency(request, dependency)
                 if isinstance(user, Response):
                     return await user(scope, receive, send)
