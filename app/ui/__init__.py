@@ -79,7 +79,7 @@ from app.ui.reports import (  # noqa: F401
 from app.ui.review import (  # noqa: F401
     _fetch_review_card,
     _render_review_card,
-    _review_filter_sql,
+    _review_filters,
     _review_url,
 )
 from app.ui.settings import (  # noqa: F401

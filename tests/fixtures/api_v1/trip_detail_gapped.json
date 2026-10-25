@@ -1,0 +1,109 @@
+{
+  "id": 1,
+  "source": "detected",
+  "imported": false,
+  "started_at": "2026-04-14T15:00:00.000000Z",
+  "ended_at": "2026-04-14T15:20:00.000000Z",
+  "local_date": "2026-04-14",
+  "distance_m": 2310.25,
+  "distance_raw_m": 2400.5,
+  "distance_snapped_m": 2310.25,
+  "snap_status": "ok",
+  "category": "business",
+  "exclusion": null,
+  "purpose": "Client visit",
+  "notes": "Gap near the tunnel",
+  "vehicle_id": 2,
+  "vehicle_name": "My Car",
+  "start": {
+    "name": null,
+    "label": null,
+    "address": null,
+    "lat": 47.6,
+    "lon": -122.33,
+    "description": "47.6000,-122.3300"
+  },
+  "end": {
+    "name": null,
+    "label": null,
+    "address": null,
+    "lat": 47.62,
+    "lon": -122.31,
+    "description": "47.6200,-122.3100"
+  },
+  "has_gap": true,
+  "point_count": 42,
+  "has_route": true,
+  "expense_count": 1,
+  "route_raw": {
+    "type": "MultiLineString",
+    "coordinates": [
+      [
+        [
+          -122.33,
+          47.6
+        ],
+        [
+          -122.32,
+          47.61
+        ],
+        [
+          -122.31,
+          47.62
+        ]
+      ]
+    ]
+  },
+  "route_snapped": {
+    "type": "MultiLineString",
+    "coordinates": [
+      [
+        [
+          -122.33,
+          47.6
+        ],
+        [
+          -122.325,
+          47.605
+        ]
+      ],
+      [
+        [
+          -122.315,
+          47.615
+        ],
+        [
+          -122.31,
+          47.62
+        ]
+      ]
+    ]
+  },
+  "stays": [
+    {
+      "position": "start",
+      "lat": 47.601,
+      "lon": -122.331
+    },
+    {
+      "position": "end",
+      "lat": 47.621,
+      "lon": -122.309
+    }
+  ],
+  "has_previous_trip": false,
+  "has_next_trip": true,
+  "expenses": [
+    {
+      "id": 1,
+      "vehicle_id": 2,
+      "vehicle_name": "My Car",
+      "incurred_on": "2026-04-14",
+      "category": "parking",
+      "amount": "12.34",
+      "treatment": "fully_business",
+      "notes": "Garage",
+      "conflicts": []
+    }
+  ]
+}

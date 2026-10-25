@@ -5,7 +5,7 @@ week-normalization and bucketing rules are the part that must be exactly
 right, so they live here where they're testable without a database.
 
 Nothing in this module issues a query or knows about FastAPI/Jinja; it
-consumes already-fetched `TRIP_COLUMNS` rows (app/ui/_common.py) and an
+consumes already-fetched `TRIP_COLUMNS` rows (app/trip_queries.py) and an
 already-summed expense total, and returns a tree of frozen dataclasses for a
 template to render.
 """

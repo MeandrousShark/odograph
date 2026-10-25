@@ -4,21 +4,21 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from psycopg import errors
-from psycopg.rows import dict_row
 from starlette.responses import Response
 
 from app.account_context import account_id
 from app.auth import require_csrf, require_user
 from app.page import render_page, render_template
+from app.review_queue import next_review_trip, review_filter
+from app.trip_queries import TripFilter
+from app.trip_reads import fetch_route_geojson
 from app.vehicles import list_vehicles
 
 from app.ui._common import (
     EXCLUSIONS,
-    TRIP_COLUMNS,
     _fetch_recent_purposes,
     _parse_vehicle_form,
     _parse_vehicle_id,
-    _trip_filter_sql,
     _url_with_filters,
     parse_date_range,
 )
@@ -33,7 +33,7 @@ def _review_url(from_str: str, to_str: str, vehicle_str: str, q_str: str = "") -
 
 
 async def _fetch_review_card(
-    conn, where: str, params: list, cursor: tuple[datetime, int] | None,
+    conn, filters: TripFilter, cursor: tuple[datetime, int] | None,
     *, inclusive: bool = False,
 ) -> dict:
     """One review card (or the lack of one): the oldest unclassified trip
@@ -51,57 +51,29 @@ async def _fetch_review_card(
     the undone trip's own position as cursor, to bring that exact trip back
     to the card instead of the trip after it.
     """
-    where += " AND" if where else "WHERE"
-    where += " trips.account_id = %s"
-    params = [*params, account_id(conn)]
-    extra_where, extra_params = "", []
-    if cursor is not None:
-        op = ">=" if inclusive else ">"
-        extra_where = f" AND (started_at, id) {op} (%s, %s)"
-        extra_params = list(cursor)
-    cur = conn.cursor(row_factory=dict_row)
-    await cur.execute(
-        f"SELECT {TRIP_COLUMNS} FROM trips {where}{extra_where} "
-        "ORDER BY started_at, id LIMIT 1",
-        [*params, *extra_params],
-    )
-    trip = await cur.fetchone()
+    trip, remaining = await next_review_trip(conn, filters, cursor, inclusive=inclusive)
     if trip is None:
         return {
             "trip": None, "remaining": 0,
             "state": "empty" if cursor is None else "done",
             "path_geojson": None, "path_snapped_geojson": None,
         }
-    remaining_cur = await conn.execute(
-        f"SELECT count(*) FROM trips {where} AND (started_at, id) >= (%s, %s)",
-        [*params, trip["started_at"], trip["id"]],
-    )
-    remaining = (await remaining_cur.fetchone())[0]
     path_geojson = path_snapped_geojson = None
     if trip["source"] == "detected":
-        path_cur = await conn.execute(
-            "SELECT ST_AsGeoJSON(path), ST_AsGeoJSON(path_snapped) FROM trips WHERE id = %s AND account_id = %s",
-            (trip["id"], account_id(conn)),
-        )
-        row = await path_cur.fetchone()
-        if row:
-            path_geojson, path_snapped_geojson = row
+        path_geojson, path_snapped_geojson = await fetch_route_geojson(conn, trip["id"])
     return {
         "trip": trip, "remaining": remaining, "state": "card",
         "path_geojson": path_geojson, "path_snapped_geojson": path_snapped_geojson,
     }
 
 
-def _review_filter_sql(
+def _review_filters(
     request: Request, from_: str, to: str, vehicle: str, q: str = ""
-) -> tuple[str, list]:
+) -> TripFilter:
     """The unclassified-pinned filter every `/review` route shares."""
     tz = request.state.config.display_tz
     from_dt, to_dt = parse_date_range(from_, to, tz)
-    return _trip_filter_sql(
-        "unclassified", from_dt, to_dt, _parse_vehicle_id(vehicle), q=q,
-        owner_id=request.state.principal.account_id,
-    )
+    return review_filter(from_dt, to_dt, _parse_vehicle_id(vehicle), q)
 
 
 async def _render_review_card(
@@ -149,9 +121,9 @@ def register(router: APIRouter) -> None:
             vehicle: str = Query(""),
             q: str = Query(""),
         ):
-            where, params = _review_filter_sql(request, from_, to, vehicle, q)
+            filters = _review_filters(request, from_, to, vehicle, q)
             async with request.state.account_pool.connection() as conn:
-                card = await _fetch_review_card(conn, where, params, cursor=None)
+                card = await _fetch_review_card(conn, filters, cursor=None)
                 return await _render_review_card(
                     request, conn, "review.html", card, from_, to, vehicle, q,
                     user=user, csrf=request.session.get("csrf", ""),
@@ -171,10 +143,10 @@ def register(router: APIRouter) -> None:
             trip's id. Its own `(started_at, id)` becomes the cursor, so a
             skipped trip can't reappear within this pass.
             """
-            where, params = _review_filter_sql(request, from_, to, vehicle, q)
+            filters = _review_filters(request, from_, to, vehicle, q)
             async with request.state.account_pool.connection() as conn:
                 cursor = await _trip_position(conn, after)
-                card = await _fetch_review_card(conn, where, params, cursor)
+                card = await _fetch_review_card(conn, filters, cursor)
                 return await _render_review_card(
                     request, conn, "_review_card.html", card, from_, to, vehicle, q,
                 )
@@ -201,7 +173,7 @@ def register(router: APIRouter) -> None:
             exclusion = exclusion if isinstance(exclusion, str) else ""
             if exclusion and exclusion not in EXCLUSIONS:
                 raise HTTPException(status_code=400, detail="Unknown exclusion")
-            where, params = _review_filter_sql(request, from_, to, vehicle, q)
+            filters = _review_filters(request, from_, to, vehicle, q)
             notes_value = notes if isinstance(notes, str) else ""
             vehicle_value = vehicle_id if isinstance(vehicle_id, str) else ""
             async with request.state.account_pool.connection() as conn:
@@ -220,7 +192,7 @@ def register(router: APIRouter) -> None:
                     raise HTTPException(status_code=400, detail="No such vehicle")
                 if cur.rowcount == 0:
                     raise HTTPException(status_code=404, detail="No such trip")
-                card = await _fetch_review_card(conn, where, params, cursor=position)
+                card = await _fetch_review_card(conn, filters, cursor=position)
                 return await _render_review_card(
                     request, conn, "_review_card.html", card, from_, to, vehicle, q,
                 )
@@ -252,7 +224,7 @@ def register(router: APIRouter) -> None:
             exclusion = exclusion if isinstance(exclusion, str) else ""
             if exclusion and exclusion not in EXCLUSIONS:
                 raise HTTPException(status_code=400, detail="Unknown exclusion")
-            where, params = _review_filter_sql(request, from_, to, vehicle, q)
+            filters = _review_filters(request, from_, to, vehicle, q)
             notes_value = notes if isinstance(notes, str) else ""
             vehicle_value = vehicle_id if isinstance(vehicle_id, str) else ""
             async with request.state.account_pool.connection() as conn:
@@ -271,7 +243,7 @@ def register(router: APIRouter) -> None:
                     raise HTTPException(status_code=400, detail="No such vehicle")
                 if cur.rowcount == 0:
                     raise HTTPException(status_code=404, detail="No such trip")
-                card = await _fetch_review_card(conn, where, params, cursor=position)
+                card = await _fetch_review_card(conn, filters, cursor=position)
                 return await _render_review_card(
                     request, conn, "_review_card.html", card, from_, to, vehicle, q,
                 )
@@ -345,7 +317,7 @@ def register(router: APIRouter) -> None:
             """
             if kind not in ("tag", "skip"):
                 raise HTTPException(status_code=400, detail="Unknown undo kind")
-            where, params = _review_filter_sql(request, from_, to, vehicle, q)
+            filters = _review_filters(request, from_, to, vehicle, q)
             async with request.state.account_pool.connection() as conn:
                 position = await _trip_position(conn, trip_id)
                 if position is None:
@@ -353,7 +325,7 @@ def register(router: APIRouter) -> None:
                 if kind == "tag":
                     await _apply_human_tag(conn, trip_id, "unclassified")
                 card = await _fetch_review_card(
-                    conn, where, params, cursor=position, inclusive=True,
+                    conn, filters, cursor=position, inclusive=True,
                 )
                 return await _render_review_card(
                     request, conn, "_review_card.html", card, from_, to, vehicle, q,
@@ -376,10 +348,10 @@ def register(router: APIRouter) -> None:
             removes the row, so the review pass continues exactly as tag and
             Skip do, including stable id tie-breaking.
             """
-            where, params = _review_filter_sql(request, from_, to, vehicle, q)
+            filters = _review_filters(request, from_, to, vehicle, q)
             async with request.state.account_pool.connection() as conn:
                 position = await _delete_trip_in(conn, trip_id)
-                card = await _fetch_review_card(conn, where, params, cursor=position)
+                card = await _fetch_review_card(conn, filters, cursor=position)
                 return await _render_review_card(
                     request, conn, "_review_card.html", card, from_, to, vehicle, q,
                 )

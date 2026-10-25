@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 from app.api_errors import ApiErrorEnvelope
+from app.api_trips import PurposeList, ReviewResponse, TripDetailResponse, TripPage, VehicleList
 from app.api_v1 import CapabilitiesResponse, MeResponse, TokenRequest, TokenResponse
 
 FIXTURES = Path(__file__).parent / "fixtures" / "api_v1"
@@ -198,7 +199,10 @@ def _snapshot_text(document: dict) -> str:
 def test_api_schema_matches_the_checked_in_contract():
     generated = api_openapi_document()
     assert set(generated["paths"]) == {
-        "/api/v1/auth/revoke", "/api/v1/auth/token", "/api/v1/capabilities", "/api/v1/me"}
+        "/api/v1/auth/revoke", "/api/v1/auth/token", "/api/v1/capabilities", "/api/v1/me",
+        "/api/v1/trips", "/api/v1/trips/{trip_id}", "/api/v1/review", "/api/v1/vehicles",
+        "/api/v1/purposes/recent",
+    }
     if os.environ.get("ODOGRAPH_UPDATE_API_SCHEMA") == "1" and SNAPSHOT.exists():
         problems = breaking_changes(json.loads(SNAPSHOT.read_text()), generated)
         assert not problems, "\n".join(problems)
@@ -269,6 +273,17 @@ def test_comparator_rejects_incompatible_changes(mutate, expected):
     ("me_response.json", MeResponse),
     ("error_invalid_token.json", ApiErrorEnvelope),
     ("error_validation_failed.json", ApiErrorEnvelope),
+    ("error_invalid_cursor.json", ApiErrorEnvelope),
+    ("trips_page_response.json", TripPage),
+    ("trip_detail_gapped.json", TripDetailResponse),
+    ("trip_detail_snapped_only.json", TripDetailResponse),
+    ("trip_detail_geometry_free.json", TripDetailResponse),
+    ("trip_detail_imported.json", TripDetailResponse),
+    ("trip_detail_manual.json", TripDetailResponse),
+    ("trip_detail_routed_manual.json", TripDetailResponse),
+    ("review_response.json", ReviewResponse),
+    ("vehicles_response.json", VehicleList),
+    ("purposes_response.json", PurposeList),
 ])
 def test_synthetic_fixtures_match_their_models(filename, model):
     data = json.loads((FIXTURES / filename).read_text())

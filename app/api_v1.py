@@ -83,6 +83,10 @@ def _bearer_token(request: Request) -> str | None:
 
 
 async def require_api_user(request: Request) -> ApiUser:
+    # Admission already ran this check for a route with a capacity lane.
+    cached = getattr(request.state, "_capacity_authenticated_user", None)
+    if isinstance(cached, ApiUser):
+        return cached
     limiter = _limiter(request)
     ip = client_ip(request)
     if limiter.blocked(ip):

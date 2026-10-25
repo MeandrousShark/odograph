@@ -1,5 +1,6 @@
 """Navigation reserves full-dashboard work before any tag form is parsed."""
 import asyncio
+import gc
 from contextlib import asynccontextmanager
 from datetime import timezone
 from types import SimpleNamespace
@@ -126,8 +127,15 @@ def test_full_result_form_authenticates_before_body_and_bounds_receipt(monkeypat
                 headers={'content-type': 'application/x-www-form-urlencoded'})
             assert rejected.status_code == 401 and reads == []
             permitted = True
-            expired = await client.post(route_path.format(trip_id=1), content=body(),
-                headers={'content-type': 'application/x-www-form-urlencoded'})
+            # The 20 ms receipt deadline starts before the first body read; a
+            # collector pause there would expire it with nothing read.
+            gc.collect()
+            gc.disable()
+            try:
+                expired = await client.post(route_path.format(trip_id=1), content=body(),
+                    headers={'content-type': 'application/x-www-form-urlencoded'})
+            finally:
+                gc.enable()
             assert expired.status_code == 503 and expired.headers['retry-after'] == '1'
         assert len(reads) == 1 and not any(app.state.capacity._active.values())
     asyncio.run(run())
