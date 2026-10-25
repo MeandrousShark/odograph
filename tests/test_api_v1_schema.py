@@ -58,7 +58,25 @@ def api_openapi_document() -> dict:
                 collect(value)
 
     collect(paths)
-    return {"paths": paths, "components": {"schemas": {name: schemas[name] for name in sorted(wanted)}}}
+    return _without_labels(
+        {"paths": paths, "components": {"schemas": {name: schemas[name] for name in sorted(wanted)}}})
+
+
+# Generated from handler names and HTTP reason phrases, not part of the
+# contract, and free to change with a framework upgrade.
+_LABELS = ("summary", "operationId", "description", "title")
+# Maps keyed by names a contract defines (fields, paths, statuses, media
+# types), where a key such as "title" is data rather than a label.
+_NAMED_MAPS = ("properties", "schemas", "paths", "responses", "content")
+
+
+def _without_labels(node, named=False):
+    if isinstance(node, list):
+        return [_without_labels(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+    return {key: _without_labels(value, key in _NAMED_MAPS and not named)
+            for key, value in node.items() if named or key not in _LABELS}
 
 
 def _resolve(document, schema):

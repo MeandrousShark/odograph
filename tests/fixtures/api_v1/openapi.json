@@ -4,7 +4,6 @@
       "ApiErrorBody": {
         "properties": {
           "code": {
-            "title": "Code",
             "type": "string"
           },
           "fields": {
@@ -18,11 +17,9 @@
               {
                 "type": "null"
               }
-            ],
-            "title": "Fields"
+            ]
           },
           "message": {
-            "title": "Message",
             "type": "string"
           }
         },
@@ -31,7 +28,6 @@
           "message",
           "fields"
         ],
-        "title": "ApiErrorBody",
         "type": "object"
       },
       "ApiErrorEnvelope": {
@@ -43,17 +39,14 @@
         "required": [
           "error"
         ],
-        "title": "ApiErrorEnvelope",
         "type": "object"
       },
       "CapabilitiesAuthorization": {
         "properties": {
           "authorize_path": {
-            "title": "Authorize Path",
             "type": "string"
           },
           "token_path": {
-            "title": "Token Path",
             "type": "string"
           }
         },
@@ -61,7 +54,6 @@
           "authorize_path",
           "token_path"
         ],
-        "title": "CapabilitiesAuthorization",
         "type": "object"
       },
       "CapabilitiesResponse": {
@@ -70,18 +62,15 @@
             "items": {
               "type": "string"
             },
-            "title": "Api Versions",
             "type": "array"
           },
           "authorization": {
             "$ref": "#/components/schemas/CapabilitiesAuthorization"
           },
           "mobile_signin_available": {
-            "title": "Mobile Signin Available",
             "type": "boolean"
           },
           "product": {
-            "title": "Product",
             "type": "string"
           }
         },
@@ -91,17 +80,14 @@
           "authorization",
           "mobile_signin_available"
         ],
-        "title": "CapabilitiesResponse",
         "type": "object"
       },
       "MeResponse": {
         "properties": {
           "account_id": {
-            "title": "Account Id",
             "type": "integer"
           },
           "detector_version": {
-            "title": "Detector Version",
             "type": "integer"
           },
           "display_name": {
@@ -112,19 +98,15 @@
               {
                 "type": "null"
               }
-            ],
-            "title": "Display Name"
+            ]
           },
           "display_time_zone": {
-            "title": "Display Time Zone",
             "type": "string"
           },
           "grant_id": {
-            "title": "Grant Id",
             "type": "string"
           },
           "server_version": {
-            "title": "Server Version",
             "type": "string"
           }
         },
@@ -136,13 +118,11 @@
           "detector_version",
           "grant_id"
         ],
-        "title": "MeResponse",
         "type": "object"
       },
       "TokenRequest": {
         "properties": {
           "grant_type": {
-            "title": "Grant Type",
             "type": "string"
           },
           "refresh_token": {
@@ -153,36 +133,29 @@
               {
                 "type": "null"
               }
-            ],
-            "title": "Refresh Token"
+            ]
           }
         },
         "required": [
           "grant_type"
         ],
-        "title": "TokenRequest",
         "type": "object"
       },
       "TokenResponse": {
         "properties": {
           "access_expires_at": {
-            "title": "Access Expires At",
             "type": "string"
           },
           "access_token": {
-            "title": "Access Token",
             "type": "string"
           },
           "expires_in": {
-            "title": "Expires In",
             "type": "integer"
           },
           "refresh_token": {
-            "title": "Refresh Token",
             "type": "string"
           },
           "token_type": {
-            "title": "Token Type",
             "type": "string"
           }
         },
@@ -193,7 +166,6 @@
           "access_expires_at",
           "expires_in"
         ],
-        "title": "TokenResponse",
         "type": "object"
       }
     }
@@ -201,7 +173,6 @@
   "paths": {
     "/api/v1/auth/token": {
       "post": {
-        "operationId": "token_api_v1_auth_token_post",
         "requestBody": {
           "content": {
             "application/json": {
@@ -220,8 +191,7 @@
                   "$ref": "#/components/schemas/TokenResponse"
                 }
               }
-            },
-            "description": "Successful Response"
+            }
           },
           "400": {
             "content": {
@@ -230,8 +200,7 @@
                   "$ref": "#/components/schemas/ApiErrorEnvelope"
                 }
               }
-            },
-            "description": "Bad Request"
+            }
           },
           "422": {
             "content": {
@@ -240,8 +209,7 @@
                   "$ref": "#/components/schemas/ApiErrorEnvelope"
                 }
               }
-            },
-            "description": "Unprocessable Content"
+            }
           },
           "429": {
             "content": {
@@ -250,8 +218,7 @@
                   "$ref": "#/components/schemas/ApiErrorEnvelope"
                 }
               }
-            },
-            "description": "Too Many Requests"
+            }
           },
           "503": {
             "content": {
@@ -260,16 +227,13 @@
                   "$ref": "#/components/schemas/ApiErrorEnvelope"
                 }
               }
-            },
-            "description": "Service Unavailable"
+            }
           }
-        },
-        "summary": "Token"
+        }
       }
     },
     "/api/v1/capabilities": {
       "get": {
-        "operationId": "capabilities_api_v1_capabilities_get",
         "responses": {
           "200": {
             "content": {
@@ -278,8 +242,7 @@
                   "$ref": "#/components/schemas/CapabilitiesResponse"
                 }
               }
-            },
-            "description": "Successful Response"
+            }
           },
           "503": {
             "content": {
@@ -288,16 +251,13 @@
                   "$ref": "#/components/schemas/ApiErrorEnvelope"
                 }
               }
-            },
-            "description": "Service Unavailable"
+            }
           }
-        },
-        "summary": "Capabilities"
+        }
       }
     },
     "/api/v1/me": {
       "get": {
-        "operationId": "me_api_v1_me_get",
         "responses": {
           "200": {
             "content": {
@@ -306,8 +266,7 @@
                   "$ref": "#/components/schemas/MeResponse"
                 }
               }
-            },
-            "description": "Successful Response"
+            }
           },
           "401": {
             "content": {
@@ -316,8 +275,7 @@
                   "$ref": "#/components/schemas/ApiErrorEnvelope"
                 }
               }
-            },
-            "description": "Unauthorized"
+            }
           },
           "429": {
             "content": {
@@ -326,8 +284,7 @@
                   "$ref": "#/components/schemas/ApiErrorEnvelope"
                 }
               }
-            },
-            "description": "Too Many Requests"
+            }
           },
           "503": {
             "content": {
@@ -336,11 +293,9 @@
                   "$ref": "#/components/schemas/ApiErrorEnvelope"
                 }
               }
-            },
-            "description": "Service Unavailable"
+            }
           }
-        },
-        "summary": "Me"
+        }
       }
     }
   }
