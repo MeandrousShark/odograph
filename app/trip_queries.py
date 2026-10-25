@@ -1,6 +1,7 @@
 """Shared trip SQL: the row projections and the filter every trip list uses."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
@@ -236,3 +237,25 @@ def _trip_filter_sql(
         params.extend([pattern] * 8)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     return where, params
+
+
+@dataclass(frozen=True)
+class TripFilter:
+    """One trip-list filter set, applied through `_trip_filter_sql`.
+
+    Values keep that function's forgiving meaning: an empty or unknown
+    category or exclusion is no filter. Callers that must reject unknown
+    values validate before building this.
+    """
+    category: str = ""
+    from_dt: datetime | None = None
+    to_dt: datetime | None = None
+    vehicle_id: int | None | Literal["none"] = None
+    q: str = ""
+    exclusion: str = ""
+
+    def where(self, owner_id: int) -> tuple[str, list]:
+        return _trip_filter_sql(
+            self.category, self.from_dt, self.to_dt, self.vehicle_id,
+            q=self.q, exclusion=self.exclusion, owner_id=owner_id,
+        )

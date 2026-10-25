@@ -29,7 +29,14 @@ from app.formatting import format_miles
 from app.missing_trip import missing_trip_badge
 from app.rates import deduction, load_rates
 from app.report import sum_month_deductions
-from app.trip_queries import DISPLAY_DISTANCE_SQL
+from app.trip_archive import (
+    MONTH_AGGREGATE_COLUMNS_SQL,
+    fetch_month_page,
+    fetch_month_rows,
+    fetch_month_totals,
+)
+from app.trip_queries import DISPLAY_DISTANCE_SQL, TripFilter
+from app.trip_reads import fetch_trip_detail, trip_position
 from app.trip_warnings import (
     WARNING_KINDS,
     acknowledge as acknowledge_warnings,
@@ -59,7 +66,7 @@ from app.ui.manual import (
     ManualTripValidationError,
     parse_manual_trip_input,
 )
-from app.ui.expenses import _EXPENSE_SELECT_JOIN, _annotate_expense, _parse_expense_input
+from app.ui.expenses import _parse_expense_input
 
 
 def _normalize_dashboard_week(request: Request, dashboard_week: str) -> str:
@@ -95,21 +102,10 @@ async def _fetch_month_page(
     exclusion: str = "",
 ) -> tuple[list[dict], bool]:
     """Fetch one stable local-month page plus a one-row `has_more` sentinel."""
-    month_start, month_end = _month_bounds(year, month, tz)
-    where, params = _trip_filter_sql(
-        category, from_dt, to_dt, vehicle_id, q=q, exclusion=exclusion, owner_id=account_id(conn)
+    return await fetch_month_page(
+        conn, TripFilter(category, from_dt, to_dt, vehicle_id, q, exclusion),
+        tz, year, month, page_size, offset,
     )
-    where += " AND" if where else "WHERE"
-    where += " started_at >= %s AND started_at < %s"
-    params.extend((month_start, month_end))
-    cur = conn.cursor(row_factory=dict_row)
-    await cur.execute(
-        f"SELECT {TRIP_COLUMNS} FROM trips {where} "
-        "ORDER BY started_at DESC, id DESC LIMIT %s OFFSET %s",
-        [*params, page_size + 1, offset],
-    )
-    rows = await cur.fetchall()
-    return rows[:page_size], len(rows) > page_size
 
 
 async def _fetch_trip_card_context(
@@ -182,16 +178,6 @@ async def _submitted_label_fields(
     return values[0], values[1]
 
 
-async def _fetch_trip_expenses(conn, trip_id: int, tz: ZoneInfo) -> list[dict]:
-    cur = conn.cursor(row_factory=dict_row)
-    await cur.execute(
-        _EXPENSE_SELECT_JOIN
-        + "WHERE expenses.trip_id = %s AND expenses.account_id = %s ORDER BY expenses.incurred_on DESC, expenses.id DESC",
-        (trip_id, account_id(conn)),
-    )
-    return [_annotate_expense(row, tz) for row in await cur.fetchall()]
-
-
 async def _delete_trip_in(conn, trip_id: int) -> tuple[datetime, int]:
     """Apply source-appropriate deletion and return the trip's old cursor.
 
@@ -234,9 +220,7 @@ async def _trip_position(conn, trip_id: int) -> tuple[datetime, int] | None:
     callers fall back to no cursor, restarting from the oldest trip rather
     than 404ing.
     """
-    cur = await conn.execute("SELECT started_at FROM trips WHERE id = %s AND account_id = %s", (trip_id, account_id(conn)))
-    row = await cur.fetchone()
-    return (row[0], trip_id) if row else None
+    return await trip_position(conn, trip_id)
 
 
 async def _apply_human_tag(
@@ -274,13 +258,7 @@ async def _apply_human_tag(
 # Shared with the single-month recompute below so a month's trip_count/
 # total_m/business_m can never be computed with different SQL in the two
 # places that need them.
-_MONTH_AGGREGATE_COLUMNS_SQL = (
-    "count(*) AS trip_count, "
-    f"COALESCE(SUM({DISPLAY_DISTANCE_SQL}) FILTER "
-    "(WHERE exclusion IS DISTINCT FROM 'not_my_vehicle'), 0) AS total_m, "
-    f"COALESCE(SUM({DISPLAY_DISTANCE_SQL}) "
-    "FILTER (WHERE category = 'business' AND exclusion IS NULL), 0) AS business_m"
-)
+_MONTH_AGGREGATE_COLUMNS_SQL = MONTH_AGGREGATE_COLUMNS_SQL
 
 
 def _build_month_summary(year: int, month_num: int, row: dict, rates) -> dict:
@@ -552,38 +530,14 @@ async def _fetch_archive_context(
         from_, to, date_preset, tz,
     )
     from_dt, to_dt = parse_date_range(from_, to, tz)
-    vehicle_id = _parse_vehicle_id(vehicle)
-    where, params = _trip_filter_sql(
-        category, from_dt, to_dt, vehicle_id, q=q, exclusion=exclusion,
-        owner_id=request.state.principal.account_id,
-    )
+    filters = TripFilter(category, from_dt, to_dt, _parse_vehicle_id(vehicle), q, exclusion)
     page_size = request.state.config.trips_page_size
     depths = _parse_archive_loaded_depth(loaded_depth, page_size)
     max_depth = max([page_size, *depths.values()])
 
     async with request.state.account_pool.connection() as conn:
-        aggregate_cur = conn.cursor(row_factory=dict_row)
-        await aggregate_cur.execute(
-            "SELECT date_trunc('month', started_at AT TIME ZONE %s)::date AS local_month, "
-            f"{_MONTH_AGGREGATE_COLUMNS_SQL} "
-            f"FROM trips {where} GROUP BY local_month ORDER BY local_month DESC",
-            [tz.key, *params],
-        )
-        month_rows = await aggregate_cur.fetchall()
-
-        page_cur = conn.cursor(row_factory=dict_row)
-        await page_cur.execute(
-            "WITH ranked AS (SELECT "
-            f"{TRIP_COLUMNS}, "
-            "date_trunc('month', started_at AT TIME ZONE %s)::date AS local_month, "
-            "row_number() OVER (PARTITION BY date_trunc('month', started_at AT TIME ZONE %s) "
-            "ORDER BY started_at DESC, id DESC) AS month_row "
-            f"FROM trips {where}) "
-            "SELECT * FROM ranked WHERE month_row <= %s "
-            "ORDER BY local_month DESC, started_at DESC, id DESC",
-            [tz.key, tz.key, *params, max_depth + 1],
-        )
-        initial_rows = await page_cur.fetchall()
+        month_rows = await fetch_month_totals(conn, filters, tz)
+        initial_rows = await fetch_month_rows(conn, filters, tz, max_depth + 1)
         rates = await load_rates(conn)
         vehicles = await list_vehicles(conn)
         recent_purposes = (
@@ -1203,65 +1157,27 @@ def register(router: APIRouter) -> None:
 
         @router.get("/trips/{trip_id}")
         async def trip_detail(request: Request, trip_id: int, user: dict = Depends(require_user)):
-            pool = request.state.account_pool
-            trip = await _fetch_trip(pool, trip_id)
-            path_geojson = None
-            path_snapped_geojson = None
-            stay_centroids = []
-            has_next_trip = False
-            has_prev_trip = False
-            expenses = []
             async with request.state.account_pool.connection() as conn:
+                detail = await fetch_trip_detail(conn, trip_id, request.state.config.display_tz)
+                if detail is None:
+                    raise HTTPException(status_code=404, detail="No such trip")
                 vehicles = await list_vehicles(conn)
                 recent_purposes = await _fetch_recent_purposes(conn)
-                expenses = await _fetch_trip_expenses(
-                    conn, trip_id, request.state.config.display_tz
-                )
-                # A routed manual trip has a real `path` too (see add_manual_trip),
-                # so it needs the same geometry fetch a detected trip gets; the
-                # stay-centroid and adjacent-trip queries below stay detected-only,
-                # since neither concept exists for a manual trip.
-                if trip["source"] == "detected" or trip["has_route_geometry"]:
-                    cur = await conn.execute(
-                        "SELECT ST_AsGeoJSON(path), ST_AsGeoJSON(path_snapped) "
-                        "FROM trips WHERE id = %s AND account_id = %s", (trip_id, account_id(conn))
-                    )
-                    row = await cur.fetchone()
-                    path_geojson = row[0] if row else None
-                    path_snapped_geojson = row[1] if row else None
-                if trip["source"] == "detected":
-                    cur = await conn.execute(
-                        "SELECT ST_AsGeoJSON(centroid::geometry) FROM stays "
-                        "WHERE account_id = %s AND tracking_device_id = %s AND (ended_at = %s OR started_at = %s)",
-                        (account_id(conn), trip["tracking_device_id"], trip["started_at"], trip["ended_at"]),
-                    )
-                    stay_centroids = [json.loads(r[0]) for r in await cur.fetchall()]
-                    # Merge buttons only render when a genuine adjacent
-                    # detected trip exists for this device.
-                    cur = await conn.execute(
-                        "SELECT EXISTS (SELECT 1 FROM trips WHERE account_id = %s AND tracking_device_id = %s "
-                        " AND source = 'detected' AND NOT imported AND started_at > %s), "
-                        "EXISTS (SELECT 1 FROM trips WHERE account_id = %s AND tracking_device_id = %s "
-                        " AND source = 'detected' AND NOT imported AND started_at < %s)",
-                        (account_id(conn), trip["tracking_device_id"], trip["started_at"],
-                         account_id(conn), trip["tracking_device_id"], trip["started_at"]),
-                    )
-                    has_next_trip, has_prev_trip = await cur.fetchone()
 
             return await render_page(
                 request, "trip.html",
                 {
-                    "trip": trip,
+                    "trip": detail.trip,
                     "vehicles": vehicles,
                     "recent_purposes": recent_purposes,
-                    "path_geojson": path_geojson,
-                    "path_snapped_geojson": path_snapped_geojson,
-                    "stay_centroids": json.dumps(stay_centroids),
-                    "has_next_trip": has_next_trip,
-                    "has_prev_trip": has_prev_trip,
+                    "path_geojson": detail.path_geojson,
+                    "path_snapped_geojson": detail.path_snapped_geojson,
+                    "stay_centroids": json.dumps([stay.centroid for stay in detail.stays]),
+                    "has_next_trip": detail.has_next_trip,
+                    "has_prev_trip": detail.has_prev_trip,
                     "min_trip_distance_m": request.state.config.detector_params.min_trip_distance_m,
                     "categories": CATEGORIES,
-                    "expenses": expenses,
+                    "expenses": detail.expenses,
                     "expense_categories": EXPENSE_CATEGORIES,
                     "expense_category_labels": CATEGORY_LABELS,
                     "expense_treatments": EXPENSE_TREATMENTS,

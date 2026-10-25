@@ -6,7 +6,6 @@ from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, Request
-from psycopg.rows import dict_row
 from starlette.responses import Response
 
 from app.account_context import account_id
@@ -26,6 +25,8 @@ from app.trip_queries import (  # noqa: F401
     _escape_ilike_term,
     _trip_filter_sql,
 )
+from app.trip_archive import month_bounds as _month_bounds  # noqa: F401
+from app.trip_reads import fetch_recent_purposes as _fetch_recent_purposes, fetch_trip  # noqa: F401
 
 RULE_CATEGORIES = ("business", "personal")
 # One definition of these exact user-facing strings, so trip detail, review,
@@ -123,24 +124,6 @@ def _parse_range_query_dates(from_str: str, to_str: str) -> tuple[date, date]:
 
 
 
-async def _fetch_recent_purposes(conn, limit: int = 10) -> list[str]:
-    """Return distinct, nonblank purposes ordered by their latest use.
-
-    Values are trimmed at write time as well as here. Keeping the defensive
-    trim in this query prevents older/direct SQL writes with surrounding
-    whitespace from creating visually duplicate datalist suggestions.
-    """
-    cur = await conn.execute(
-        "SELECT purpose FROM ("
-        " SELECT DISTINCT ON (btrim(purpose)) btrim(purpose) AS purpose, updated_at"
-        " FROM trips WHERE account_id = %s AND purpose IS NOT NULL AND btrim(purpose) <> ''"
-        " ORDER BY btrim(purpose), updated_at DESC"
-        ") recent ORDER BY updated_at DESC, purpose LIMIT %s",
-        (account_id(conn), limit),
-    )
-    return [row[0] for row in await cur.fetchall()]
-
-
 def _parse_vehicle_id(vehicle: str) -> int | None | Literal["none"]:
     """A malformed/empty `vehicle` query param means "no vehicle filter",
     same open-ended-on-junk-input treatment `parse_date_range` gives a bad
@@ -191,16 +174,6 @@ def _url_with_filters(
     if term:
         params["q"] = term
     return f"{path}?{urlencode(params)}" if params else path
-
-
-def _month_bounds(year: int, month: int, tz: ZoneInfo) -> tuple[datetime, datetime]:
-    start = datetime(year, month, 1, tzinfo=tz)
-    end = (
-        datetime(year + 1, 1, 1, tzinfo=tz)
-        if month == 12
-        else datetime(year, month + 1, 1, tzinfo=tz)
-    )
-    return start, end
 
 
 def _month_page_url(
@@ -254,12 +227,7 @@ async def refuse_in_progress_trips(conn, trip_ids: list[int]) -> None:
 
 async def _fetch_trip(pool, trip_id: int) -> dict:
     async with pool.connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        await cur.execute(
-            f"SELECT {TRIP_COLUMNS} FROM trips WHERE id = %s AND account_id = %s",
-            (trip_id, account_id(conn)),
-        )
-        trip = await cur.fetchone()
+        trip = await fetch_trip(conn, trip_id)
     if not trip:
         raise HTTPException(status_code=404, detail="No such trip")
     return trip
