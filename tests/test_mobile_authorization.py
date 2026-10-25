@@ -1,5 +1,5 @@
 """Mobile sign-in browser routes and helpers that need no database: the
-client registry, parameter validation, the setting, the per-client limit,
+client registry, parameter validation, the setting, the per-IP limit,
 template escaping and button rules, and request-log redaction."""
 from __future__ import annotations
 
@@ -169,7 +169,7 @@ def test_other_invalid_parameters_redirect_to_the_callback(overrides, echoes_sta
     _run(check)
 
 
-def test_the_per_client_limit_counts_every_start():
+def test_the_per_ip_limit_counts_every_start():
     limiter = AttemptLimiter("test", 2, 900)
 
     async def check(client):
@@ -255,9 +255,49 @@ def test_at_the_limit_the_only_button_returns_to_the_app():
 
 def test_return_page_links_to_the_callback_and_escapes_it():
     templates = make_templates(SimpleNamespace(display_tz=timezone.utc, app_version="test"))
-    url = Completion(CALLBACK, 'x"><script>', code="C" * 43).url()
     body = templates.env.get_template("mobile_authorize_return.html").render(
-        callback_url=url, message="done", csp_nonce="nonce")
-    assert "<script>" not in body.split("<body>", 1)[1].split("<script nonce")[0]
+        callback_url='x"><script>alert(1)</script>', message="<b>done</b>", csp_nonce="nonce")
+    assert '"><script>alert(1)' not in body and "<b>done</b>" not in body
+    assert 'href="x&#34;&gt;&lt;script&gt;alert(1)&lt;/script&gt;"' in body
+    assert body.count("<script") == 1
     assert 'id="mobile-callback-link"' in body
     assert 'class="control control-primary auth-submit"' in body
+
+
+def test_authorize_admits_like_the_other_sign_in_starts():
+    from app.capacity_routes import AdmissionRoute
+
+    lanes = {(method, route.path): route.capacity_lane for route in make_router().routes
+             for method in route.methods}
+    assert all(isinstance(route, AdmissionRoute) for route in make_router().routes)
+    assert lanes == {("GET", "/mobile/authorize"): "auth_interactive",
+                     ("GET", "/mobile/authorize/confirm"): None,
+                     ("POST", "/mobile/authorize/confirm"): "form"}
+
+
+class _FailingPool:
+    def __init__(self, error):
+        self.error = error
+
+    def connection(self):
+        raise self.error
+
+
+@pytest.mark.parametrize("error_name", ["OperationalError", "PoolTimeout", "CapacityBusy"])
+def test_a_failed_pending_lookup_falls_back_to_the_default_destination(error_name, caplog):
+    import psycopg
+    from psycopg_pool import PoolTimeout
+    from app.capacity import CapacityBusy
+    from app.mobile_authorization import signed_in_destination
+
+    error = {"OperationalError": psycopg.OperationalError("down"), "PoolTimeout": PoolTimeout("full"),
+             "CapacityBusy": CapacityBusy("busy")}[error_name]
+    cookie = "K" * 43
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(config=SimpleNamespace(mobile_signin=True),
+                                                  control_pool=_FailingPool(error))),
+        cookies={COOKIE_NAME: cookie})
+    caplog.set_level(logging.DEBUG)
+    assert asyncio.run(signed_in_destination(request)) == "/"
+    assert "mobile authorization lookup failed" in caplog.text
+    assert cookie not in caplog.text

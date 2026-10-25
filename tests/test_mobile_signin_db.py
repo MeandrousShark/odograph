@@ -335,6 +335,43 @@ def test_confirm_and_decision_require_a_session_and_csrf(monkeypatch):
     _site(monkeypatch, check)
 
 
+def test_an_anonymous_decision_is_sent_to_login_and_approves_nothing(monkeypatch):
+    async def check(site):
+        async with site.client() as client:
+            _, challenge = _pkce()
+            await _authorize(client, challenge)
+            page = await client.get("/login")
+            refused = await client.post("/mobile/authorize/confirm",
+                                        data={"decision": "approve", "csrf_token": _csrf(page)})
+            assert refused.status_code == 303 and refused.headers["location"] == "/login"
+            assert "mobile-callback-link" not in refused.text
+            assert (await site.sql("SELECT count(*) FROM mobile_authorization_codes")) == [(0,)]
+            assert (await site.sql("SELECT count(*) FROM mobile_authorization_requests")) == [(1,)]
+    _site(monkeypatch, check)
+
+
+def test_a_failed_pending_lookup_still_signs_the_browser_in(monkeypatch, caplog):
+    import psycopg
+    import app.mobile_authorization as mobile_authorization
+
+    async def check(site):
+        async with site.client() as client:
+            _, challenge = _pkce()
+            await _authorize(client, challenge)
+            cookie = client.cookies.get(COOKIE_NAME)
+
+            async def broken(conn, value):
+                raise psycopg.OperationalError("lookup failed")
+
+            monkeypatch.setattr(mobile_authorization, "live_request", broken)
+            login = await _login_local(client)
+            assert (login.status_code, login.headers["location"]) == (303, "/")
+            assert (await client.get("/settings/account")).status_code == 200
+            assert cookie not in caplog.text and token_digest(cookie) not in caplog.text
+            assert "mobile authorization lookup failed" in caplog.text
+    _site(monkeypatch, check)
+
+
 def test_codes_expire_and_a_wrong_verifier_consumes_the_code(monkeypatch):
     async def check(site):
         async with site.client() as client:
@@ -703,6 +740,40 @@ def test_two_concurrent_exchanges_of_one_code_yield_exactly_one_grant():
             assert sorted(outcome is None for outcome in outcomes) == [False, True]
             async with owner.connection() as conn:
                 assert await (await conn.execute("SELECT count(*) FROM api_grants")).fetchone() == (1,)
+    asyncio.run(scenario())
+
+
+def test_admin_purge_removes_the_accounts_outstanding_codes():
+    from app.account_lifecycle import purge_account, request_account_deletion
+
+    async def scenario():
+        async with _role_pools() as (owner, pools):
+            async with pools.control.connection() as conn:
+                admin = await create_admin(conn, LOCAL_EMAIL, "hash-a")
+            async with owner.connection() as conn:
+                member = (await (await conn.execute(
+                    "INSERT INTO accounts(email,password_hash,is_admin) VALUES (%s,'hash-b',false) "
+                    "RETURNING id", (OIDC_EMAIL,))).fetchone())[0]
+                await conn.execute("INSERT INTO account_settings(account_id) VALUES (%s)", (member,))
+            async with pools.control.connection() as conn:
+                for account_id in (member, admin["id"]):
+                    started = await start_request(
+                        conn, previous_cookie=None, client_id="odograph-ios", redirect_uri=CALLBACK,
+                        code_challenge=_pkce()[1], state="s", device_label="Phone", replaces=None)
+                    assert (await approve_request(conn, started.cookie_value, account_id, 1)).code
+                actor = dict(await get_account(conn, admin["id"]))
+                assert await request_account_deletion(
+                    conn, actor, member, email=OIDC_EMAIL, acknowledge=True) == "scheduled"
+            async with owner.connection() as conn:
+                await conn.execute("UPDATE accounts SET deletion_deadline=clock_timestamp()-interval '1 second' "
+                                   "WHERE id=%s", (member,))
+            async with pools.control.connection() as conn:
+                actor = dict(await get_account(conn, admin["id"]))
+                assert await purge_account(conn, actor, member, email=OIDC_EMAIL, confirm=True,
+                                           verified_password_hash=actor["password_hash"]) == "purged"
+            async with owner.connection() as conn:
+                assert await (await conn.execute(
+                    "SELECT account_id FROM mobile_authorization_codes")).fetchall() == [(admin["id"],)]
     asyncio.run(scenario())
 
 
