@@ -11,8 +11,8 @@ import pytest
 from psycopg import errors
 
 from app.account_context import control_connection
-from app.accounts import get_account
-from app.api_grants import list_active_grants, token_digest
+from app.accounts import create_admin, get_account
+from app.api_grants import create_grant, list_active_grants, token_digest
 from app.db import make_pool
 from conftest import provisioned_role_pools, reset_db
 from test_mobile_signin_db import (
@@ -189,10 +189,7 @@ def test_list_function_returns_display_fields_only_and_only_through_control():
     async def scenario():
         async with _role_pools() as (owner, pools):
             async with pools.control.connection() as conn:
-                from app.accounts import create_admin
-                from app.api_grants import create_grant
-                account = await create_admin(conn, LOCAL_EMAIL, "unused")
-                account_id = account["id"] if isinstance(account, dict) else account
+                account_id = (await create_admin(conn, LOCAL_EMAIL, "unused"))["id"]
                 version = (await get_account(conn, account_id))["auth_version"]
                 issued = await create_grant(conn, account_id, version, "Phone")
                 apps = await list_active_grants(conn, account_id)
