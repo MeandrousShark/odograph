@@ -66,6 +66,7 @@ from app.ingest import _read_capped_body
 from app.invitations import InvitationCapacityExceeded, InvitationUnavailable, redeem_invitation
 from app.local_auth import hash_password, verify_password
 from app.mailer import Mailer
+from app.mobile_authorization import signed_in_destination
 from app.security_mail_preparation import SecurityMailSpec
 from app.password_reset import consume_password_reset, password_reset_usable
 from app.page import render_page
@@ -1048,7 +1049,7 @@ def make_router() -> APIRouter:
             )
 
         _set_account_session(request, account)
-        return RedirectResponse("/", status_code=303)
+        return RedirectResponse(await signed_in_destination(request), status_code=303)
 
     @router.get("/invite")
     async def invite_page(request: Request):
@@ -1487,7 +1488,7 @@ def make_router() -> APIRouter:
                 )
         if account is not None:
             _set_account_session(request, account)
-            return RedirectResponse("/", status_code=303)
+            return RedirectResponse(await signed_in_destination(request), status_code=303)
 
         async with control_connection(request.app.state.control_pool) as conn:
             has_account = await account_exists(conn)
