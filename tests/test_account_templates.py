@@ -115,6 +115,7 @@ def _render_account_security(
     avatar_version=0,
     avatar_max_label="500 KB",
     can_sign_out_everywhere=True,
+    signed_in_apps=(),
 ):
     return _templates().env.get_template("account_security.html").render(
         user={
@@ -130,6 +131,7 @@ def _render_account_security(
         avatar_max_label=avatar_max_label,
         has_password=has_password,
         can_sign_out_everywhere=can_sign_out_everywhere,
+        signed_in_apps=signed_in_apps,
         method_notice=method_notice,
         error=error,
         success=success,
@@ -415,3 +417,27 @@ def test_account_security_avatar_section_with_an_avatar_shows_remove_confirmatio
     assert "window.confirm" not in body
     # Upload and confirmation are separate forms, each with its own CSRF field.
     assert body.count('name="csrf_token" value="test-csrf-token"') >= 3
+
+
+def test_signed_in_apps_section_lists_escaped_labels_with_times_and_revoke_forms():
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    apps = [
+        SimpleNamespace(public_id="A" * 22, device_label="<b>Phone</b>",
+                        created_at=datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc), last_used_at=None),
+        SimpleNamespace(public_id="B" * 22, device_label="Tablet",
+                        created_at=datetime(2026, 10, 2, 12, 0, tzinfo=timezone.utc),
+                        last_used_at=datetime(2026, 10, 3, 9, 30, tzinfo=timezone.utc)),
+    ]
+    body = _render_account_security(signed_in_apps=apps)
+    assert "<b>Phone</b>" not in body and "&lt;b&gt;Phone&lt;/b&gt;" in body
+    assert "Never used" in body and "Last used Sat 2026-10-03 09:30" in body
+    assert body.count('action="/settings/account/signed-in-apps/revoke"') == 2
+    assert 'name="grant_id" value="' + "A" * 22 + '"' in body
+    assert "No apps are signed in to this account." not in body
+
+
+def test_signed_in_apps_section_shows_an_empty_state():
+    body = _render_account_security()
+    assert "No apps are signed in to this account." in body
+    assert "signed-in-apps/revoke" not in body

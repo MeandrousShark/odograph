@@ -1,6 +1,7 @@
 """Authentication finalizers retain admission; completed phases release it."""
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
 import asyncio
 import threading
 
@@ -138,6 +139,7 @@ def test_saved_password_reports_success_when_followup_identity_read_is_busy(monk
     monkeypatch.setattr(auth, "replace_password", replace)
     monkeypatch.setattr(auth, "hash_password", lambda value: "new-hash")
     monkeypatch.setattr(auth, "is_current_email_verified", busy)
+    monkeypatch.setattr(auth, "list_active_grants", AsyncMock(return_value=[]))
 
     async def run():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:

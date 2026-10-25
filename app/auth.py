@@ -38,6 +38,7 @@ from app.accounts import (
     sign_out_everywhere,
     valid_email,
 )
+from app.api_grants import list_active_grants, revoke_grant, valid_public_id
 from app.capacity_routes import capacity_setting
 from app.capacity import CapacityBusy, await_completion, owned_thread
 from app.capacity_routes import release_authentication
@@ -105,6 +106,7 @@ INVITE_CAPACITY_ERROR = (
 )
 OIDC_REAUTH_NOTICE = "Provider authentication confirmed. Complete the action within 10 minutes."
 PASSWORD_SAVED_NOTICE = "Password saved. Other sessions have been signed out."
+SIGNED_IN_APPS_NOTICE = "Signed-in apps updated."
 MAX_INVITE_FORM_BYTES = 8192
 MAX_EMAIL_FORM_BYTES = 8192
 GENERIC_EMAIL_ERROR = "Unable to process email request. Please try again."
@@ -901,6 +903,7 @@ def make_router() -> APIRouter:
                     request.app.state.config.oidc_issuer,
                 )
             account_email_verified = await is_current_email_verified(conn, account["id"])
+            signed_in_apps = await list_active_grants(conn, account["id"])
         if identity is not None:
             linked_identity = {
                 "email": identity["provider_email"],
@@ -928,6 +931,7 @@ def make_router() -> APIRouter:
             "account_email": account["email"],
             "has_password": account["password_hash"] is not None,
             "can_sign_out_everywhere": not cfg.dev_no_auth,
+            "signed_in_apps": signed_in_apps,
             "account_email_verified": account_email_verified,
             "email_challenge_available": bool(
                 getattr(cfg, "smtp_host", "") and getattr(cfg, "email_from", "")
@@ -2363,6 +2367,22 @@ def make_router() -> APIRouter:
         request.session["login_notice"] = RESET_COMPLETE_NOTICE
         # signed_out clears the shared cross-tab account marker (base.html).
         return RedirectResponse("/login?signed_out=1", status_code=303)
+
+    @router.post("/settings/account/signed-in-apps/revoke")
+    async def revoke_signed_in_app(
+        request: Request,
+        csrf_token: str = Form(...),
+        grant_id: str = Form(""),
+        user: dict = Depends(require_user),
+    ):
+        check_form_csrf(request, csrf_token)
+        # Scoped to the signed-in account; an unknown, foreign, revoked or
+        # malformed id changes nothing and gets the same answer.
+        if valid_public_id(grant_id):
+            async with control_connection(request.app.state.control_pool) as conn:
+                await revoke_grant(conn, user["id"], grant_id)
+        request.session["account_notice"] = SIGNED_IN_APPS_NOTICE
+        return RedirectResponse("/settings/account", status_code=303)
 
     @router.post("/settings/account/sign-out-everywhere", dependencies=[Depends(require_csrf)])
     async def sign_out_everywhere_route(

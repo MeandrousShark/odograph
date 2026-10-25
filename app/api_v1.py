@@ -5,7 +5,8 @@ browser session cookie (see WebSessionMiddleware), so a browser cannot be
 used to make a cookie-authenticated API request, and no CORS headers are
 sent. Every failed bearer check returns the same 401; checks that look like
 guessing (a token no grant holds, or a malformed header) count toward the
-per-client failure limiter.
+per-client failure limiter. The limiter only refuses requests that fail:
+a valid credential is always honored, even from a blocked client.
 """
 from __future__ import annotations
 
@@ -72,6 +73,21 @@ def _rate_limited(limiter: FailedAuthLimiter) -> ApiError:
     return ApiError("rate_limited", headers={"Retry-After": str(math.ceil(limiter.window_s))})
 
 
+def _refuse(limiter: FailedAuthLimiter, ip: str, error: ApiError, *, count: bool = True) -> ApiError:
+    """The error for a failed credential check. A counted failure from a
+    blocked IP gets 429 instead and is not recorded again; otherwise it is
+    recorded. An uncounted failure (a real grant's outdated token) keeps its
+    own error, so the client refreshes instead of waiting. Only failures are
+    ever limited: callers reach this after the credential was checked, or
+    when it is too malformed to look up."""
+    if not count:
+        return error
+    if limiter.blocked(ip):
+        return _rate_limited(limiter)
+    limiter.record_failure(ip)
+    return error
+
+
 def _bearer_token(request: Request) -> str | None:
     values = request.headers.getlist("authorization")
     if len(values) != 1:
@@ -89,29 +105,30 @@ async def require_api_user(request: Request) -> ApiUser:
         return cached
     limiter = _limiter(request)
     ip = client_ip(request)
-    if limiter.blocked(ip):
-        raise _rate_limited(limiter)
     token = _bearer_token(request)
     principal = account = None
     known = False
-    if token_digest(token) is not None:
-        async with control_connection(request.app.state.control_pool) as conn:
-            check = await check_access_token(conn, token)
-            principal, known = check.principal, check.known
-            if principal is not None:
-                account = await get_account(conn, principal.account_id)
+    if token_digest(token) is None:
+        # Malformed or missing: nothing to look up, so a blocked IP is
+        # refused without touching the database.
+        raise _refuse(limiter, ip, ApiError("invalid_token", headers=BEARER_HEADERS))
+    # The credential is checked before the limiter is consulted, so a valid
+    # token is never refused because of earlier failures from the same IP.
+    async with control_connection(request.app.state.control_pool) as conn:
+        check = await check_access_token(conn, token)
+        principal, known = check.principal, check.known
+        if principal is not None:
+            account = await get_account(conn, principal.account_id)
     # Only guesses count toward the limiter: an expired or otherwise outdated
     # token of a real grant is normal client behavior. The 401 is identical.
     if (principal is None or account is None or not account["is_enabled"]
             or account["auth_version"] != principal.auth_version):
-        if not known:
-            limiter.record_failure(ip)
-        raise ApiError("invalid_token", headers=BEARER_HEADERS)
+        raise _refuse(limiter, ip, ApiError("invalid_token", headers=BEARER_HEADERS), count=not known)
     try:
         user = await _bind_account(request, account)
     except errors.InsufficientPrivilege:
         # Disabled or signed out between the grant check and admission.
-        raise ApiError("invalid_token", headers=BEARER_HEADERS) from None
+        raise _refuse(limiter, ip, ApiError("invalid_token", headers=BEARER_HEADERS), count=False) from None
     return ApiUser(user, account, principal.grant_id)
 
 
@@ -154,11 +171,12 @@ class MeResponse(BaseModel):
 async def _refresh(request: Request, body: TokenRequest, limiter: FailedAuthLimiter, ip: str) -> IssuedTokens:
     if body.refresh_token is None:
         raise ApiError("validation_failed", fields={"refresh_token": FIELD_REQUIRED})
+    if token_digest(body.refresh_token) is None:
+        raise _refuse(limiter, ip, ApiError("invalid_grant"))
     async with control_connection(request.app.state.control_pool) as conn:
         outcome = await refresh_grant(conn, body.refresh_token)
     if outcome.tokens is None:
-        limiter.record_failure(ip)
-        raise ApiError("invalid_grant")
+        raise _refuse(limiter, ip, ApiError("invalid_grant"))
     return outcome.tokens
 
 
@@ -176,8 +194,7 @@ async def _exchange(request: Request, body: TokenRequest, limiter: FailedAuthLim
         except GrantLimitReached:
             raise ApiError("grant_limit_reached") from None
     if issued is None:
-        limiter.record_failure(ip)
-        raise ApiError("invalid_grant")
+        raise _refuse(limiter, ip, ApiError("invalid_grant"))
     return issued
 
 
@@ -203,8 +220,6 @@ def make_router() -> APIRouter:
     async def token(request: Request, body: TokenRequest):
         limiter = _limiter(request)
         ip = client_ip(request)
-        if limiter.blocked(ip):
-            raise _rate_limited(limiter)
         if body.grant_type == "refresh_token":
             issued = await _refresh(request, body, limiter, ip)
         elif body.grant_type == "authorization_code":

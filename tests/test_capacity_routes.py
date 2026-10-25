@@ -1,4 +1,5 @@
 """Actual ASGI admission, bounded receipt and response ownership contracts."""
+from unittest.mock import AsyncMock
 import asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -568,6 +569,7 @@ def test_avatar_actual_http_chunked_failure_closes_spools_and_owner(monkeypatch,
     async def unverified(*args):
         return False
     monkeypatch.setattr(auth, 'is_current_email_verified', unverified)
+    monkeypatch.setattr(auth, 'list_active_grants', AsyncMock(return_value=[]))
     async def run():
         app = FastAPI()
         app.add_middleware(SessionMiddleware, secret_key='test-only-avatar')

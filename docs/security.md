@@ -95,6 +95,23 @@ Every network-reachable route, and what actually guards it:
   fails with the same message ("Invalid email or password."). The check is
   not constant time. A successful login clears and rebuilds the session
   (fixation defense) and issues a fresh CSRF token.
+- **`/mobile/authorize`, `/mobile/authorize/confirm`**: browser side of
+  sign-in for the first-party mobile app. Both return 404 unless
+  `MOBILE_SIGNIN=1`. The signed-in browser must approve each sign-in on a
+  confirmation page, which uses the usual CSRF token.
+- **`/api/v1`**: the mobile app's API, always served. `/api/v1/capabilities`
+  is unauthenticated and reports only the product name, API versions, the
+  authorization and token paths, and whether new sign-in is available.
+  `/api/v1/auth/token` takes a one-time authorization code with its verifier,
+  or a refresh token, in the request body; the code exchange is refused unless
+  `MOBILE_SIGNIN=1`. Every other route needs a bearer token from a revocable
+  grant. Grant tokens are stored only as digests and are separate from browser
+  sessions; existing grants keep working when `MOBILE_SIGNIN` is off. Each
+  grant appears under **Signed-in apps** in Account Settings, where you can
+  revoke it. Sign out everywhere, a password change or reset, a login-email
+  change, linking or unlinking a provider and disabling an account all end
+  every grant. See
+  [Mobile app sign-in and signed-in apps](accounts.md#mobile-app-sign-in-and-signed-in-apps).
 - **`/signup`**: reachable only when `INITIAL_ADMIN_SIGNUP=1`, no account
   exists, and development auth bypass is off. The first successful transaction
   creates the administrator. A durable bootstrap marker then closes public

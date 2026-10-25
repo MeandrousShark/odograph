@@ -25,10 +25,11 @@ from app.account_context import control_connection
 from app.accounts import create_admin, get_account, sign_out_everywhere
 from app.api_grants import ACTIVE_GRANT_LIMIT, create_grant, token_digest
 from app.config import Config
+from app.ingest import FailedAuthLimiter
 from app.db import make_pool
 from app.local_auth import hash_password
 from app.mobile_authorization import (
-    COOKIE_NAME, PENDING_REQUEST_CAP, approve_request, exchange_code, start_request,
+    HOST_COOKIE_NAME as COOKIE_NAME, PENDING_REQUEST_CAP, approve_request, exchange_code, start_request,
 )
 from app.oidc_identities import create_identity_link
 from conftest import provisioned_role_pools, reset_db
@@ -133,6 +134,10 @@ def _csrf(page) -> str:
     return re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
 
 
+def _binding(page) -> str:
+    return re.search(r'name="binding" value="([^"]+)"', page.text).group(1)
+
+
 async def _login_local(client, email=LOCAL_EMAIL, password=PASSWORD):
     page = await client.get("/login")
     return await client.post("/login/local", data={"email": email, "password": password,
@@ -167,7 +172,8 @@ async def _decide(client, decision="approve"):
     page = await client.get("/mobile/authorize/confirm")
     assert page.status_code == 200, page.text
     finished = await client.post("/mobile/authorize/confirm",
-                                 data={"decision": decision, "csrf_token": _csrf(page)})
+                                 data={"decision": decision, "csrf_token": _csrf(page),
+                                       "binding": _binding(page)})
     return page, finished
 
 
@@ -202,8 +208,10 @@ def test_local_account_signs_in_from_a_signed_out_browser(monkeypatch):
             assert started.headers["referrer-policy"] == "no-referrer"
             cookie = started.headers["set-cookie"]
             assert cookie.startswith(f"{COOKIE_NAME}=")
+            assert cookie.startswith("__Host-odograph_mobile_authorization=")
             for attribute in ("HttpOnly", "Max-Age=600", "Path=/", "SameSite=lax", "Secure"):
                 assert attribute in cookie, attribute
+            assert "domain" not in cookie.lower()
             value = client.cookies.get(COOKIE_NAME)
             assert re.fullmatch(r"[A-Za-z0-9_-]{43}", value)
             assert (await site.sql("SELECT count(*) FROM mobile_authorization_requests "
@@ -335,6 +343,32 @@ def test_confirm_and_decision_require_a_session_and_csrf(monkeypatch):
     _site(monkeypatch, check)
 
 
+def test_a_request_swapped_between_review_and_decision_is_not_approved(monkeypatch):
+    async def check(site):
+        async with site.client() as client:
+            await _login_local(client)
+            _, challenge = _pkce()
+            await _authorize(client, challenge, state="first", label="Reviewed phone")
+            page = await client.get("/mobile/authorize/confirm")
+            assert "Device name reported by the app: <strong>Reviewed phone" in page.text
+            # Another tab starts a different request, replacing the pending one.
+            await _authorize(client, _pkce()[1], state="second", label="Swapped phone")
+            refused = await client.post("/mobile/authorize/confirm", data={
+                "decision": "approve", "csrf_token": _csrf(page), "binding": _binding(page)})
+            assert refused.status_code == 410 and "mobile-callback-link" not in refused.text
+            assert _cleared(refused)
+            assert (await site.sql("SELECT count(*) FROM mobile_authorization_codes")) == [(0,)]
+            assert (await site.sql("SELECT count(*) FROM api_grants")) == [(0,)]
+            for binding in ("", "x" * 64):
+                again = await _authorize(client, _pkce()[1], state="third")
+                page = await client.get("/mobile/authorize/confirm")
+                refused = await client.post("/mobile/authorize/confirm", data={
+                    "decision": "deny", "csrf_token": _csrf(page), "binding": binding})
+                assert refused.status_code == 410
+            assert (await site.sql("SELECT count(*) FROM mobile_authorization_codes")) == [(0,)]
+    _site(monkeypatch, check)
+
+
 def test_an_anonymous_decision_is_sent_to_login_and_approves_nothing(monkeypatch):
     async def check(site):
         async with site.client() as client:
@@ -342,7 +376,8 @@ def test_an_anonymous_decision_is_sent_to_login_and_approves_nothing(monkeypatch
             await _authorize(client, challenge)
             page = await client.get("/login")
             refused = await client.post("/mobile/authorize/confirm",
-                                        data={"decision": "approve", "csrf_token": _csrf(page)})
+                                        data={"decision": "approve", "csrf_token": _csrf(page),
+                                  "binding": "x" * 64})
             assert refused.status_code == 303 and refused.headers["location"] == "/login"
             assert "mobile-callback-link" not in refused.text
             assert (await site.sql("SELECT count(*) FROM mobile_authorization_codes")) == [(0,)]
@@ -427,14 +462,16 @@ def test_replaces_ends_only_the_named_grant_of_the_signed_in_account(monkeypatch
             await _authorize(client, challenge, replaces=foreign.grant_id)
             page = await client.get("/mobile/authorize/confirm")
             assert "Member phone" not in page.text and "ends the earlier sign-in" not in page.text
-            await client.post("/mobile/authorize/confirm", data={"decision": "deny", "csrf_token": _csrf(page)})
+            await client.post("/mobile/authorize/confirm", data={"decision": "deny", "csrf_token": _csrf(page),
+                                  "binding": _binding(page)})
 
             verifier, challenge = _pkce()
             await _authorize(client, challenge, replaces=old.grant_id)
             page = await client.get("/mobile/authorize/confirm")
             assert "ends the earlier sign-in from <strong>Old &lt;Phone&gt;</strong>" in page.text
             finished = await client.post("/mobile/authorize/confirm",
-                                         data={"decision": "approve", "csrf_token": _csrf(page)})
+                                         data={"decision": "approve", "csrf_token": _csrf(page),
+                                  "binding": _binding(page)})
             assert (await _exchange(client, _callback(finished)["code"], verifier)).status_code == 200
 
             rows = dict(await site.sql("SELECT public_id, revoked_at IS NOT NULL FROM api_grants"))
@@ -459,7 +496,8 @@ def test_at_the_limit_sign_in_is_refused_without_revoking_and_replaces_still_wor
             assert 'value="approve"' not in page.text
             # A forged approval is refused the same way.
             forged = await client.post("/mobile/authorize/confirm",
-                                       data={"decision": "approve", "csrf_token": _csrf(page)})
+                                       data={"decision": "approve", "csrf_token": _csrf(page),
+                                  "binding": _binding(page)})
             assert _callback(forged) == {"error": "grant_limit_reached", "state": "limit-state"}
             assert _cleared(forged)
 
@@ -467,7 +505,8 @@ def test_at_the_limit_sign_in_is_refused_without_revoking_and_replaces_still_wor
             await _authorize(client, challenge, state="limit-state-2")
             page = await client.get("/mobile/authorize/confirm")
             finished = await client.post("/mobile/authorize/confirm",
-                                         data={"decision": "deny", "csrf_token": _csrf(page)})
+                                         data={"decision": "deny", "csrf_token": _csrf(page),
+                                  "binding": _binding(page)})
             assert _callback(finished) == {"error": "grant_limit_reached", "state": "limit-state-2"}
             assert (await site.sql("SELECT count(*), count(revoked_at) FROM api_grants")) == [(10, 0)]
             assert (await site.sql("SELECT count(*) FROM mobile_authorization_codes")) == [(0,)]
@@ -801,3 +840,49 @@ def test_rows_are_reached_only_through_their_functions():
                 assert await (await conn.execute(
                     "SELECT count(*) FROM mobile_authorization_codes")).fetchone() == (0,)
     asyncio.run(scenario())
+
+
+def test_a_blocked_client_keeps_its_valid_credentials_working(monkeypatch):
+    async def check(site):
+        site.app.state.api_auth_limiter = FailedAuthLimiter(3, 900)
+        stale = [await site.mint(site.local["id"], f"Old phone {i}") for i in range(3)]
+        await site.sql("UPDATE accounts SET auth_version=auth_version+1 WHERE id=%s", (site.local["id"],))
+        # Signing a new app in deletes the grants the version bump killed, so
+        # the old phones' tokens become unknown ones.
+        fresh = await site.mint(site.local["id"], "New phone")
+        assert (await site.sql("SELECT count(*) FROM api_grants")) == [(1,)]
+        async with site.client() as client:
+            await _login_local(client)
+            verifier, challenge = _pkce()
+            await _authorize(client, challenge)
+            _, finished = await _decide(client)
+            code = _callback(finished)["code"]
+
+            for phone in stale:
+                refused = await client.get("/api/v1/me", headers={"Authorization": f"Bearer {phone.access_token}"})
+                assert refused.status_code == 401
+            # The same IP is now blocked for failures ...
+            for refused in (
+                await client.get("/api/v1/me", headers={"Authorization": f"Bearer {secrets.token_urlsafe(32)}"}),
+                await client.get("/api/v1/me", headers={"Authorization": f"Bearer {stale[0].access_token}"}),
+                await client.post("/api/v1/auth/token", json={
+                    "grant_type": "refresh_token", "refresh_token": stale[0].refresh_token}),
+                await client.post("/api/v1/auth/token", json={
+                    "grant_type": "authorization_code", "code": secrets.token_urlsafe(32),
+                    "code_verifier": verifier}),
+            ):
+                assert refused.status_code == 429 and refused.headers["retry-after"] == "900"
+                assert refused.json()["error"]["code"] == "rate_limited"
+            # ... but valid credentials from it still work.
+            me = await client.get("/api/v1/me", headers={"Authorization": f"Bearer {fresh.access_token}"})
+            assert me.status_code == 200 and me.json()["grant_id"] == fresh.grant_id
+            refreshed = await client.post("/api/v1/auth/token", json={
+                "grant_type": "refresh_token", "refresh_token": fresh.refresh_token})
+            assert refreshed.status_code == 200
+            exchanged = await _exchange(client, code, verifier)
+            assert exchanged.status_code == 200, exchanged.text
+            new_bearer = {"Authorization": f"Bearer {exchanged.json()['access_token']}"}
+            assert (await client.get("/api/v1/me", headers=new_bearer)).status_code == 200
+            assert (await client.get("/api/v1/me", headers={
+                "Authorization": f"Bearer {secrets.token_urlsafe(32)}"})).status_code == 429
+    _site(monkeypatch, check)

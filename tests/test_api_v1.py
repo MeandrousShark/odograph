@@ -11,12 +11,13 @@ import pytest
 from fastapi import FastAPI, Form, Request
 from starlette.responses import Response
 
-from app.api_errors import ERRORS, register_api_errors
+from app.api_errors import ERRORS, ApiError, register_api_errors
 from app.api_grants import (
     DEFAULT_DEVICE_LABEL, DEVICE_LABEL_MAX_LENGTH, IssuedTokens, format_instant,
     normalize_device_label, token_digest,
 )
-from app.api_v1 import WebSessionMiddleware, make_router
+from app import api_v1
+from app.api_v1 import BEARER_HEADERS, WebSessionMiddleware, make_router
 from app.capacity_routes import busy_response
 from app.ingest import FailedAuthLimiter
 
@@ -166,7 +167,7 @@ def test_malformed_codes_are_invalid_grants_without_a_database_lookup():
                 "grant_type": "authorization_code", "code": code, "code_verifier": "V" * 64})
             assert response.status_code == 400 and response.json()["error"]["code"] == "invalid_grant"
         limited = await client.post("/api/v1/auth/token", json={
-            "grant_type": "authorization_code", "code": TOKEN, "code_verifier": "V" * 64})
+            "grant_type": "authorization_code", "code": "short", "code_verifier": "V" * 64})
         assert limited.status_code == 429 and limited.headers["retry-after"] == "900"
     _run(check, _app(FailedAuthLimiter(3, 900), mobile_signin=True))
 
@@ -215,14 +216,80 @@ def test_failed_bearer_attempts_are_rate_limited():
     async def check(client):
         for _ in range(3):
             assert (await client.get("/api/v1/me")).status_code == 401
-        limited = await client.get("/api/v1/me", headers={"Authorization": f"Bearer {TOKEN}"})
+        limited = await client.get("/api/v1/me", headers={"Authorization": "Bearer short"})
         assert limited.status_code == 429 and limited.headers["retry-after"] == "900"
         assert limited.json()["error"] == {"code": "rate_limited", "message": ERRORS["rate_limited"][1],
                                            "fields": None}
         refused = await client.post("/api/v1/auth/token",
-                                    json={"grant_type": "refresh_token", "refresh_token": TOKEN})
+                                    json={"grant_type": "refresh_token", "refresh_token": "short"})
         assert refused.status_code == 429 and refused.headers["retry-after"] == "900"
     _run(check, _app(FailedAuthLimiter(3, 900)))
+
+
+class _LookupPool:
+    """A control pool that records that a lookup was attempted and then fails
+    the request, so ordering is observable without a database."""
+
+    def __init__(self):
+        self.reached = 0
+
+    def connection(self):
+        self.reached += 1
+        raise RuntimeError("lookup reached")
+
+
+def _blocked_limiter():
+    limiter = FailedAuthLimiter(1, 900)
+    limiter.record_failure("127.0.0.1")
+    return limiter
+
+
+def test_a_blocked_client_still_gets_its_credential_looked_up_first():
+    async def run():
+        for method, path, kwargs in (
+            ("get", "/api/v1/me", {"headers": {"Authorization": f"Bearer {TOKEN}"}}),
+            ("post", "/api/v1/auth/token", {"json": {"grant_type": "refresh_token", "refresh_token": TOKEN}}),
+            ("post", "/api/v1/auth/token", {"json": {
+                "grant_type": "authorization_code", "code": TOKEN, "code_verifier": "V" * 64}}),
+        ):
+            app = _app(_blocked_limiter(), mobile_signin=True)
+            app.state.control_pool = pool = _LookupPool()
+            limiter = app.state.api_auth_limiter
+            assert limiter.blocked("127.0.0.1")
+            async with _client(app) as client:
+                with pytest.raises(RuntimeError, match="lookup reached"):
+                    await getattr(client, method)(path, **kwargs)
+            assert pool.reached == 1, path
+    asyncio.run(run())
+
+
+def test_a_blocked_client_is_refused_without_a_lookup_when_nothing_can_be_looked_up():
+    async def check(client):
+        for method, path, kwargs in (
+            ("get", "/api/v1/me", {}),
+            ("get", "/api/v1/me", {"headers": {"Authorization": "Bearer short"}}),
+            ("post", "/api/v1/auth/token", {"json": {"grant_type": "refresh_token", "refresh_token": "short"}}),
+            ("post", "/api/v1/auth/token", {"json": {
+                "grant_type": "authorization_code", "code": "short", "code_verifier": "V" * 64}}),
+        ):
+            response = await getattr(client, method)(path, **kwargs)
+            assert response.status_code == 429 and response.headers["retry-after"] == "900", (path, kwargs)
+    _run(check, _app(_blocked_limiter(), mobile_signin=True))
+
+
+def test_an_outdated_token_of_a_real_grant_is_not_turned_into_a_wait():
+    limiter = _blocked_limiter()
+    error = ApiError("invalid_token", headers=BEARER_HEADERS)
+    assert api_v1._refuse(limiter, "127.0.0.1", error, count=False) is error
+    assert api_v1._refuse(limiter, "127.0.0.1", error).code == "rate_limited"
+
+
+def test_refusals_not_caused_by_a_failed_credential_are_not_limited_or_counted():
+    async def check(client):
+        for body in ({"grant_type": "nope"}, {"grant_type": "refresh_token"}):
+            assert (await client.post("/api/v1/auth/token", json=body)).status_code == 422
+    app = _app(_blocked_limiter())
+    _run(check, app)
 
 
 def test_token_request_validation_uses_the_envelope_without_echoing_input():
