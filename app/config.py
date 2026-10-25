@@ -168,6 +168,8 @@ class Config:
     storage_instance_reserve_bytes: int = DEFAULT_STORAGE_INSTANCE_RESERVE_BYTES
     preparation_spool_dir: str = ""
     forwarded_allow_ips: str = ""
+    # New mobile sign-ins only; existing grants keep working when off.
+    mobile_signin: bool = False
 
     capacity_ingest_slots: int = 2
     capacity_routine_slots: int = 1
@@ -438,6 +440,7 @@ class Config:
             login_auth_window_s=_f("LOGIN_AUTH_WINDOW_S", 900.0),
             display_tz=ZoneInfo(os.environ.get("DISPLAY_TZ", "UTC")),
             dev_no_auth=dev_no_auth,
+            mobile_signin=os.environ.get("MOBILE_SIGNIN", "") == "1",
             detector_params=Params(
                 max_accuracy_m=_f("MAX_ACCURACY_M", 100.0),
                 max_speed_ms=_f("MAX_SPEED_MS", 60.0),

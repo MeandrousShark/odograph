@@ -67,6 +67,16 @@ def test_dev_no_auth_needs_no_oidc(clean_env):
     assert cfg.initial_admin_signup is False
 
 
+@pytest.mark.parametrize("value, enabled", [
+    (None, False), ("", False), ("0", False), ("true", False), ("yes", False), ("1", True),
+])
+def test_mobile_signin_defaults_off_and_needs_exactly_one(clean_env, value, enabled):
+    clean_env.delenv("MOBILE_SIGNIN", raising=False)
+    if value is not None:
+        clean_env.setenv("MOBILE_SIGNIN", value)
+    assert Config.from_env().mobile_signin is enabled
+
+
 def test_local_only_mode_needs_no_oidc(clean_env):
     cfg = Config.from_env()
     assert cfg.dev_no_auth is False
