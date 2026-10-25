@@ -17,24 +17,25 @@ from fastapi import APIRouter, Depends, Request
 from psycopg import errors
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 
 from app.account_context import control_connection
 from app.accounts import get_account
 from app.api_errors import ApiError, ApiErrorEnvelope, FIELD_REQUIRED, FIELD_UNSUPPORTED, is_api_path
 from app.api_grants import (
-    ACCESS_TOKEN_SECONDS, check_access_token, format_instant, refresh_grant, token_digest,
+    ACCESS_TOKEN_SECONDS, GrantLimitReached, IssuedTokens, check_access_token, format_instant,
+    refresh_grant, revoke_grant, token_digest,
 )
 from app.auth import _bind_account
 from app.capacity_routes import AdmissionRoute, capacity_policy
 from app.detector.runner import DETECTOR_VERSION
 from app.ingest import FailedAuthLimiter, client_ip
+from app.mobile_authorization import AUTHORIZE_PATH, exchange_code, mobile_signin_enabled
 
 log = logging.getLogger(__name__)
 
 API_VERSIONS = ("v1",)
 PRODUCT_NAME = "odograph"
-AUTHORIZE_PATH = "/mobile/authorize"
 TOKEN_PATH = "/api/v1/auth/token"
 BEARER_HEADERS = {"WWW-Authenticate": "Bearer"}
 TOKEN_RESPONSE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
@@ -113,6 +114,8 @@ async def require_api_user(request: Request) -> ApiUser:
 class TokenRequest(BaseModel):
     grant_type: str
     refresh_token: str | None = Field(default=None, repr=False)
+    code: str | None = Field(default=None, repr=False)
+    code_verifier: str | None = Field(default=None, repr=False)
 
 
 class TokenResponse(BaseModel):
@@ -144,6 +147,36 @@ class MeResponse(BaseModel):
     grant_id: str
 
 
+async def _refresh(request: Request, body: TokenRequest, limiter: FailedAuthLimiter, ip: str) -> IssuedTokens:
+    if body.refresh_token is None:
+        raise ApiError("validation_failed", fields={"refresh_token": FIELD_REQUIRED})
+    async with control_connection(request.app.state.control_pool) as conn:
+        outcome = await refresh_grant(conn, body.refresh_token)
+    if outcome.tokens is None:
+        limiter.record_failure(ip)
+        raise ApiError("invalid_grant")
+    return outcome.tokens
+
+
+async def _exchange(request: Request, body: TokenRequest, limiter: FailedAuthLimiter, ip: str) -> IssuedTokens:
+    if not mobile_signin_enabled(request):
+        raise ApiError("signin_disabled")
+    missing = {name: FIELD_REQUIRED for name in ("code", "code_verifier") if getattr(body, name) is None}
+    if missing:
+        raise ApiError("validation_failed", fields=missing)
+    issued = None
+    if token_digest(body.code) is not None:
+        try:
+            async with control_connection(request.app.state.control_pool) as conn:
+                issued = await exchange_code(conn, body.code, body.code_verifier)
+        except GrantLimitReached:
+            raise ApiError("grant_limit_reached") from None
+    if issued is None:
+        limiter.record_failure(ip)
+        raise ApiError("invalid_grant")
+    return issued
+
+
 def _errors(*statuses: int) -> dict:
     return {status: {"model": ApiErrorEnvelope} for status in statuses}
 
@@ -152,38 +185,41 @@ def make_router() -> APIRouter:
     router = APIRouter(route_class=AdmissionRoute)
 
     @router.get("/api/v1/capabilities", response_model=CapabilitiesResponse, responses=_errors(503))
-    async def capabilities():
+    async def capabilities(request: Request):
         return CapabilitiesResponse(
             product=PRODUCT_NAME,
             api_versions=list(API_VERSIONS),
             authorization=CapabilitiesAuthorization(authorize_path=AUTHORIZE_PATH, token_path=TOKEN_PATH),
-            mobile_signin_available=False,
+            mobile_signin_available=mobile_signin_enabled(request),
         )
 
     @router.post("/api/v1/auth/token", response_model=TokenResponse,
-                 responses=_errors(400, 422, 429, 503))
+                 responses=_errors(400, 403, 409, 422, 429, 503))
     @capacity_policy("auth_interactive")
     async def token(request: Request, body: TokenRequest):
         limiter = _limiter(request)
         ip = client_ip(request)
         if limiter.blocked(ip):
             raise _rate_limited(limiter)
-        if body.grant_type != "refresh_token":
+        if body.grant_type == "refresh_token":
+            issued = await _refresh(request, body, limiter, ip)
+        elif body.grant_type == "authorization_code":
+            issued = await _exchange(request, body, limiter, ip)
+        else:
             raise ApiError("validation_failed", fields={"grant_type": FIELD_UNSUPPORTED})
-        if body.refresh_token is None:
-            raise ApiError("validation_failed", fields={"refresh_token": FIELD_REQUIRED})
-        async with control_connection(request.app.state.control_pool) as conn:
-            outcome = await refresh_grant(conn, body.refresh_token)
-        if outcome.tokens is None:
-            limiter.record_failure(ip)
-            raise ApiError("invalid_grant")
-        issued = outcome.tokens
         response = TokenResponse(
             access_token=issued.access_token, refresh_token=issued.refresh_token,
             token_type="Bearer", access_expires_at=format_instant(issued.access_expires_at),
             expires_in=ACCESS_TOKEN_SECONDS,
         )
         return JSONResponse(response.model_dump(), headers=TOKEN_RESPONSE_HEADERS)
+
+    @router.post("/api/v1/auth/revoke", status_code=204, response_class=Response,
+                 responses=_errors(401, 429, 503))
+    async def revoke(request: Request, api_user: ApiUser = Depends(require_api_user)):
+        async with control_connection(request.app.state.control_pool) as conn:
+            await revoke_grant(conn, api_user.account["id"], api_user.grant_id)
+        return Response(status_code=204)
 
     @router.get("/api/v1/me", response_model=MeResponse, responses=_errors(401, 429, 503))
     async def me(request: Request, api_user: ApiUser = Depends(require_api_user)):
