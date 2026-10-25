@@ -1,13 +1,23 @@
-"""Pure parts of API trip writes: instant and key parsing, the canonical
-request digest and the error registry."""
+"""API trip writes without a database: instant and key parsing, the
+canonical request digest, the error registry and the admission lane."""
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
+import httpx
 import pytest
+from fastapi import APIRouter, Depends, FastAPI, Request
+from pydantic import BaseModel
+from starlette.responses import Response
 
-from app.api_errors import ERRORS, ApiError
+from app.account_context import AccountPrincipal
+from app.api_errors import ERRORS, ApiError, register_api_errors
+from app.api_v1 import require_api_user
+from app.capacity import AdmissionManager
+from app.capacity_routes import AdmissionRoute, capacity_policy
 from app.api_trips import _idempotency_key, _instant, _write_values
 from app.trip_writes import ManualTrip, manual_trip_digest
 
@@ -79,3 +89,56 @@ def test_write_error_codes_are_registered():
     assert ERRORS["idempotency_key_reused"][0] == 409
     assert ERRORS["storage_full"][0] == 409
     assert ERRORS["trip_in_progress"][0] == 409
+
+
+class _NotesBody(BaseModel):
+    notes: str
+
+
+def test_api_edits_and_deletes_authenticate_first_and_free_the_form_slot():
+    async def run():
+        app = FastAPI()
+        register_api_errors(app)
+        manager = app.state.capacity = AdmissionManager(SimpleNamespace())
+        router = APIRouter(route_class=AdmissionRoute)
+        authenticated = False
+        calls = []
+
+        async def identity(request: Request):
+            if not authenticated:
+                raise ApiError("invalid_token")
+            request.state.principal = AccountPrincipal(1, True, 1)
+            return {"id": 1}
+        app.dependency_overrides[require_api_user] = identity
+
+        @router.patch("/api/v1/things/{thing_id}")
+        @capacity_policy("form")
+        async def edit(thing_id: int, body: _NotesBody, user=Depends(require_api_user)):
+            assert not manager._active["auth_interactive"]
+            calls.append(("patch", body.notes))
+            return Response(status_code=204)
+
+        @router.delete("/api/v1/things/{thing_id}")
+        @capacity_policy("form")
+        async def remove(thing_id: int, user=Depends(require_api_user)):
+            assert not manager._active["auth_interactive"]
+            calls.append(("delete", thing_id))
+            return Response(status_code=204)
+        app.include_router(router)
+        reads = 0
+
+        async def body():
+            nonlocal reads
+            reads += 1
+            yield b'{"notes": "hello"}'
+        headers = {"content-type": "application/json"}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            denied = await client.patch("/api/v1/things/1", content=body(), headers=headers)
+            assert denied.status_code == 401 and reads == 0
+            authenticated = True
+            saved = await client.patch("/api/v1/things/1", content=body(), headers=headers)
+            assert saved.status_code == 204, saved.text
+            assert (await client.delete("/api/v1/things/2")).status_code == 204
+        assert reads == 1 and calls == [("patch", "hello"), ("delete", 2)]
+        assert not any(manager._active.values())
+    asyncio.run(run())

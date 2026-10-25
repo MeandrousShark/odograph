@@ -233,9 +233,10 @@ class AdmissionRoute(APIRoute):
                 return message
 
             active_receive = bounded_receive if body_timeout is not None else receive
-            if lane in ('auth_interactive', 'form') and scope['method'] == 'POST':
+            if lane in ('auth_interactive', 'form') and scope['method'] in ('POST', 'PATCH', 'DELETE'):
                 # Buffer only the bounded tiny form, so framework multipart cleanup
                 # never receives a timeout/overflow while it owns partial spools.
+                # API edits and deletes on this lane release it the same way.
                 body = bytearray()
                 disconnected = False
                 while True:
