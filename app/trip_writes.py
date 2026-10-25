@@ -25,9 +25,6 @@ from app.account_context import account_id
 from app.detector.lock import lock_detector
 from app.trip_queries import CATEGORIES, EXCLUSIONS
 
-MAX_ID = 2**63 - 1
-
-
 class ManualTripValidationError(ValueError):
     """Per-field validation messages for a trip write. The web pages show
     them beside their inputs; the API returns them as `validation_failed`."""
@@ -87,13 +84,7 @@ def _text(value: str | None) -> str | None:
     return None if value is None else (value.strip() or None)
 
 
-def _vehicle_in_range(vehicle_id: int) -> bool:
-    return not isinstance(vehicle_id, bool) and 1 <= vehicle_id <= MAX_ID
-
-
 async def vehicle_exists(conn, vehicle_id: int) -> bool:
-    if not _vehicle_in_range(vehicle_id):
-        return False
     cur = await conn.execute(
         "SELECT 1 FROM vehicles WHERE id = %s AND account_id = %s", (vehicle_id, account_id(conn))
     )

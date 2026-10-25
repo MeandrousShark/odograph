@@ -32,8 +32,8 @@ from app.trip_reads import (
     TripDetail, detail_for_trip, fetch_recent_purposes, fetch_trip_detail, route_parts,
 )
 from app.trip_writes import (
-    TIME_INVALID, IdempotencyKeyReused, ManualTripValidationError, create_manual_trip, delete_trip,
-    manual_trip_digest, update_trip, validate_manual_trip,
+    TIME_INVALID, VEHICLE_MISSING, IdempotencyKeyReused, ManualTripValidationError, create_manual_trip,
+    delete_trip, manual_trip_digest, update_trip, validate_manual_trip,
 )
 from app.vehicles import list_vehicles
 
@@ -287,11 +287,15 @@ def _instant(value: str) -> datetime | None:
 
 
 def _write_values(values: dict) -> dict:
-    """Parse instants and refuse NUL, which no stored text can hold."""
+    """Parse instants, and refuse NUL, which no stored text can hold, and
+    ids no stored vehicle can have."""
     problems = {}
     for name, value in values.items():
         if isinstance(value, str) and "\x00" in value:
             problems[name] = FIELD_INVALID
+    vehicle_id = values.get("vehicle_id")
+    if vehicle_id is not None and not 1 <= vehicle_id <= _MAX_ID:
+        problems["vehicle_id"] = VEHICLE_MISSING
     for name in _INSTANT_FIELDS:
         if isinstance(values.get(name), str) and name not in problems:
             parsed = _instant(values[name])
