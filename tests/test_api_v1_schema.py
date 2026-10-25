@@ -222,8 +222,8 @@ def _schema(document, name):
 def test_comparator_accepts_added_optional_fields():
     old = _document()
     new = copy.deepcopy(old)
-    _schema(new, "TokenRequest")["properties"]["code"] = {
-        "anyOf": [{"type": "string"}, {"type": "null"}], "title": "Code"}
+    _schema(new, "TokenRequest")["properties"]["new_optional"] = {
+        "anyOf": [{"type": "string"}, {"type": "null"}], "title": "New Optional"}
     _schema(new, "MeResponse")["properties"]["new_field"] = {"type": "string"}
     _schema(new, "MeResponse")["required"].append("new_field")
     new["paths"]["/api/v1/me"]["get"]["responses"]["404"] = {"description": "Not Found"}
