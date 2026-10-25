@@ -355,7 +355,7 @@ and returns a valid `auth_time`; otherwise these actions fail closed.
 | `OIDC_CLIENT_SECRET` | unset | Provider client secret. |
 | `ALLOWED_EMAIL` | unset | Compatibility gate for the one-time claim of an upgraded OIDC-only installation. It does not authorize or link normal OIDC login. |
 | `ADMIN_TOKEN` | obsolete and ignored | Accepted in an old `.env` for upgrade compatibility. It enables no route and its value is never reported. Remove it when convenient. |
-| `MOBILE_SIGNIN` | `0` | `1` allows new mobile app sign-ins. Turning it off refuses new sign-ins only; apps already signed in keep working. |
+| `MOBILE_SIGNIN` | `0` | `1` allows new mobile app sign-ins; it needs HTTPS and `APP_URL` set to the public HTTPS address. Turning it off refuses new sign-ins only; apps already signed in keep working and can be revoked under **Signed-in apps** in Account Settings. See [Mobile app sign-in](accounts.md#mobile-app-sign-in-and-signed-in-apps). |
 | `DEV_NO_AUTH` | `0` | Development only. `1` binds a real synthetic account; it refuses an existing non-synthetic account. Never enable it on a deployed instance. |
 
 ## Detector behavior

@@ -9,6 +9,28 @@ reproduced here.
 
 ## [Unreleased]
 
+### Added
+
+- Mobile app sign-in for the first-party Odograph app, off by default. Set
+  `MOBILE_SIGNIN=1` to allow new sign-ins; it needs HTTPS. The browser
+  approves each sign-in, and an app holds its own revocable grant. See
+  [Mobile app sign-in and signed-in apps](docs/accounts.md#mobile-app-sign-in-and-signed-in-apps).
+- **Signed-in apps** in Account Settings lists the apps signed in to an
+  account and revokes any of them. Sign out everywhere, a password change or
+  reset, a login-email change, linking or unlinking a sign-in provider and
+  disabling an account sign out every app.
+- `/api/v1` foundation endpoints for the mobile app: capabilities, the signed-in
+  account, token refresh and sign-out, authenticated by a bearer token only.
+
+### Migrations
+
+- Migration 048 (`additive`) adds the API grants table and its protected
+  functions.
+- Migration 049 (`additive`) adds the mobile authorization request and code
+  tables and their protected functions.
+- Migration 050 (`additive`) adds the protected function behind the signed-in
+  apps list.
+
 ## [1.1.0] - 2026-10-23
 
 ### Security

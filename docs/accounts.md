@@ -65,6 +65,25 @@ An account created by accepting an invitation with the identity provider has
 no password at first. It can add one in Account Settings after
 reauthenticating with that provider.
 
+## Mobile app sign-in and signed-in apps
+
+The first-party Odograph mobile app signs in through your browser. Mobile
+sign-in is off by default. The operator turns it on with `MOBILE_SIGNIN=1`
+(see [Authentication and ingest](configuration.md#authentication-and-ingest)); it needs Odograph served over HTTPS
+and `APP_URL` set to its public HTTPS address. The setting only allows new
+sign-ins: turning it off does not sign out apps that are already signed in.
+
+**Settings > Account Settings > Security > Signed-in apps** lists the apps
+signed in to your account, each with its device name, when it signed in and
+when it was last used (or "Never used"). **Revoke** signs that one app out; it
+must be approved again in the browser to sign back in. An account can have at
+most 10 signed-in apps, so revoke one you no longer use before adding another.
+An app idle for 60 days is signed out on its own.
+
+**Sign out everywhere**, a password change or reset, a login-email change,
+linking or unlinking a sign-in provider, and disabling the account all sign out
+every app along with every browser session.
+
 ## Login email
 
 In **Settings > Account Settings**, you can verify your current login email or
