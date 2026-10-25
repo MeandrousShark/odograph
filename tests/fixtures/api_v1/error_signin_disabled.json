@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "signin_disabled",
+    "message": "Mobile sign-in is not enabled on this server.",
+    "fields": null
+  }
+}

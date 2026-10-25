@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -27,9 +28,10 @@ class _NoDatabase:
         raise AssertionError("this request must not reach the database")
 
 
-def _app(limiter=None):
+def _app(limiter=None, *, mobile_signin=False):
     app = FastAPI()
     app.add_middleware(WebSessionMiddleware, secret_key="disposable-secret", https_only=False)
+    app.state.config = SimpleNamespace(mobile_signin=mobile_signin)
     app.state.api_auth_limiter = limiter or FailedAuthLimiter(50, 900)
     app.state.control_pool = _NoDatabase()
 
@@ -113,6 +115,69 @@ def test_capabilities_reveal_nothing_account_or_version_specific():
         assert bearer.json() == expected
         assert "set-cookie" not in bearer.headers
         assert not any(name.lower().startswith("access-control-") for name in bearer.headers)
+    _run(check)
+
+
+def test_capabilities_report_the_mobile_signin_setting():
+    async def check(client):
+        response = await client.get("/api/v1/capabilities")
+        assert response.json()["mobile_signin_available"] is True
+    _run(check, _app(mobile_signin=True))
+
+
+def test_token_request_repr_hides_the_code_and_verifier():
+    from app.api_v1 import TokenRequest
+    request = TokenRequest(grant_type="authorization_code", code=TOKEN, code_verifier="V" * 64)
+    assert TOKEN not in repr(request) and "V" * 64 not in repr(request)
+
+
+def test_authorization_code_exchange_is_refused_while_signin_is_off():
+    async def check(client):
+        for body in ({"grant_type": "authorization_code", "code": TOKEN, "code_verifier": "V" * 64},
+                     {"grant_type": "authorization_code"}):
+            response = await client.post("/api/v1/auth/token", json=body)
+            assert response.status_code == 403
+            assert response.json() == {"error": {"code": "signin_disabled",
+                                                 "message": ERRORS["signin_disabled"][1], "fields": None}}
+            assert TOKEN not in response.text
+    _run(check)
+
+
+def test_authorization_code_request_validation_without_echoing_input():
+    async def check(client):
+        cases = [
+            ({"grant_type": "authorization_code"},
+             {"code": "This field is required.", "code_verifier": "This field is required."}),
+            ({"grant_type": "authorization_code", "code": TOKEN}, {"code_verifier": "This field is required."}),
+            ({"grant_type": "authorization_code", "code_verifier": TOKEN}, {"code": "This field is required."}),
+        ]
+        for body, fields in cases:
+            response = await client.post("/api/v1/auth/token", json=body)
+            assert response.status_code == 422, body
+            assert response.json()["error"]["fields"] == fields
+            assert TOKEN not in response.text
+    _run(check, _app(mobile_signin=True))
+
+
+def test_malformed_codes_are_invalid_grants_without_a_database_lookup():
+    async def check(client):
+        for code in ("short", "A" * 44, "A" * 42 + "="):
+            response = await client.post("/api/v1/auth/token", json={
+                "grant_type": "authorization_code", "code": code, "code_verifier": "V" * 64})
+            assert response.status_code == 400 and response.json()["error"]["code"] == "invalid_grant"
+        limited = await client.post("/api/v1/auth/token", json={
+            "grant_type": "authorization_code", "code": TOKEN, "code_verifier": "V" * 64})
+        assert limited.status_code == 429 and limited.headers["retry-after"] == "900"
+    _run(check, _app(FailedAuthLimiter(3, 900), mobile_signin=True))
+
+
+def test_revoke_requires_a_bearer_token():
+    async def check(client):
+        await client.post("/test/session")
+        response = await client.post("/api/v1/auth/revoke")
+        assert response.status_code == 401
+        assert response.json()["error"]["code"] == "invalid_token"
+        assert response.headers["www-authenticate"] == "Bearer"
     _run(check)
 
 

@@ -1,0 +1,5 @@
+{
+  "grant_type": "authorization_code",
+  "code": "code-example-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "code_verifier": "verifier-example-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}

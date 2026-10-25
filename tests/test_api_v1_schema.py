@@ -197,7 +197,8 @@ def _snapshot_text(document: dict) -> str:
 
 def test_api_schema_matches_the_checked_in_contract():
     generated = api_openapi_document()
-    assert set(generated["paths"]) == {"/api/v1/auth/token", "/api/v1/capabilities", "/api/v1/me"}
+    assert set(generated["paths"]) == {
+        "/api/v1/auth/revoke", "/api/v1/auth/token", "/api/v1/capabilities", "/api/v1/me"}
     if os.environ.get("ODOGRAPH_UPDATE_API_SCHEMA") == "1" and SNAPSHOT.exists():
         problems = breaking_changes(json.loads(SNAPSHOT.read_text()), generated)
         assert not problems, "\n".join(problems)
@@ -221,8 +222,8 @@ def _schema(document, name):
 def test_comparator_accepts_added_optional_fields():
     old = _document()
     new = copy.deepcopy(old)
-    _schema(new, "TokenRequest")["properties"]["code"] = {
-        "anyOf": [{"type": "string"}, {"type": "null"}], "title": "Code"}
+    _schema(new, "TokenRequest")["properties"]["new_optional"] = {
+        "anyOf": [{"type": "string"}, {"type": "null"}], "title": "New Optional"}
     _schema(new, "MeResponse")["properties"]["new_field"] = {"type": "string"}
     _schema(new, "MeResponse")["required"].append("new_field")
     new["paths"]["/api/v1/me"]["get"]["responses"]["404"] = {"description": "Not Found"}
@@ -260,6 +261,9 @@ def test_comparator_rejects_incompatible_changes(mutate, expected):
 
 @pytest.mark.parametrize("filename,model", [
     ("token_request.json", TokenRequest),
+    ("token_request_authorization_code.json", TokenRequest),
+    ("error_grant_limit_reached.json", ApiErrorEnvelope),
+    ("error_signin_disabled.json", ApiErrorEnvelope),
     ("token_response.json", TokenResponse),
     ("capabilities_response.json", CapabilitiesResponse),
     ("me_response.json", MeResponse),
@@ -269,6 +273,6 @@ def test_comparator_rejects_incompatible_changes(mutate, expected):
 def test_synthetic_fixtures_match_their_models(filename, model):
     data = json.loads((FIXTURES / filename).read_text())
     parsed = model.model_validate(data)
-    if filename != "token_request.json":
+    if not filename.startswith("token_request"):
         # Every documented response field is present, null rather than omitted.
         assert parsed.model_dump(mode="json") == data

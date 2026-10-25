@@ -74,6 +74,18 @@ async def _seed_source(database_url):
                     "VALUES(%s,%s,%s,'link',%s,1,'link',now(),now()+interval '5 minutes')",
                     ("b" * 64, "c" * 64, "d" * 64, actor_id),
                 )
+                await conn.execute(
+                    "INSERT INTO mobile_authorization_requests(request_digest,client_id,redirect_uri,"
+                    "code_challenge,state,device_label,created_at,expires_at) VALUES(%s,'odograph-ios',"
+                    "'odograph://auth/callback',%s,'s','Phone',now(),now()+interval '10 minutes')",
+                    ("e" * 64, "f" * 43),
+                )
+                await conn.execute(
+                    "INSERT INTO mobile_authorization_codes(code_digest,account_id,issued_auth_version,"
+                    "request_digest,client_id,code_challenge,device_label,created_at,expires_at) "
+                    "VALUES(%s,%s,1,%s,'odograph-ios',%s,'Phone',now(),now()+interval '1 minute')",
+                    ("9" * 64, actor_id, "8" * 64, "f" * 43),
+                )
             actor = {"id": actor_id, "auth_version": 1, "is_admin": True, "is_enabled": True}
             async with roles.control.connection() as conn:
                 assert await request_account_deletion(
@@ -272,6 +284,8 @@ async def _assert_restored_state(database_url, first, actor, cookie, proofs, *, 
             ]
             assert conn.execute("SELECT count(*) FROM oidc_action_proofs").fetchone() == (0,)
             assert conn.execute("SELECT count(*) FROM oidc_attempts").fetchone() == (0,)
+            assert conn.execute("SELECT count(*) FROM mobile_authorization_requests").fetchone() == (0,)
+            assert conn.execute("SELECT count(*) FROM mobile_authorization_codes").fetchone() == (0,)
             assert conn.execute(
                 "SELECT auth_version FROM accounts WHERE id=%s", (actor["id"],)
             ).fetchone()[0] > 2

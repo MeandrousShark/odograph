@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "grant_limit_reached",
+    "message": "This account has reached its limit of signed-in apps.",
+    "fields": null
+  }
+}

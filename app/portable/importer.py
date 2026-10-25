@@ -41,7 +41,8 @@ log = logging.getLogger(__name__)
 # single-account guard on accounts. Schema 46 makes protected storage limits
 # optional and adds grant modes. Schema 47 adds the administrator storage
 # limit editor functions. Schema 48 adds API grants, authentication state the
-# bundle never carries.
+# bundle never carries. Schema 49 adds mobile authorization requests and
+# codes, which it never carries either.
 # None changes the portable bundle.
 # Keep the tuples explicit so a future migration never becomes cross-schema
 # compatible merely because its version is adjacent.
@@ -127,6 +128,12 @@ _COMPATIBLE_SCHEMA_TRANSITIONS = {
     (3, 36, 48), (3, 37, 48), (3, 38, 48), (3, 39, 48), (3, 40, 48),
     (3, 41, 48), (3, 42, 48), (3, 43, 48), (3, 44, 48), (3, 45, 48),
     (3, 46, 48), (3, 47, 48), (3, 48, 48),
+    (1, 21, 49), (2, 22, 49), (2, 23, 49), (2, 24, 49), (2, 25, 49),
+    (3, 26, 49), (3, 27, 49), (3, 28, 49), (3, 29, 49), (3, 30, 49),
+    (3, 31, 49), (3, 32, 49), (3, 33, 49), (3, 34, 49), (3, 35, 49),
+    (3, 36, 49), (3, 37, 49), (3, 38, 49), (3, 39, 49), (3, 40, 49),
+    (3, 41, 49), (3, 42, 49), (3, 43, 49), (3, 44, 49), (3, 45, 49),
+    (3, 46, 49), (3, 47, 49), (3, 48, 49), (3, 49, 49),
 }
 
 
