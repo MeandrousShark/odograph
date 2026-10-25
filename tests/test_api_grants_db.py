@@ -517,19 +517,24 @@ def test_unknown_tokens_are_rate_limited_with_retry_after():
                         for _ in range(3)]
             assert all(response.status_code == 401 for response in failures)
             assert len({response.content for response in failures}) == 1
-            limited = await client.get("/api/v1/me", headers=_bearer(issued.access_token))
+            # The block applies to failures only: a valid credential is honored.
+            assert (await client.get("/api/v1/me", headers=_bearer(issued.access_token))).status_code == 200
+            limited = await client.get("/api/v1/me", headers=_bearer(secrets.token_urlsafe(32)))
             assert limited.status_code == 429
             assert limited.headers["retry-after"] == "900"
             assert limited.json()["error"]["code"] == "rate_limited"
             token = await client.post("/api/v1/auth/token", json={
-                "grant_type": "refresh_token", "refresh_token": issued.refresh_token})
+                "grant_type": "refresh_token", "refresh_token": secrets.token_urlsafe(32)})
             assert token.status_code == 429 and token.headers["retry-after"] == "900"
+            refreshed = await client.post("/api/v1/auth/token", json={
+                "grant_type": "refresh_token", "refresh_token": issued.refresh_token})
+            assert refreshed.status_code == 200
         async with _client(_app(pools, FailedAuthLimiter(2, 900))) as client:
             # Refresh invalid_grant still counts.
             for _ in range(2):
                 assert (await client.post("/api/v1/auth/token", json={
                     "grant_type": "refresh_token", "refresh_token": secrets.token_urlsafe(32)})).status_code == 400
-            assert (await client.get("/api/v1/me", headers=_bearer(issued.access_token))).status_code == 429
+            assert (await client.get("/api/v1/me", headers=_bearer(secrets.token_urlsafe(32)))).status_code == 429
         # Rate limiting revoked nothing.
         assert (await _grant(owner, issued.grant_id))[0] is None
     _run(check)

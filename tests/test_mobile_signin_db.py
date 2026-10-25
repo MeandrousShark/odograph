@@ -25,6 +25,7 @@ from app.account_context import control_connection
 from app.accounts import create_admin, get_account, sign_out_everywhere
 from app.api_grants import ACTIVE_GRANT_LIMIT, create_grant, token_digest
 from app.config import Config
+from app.ingest import FailedAuthLimiter
 from app.db import make_pool
 from app.local_auth import hash_password
 from app.mobile_authorization import (
@@ -839,3 +840,49 @@ def test_rows_are_reached_only_through_their_functions():
                 assert await (await conn.execute(
                     "SELECT count(*) FROM mobile_authorization_codes")).fetchone() == (0,)
     asyncio.run(scenario())
+
+
+def test_a_blocked_client_keeps_its_valid_credentials_working(monkeypatch):
+    async def check(site):
+        site.app.state.api_auth_limiter = FailedAuthLimiter(3, 900)
+        stale = [await site.mint(site.local["id"], f"Old phone {i}") for i in range(3)]
+        await site.sql("UPDATE accounts SET auth_version=auth_version+1 WHERE id=%s", (site.local["id"],))
+        # Signing a new app in deletes the grants the version bump killed, so
+        # the old phones' tokens become unknown ones.
+        fresh = await site.mint(site.local["id"], "New phone")
+        assert (await site.sql("SELECT count(*) FROM api_grants")) == [(1,)]
+        async with site.client() as client:
+            await _login_local(client)
+            verifier, challenge = _pkce()
+            await _authorize(client, challenge)
+            _, finished = await _decide(client)
+            code = _callback(finished)["code"]
+
+            for phone in stale:
+                refused = await client.get("/api/v1/me", headers={"Authorization": f"Bearer {phone.access_token}"})
+                assert refused.status_code == 401
+            # The same IP is now blocked for failures ...
+            for refused in (
+                await client.get("/api/v1/me", headers={"Authorization": f"Bearer {secrets.token_urlsafe(32)}"}),
+                await client.get("/api/v1/me", headers={"Authorization": f"Bearer {stale[0].access_token}"}),
+                await client.post("/api/v1/auth/token", json={
+                    "grant_type": "refresh_token", "refresh_token": stale[0].refresh_token}),
+                await client.post("/api/v1/auth/token", json={
+                    "grant_type": "authorization_code", "code": secrets.token_urlsafe(32),
+                    "code_verifier": verifier}),
+            ):
+                assert refused.status_code == 429 and refused.headers["retry-after"] == "900"
+                assert refused.json()["error"]["code"] == "rate_limited"
+            # ... but valid credentials from it still work.
+            me = await client.get("/api/v1/me", headers={"Authorization": f"Bearer {fresh.access_token}"})
+            assert me.status_code == 200 and me.json()["grant_id"] == fresh.grant_id
+            refreshed = await client.post("/api/v1/auth/token", json={
+                "grant_type": "refresh_token", "refresh_token": fresh.refresh_token})
+            assert refreshed.status_code == 200
+            exchanged = await _exchange(client, code, verifier)
+            assert exchanged.status_code == 200, exchanged.text
+            new_bearer = {"Authorization": f"Bearer {exchanged.json()['access_token']}"}
+            assert (await client.get("/api/v1/me", headers=new_bearer)).status_code == 200
+            assert (await client.get("/api/v1/me", headers={
+                "Authorization": f"Bearer {secrets.token_urlsafe(32)}"})).status_code == 429
+    _site(monkeypatch, check)
