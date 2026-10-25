@@ -163,6 +163,7 @@ def test_patch_leaves_the_same_rows_as_the_web_full_edit(monkeypatch):
             "category": "business", "purpose": "  Client ", "notes": " Note ", "vehicle_id": van,
             "exclusion": "not_deductible"})
         assert response.status_code == 200, response.text
+        assert response.headers["cache-control"] == "no-store, private"
         web_row, api_row = await _row(state, web), await _row(state, api)
         assert _durable(api_row) == _durable(web_row)
         assert api_row["tag_source"] == "human" and api_row["purpose"] == "Client"
@@ -339,6 +340,7 @@ def test_delete_is_source_aware_like_the_web(monkeypatch):
         usage = await _usage(state)
         response = await _api(state, "DELETE", f"/api/v1/trips/{api_detected}")
         assert (response.status_code, response.content) == (204, b"")
+        assert response.headers["cache-control"] == "no-store, private"
         assert usage - await _usage(state) == web_detected_cost
         async with state.raw.connection() as conn:
             overrides = await (await conn.execute(
@@ -416,6 +418,7 @@ def test_create_leaves_the_same_row_and_charge_as_the_web_form(monkeypatch):
         key = _key()
         response = await _create(state, _create_body(vehicle_id=vehicle), key)
         assert response.status_code == 201, response.text
+        assert response.headers["cache-control"] == "no-store, private"
         body = response.json()
         assert response.headers["location"] == f"/api/v1/trips/{body['id']}"
         assert "idempotent-replayed" not in response.headers
@@ -450,6 +453,7 @@ def test_create_replays_a_repeat_and_refuses_a_reused_key(monkeypatch):
             replay = await _create(state, body, key.upper())
             assert replay.status_code == 200, replay.text
             assert replay.headers["idempotent-replayed"] == "true"
+            assert replay.headers["cache-control"] == "no-store, private"
             assert "location" not in replay.headers
             assert replay.json() == {**first.json(), "notes": "edited later"}
         assert await _count(state) == rows
