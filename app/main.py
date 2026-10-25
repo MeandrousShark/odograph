@@ -534,7 +534,10 @@ def create_app(config: Config | None = None) -> FastAPI:
     app.include_router(admin.make_router())
     app.include_router(portable.make_router())
     app.include_router(api_v1.make_router())
-    app.include_router(mobile_routes.make_router())
+    # Fixed for the process, so with the setting off the routes do not exist
+    # and every request to them, signed in or not, is a plain 404.
+    if cfg.mobile_signin:
+        app.include_router(mobile_routes.make_router())
     app.mount("/static", RevalidatingStaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
     return app
