@@ -12,6 +12,7 @@ from app.page import render_page, render_template
 from app.review_queue import next_review_trip, review_filter
 from app.trip_queries import TripFilter
 from app.trip_reads import fetch_route_geojson
+from app.trip_writes import ManualTripValidationError, update_trip
 from app.vehicles import list_vehicles
 
 from app.ui._common import (
@@ -231,18 +232,15 @@ def register(router: APIRouter) -> None:
                 position = await _trip_position(conn, trip_id)
                 if position is None:
                     raise HTTPException(status_code=404, detail="No such trip")
+                # Review sets 'human' even when the stored category already
+                # matches (a stale card), as tagging always has.
                 try:
-                    cur = await conn.execute(
-                        "UPDATE trips SET category = %s, purpose = %s, notes = %s, "
-                        "vehicle_id = %s, exclusion = %s, tag_source = 'human', updated_at = now() "
-                        "WHERE id = %s AND account_id = %s",
-                        (category, purpose.strip() or None, notes_value.strip() or None,
-                         _parse_vehicle_form(vehicle_value), exclusion or None, trip_id, account_id(conn)),
-                    )
-                except errors.ForeignKeyViolation:
+                    await update_trip(conn, trip_id, {
+                        "category": category, "purpose": purpose, "notes": notes_value,
+                        "vehicle_id": _parse_vehicle_form(vehicle_value), "exclusion": exclusion,
+                    }, write_unchanged=True, force_human=True)
+                except ManualTripValidationError:
                     raise HTTPException(status_code=400, detail="No such vehicle")
-                if cur.rowcount == 0:
-                    raise HTTPException(status_code=404, detail="No such trip")
                 card = await _fetch_review_card(conn, filters, cursor=position)
                 return await _render_review_card(
                     request, conn, "_review_card.html", card, from_, to, vehicle, q,
