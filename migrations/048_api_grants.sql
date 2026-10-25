@@ -80,20 +80,23 @@ BEGIN
            OR g.issued_auth_version <> account_row.auth_version
            OR GREATEST(g.created_at, COALESCE(g.last_used_at, g.created_at))
               <= checked_at - interval '60 days');
-    -- Every remaining grant of the account is active.
+    -- Every remaining unrevoked grant of the account is active. The
+    -- revoked_at checks cover a revocation that commits after the cleanup.
     IF input_replaces IS NOT NULL THEN
         SELECT g.id INTO replaced_id FROM public.api_grants g
         WHERE g.account_id = input_account_id AND g.public_id = input_replaces
+          AND g.revoked_at IS NULL
         FOR UPDATE;
     END IF;
     SELECT pg_catalog.count(*) INTO active_count FROM public.api_grants g
-    WHERE g.account_id = input_account_id;
+    WHERE g.account_id = input_account_id AND g.revoked_at IS NULL;
     IF active_count - (CASE WHEN replaced_id IS NULL THEN 0 ELSE 1 END) >= 10 THEN
         RETURN QUERY SELECT 'grant_limit_reached'::text, NULL::timestamptz;
         RETURN;
     END IF;
     IF replaced_id IS NOT NULL THEN
-        UPDATE public.api_grants g SET revoked_at = checked_at WHERE g.id = replaced_id;
+        UPDATE public.api_grants g SET revoked_at = checked_at
+        WHERE g.id = replaced_id AND g.revoked_at IS NULL;
     END IF;
     INSERT INTO public.api_grants
         (account_id, public_id, device_label, issued_auth_version, created_at,
