@@ -1,0 +1,3710 @@
+{
+  "description": "PATCH /api/v1/trips/{trip_id} applied in order to the synthetic detected trip (trip_detail_gapped) and manual trip (trip_detail_manual), both starting with a rule-assigned tag. `written` says whether the trip was updated and `tag_source` is the stored tag source afterwards; neither is part of the response.",
+  "vehicles": {
+    "2": "My Car",
+    "4": "Van"
+  },
+  "cases": [
+    {
+      "trip": "detected",
+      "field": "all",
+      "case": "omitted",
+      "request": {},
+      "status": 200,
+      "written": false,
+      "tag_source": "rule",
+      "response": {
+        "id": 1,
+        "source": "detected",
+        "imported": false,
+        "started_at": "2026-04-14T15:00:00.000000Z",
+        "ended_at": "2026-04-14T15:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 2310.25,
+        "distance_raw_m": 2400.5,
+        "distance_snapped_m": 2310.25,
+        "snap_status": "ok",
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Client visit",
+        "notes": "Gap near the tunnel",
+        "vehicle_id": 2,
+        "vehicle_name": "My Car",
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.6,
+          "lon": -122.33,
+          "description": "47.6000,-122.3300"
+        },
+        "end": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.62,
+          "lon": -122.31,
+          "description": "47.6200,-122.3100"
+        },
+        "has_gap": true,
+        "point_count": 42,
+        "has_route": true,
+        "expense_count": 1,
+        "route_raw": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.32,
+                47.61
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "route_snapped": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.325,
+                47.605
+              ]
+            ],
+            [
+              [
+                -122.315,
+                47.615
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "stays": [
+          {
+            "position": "start",
+            "lat": 47.601,
+            "lon": -122.331
+          },
+          {
+            "position": "end",
+            "lat": 47.621,
+            "lon": -122.309
+          }
+        ],
+        "has_previous_trip": false,
+        "has_next_trip": true,
+        "expenses": [
+          {
+            "id": 1,
+            "vehicle_id": 2,
+            "vehicle_name": "My Car",
+            "incurred_on": "2026-04-14",
+            "category": "parking",
+            "amount": "12.34",
+            "treatment": "fully_business",
+            "notes": "Garage",
+            "conflicts": []
+          }
+        ]
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "notes",
+      "case": "unchanged",
+      "request": {
+        "notes": "Gap near the tunnel"
+      },
+      "status": 200,
+      "written": false,
+      "tag_source": "rule",
+      "response": {
+        "id": 1,
+        "source": "detected",
+        "imported": false,
+        "started_at": "2026-04-14T15:00:00.000000Z",
+        "ended_at": "2026-04-14T15:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 2310.25,
+        "distance_raw_m": 2400.5,
+        "distance_snapped_m": 2310.25,
+        "snap_status": "ok",
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Client visit",
+        "notes": "Gap near the tunnel",
+        "vehicle_id": 2,
+        "vehicle_name": "My Car",
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.6,
+          "lon": -122.33,
+          "description": "47.6000,-122.3300"
+        },
+        "end": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.62,
+          "lon": -122.31,
+          "description": "47.6200,-122.3100"
+        },
+        "has_gap": true,
+        "point_count": 42,
+        "has_route": true,
+        "expense_count": 1,
+        "route_raw": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.32,
+                47.61
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "route_snapped": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.325,
+                47.605
+              ]
+            ],
+            [
+              [
+                -122.315,
+                47.615
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "stays": [
+          {
+            "position": "start",
+            "lat": 47.601,
+            "lon": -122.331
+          },
+          {
+            "position": "end",
+            "lat": 47.621,
+            "lon": -122.309
+          }
+        ],
+        "has_previous_trip": false,
+        "has_next_trip": true,
+        "expenses": [
+          {
+            "id": 1,
+            "vehicle_id": 2,
+            "vehicle_name": "My Car",
+            "incurred_on": "2026-04-14",
+            "category": "parking",
+            "amount": "12.34",
+            "treatment": "fully_business",
+            "notes": "Garage",
+            "conflicts": []
+          }
+        ]
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "notes",
+      "case": "modified",
+      "request": {
+        "notes": "  Tunnel detour  "
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "rule",
+      "response": {
+        "id": 1,
+        "source": "detected",
+        "imported": false,
+        "started_at": "2026-04-14T15:00:00.000000Z",
+        "ended_at": "2026-04-14T15:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 2310.25,
+        "distance_raw_m": 2400.5,
+        "distance_snapped_m": 2310.25,
+        "snap_status": "ok",
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Client visit",
+        "notes": "Tunnel detour",
+        "vehicle_id": 2,
+        "vehicle_name": "My Car",
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.6,
+          "lon": -122.33,
+          "description": "47.6000,-122.3300"
+        },
+        "end": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.62,
+          "lon": -122.31,
+          "description": "47.6200,-122.3100"
+        },
+        "has_gap": true,
+        "point_count": 42,
+        "has_route": true,
+        "expense_count": 1,
+        "route_raw": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.32,
+                47.61
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "route_snapped": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.325,
+                47.605
+              ]
+            ],
+            [
+              [
+                -122.315,
+                47.615
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "stays": [
+          {
+            "position": "start",
+            "lat": 47.601,
+            "lon": -122.331
+          },
+          {
+            "position": "end",
+            "lat": 47.621,
+            "lon": -122.309
+          }
+        ],
+        "has_previous_trip": false,
+        "has_next_trip": true,
+        "expenses": [
+          {
+            "id": 1,
+            "vehicle_id": 2,
+            "vehicle_name": "My Car",
+            "incurred_on": "2026-04-14",
+            "category": "parking",
+            "amount": "12.34",
+            "treatment": "fully_business",
+            "notes": "Garage",
+            "conflicts": []
+          }
+        ]
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "notes",
+      "case": "null",
+      "request": {
+        "notes": null
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "rule",
+      "response": {
+        "id": 1,
+        "source": "detected",
+        "imported": false,
+        "started_at": "2026-04-14T15:00:00.000000Z",
+        "ended_at": "2026-04-14T15:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 2310.25,
+        "distance_raw_m": 2400.5,
+        "distance_snapped_m": 2310.25,
+        "snap_status": "ok",
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Client visit",
+        "notes": null,
+        "vehicle_id": 2,
+        "vehicle_name": "My Car",
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.6,
+          "lon": -122.33,
+          "description": "47.6000,-122.3300"
+        },
+        "end": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.62,
+          "lon": -122.31,
+          "description": "47.6200,-122.3100"
+        },
+        "has_gap": true,
+        "point_count": 42,
+        "has_route": true,
+        "expense_count": 1,
+        "route_raw": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.32,
+                47.61
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "route_snapped": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.325,
+                47.605
+              ]
+            ],
+            [
+              [
+                -122.315,
+                47.615
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "stays": [
+          {
+            "position": "start",
+            "lat": 47.601,
+            "lon": -122.331
+          },
+          {
+            "position": "end",
+            "lat": 47.621,
+            "lon": -122.309
+          }
+        ],
+        "has_previous_trip": false,
+        "has_next_trip": true,
+        "expenses": [
+          {
+            "id": 1,
+            "vehicle_id": 2,
+            "vehicle_name": "My Car",
+            "incurred_on": "2026-04-14",
+            "category": "parking",
+            "amount": "12.34",
+            "treatment": "fully_business",
+            "notes": "Garage",
+            "conflicts": []
+          }
+        ]
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "vehicle_id",
+      "case": "unchanged",
+      "request": {
+        "vehicle_id": 2
+      },
+      "status": 200,
+      "written": false,
+      "tag_source": "rule",
+      "response": {
+        "id": 1,
+        "source": "detected",
+        "imported": false,
+        "started_at": "2026-04-14T15:00:00.000000Z",
+        "ended_at": "2026-04-14T15:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 2310.25,
+        "distance_raw_m": 2400.5,
+        "distance_snapped_m": 2310.25,
+        "snap_status": "ok",
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Client visit",
+        "notes": null,
+        "vehicle_id": 2,
+        "vehicle_name": "My Car",
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.6,
+          "lon": -122.33,
+          "description": "47.6000,-122.3300"
+        },
+        "end": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.62,
+          "lon": -122.31,
+          "description": "47.6200,-122.3100"
+        },
+        "has_gap": true,
+        "point_count": 42,
+        "has_route": true,
+        "expense_count": 1,
+        "route_raw": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.32,
+                47.61
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "route_snapped": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.325,
+                47.605
+              ]
+            ],
+            [
+              [
+                -122.315,
+                47.615
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "stays": [
+          {
+            "position": "start",
+            "lat": 47.601,
+            "lon": -122.331
+          },
+          {
+            "position": "end",
+            "lat": 47.621,
+            "lon": -122.309
+          }
+        ],
+        "has_previous_trip": false,
+        "has_next_trip": true,
+        "expenses": [
+          {
+            "id": 1,
+            "vehicle_id": 2,
+            "vehicle_name": "My Car",
+            "incurred_on": "2026-04-14",
+            "category": "parking",
+            "amount": "12.34",
+            "treatment": "fully_business",
+            "notes": "Garage",
+            "conflicts": []
+          }
+        ]
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "vehicle_id",
+      "case": "modified",
+      "request": {
+        "vehicle_id": 4
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "rule",
+      "response": {
+        "id": 1,
+        "source": "detected",
+        "imported": false,
+        "started_at": "2026-04-14T15:00:00.000000Z",
+        "ended_at": "2026-04-14T15:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 2310.25,
+        "distance_raw_m": 2400.5,
+        "distance_snapped_m": 2310.25,
+        "snap_status": "ok",
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Client visit",
+        "notes": null,
+        "vehicle_id": 4,
+        "vehicle_name": "Van",
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.6,
+          "lon": -122.33,
+          "description": "47.6000,-122.3300"
+        },
+        "end": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.62,
+          "lon": -122.31,
+          "description": "47.6200,-122.3100"
+        },
+        "has_gap": true,
+        "point_count": 42,
+        "has_route": true,
+        "expense_count": 1,
+        "route_raw": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.32,
+                47.61
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "route_snapped": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.325,
+                47.605
+              ]
+            ],
+            [
+              [
+                -122.315,
+                47.615
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "stays": [
+          {
+            "position": "start",
+            "lat": 47.601,
+            "lon": -122.331
+          },
+          {
+            "position": "end",
+            "lat": 47.621,
+            "lon": -122.309
+          }
+        ],
+        "has_previous_trip": false,
+        "has_next_trip": true,
+        "expenses": [
+          {
+            "id": 1,
+            "vehicle_id": 2,
+            "vehicle_name": "My Car",
+            "incurred_on": "2026-04-14",
+            "category": "parking",
+            "amount": "12.34",
+            "treatment": "fully_business",
+            "notes": "Garage",
+            "conflicts": [
+              "vehicle"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "vehicle_id",
+      "case": "null",
+      "request": {
+        "vehicle_id": null
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "rule",
+      "response": {
+        "id": 1,
+        "source": "detected",
+        "imported": false,
+        "started_at": "2026-04-14T15:00:00.000000Z",
+        "ended_at": "2026-04-14T15:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 2310.25,
+        "distance_raw_m": 2400.5,
+        "distance_snapped_m": 2310.25,
+        "snap_status": "ok",
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Client visit",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.6,
+          "lon": -122.33,
+          "description": "47.6000,-122.3300"
+        },
+        "end": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.62,
+          "lon": -122.31,
+          "description": "47.6200,-122.3100"
+        },
+        "has_gap": true,
+        "point_count": 42,
+        "has_route": true,
+        "expense_count": 1,
+        "route_raw": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.32,
+                47.61
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "route_snapped": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.325,
+                47.605
+              ]
+            ],
+            [
+              [
+                -122.315,
+                47.615
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "stays": [
+          {
+            "position": "start",
+            "lat": 47.601,
+            "lon": -122.331
+          },
+          {
+            "position": "end",
+            "lat": 47.621,
+            "lon": -122.309
+          }
+        ],
+        "has_previous_trip": false,
+        "has_next_trip": true,
+        "expenses": [
+          {
+            "id": 1,
+            "vehicle_id": 2,
+            "vehicle_name": "My Car",
+            "incurred_on": "2026-04-14",
+            "category": "parking",
+            "amount": "12.34",
+            "treatment": "fully_business",
+            "notes": "Garage",
+            "conflicts": [
+              "vehicle"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "exclusion",
+      "case": "modified",
+      "request": {
+        "exclusion": "not_deductible"
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "rule",
+      "response": {
+        "id": 1,
+        "source": "detected",
+        "imported": false,
+        "started_at": "2026-04-14T15:00:00.000000Z",
+        "ended_at": "2026-04-14T15:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 2310.25,
+        "distance_raw_m": 2400.5,
+        "distance_snapped_m": 2310.25,
+        "snap_status": "ok",
+        "category": "business",
+        "exclusion": "not_deductible",
+        "purpose": "Client visit",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.6,
+          "lon": -122.33,
+          "description": "47.6000,-122.3300"
+        },
+        "end": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.62,
+          "lon": -122.31,
+          "description": "47.6200,-122.3100"
+        },
+        "has_gap": true,
+        "point_count": 42,
+        "has_route": true,
+        "expense_count": 1,
+        "route_raw": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.32,
+                47.61
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "route_snapped": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.325,
+                47.605
+              ]
+            ],
+            [
+              [
+                -122.315,
+                47.615
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "stays": [
+          {
+            "position": "start",
+            "lat": 47.601,
+            "lon": -122.331
+          },
+          {
+            "position": "end",
+            "lat": 47.621,
+            "lon": -122.309
+          }
+        ],
+        "has_previous_trip": false,
+        "has_next_trip": true,
+        "expenses": [
+          {
+            "id": 1,
+            "vehicle_id": 2,
+            "vehicle_name": "My Car",
+            "incurred_on": "2026-04-14",
+            "category": "parking",
+            "amount": "12.34",
+            "treatment": "fully_business",
+            "notes": "Garage",
+            "conflicts": [
+              "vehicle"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "exclusion",
+      "case": "unchanged",
+      "request": {
+        "exclusion": "not_deductible"
+      },
+      "status": 200,
+      "written": false,
+      "tag_source": "rule",
+      "response": {
+        "id": 1,
+        "source": "detected",
+        "imported": false,
+        "started_at": "2026-04-14T15:00:00.000000Z",
+        "ended_at": "2026-04-14T15:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 2310.25,
+        "distance_raw_m": 2400.5,
+        "distance_snapped_m": 2310.25,
+        "snap_status": "ok",
+        "category": "business",
+        "exclusion": "not_deductible",
+        "purpose": "Client visit",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.6,
+          "lon": -122.33,
+          "description": "47.6000,-122.3300"
+        },
+        "end": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.62,
+          "lon": -122.31,
+          "description": "47.6200,-122.3100"
+        },
+        "has_gap": true,
+        "point_count": 42,
+        "has_route": true,
+        "expense_count": 1,
+        "route_raw": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.32,
+                47.61
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "route_snapped": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.325,
+                47.605
+              ]
+            ],
+            [
+              [
+                -122.315,
+                47.615
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "stays": [
+          {
+            "position": "start",
+            "lat": 47.601,
+            "lon": -122.331
+          },
+          {
+            "position": "end",
+            "lat": 47.621,
+            "lon": -122.309
+          }
+        ],
+        "has_previous_trip": false,
+        "has_next_trip": true,
+        "expenses": [
+          {
+            "id": 1,
+            "vehicle_id": 2,
+            "vehicle_name": "My Car",
+            "incurred_on": "2026-04-14",
+            "category": "parking",
+            "amount": "12.34",
+            "treatment": "fully_business",
+            "notes": "Garage",
+            "conflicts": [
+              "vehicle"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "exclusion",
+      "case": "null",
+      "request": {
+        "exclusion": null
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "rule",
+      "response": {
+        "id": 1,
+        "source": "detected",
+        "imported": false,
+        "started_at": "2026-04-14T15:00:00.000000Z",
+        "ended_at": "2026-04-14T15:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 2310.25,
+        "distance_raw_m": 2400.5,
+        "distance_snapped_m": 2310.25,
+        "snap_status": "ok",
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Client visit",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.6,
+          "lon": -122.33,
+          "description": "47.6000,-122.3300"
+        },
+        "end": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.62,
+          "lon": -122.31,
+          "description": "47.6200,-122.3100"
+        },
+        "has_gap": true,
+        "point_count": 42,
+        "has_route": true,
+        "expense_count": 1,
+        "route_raw": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.32,
+                47.61
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "route_snapped": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.325,
+                47.605
+              ]
+            ],
+            [
+              [
+                -122.315,
+                47.615
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "stays": [
+          {
+            "position": "start",
+            "lat": 47.601,
+            "lon": -122.331
+          },
+          {
+            "position": "end",
+            "lat": 47.621,
+            "lon": -122.309
+          }
+        ],
+        "has_previous_trip": false,
+        "has_next_trip": true,
+        "expenses": [
+          {
+            "id": 1,
+            "vehicle_id": 2,
+            "vehicle_name": "My Car",
+            "incurred_on": "2026-04-14",
+            "category": "parking",
+            "amount": "12.34",
+            "treatment": "fully_business",
+            "notes": "Garage",
+            "conflicts": [
+              "vehicle"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "category",
+      "case": "unchanged",
+      "request": {
+        "category": "business"
+      },
+      "status": 200,
+      "written": false,
+      "tag_source": "rule",
+      "response": {
+        "id": 1,
+        "source": "detected",
+        "imported": false,
+        "started_at": "2026-04-14T15:00:00.000000Z",
+        "ended_at": "2026-04-14T15:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 2310.25,
+        "distance_raw_m": 2400.5,
+        "distance_snapped_m": 2310.25,
+        "snap_status": "ok",
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Client visit",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.6,
+          "lon": -122.33,
+          "description": "47.6000,-122.3300"
+        },
+        "end": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.62,
+          "lon": -122.31,
+          "description": "47.6200,-122.3100"
+        },
+        "has_gap": true,
+        "point_count": 42,
+        "has_route": true,
+        "expense_count": 1,
+        "route_raw": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.32,
+                47.61
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "route_snapped": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.325,
+                47.605
+              ]
+            ],
+            [
+              [
+                -122.315,
+                47.615
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "stays": [
+          {
+            "position": "start",
+            "lat": 47.601,
+            "lon": -122.331
+          },
+          {
+            "position": "end",
+            "lat": 47.621,
+            "lon": -122.309
+          }
+        ],
+        "has_previous_trip": false,
+        "has_next_trip": true,
+        "expenses": [
+          {
+            "id": 1,
+            "vehicle_id": 2,
+            "vehicle_name": "My Car",
+            "incurred_on": "2026-04-14",
+            "category": "parking",
+            "amount": "12.34",
+            "treatment": "fully_business",
+            "notes": "Garage",
+            "conflicts": [
+              "vehicle"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "category",
+      "case": "modified",
+      "request": {
+        "category": "personal"
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "human",
+      "response": {
+        "id": 1,
+        "source": "detected",
+        "imported": false,
+        "started_at": "2026-04-14T15:00:00.000000Z",
+        "ended_at": "2026-04-14T15:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 2310.25,
+        "distance_raw_m": 2400.5,
+        "distance_snapped_m": 2310.25,
+        "snap_status": "ok",
+        "category": "personal",
+        "exclusion": null,
+        "purpose": "Client visit",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.6,
+          "lon": -122.33,
+          "description": "47.6000,-122.3300"
+        },
+        "end": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.62,
+          "lon": -122.31,
+          "description": "47.6200,-122.3100"
+        },
+        "has_gap": true,
+        "point_count": 42,
+        "has_route": true,
+        "expense_count": 1,
+        "route_raw": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.32,
+                47.61
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "route_snapped": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.325,
+                47.605
+              ]
+            ],
+            [
+              [
+                -122.315,
+                47.615
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "stays": [
+          {
+            "position": "start",
+            "lat": 47.601,
+            "lon": -122.331
+          },
+          {
+            "position": "end",
+            "lat": 47.621,
+            "lon": -122.309
+          }
+        ],
+        "has_previous_trip": false,
+        "has_next_trip": true,
+        "expenses": [
+          {
+            "id": 1,
+            "vehicle_id": 2,
+            "vehicle_name": "My Car",
+            "incurred_on": "2026-04-14",
+            "category": "parking",
+            "amount": "12.34",
+            "treatment": "fully_business",
+            "notes": "Garage",
+            "conflicts": [
+              "vehicle"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "category",
+      "case": "null",
+      "request": {
+        "category": null
+      },
+      "status": 422,
+      "written": false,
+      "tag_source": "human",
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "category": "This value is not valid."
+          }
+        }
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "purpose",
+      "case": "unchanged",
+      "request": {
+        "purpose": " Client visit "
+      },
+      "status": 200,
+      "written": false,
+      "tag_source": "human",
+      "response": {
+        "id": 1,
+        "source": "detected",
+        "imported": false,
+        "started_at": "2026-04-14T15:00:00.000000Z",
+        "ended_at": "2026-04-14T15:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 2310.25,
+        "distance_raw_m": 2400.5,
+        "distance_snapped_m": 2310.25,
+        "snap_status": "ok",
+        "category": "personal",
+        "exclusion": null,
+        "purpose": "Client visit",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.6,
+          "lon": -122.33,
+          "description": "47.6000,-122.3300"
+        },
+        "end": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.62,
+          "lon": -122.31,
+          "description": "47.6200,-122.3100"
+        },
+        "has_gap": true,
+        "point_count": 42,
+        "has_route": true,
+        "expense_count": 1,
+        "route_raw": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.32,
+                47.61
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "route_snapped": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.325,
+                47.605
+              ]
+            ],
+            [
+              [
+                -122.315,
+                47.615
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "stays": [
+          {
+            "position": "start",
+            "lat": 47.601,
+            "lon": -122.331
+          },
+          {
+            "position": "end",
+            "lat": 47.621,
+            "lon": -122.309
+          }
+        ],
+        "has_previous_trip": false,
+        "has_next_trip": true,
+        "expenses": [
+          {
+            "id": 1,
+            "vehicle_id": 2,
+            "vehicle_name": "My Car",
+            "incurred_on": "2026-04-14",
+            "category": "parking",
+            "amount": "12.34",
+            "treatment": "fully_business",
+            "notes": "Garage",
+            "conflicts": [
+              "vehicle"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "purpose",
+      "case": "modified",
+      "request": {
+        "purpose": "Site survey"
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "human",
+      "response": {
+        "id": 1,
+        "source": "detected",
+        "imported": false,
+        "started_at": "2026-04-14T15:00:00.000000Z",
+        "ended_at": "2026-04-14T15:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 2310.25,
+        "distance_raw_m": 2400.5,
+        "distance_snapped_m": 2310.25,
+        "snap_status": "ok",
+        "category": "personal",
+        "exclusion": null,
+        "purpose": "Site survey",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.6,
+          "lon": -122.33,
+          "description": "47.6000,-122.3300"
+        },
+        "end": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.62,
+          "lon": -122.31,
+          "description": "47.6200,-122.3100"
+        },
+        "has_gap": true,
+        "point_count": 42,
+        "has_route": true,
+        "expense_count": 1,
+        "route_raw": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.32,
+                47.61
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "route_snapped": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.325,
+                47.605
+              ]
+            ],
+            [
+              [
+                -122.315,
+                47.615
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "stays": [
+          {
+            "position": "start",
+            "lat": 47.601,
+            "lon": -122.331
+          },
+          {
+            "position": "end",
+            "lat": 47.621,
+            "lon": -122.309
+          }
+        ],
+        "has_previous_trip": false,
+        "has_next_trip": true,
+        "expenses": [
+          {
+            "id": 1,
+            "vehicle_id": 2,
+            "vehicle_name": "My Car",
+            "incurred_on": "2026-04-14",
+            "category": "parking",
+            "amount": "12.34",
+            "treatment": "fully_business",
+            "notes": "Garage",
+            "conflicts": [
+              "vehicle"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "purpose",
+      "case": "null",
+      "request": {
+        "purpose": null
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "human",
+      "response": {
+        "id": 1,
+        "source": "detected",
+        "imported": false,
+        "started_at": "2026-04-14T15:00:00.000000Z",
+        "ended_at": "2026-04-14T15:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 2310.25,
+        "distance_raw_m": 2400.5,
+        "distance_snapped_m": 2310.25,
+        "snap_status": "ok",
+        "category": "personal",
+        "exclusion": null,
+        "purpose": null,
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.6,
+          "lon": -122.33,
+          "description": "47.6000,-122.3300"
+        },
+        "end": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.62,
+          "lon": -122.31,
+          "description": "47.6200,-122.3100"
+        },
+        "has_gap": true,
+        "point_count": 42,
+        "has_route": true,
+        "expense_count": 1,
+        "route_raw": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.32,
+                47.61
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "route_snapped": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.325,
+                47.605
+              ]
+            ],
+            [
+              [
+                -122.315,
+                47.615
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "stays": [
+          {
+            "position": "start",
+            "lat": 47.601,
+            "lon": -122.331
+          },
+          {
+            "position": "end",
+            "lat": 47.621,
+            "lon": -122.309
+          }
+        ],
+        "has_previous_trip": false,
+        "has_next_trip": true,
+        "expenses": [
+          {
+            "id": 1,
+            "vehicle_id": 2,
+            "vehicle_name": "My Car",
+            "incurred_on": "2026-04-14",
+            "category": "parking",
+            "amount": "12.34",
+            "treatment": "fully_business",
+            "notes": "Garage",
+            "conflicts": [
+              "vehicle"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "started_at",
+      "case": "unchanged",
+      "request": {
+        "started_at": "2026-04-14T15:00:00.000000Z"
+      },
+      "status": 422,
+      "written": false,
+      "tag_source": "human",
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "started_at": "This can only be changed on a manual trip."
+          }
+        }
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "started_at",
+      "case": "modified",
+      "request": {
+        "started_at": "2026-04-14T14:55:00.000000Z"
+      },
+      "status": 422,
+      "written": false,
+      "tag_source": "human",
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "started_at": "This can only be changed on a manual trip."
+          }
+        }
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "started_at",
+      "case": "null",
+      "request": {
+        "started_at": null
+      },
+      "status": 422,
+      "written": false,
+      "tag_source": "human",
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "started_at": "This value is not valid."
+          }
+        }
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "ended_at",
+      "case": "unchanged",
+      "request": {
+        "ended_at": "2026-04-14T15:20:00.000000Z"
+      },
+      "status": 422,
+      "written": false,
+      "tag_source": "human",
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "ended_at": "This can only be changed on a manual trip."
+          }
+        }
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "ended_at",
+      "case": "modified",
+      "request": {
+        "ended_at": "2026-04-14T15:25:00.000000Z"
+      },
+      "status": 422,
+      "written": false,
+      "tag_source": "human",
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "ended_at": "This can only be changed on a manual trip."
+          }
+        }
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "ended_at",
+      "case": "null",
+      "request": {
+        "ended_at": null
+      },
+      "status": 422,
+      "written": false,
+      "tag_source": "human",
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "ended_at": "This value is not valid."
+          }
+        }
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "distance_m",
+      "case": "unchanged",
+      "request": {
+        "distance_m": 2400.5
+      },
+      "status": 422,
+      "written": false,
+      "tag_source": "human",
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "distance_m": "This can only be changed on a manual trip."
+          }
+        }
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "distance_m",
+      "case": "modified",
+      "request": {
+        "distance_m": 2500.0
+      },
+      "status": 422,
+      "written": false,
+      "tag_source": "human",
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "distance_m": "This can only be changed on a manual trip."
+          }
+        }
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "distance_m",
+      "case": "null",
+      "request": {
+        "distance_m": null
+      },
+      "status": 422,
+      "written": false,
+      "tag_source": "human",
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "distance_m": "This value is not valid."
+          }
+        }
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "start_label",
+      "case": "unchanged",
+      "request": {
+        "start_label": null
+      },
+      "status": 422,
+      "written": false,
+      "tag_source": "human",
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "start_label": "This can only be changed on a manual trip."
+          }
+        }
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "start_label",
+      "case": "modified",
+      "request": {
+        "start_label": "Home"
+      },
+      "status": 422,
+      "written": false,
+      "tag_source": "human",
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "start_label": "Location names are only available for a trip with no route."
+          }
+        }
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "start_label",
+      "case": "null",
+      "request": {
+        "start_label": null
+      },
+      "status": 422,
+      "written": false,
+      "tag_source": "human",
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "start_label": "This can only be changed on a manual trip."
+          }
+        }
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "end_label",
+      "case": "unchanged",
+      "request": {
+        "end_label": null
+      },
+      "status": 422,
+      "written": false,
+      "tag_source": "human",
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "end_label": "This can only be changed on a manual trip."
+          }
+        }
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "end_label",
+      "case": "modified",
+      "request": {
+        "end_label": "Office"
+      },
+      "status": 422,
+      "written": false,
+      "tag_source": "human",
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "end_label": "Location names are only available for a trip with no route."
+          }
+        }
+      }
+    },
+    {
+      "trip": "detected",
+      "field": "end_label",
+      "case": "null",
+      "request": {
+        "end_label": null
+      },
+      "status": 422,
+      "written": false,
+      "tag_source": "human",
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "end_label": "This can only be changed on a manual trip."
+          }
+        }
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "all",
+      "case": "omitted",
+      "request": {},
+      "status": 200,
+      "written": false,
+      "tag_source": "rule",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T20:00:00.000000Z",
+        "ended_at": "2026-04-14T20:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5000.0,
+        "distance_raw_m": 5000.0,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Supplies",
+        "notes": null,
+        "vehicle_id": 2,
+        "vehicle_name": "My Car",
+        "start": {
+          "name": "Office",
+          "label": "Office",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Office"
+        },
+        "end": {
+          "name": "Hardware store",
+          "label": "Hardware store",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Hardware store"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "notes",
+      "case": "modified",
+      "request": {
+        "notes": "Receipt in the glovebox"
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "rule",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T20:00:00.000000Z",
+        "ended_at": "2026-04-14T20:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5000.0,
+        "distance_raw_m": 5000.0,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Supplies",
+        "notes": "Receipt in the glovebox",
+        "vehicle_id": 2,
+        "vehicle_name": "My Car",
+        "start": {
+          "name": "Office",
+          "label": "Office",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Office"
+        },
+        "end": {
+          "name": "Hardware store",
+          "label": "Hardware store",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Hardware store"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "notes",
+      "case": "unchanged",
+      "request": {
+        "notes": "Receipt in the glovebox "
+      },
+      "status": 200,
+      "written": false,
+      "tag_source": "rule",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T20:00:00.000000Z",
+        "ended_at": "2026-04-14T20:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5000.0,
+        "distance_raw_m": 5000.0,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Supplies",
+        "notes": "Receipt in the glovebox",
+        "vehicle_id": 2,
+        "vehicle_name": "My Car",
+        "start": {
+          "name": "Office",
+          "label": "Office",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Office"
+        },
+        "end": {
+          "name": "Hardware store",
+          "label": "Hardware store",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Hardware store"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "notes",
+      "case": "null",
+      "request": {
+        "notes": null
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "rule",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T20:00:00.000000Z",
+        "ended_at": "2026-04-14T20:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5000.0,
+        "distance_raw_m": 5000.0,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Supplies",
+        "notes": null,
+        "vehicle_id": 2,
+        "vehicle_name": "My Car",
+        "start": {
+          "name": "Office",
+          "label": "Office",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Office"
+        },
+        "end": {
+          "name": "Hardware store",
+          "label": "Hardware store",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Hardware store"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "vehicle_id",
+      "case": "unchanged",
+      "request": {
+        "vehicle_id": 2
+      },
+      "status": 200,
+      "written": false,
+      "tag_source": "rule",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T20:00:00.000000Z",
+        "ended_at": "2026-04-14T20:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5000.0,
+        "distance_raw_m": 5000.0,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Supplies",
+        "notes": null,
+        "vehicle_id": 2,
+        "vehicle_name": "My Car",
+        "start": {
+          "name": "Office",
+          "label": "Office",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Office"
+        },
+        "end": {
+          "name": "Hardware store",
+          "label": "Hardware store",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Hardware store"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "vehicle_id",
+      "case": "modified",
+      "request": {
+        "vehicle_id": 4
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "rule",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T20:00:00.000000Z",
+        "ended_at": "2026-04-14T20:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5000.0,
+        "distance_raw_m": 5000.0,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Supplies",
+        "notes": null,
+        "vehicle_id": 4,
+        "vehicle_name": "Van",
+        "start": {
+          "name": "Office",
+          "label": "Office",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Office"
+        },
+        "end": {
+          "name": "Hardware store",
+          "label": "Hardware store",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Hardware store"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "vehicle_id",
+      "case": "null",
+      "request": {
+        "vehicle_id": null
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "rule",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T20:00:00.000000Z",
+        "ended_at": "2026-04-14T20:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5000.0,
+        "distance_raw_m": 5000.0,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Supplies",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": "Office",
+          "label": "Office",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Office"
+        },
+        "end": {
+          "name": "Hardware store",
+          "label": "Hardware store",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Hardware store"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "exclusion",
+      "case": "modified",
+      "request": {
+        "exclusion": "not_my_vehicle"
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "rule",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T20:00:00.000000Z",
+        "ended_at": "2026-04-14T20:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5000.0,
+        "distance_raw_m": 5000.0,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": "not_my_vehicle",
+        "purpose": "Supplies",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": "Office",
+          "label": "Office",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Office"
+        },
+        "end": {
+          "name": "Hardware store",
+          "label": "Hardware store",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Hardware store"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "exclusion",
+      "case": "unchanged",
+      "request": {
+        "exclusion": "not_my_vehicle"
+      },
+      "status": 200,
+      "written": false,
+      "tag_source": "rule",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T20:00:00.000000Z",
+        "ended_at": "2026-04-14T20:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5000.0,
+        "distance_raw_m": 5000.0,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": "not_my_vehicle",
+        "purpose": "Supplies",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": "Office",
+          "label": "Office",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Office"
+        },
+        "end": {
+          "name": "Hardware store",
+          "label": "Hardware store",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Hardware store"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "exclusion",
+      "case": "null",
+      "request": {
+        "exclusion": null
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "rule",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T20:00:00.000000Z",
+        "ended_at": "2026-04-14T20:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5000.0,
+        "distance_raw_m": 5000.0,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Supplies",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": "Office",
+          "label": "Office",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Office"
+        },
+        "end": {
+          "name": "Hardware store",
+          "label": "Hardware store",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Hardware store"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "started_at",
+      "case": "unchanged",
+      "request": {
+        "started_at": "2026-04-14T20:00:00.000000Z"
+      },
+      "status": 200,
+      "written": false,
+      "tag_source": "rule",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T20:00:00.000000Z",
+        "ended_at": "2026-04-14T20:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5000.0,
+        "distance_raw_m": 5000.0,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Supplies",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": "Office",
+          "label": "Office",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Office"
+        },
+        "end": {
+          "name": "Hardware store",
+          "label": "Hardware store",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Hardware store"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "started_at",
+      "case": "modified",
+      "request": {
+        "started_at": "2026-04-14T12:30:00-07:00"
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "rule",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T19:30:00.000000Z",
+        "ended_at": "2026-04-14T20:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5000.0,
+        "distance_raw_m": 5000.0,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Supplies",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": "Office",
+          "label": "Office",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Office"
+        },
+        "end": {
+          "name": "Hardware store",
+          "label": "Hardware store",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Hardware store"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "started_at",
+      "case": "null",
+      "request": {
+        "started_at": null
+      },
+      "status": 422,
+      "written": false,
+      "tag_source": "rule",
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "started_at": "This value is not valid."
+          }
+        }
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "ended_at",
+      "case": "unchanged",
+      "request": {
+        "ended_at": "2026-04-14T20:20:00.000000Z"
+      },
+      "status": 200,
+      "written": false,
+      "tag_source": "rule",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T19:30:00.000000Z",
+        "ended_at": "2026-04-14T20:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5000.0,
+        "distance_raw_m": 5000.0,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Supplies",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": "Office",
+          "label": "Office",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Office"
+        },
+        "end": {
+          "name": "Hardware store",
+          "label": "Hardware store",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Hardware store"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "ended_at",
+      "case": "modified",
+      "request": {
+        "ended_at": "2026-04-14T20:30:00.000000Z"
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "rule",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T19:30:00.000000Z",
+        "ended_at": "2026-04-14T20:30:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5000.0,
+        "distance_raw_m": 5000.0,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Supplies",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": "Office",
+          "label": "Office",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Office"
+        },
+        "end": {
+          "name": "Hardware store",
+          "label": "Hardware store",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Hardware store"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "ended_at",
+      "case": "null",
+      "request": {
+        "ended_at": null
+      },
+      "status": 422,
+      "written": false,
+      "tag_source": "rule",
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "ended_at": "This value is not valid."
+          }
+        }
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "distance_m",
+      "case": "unchanged",
+      "request": {
+        "distance_m": 5000
+      },
+      "status": 200,
+      "written": false,
+      "tag_source": "rule",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T19:30:00.000000Z",
+        "ended_at": "2026-04-14T20:30:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5000.0,
+        "distance_raw_m": 5000.0,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Supplies",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": "Office",
+          "label": "Office",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Office"
+        },
+        "end": {
+          "name": "Hardware store",
+          "label": "Hardware store",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Hardware store"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "distance_m",
+      "case": "modified",
+      "request": {
+        "distance_m": 5200.5
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "rule",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T19:30:00.000000Z",
+        "ended_at": "2026-04-14T20:30:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5200.5,
+        "distance_raw_m": 5200.5,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Supplies",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": "Office",
+          "label": "Office",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Office"
+        },
+        "end": {
+          "name": "Hardware store",
+          "label": "Hardware store",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Hardware store"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "distance_m",
+      "case": "null",
+      "request": {
+        "distance_m": null
+      },
+      "status": 422,
+      "written": false,
+      "tag_source": "rule",
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "distance_m": "This value is not valid."
+          }
+        }
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "start_label",
+      "case": "unchanged",
+      "request": {
+        "start_label": "Office"
+      },
+      "status": 200,
+      "written": false,
+      "tag_source": "rule",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T19:30:00.000000Z",
+        "ended_at": "2026-04-14T20:30:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5200.5,
+        "distance_raw_m": 5200.5,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Supplies",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": "Office",
+          "label": "Office",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Office"
+        },
+        "end": {
+          "name": "Hardware store",
+          "label": "Hardware store",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Hardware store"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "start_label",
+      "case": "modified",
+      "request": {
+        "start_label": " Main office "
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "rule",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T19:30:00.000000Z",
+        "ended_at": "2026-04-14T20:30:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5200.5,
+        "distance_raw_m": 5200.5,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Supplies",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": "Main office",
+          "label": "Main office",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Main office"
+        },
+        "end": {
+          "name": "Hardware store",
+          "label": "Hardware store",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Hardware store"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "start_label",
+      "case": "null",
+      "request": {
+        "start_label": null
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "rule",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T19:30:00.000000Z",
+        "ended_at": "2026-04-14T20:30:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5200.5,
+        "distance_raw_m": 5200.5,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Supplies",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "--"
+        },
+        "end": {
+          "name": "Hardware store",
+          "label": "Hardware store",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Hardware store"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "end_label",
+      "case": "unchanged",
+      "request": {
+        "end_label": "Hardware store"
+      },
+      "status": 200,
+      "written": false,
+      "tag_source": "rule",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T19:30:00.000000Z",
+        "ended_at": "2026-04-14T20:30:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5200.5,
+        "distance_raw_m": 5200.5,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Supplies",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "--"
+        },
+        "end": {
+          "name": "Hardware store",
+          "label": "Hardware store",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Hardware store"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "end_label",
+      "case": "modified",
+      "request": {
+        "end_label": "Lumber yard"
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "rule",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T19:30:00.000000Z",
+        "ended_at": "2026-04-14T20:30:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5200.5,
+        "distance_raw_m": 5200.5,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Supplies",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "--"
+        },
+        "end": {
+          "name": "Lumber yard",
+          "label": "Lumber yard",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Lumber yard"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "end_label",
+      "case": "null",
+      "request": {
+        "end_label": "  "
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "rule",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T19:30:00.000000Z",
+        "ended_at": "2026-04-14T20:30:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5200.5,
+        "distance_raw_m": 5200.5,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Supplies",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "--"
+        },
+        "end": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "--"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "purpose",
+      "case": "unchanged",
+      "request": {
+        "purpose": "Supplies"
+      },
+      "status": 200,
+      "written": false,
+      "tag_source": "rule",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T19:30:00.000000Z",
+        "ended_at": "2026-04-14T20:30:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5200.5,
+        "distance_raw_m": 5200.5,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Supplies",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "--"
+        },
+        "end": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "--"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "purpose",
+      "case": "modified",
+      "request": {
+        "purpose": "Lumber"
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "human",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T19:30:00.000000Z",
+        "ended_at": "2026-04-14T20:30:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5200.5,
+        "distance_raw_m": 5200.5,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Lumber",
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "--"
+        },
+        "end": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "--"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "purpose",
+      "case": "null",
+      "request": {
+        "purpose": null
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "human",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T19:30:00.000000Z",
+        "ended_at": "2026-04-14T20:30:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5200.5,
+        "distance_raw_m": 5200.5,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": null,
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "--"
+        },
+        "end": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "--"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "category",
+      "case": "unchanged",
+      "request": {
+        "category": "business"
+      },
+      "status": 200,
+      "written": false,
+      "tag_source": "human",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T19:30:00.000000Z",
+        "ended_at": "2026-04-14T20:30:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5200.5,
+        "distance_raw_m": 5200.5,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": null,
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "--"
+        },
+        "end": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "--"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "category",
+      "case": "modified",
+      "request": {
+        "category": "personal"
+      },
+      "status": 200,
+      "written": true,
+      "tag_source": "human",
+      "response": {
+        "id": 6,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-14T19:30:00.000000Z",
+        "ended_at": "2026-04-14T20:30:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 5200.5,
+        "distance_raw_m": 5200.5,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "personal",
+        "exclusion": null,
+        "purpose": null,
+        "notes": null,
+        "vehicle_id": null,
+        "vehicle_name": null,
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "--"
+        },
+        "end": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "--"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "trip": "manual",
+      "field": "category",
+      "case": "null",
+      "request": {
+        "category": null
+      },
+      "status": 422,
+      "written": false,
+      "tag_source": "human",
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "category": "This value is not valid."
+          }
+        }
+      }
+    }
+  ]
+}

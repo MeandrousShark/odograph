@@ -1,0 +1,12 @@
+{
+  "started_at": "2026-04-20T16:00:00Z",
+  "ended_at": "2026-04-20T16:30:00Z",
+  "distance_m": 6759.2448,
+  "category": "business",
+  "purpose": "Supplies run",
+  "notes": null,
+  "vehicle_id": 2,
+  "exclusion": null,
+  "start_label": "Office",
+  "end_label": "Hardware store"
+}

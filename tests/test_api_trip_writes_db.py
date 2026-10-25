@@ -659,3 +659,69 @@ def test_portable_export_and_import_leave_idempotency_keys_out():
         assert not {"idempotency_key", "idempotency_digest"} & set(trips[0])
     _run(check)
 
+
+async def _vehicle_names(state) -> dict[str, int]:
+    async with state.pools[state.owner].connection() as conn:
+        rows = await (await conn.execute(
+            "SELECT name, id FROM vehicles WHERE account_id = %s", (account_id(conn),))).fetchall()
+    return dict(rows)
+
+
+def _local_vehicles(request: dict, fixture: dict, names: dict[str, int]) -> dict:
+    if request.get("vehicle_id") is None:
+        return request
+    return {**request, "vehicle_id": names[fixture["vehicles"][str(request["vehicle_id"])]]}
+
+
+def test_patch_cases_match_the_synthetic_fixture(monkeypatch):
+    async def check(state):
+        commits = _Commits(monkeypatch)
+        ids = await _seed(state)
+        await _second_vehicle(state)
+        names = await _vehicle_names(state)
+        trips = {"detected": ids["gapped"], "manual": ids["manual"]}
+        await _sql(state, "UPDATE trips SET tag_source = 'rule' WHERE id = ANY(%s)", (list(trips.values()),))
+        fixture = json.loads((FIXTURES / "trip_patch_cases.json").read_text())
+        for kind in ("detected", "manual"):
+            covered = {(c["field"], c["case"]) for c in fixture["cases"] if c["trip"] == kind}
+            assert covered == {("all", "omitted")} | {
+                (field, case) for field in api_trips.TripPatch.model_fields
+                for case in ("unchanged", "modified", "null")}, kind
+        for case in fixture["cases"]:
+            trip_id = trips[case["trip"]]
+            before = await _row(state, trip_id)
+            response = await _api(state, "PATCH", f"/api/v1/trips/{trip_id}",
+                                  body=_local_vehicles(case["request"], fixture, names))
+            label = (case["trip"], case["field"], case["case"])
+            assert response.status_code == case["status"], label
+            assert _without_ids(response.json()) == _without_ids(case["response"]), label
+            after = await _row(state, trip_id)
+            assert (after["updated_at"] != before["updated_at"]) == case["written"], label
+            assert after["tag_source"] == case["tag_source"], label
+            assert commits.take() == ([f"/api/v1/trips/{trip_id}"] if case["written"] else []), label
+            if not case["written"]:
+                assert after == before, label
+    _run(check)
+
+
+def test_create_cases_match_the_synthetic_fixture():
+    async def check(state):
+        names = await _vehicle_names(state)
+        fixture = json.loads((FIXTURES / "trip_create_cases.json").read_text())
+        created = {}
+        for case in fixture["cases"]:
+            response = await _api(state, "POST", "/api/v1/trips", headers=case["headers"],
+                                  body=_local_vehicles(case["request"], fixture, names))
+            assert response.status_code == case["status"], case["case"]
+            body = response.json()
+            assert _without_ids(body) == _without_ids(case["response"]), case["case"]
+            headers = {k: v for k, v in response.headers.items() if k in ("location", "idempotent-replayed")}
+            assert set(headers) == set(case["response_headers"]), case["case"]
+            if "location" in headers:
+                assert headers["location"] == f"/api/v1/trips/{body['id']}"
+                created[case["case"]] = body["id"]
+            if case["case"] == "replayed":
+                assert body["id"] == created["created"]
+                assert headers["idempotent-replayed"] == "true"
+        assert await _count(state) == 2
+    _run(check)

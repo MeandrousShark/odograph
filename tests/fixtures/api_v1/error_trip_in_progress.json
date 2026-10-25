@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "trip_in_progress",
+    "message": "This trip is still in progress. Try again once it ends.",
+    "fields": null
+  }
+}
