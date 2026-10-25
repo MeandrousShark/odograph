@@ -553,7 +553,7 @@ def test_warning_ack_upgrade_keeps_contract_without_reprovisioning(monkeypatch, 
             await prepare_application_roles(TEST_DB)
             async with pool.connection() as conn:
                 assert await (await conn.execute(
-                    "SELECT MAX(version) FROM schema_migrations")).fetchone() == (48,)
+                    "SELECT MAX(version) FROM schema_migrations")).fetchone() == (49,)
                 assert await (await conn.execute(
                     "SELECT row_to_json(t)::text FROM trips t WHERE id=%s", (trip_id,))).fetchone() == (trip_before,)
                 assert await (await conn.execute(
@@ -629,6 +629,75 @@ def test_api_grant_upgrade_keeps_contract_without_reprovisioning(monkeypatch, tm
                 assert await (await conn.execute("SELECT public.storage_usage_consistent()")).fetchone() == (True,)
                 await conn.execute("DELETE FROM accounts WHERE id=41")
                 assert await (await conn.execute("SELECT count(*) FROM api_grants")).fetchone() == (0,)
+        finally:
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
+            await pool.close()
+    asyncio.run(scenario())
+
+
+def test_mobile_authorization_upgrade_keeps_contract_without_reprovisioning(monkeypatch, tmp_path):
+    async def scenario():
+        pool = make_pool(TEST_DB)
+        await pool.open(wait=True)
+        try:
+            await drop_and_recreate_schema(pool)
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR",
+                                _migration_dir(tmp_path, "before_mobile_authorization", through=48))
+            await run_migrations(pool)
+            await prepare_application_roles(TEST_DB)
+            async with pool.connection() as conn:
+                await conn.execute(
+                    "INSERT INTO accounts(id,email,password_hash,is_admin) "
+                    "VALUES(42,'upgrade-mobile@example.invalid','unused',true)")
+                before = (await (await conn.execute(
+                    "SELECT actual_bytes,reserved_bytes,raw_bytes,enhancement_bytes "
+                    "FROM account_usage WHERE account_id=42")).fetchone())
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
+            await run_migrations(pool)
+
+            async def forbidden_reprovision(conn):
+                raise AssertionError("upgrade must validate rather than provision")
+
+            monkeypatch.setattr(application_roles, "_provision", forbidden_reprovision)
+            await prepare_application_roles(TEST_DB)
+            request, code = "a" * 64, "b" * 64
+            async with application_roles.application_role_pools(TEST_DB) as roles:
+                async with roles.control.connection() as conn:
+                    assert (await (await conn.execute(
+                        "SELECT public.mobile_authorization_start(%s,NULL,'odograph-ios',"
+                        "'odograph://auth/callback',%s,'state','Phone',NULL)",
+                        (request, "c" * 43))).fetchone())[0] is not None
+                    assert await (await conn.execute(
+                        "SELECT result FROM public.mobile_authorization_approve(%s,42,1,%s)",
+                        (request, code))).fetchone() == ("approved",)
+                    assert (await (await conn.execute(
+                        "SELECT result_account_id FROM public.mobile_authorization_code_consume(%s)",
+                        (code,))).fetchone()) == (42,)
+                    for table in ("mobile_authorization_requests", "mobile_authorization_codes"):
+                        with pytest.raises(errors.InsufficientPrivilege):
+                            async with conn.transaction():
+                                await conn.execute(f"SELECT * FROM {table}")
+                async with roles.runtime.connection() as conn:
+                    for table in ("mobile_authorization_requests", "mobile_authorization_codes"):
+                        with pytest.raises(errors.InsufficientPrivilege):
+                            async with conn.transaction():
+                                await conn.execute(f"SELECT * FROM {table}")
+                    with pytest.raises(errors.InsufficientPrivilege):
+                        await conn.execute("SELECT public.mobile_authorization_code_consume(%s)", (code,))
+            async with pool.connection() as conn:
+                assert await (await conn.execute(
+                    "SELECT relname,relrowsecurity,relforcerowsecurity FROM pg_class "
+                    "WHERE relname IN ('mobile_authorization_requests','mobile_authorization_codes') "
+                    "ORDER BY relname")).fetchall() == [
+                        ("mobile_authorization_codes", True, True),
+                        ("mobile_authorization_requests", False, False)]
+                assert await (await conn.execute(
+                    "SELECT actual_bytes,reserved_bytes,raw_bytes,enhancement_bytes "
+                    "FROM account_usage WHERE account_id=42")).fetchone() == before
+                assert await (await conn.execute("SELECT public.storage_usage_consistent()")).fetchone() == (True,)
+                await conn.execute("DELETE FROM accounts WHERE id=42")
+                assert await (await conn.execute(
+                    "SELECT count(*) FROM mobile_authorization_codes")).fetchone() == (0,)
         finally:
             monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
             await pool.close()
