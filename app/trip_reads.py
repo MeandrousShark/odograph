@@ -110,6 +110,12 @@ async def fetch_trip_detail(conn, trip_id: int, tz: ZoneInfo) -> TripDetail | No
     trip = await fetch_trip(conn, trip_id)
     if trip is None:
         return None
+    return await detail_for_trip(conn, trip, tz)
+
+
+async def detail_for_trip(conn, trip: dict, tz: ZoneInfo) -> TripDetail:
+    """The detail of an already-fetched `TRIP_COLUMNS` row."""
+    trip_id = trip["id"]
     expenses = await fetch_trip_expenses(conn, trip_id, tz)
     path_geojson = path_snapped_geojson = None
     stays: list[TripStay] = []

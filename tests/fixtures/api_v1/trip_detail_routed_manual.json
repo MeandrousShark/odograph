@@ -1,0 +1,62 @@
+{
+  "id": 7,
+  "source": "manual",
+  "imported": false,
+  "started_at": "2026-04-14T21:00:00.000000Z",
+  "ended_at": "2026-04-14T21:20:00.000000Z",
+  "local_date": "2026-04-14",
+  "distance_m": 4200.0,
+  "distance_raw_m": 4200.0,
+  "distance_snapped_m": null,
+  "snap_status": null,
+  "category": "unclassified",
+  "exclusion": null,
+  "purpose": null,
+  "notes": null,
+  "vehicle_id": null,
+  "vehicle_name": null,
+  "start": {
+    "name": null,
+    "label": null,
+    "address": null,
+    "lat": 47.6,
+    "lon": -122.33,
+    "description": "47.6000,-122.3300"
+  },
+  "end": {
+    "name": null,
+    "label": null,
+    "address": null,
+    "lat": 47.62,
+    "lon": -122.31,
+    "description": "47.6200,-122.3100"
+  },
+  "has_gap": false,
+  "point_count": 0,
+  "has_route": true,
+  "expense_count": 0,
+  "route_raw": {
+    "type": "MultiLineString",
+    "coordinates": [
+      [
+        [
+          -122.33,
+          47.6
+        ],
+        [
+          -122.32,
+          47.61
+        ],
+        [
+          -122.31,
+          47.62
+        ]
+      ]
+    ]
+  },
+  "route_snapped": null,
+  "stays": [],
+  "has_previous_trip": false,
+  "has_next_trip": false,
+  "expenses": []
+}

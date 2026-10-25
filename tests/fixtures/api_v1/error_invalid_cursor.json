@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "invalid_cursor",
+    "message": "The cursor is not valid for this request. Start again from the first page.",
+    "fields": null
+  }
+}

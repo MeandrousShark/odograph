@@ -1,0 +1,13 @@
+{
+  "items": [
+    {
+      "id": 2,
+      "name": "My Car",
+      "make": null,
+      "model": null,
+      "plate": null,
+      "is_default": true
+    }
+  ],
+  "next_cursor": null
+}

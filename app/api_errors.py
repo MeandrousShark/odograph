@@ -80,7 +80,7 @@ def _validation_fields(exc: RequestValidationError) -> dict[str, str]:
     for error in exc.errors():
         location = tuple(error.get("loc") or ())
         kind = error.get("type", "")
-        path = location[1:] if location[:1] == ("body",) else location
+        path = location[1:] if location[:1] in (("body",), ("query",), ("path",)) else location
         if kind in ("json_invalid", "model_attributes_type", "dict_type") or not path:
             fields.setdefault("body", BODY_NOT_JSON)
             continue

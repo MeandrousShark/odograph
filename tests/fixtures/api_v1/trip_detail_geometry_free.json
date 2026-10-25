@@ -1,0 +1,50 @@
+{
+  "id": 4,
+  "source": "detected",
+  "imported": false,
+  "started_at": "2026-04-14T18:00:00.000000Z",
+  "ended_at": "2026-04-14T18:20:00.000000Z",
+  "local_date": "2026-04-14",
+  "distance_m": 900.0,
+  "distance_raw_m": 900.0,
+  "distance_snapped_m": null,
+  "snap_status": "failed",
+  "category": "personal",
+  "exclusion": null,
+  "purpose": null,
+  "notes": null,
+  "vehicle_id": null,
+  "vehicle_name": null,
+  "start": {
+    "name": null,
+    "label": null,
+    "address": null,
+    "lat": null,
+    "lon": null,
+    "description": "--"
+  },
+  "end": {
+    "name": null,
+    "label": null,
+    "address": null,
+    "lat": null,
+    "lon": null,
+    "description": "--"
+  },
+  "has_gap": false,
+  "point_count": 3,
+  "has_route": false,
+  "expense_count": 0,
+  "route_raw": null,
+  "route_snapped": null,
+  "stays": [
+    {
+      "position": "end",
+      "lat": 47.6,
+      "lon": -122.3
+    }
+  ],
+  "has_previous_trip": true,
+  "has_next_trip": false,
+  "expenses": []
+}
