@@ -74,14 +74,17 @@ def _rate_limited(limiter: FailedAuthLimiter) -> ApiError:
 
 
 def _refuse(limiter: FailedAuthLimiter, ip: str, error: ApiError, *, count: bool = True) -> ApiError:
-    """The error for a failed credential check. A blocked IP gets 429 instead,
-    and its failures are not recorded again; otherwise a counted failure is
-    recorded. Only failures are ever limited: callers reach this after the
-    credential was checked, or when it is too malformed to look up."""
+    """The error for a failed credential check. A counted failure from a
+    blocked IP gets 429 instead and is not recorded again; otherwise it is
+    recorded. An uncounted failure (a real grant's outdated token) keeps its
+    own error, so the client refreshes instead of waiting. Only failures are
+    ever limited: callers reach this after the credential was checked, or
+    when it is too malformed to look up."""
+    if not count:
+        return error
     if limiter.blocked(ip):
         return _rate_limited(limiter)
-    if count:
-        limiter.record_failure(ip)
+    limiter.record_failure(ip)
     return error
 
 

@@ -11,12 +11,13 @@ import pytest
 from fastapi import FastAPI, Form, Request
 from starlette.responses import Response
 
-from app.api_errors import ERRORS, register_api_errors
+from app.api_errors import ERRORS, ApiError, register_api_errors
 from app.api_grants import (
     DEFAULT_DEVICE_LABEL, DEVICE_LABEL_MAX_LENGTH, IssuedTokens, format_instant,
     normalize_device_label, token_digest,
 )
-from app.api_v1 import WebSessionMiddleware, make_router
+from app import api_v1
+from app.api_v1 import BEARER_HEADERS, WebSessionMiddleware, make_router
 from app.capacity_routes import busy_response
 from app.ingest import FailedAuthLimiter
 
@@ -274,6 +275,13 @@ def test_a_blocked_client_is_refused_without_a_lookup_when_nothing_can_be_looked
             response = await getattr(client, method)(path, **kwargs)
             assert response.status_code == 429 and response.headers["retry-after"] == "900", (path, kwargs)
     _run(check, _app(_blocked_limiter(), mobile_signin=True))
+
+
+def test_an_outdated_token_of_a_real_grant_is_not_turned_into_a_wait():
+    limiter = _blocked_limiter()
+    error = ApiError("invalid_token", headers=BEARER_HEADERS)
+    assert api_v1._refuse(limiter, "127.0.0.1", error, count=False) is error
+    assert api_v1._refuse(limiter, "127.0.0.1", error).code == "rate_limited"
 
 
 def test_refusals_not_caused_by_a_failed_credential_are_not_limited_or_counted():
