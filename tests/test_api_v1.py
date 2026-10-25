@@ -79,6 +79,17 @@ def test_instant_format_is_utc_with_fraction_and_z():
     assert format_instant(datetime(2026, 1, 1, tzinfo=timezone.utc)) == "2026-01-01T00:00:00.000000Z"
 
 
+def test_token_request_repr_hides_the_refresh_token():
+    from app.api_v1 import TokenRequest
+    assert TOKEN not in repr(TokenRequest(grant_type="refresh_token", refresh_token=TOKEN))
+
+
+def test_device_label_strips_before_composing():
+    # A stripped format character between a base and its combining mark must
+    # not leave the result decomposed.
+    assert normalize_device_label("e\u200b\u0301") == "\u00e9"
+
+
 def test_token_digest_shape_and_issued_tokens_repr_hide_secrets():
     assert token_digest(TOKEN) is not None and len(token_digest(TOKEN)) == 64
     for bad in ("", "A" * 42, "A" * 44, "A" * 42 + "=", None, 1):
@@ -140,12 +151,12 @@ def test_failed_bearer_attempts_are_rate_limited():
         for _ in range(3):
             assert (await client.get("/api/v1/me")).status_code == 401
         limited = await client.get("/api/v1/me", headers={"Authorization": f"Bearer {TOKEN}"})
-        assert limited.status_code == 429
+        assert limited.status_code == 429 and limited.headers["retry-after"] == "900"
         assert limited.json()["error"] == {"code": "rate_limited", "message": ERRORS["rate_limited"][1],
                                            "fields": None}
         refused = await client.post("/api/v1/auth/token",
                                     json={"grant_type": "refresh_token", "refresh_token": TOKEN})
-        assert refused.status_code == 429
+        assert refused.status_code == 429 and refused.headers["retry-after"] == "900"
     _run(check, _app(FailedAuthLimiter(3, 900)))
 
 
