@@ -14,7 +14,7 @@
   {% if review.at_limit %}
   <div class="notice notice-danger form-error-summary" role="alert">
     This account already has {{ grant_limit }} signed-in apps, the most it can have.
-    Sign one out from <a href="/settings/account">Account Settings</a>, then sign in again from the app.
+    Sign one out from <a href="/settings/account#signed-in-apps-heading">Account Settings</a>, then sign in again from the app.
   </div>
   <form method="post" action="/mobile/authorize/confirm" class="auth-form">
     <input type="hidden" name="csrf_token" value="{{ csrf }}">

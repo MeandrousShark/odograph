@@ -69,8 +69,9 @@ reauthenticating with that provider.
 
 The first-party Odograph mobile app signs in through your browser. Mobile
 sign-in is off by default. The operator turns it on with `MOBILE_SIGNIN=1`
-(see [Authentication and ingest](configuration.md#authentication-and-ingest)); it needs Odograph served over HTTPS
-and `APP_URL` set to its public HTTPS address. The setting only allows new
+(see [Authentication and ingest](configuration.md#authentication-and-ingest)). It needs Odograph served over HTTPS
+at the address entered in the app, because the sign-in cookie is only sent
+over HTTPS. The setting only allows new
 sign-ins: turning it off does not sign out apps that are already signed in.
 
 **Settings > Account Settings > Security > Signed-in apps** lists the apps
