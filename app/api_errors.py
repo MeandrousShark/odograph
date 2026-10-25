@@ -2,7 +2,7 @@
 
 Codes are stable identifiers and messages are fixed strings per code, so an
 error body never echoes request input, tokens or account data. Web paths keep
-FastAPI's default handlers.
+FastAPI's and Starlette's default responses.
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from fastapi.exception_handlers import http_exception_handler, request_validatio
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 
 API_PATH_PREFIX = "/api/"
 
@@ -24,7 +24,13 @@ ERRORS = {
     "validation_failed": (422, "The request is not valid."),
     "not_found": (404, "Not found."),
     "busy": (503, "The server is busy. Please try again."),
+    "invalid_cursor": (400, "The cursor is not valid for this request. Start again from the first page."),
+    "method_not_allowed": (405, "This method is not allowed here."),
+    "payload_too_large": (413, "The request body is too large."),
+    "internal_error": (500, "The server could not complete the request."),
 }
+# Framework HTTP errors on API paths, answered in the envelope.
+HTTP_STATUS_CODES = {404: "not_found", 405: "method_not_allowed", 413: "payload_too_large"}
 FIELD_REQUIRED = "This field is required."
 FIELD_INVALID = "This value is not valid."
 FIELD_UNSUPPORTED = "This value is not supported."
@@ -96,6 +102,15 @@ def register_api_errors(app) -> None:
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, exc: StarletteHTTPException):
-        if is_api_path(request.url.path) and exc.status_code == 404:
-            return error_response("not_found")
+        code = HTTP_STATUS_CODES.get(exc.status_code)
+        if is_api_path(request.url.path) and code is not None:
+            # Keeps headers such as a 405's Allow.
+            return error_response(code, headers=exc.headers)
         return await http_exception_handler(request, exc)
+
+    @app.exception_handler(Exception)
+    async def unhandled_error(request: Request, exc: Exception):
+        # Starlette still logs and re-raises the exception after this response.
+        if is_api_path(request.url.path):
+            return error_response("internal_error")
+        return PlainTextResponse("Internal Server Error", status_code=500)
