@@ -13,6 +13,7 @@ from psycopg.pq import TransactionStatus
 from starlette.responses import HTMLResponse, JSONResponse, Response
 
 from app.account_work import external_account_work, report_account_work
+from app.api_errors import busy_response as api_busy_response, is_api_path
 from app.capacity import CapacityBusy
 from app.preparation_resources import PreparationBusy, PreparationResourceError
 
@@ -82,6 +83,8 @@ def capacity_policy(lane):
 
 
 def busy_response(request: Request, *, importing=False):
+    if is_api_path(request.url.path):
+        return api_busy_response()
     if importing:
         from app.auth import import_busy_response
         return import_busy_response()

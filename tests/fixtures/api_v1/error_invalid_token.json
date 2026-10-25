@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "invalid_token",
+    "message": "The access token is invalid or has expired.",
+    "fields": null
+  }
+}

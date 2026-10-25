@@ -42,7 +42,10 @@ S2_TABLES = S2_PROTECTED_TABLES + ("storage_policy",)
 GEOCODE_TABLES = ("geocode_retry", "geocode_discovery")
 GEOCODE_PROTECTED_TABLES = ("geocode_discovery",)
 WARNING_ACK_TABLES = ("trip_warning_acks",)
-PROTECTED_TABLES = ("email_challenges",) + STORAGE_TABLES + GEOCODE_PROTECTED_TABLES + S2_PROTECTED_TABLES
+# Authentication metadata: protected, uncharged and without admission triggers.
+API_GRANT_TABLES = ("api_grants",)
+PROTECTED_TABLES = (("email_challenges",) + STORAGE_TABLES + GEOCODE_PROTECTED_TABLES + S2_PROTECTED_TABLES
+                    + API_GRANT_TABLES)
 CONTROL_TABLES = (
     "accounts", "oidc_identities", "instance_state", "invitations",
     "oidc_attempts", "oidc_action_proofs", "account_security_audit", "storage_policy",
@@ -252,6 +255,17 @@ FUNCTION_SPECS = tuple(
     if spec.signature in LIMIT_EDITOR_REPLACED_FUNCTIONS else spec
     for spec in FUNCTION_SPECS
 ) + LIMIT_EDITOR_FUNCTION_SPECS
+API_GRANT_FUNCTION_SPECS = tuple(
+    FunctionSpec(signature, CONTROL_ROLE, "048_api_grants.sql", MIGRATE_ROLE)
+    for signature in (
+        "public.api_grant_create(bigint,bigint,text,text,text,text,text)",
+        "public.api_grant_refresh(text,text,text)",
+        "public.api_grant_authenticate(text)",
+        "public.api_grant_revoke(bigint,text)",
+    )
+)
+API_GRANT_FUNCTIONS = tuple(spec.signature for spec in API_GRANT_FUNCTION_SPECS)
+FUNCTION_SPECS += API_GRANT_FUNCTION_SPECS
 FUNCTIONS = {spec.signature: spec.caller for spec in FUNCTION_SPECS}
 FUNCTION_OWNERS = {spec.signature: spec.owner for spec in FUNCTION_SPECS}
 # Superseded by migration 034 but never dropped. A --no-privileges restore
@@ -266,6 +280,8 @@ STATE_TABLES = ("managed_role_state", "recovery_metadata")
 def _contract_function_specs(schema_version: int) -> tuple[FunctionSpec, ...]:
     specs = []
     for spec in FUNCTION_SPECS:
+        if schema_version < 48 and spec.signature in API_GRANT_FUNCTIONS:
+            continue
         if schema_version < 47 and spec.signature in LIMIT_EDITOR_FUNCTIONS:
             continue
         if schema_version < 44 and spec.signature in WARNING_ACK_FUNCTIONS:
@@ -385,7 +401,7 @@ def _account_control_update_columns(schema_version: int) -> tuple[str, ...]:
                  if schema_version >= 43 or column != "display_name")
 
 
-def _policy_contract(schema_version: int = 44) -> dict[tuple[str, str], tuple[str, str, str | None, str | None]]:
+def _policy_contract(schema_version: int = 48) -> dict[tuple[str, str], tuple[str, str, str | None, str | None]]:
     expression = "account_id = NULLIF(current_setting('app.account_id'::text,true),''::text)::bigint"
     policies = {(table, "account_isolation"): (RUNTIME_ROLE, "ALL", expression, expression)
                 for table in OWNED_TABLES + PROTECTED_TABLES
@@ -401,6 +417,8 @@ def _policy_contract(schema_version: int = 44) -> dict[tuple[str, str], tuple[st
     for table in OWNED_TABLES + PROTECTED_TABLES:
         if _table_rights(BOOTSTRAP_ROLE, table):
             policies[table, "bootstrap_defaults"] = (BOOTSTRAP_ROLE, "ALL", "true", "true")
+    if schema_version < 48:
+        policies = {key: value for key, value in policies.items() if key[0] not in API_GRANT_TABLES}
     if schema_version < 44:
         policies = {key: value for key, value in policies.items() if key[0] not in WARNING_ACK_TABLES}
     if schema_version < 42:
@@ -440,11 +458,13 @@ async def _provision(conn) -> None:
     """Initial provisioning or explicit restore only, never a startup repair."""
     schema_version = await _installed_schema_version(conn)
     contract_tables = tuple(table for table in TABLES
-                            if (schema_version >= 44 or table not in WARNING_ACK_TABLES)
+                            if (schema_version >= 48 or table not in API_GRANT_TABLES)
+                            and (schema_version >= 44 or table not in WARNING_ACK_TABLES)
                             and (schema_version >= 42 or table not in S2_TABLES)
                             and (schema_version >= 41 or table not in GEOCODE_TABLES))
     contract_functions = {signature: caller for signature, caller in FUNCTIONS.items()
-                          if (schema_version >= 47 or signature not in LIMIT_EDITOR_FUNCTIONS)
+                          if (schema_version >= 48 or signature not in API_GRANT_FUNCTIONS)
+                          and (schema_version >= 47 or signature not in LIMIT_EDITOR_FUNCTIONS)
                           and (schema_version >= 44 or signature not in WARNING_ACK_FUNCTIONS)
                           and (schema_version >= 42 or signature not in S2_FUNCTIONS)
                           and (schema_version >= 41 or signature not in GEOCODE_FUNCTIONS)}
@@ -556,11 +576,13 @@ async def validate_application_contract(conn, state: ManagedRoleState) -> None:
     """Validate effective privileges and policies without fixing drift."""
     schema_version = await _installed_schema_version(conn)
     contract_tables = tuple(table for table in TABLES
-                            if (schema_version >= 44 or table not in WARNING_ACK_TABLES)
+                            if (schema_version >= 48 or table not in API_GRANT_TABLES)
+                            and (schema_version >= 44 or table not in WARNING_ACK_TABLES)
                             and (schema_version >= 42 or table not in S2_TABLES)
                             and (schema_version >= 41 or table not in GEOCODE_TABLES))
     contract_functions = {signature: caller for signature, caller in FUNCTIONS.items()
-                          if (schema_version >= 47 or signature not in LIMIT_EDITOR_FUNCTIONS)
+                          if (schema_version >= 48 or signature not in API_GRANT_FUNCTIONS)
+                          and (schema_version >= 47 or signature not in LIMIT_EDITOR_FUNCTIONS)
                           and (schema_version >= 44 or signature not in WARNING_ACK_FUNCTIONS)
                           and (schema_version >= 42 or signature not in S2_FUNCTIONS)
                           and (schema_version >= 41 or signature not in GEOCODE_FUNCTIONS)}
@@ -1097,7 +1119,8 @@ async def _validate_storage_triggers(conn, schema_version: int = 44) -> None:
         "JOIN pg_proc p ON p.oid=t.tgfoid WHERE NOT t.tgisinternal "
         "AND c.relnamespace='public'::regnamespace AND c.relname=ANY(%s)",
         (list(table for table in TABLES
-              if (schema_version >= 44 or table not in WARNING_ACK_TABLES)
+              if (schema_version >= 48 or table not in API_GRANT_TABLES)
+              and (schema_version >= 44 or table not in WARNING_ACK_TABLES)
               and (schema_version >= 42 or table not in S2_TABLES)
               and (schema_version >= 41 or table not in GEOCODE_TABLES)),))
     rows = await cur.fetchall()
@@ -1179,6 +1202,7 @@ async def prepare_application_roles(database_url: str, *, restoring: bool = Fals
                     await _check_contract_functions_exist(
                         conn, (spec.signature for spec in FUNCTION_SPECS
                                if spec.signature in FUNCTIONS and spec.source not in FUNCTION_FILES
+                               and (schema_version >= 48 or spec.signature not in API_GRANT_FUNCTIONS)
                                and (schema_version >= 47 or spec.signature not in LIMIT_EDITOR_FUNCTIONS)
                                and (schema_version >= 44 or spec.signature not in WARNING_ACK_FUNCTIONS)
                                and (schema_version >= 42 or spec.signature not in S2_FUNCTIONS)

@@ -1,0 +1,302 @@
+{
+  "components": {
+    "schemas": {
+      "ApiErrorBody": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "ApiErrorEnvelope": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ApiErrorBody"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "CapabilitiesAuthorization": {
+        "properties": {
+          "authorize_path": {
+            "type": "string"
+          },
+          "token_path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorize_path",
+          "token_path"
+        ],
+        "type": "object"
+      },
+      "CapabilitiesResponse": {
+        "properties": {
+          "api_versions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "authorization": {
+            "$ref": "#/components/schemas/CapabilitiesAuthorization"
+          },
+          "mobile_signin_available": {
+            "type": "boolean"
+          },
+          "product": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "product",
+          "api_versions",
+          "authorization",
+          "mobile_signin_available"
+        ],
+        "type": "object"
+      },
+      "MeResponse": {
+        "properties": {
+          "account_id": {
+            "type": "integer"
+          },
+          "detector_version": {
+            "type": "integer"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "display_time_zone": {
+            "type": "string"
+          },
+          "grant_id": {
+            "type": "string"
+          },
+          "server_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "display_name",
+          "display_time_zone",
+          "server_version",
+          "detector_version",
+          "grant_id"
+        ],
+        "type": "object"
+      },
+      "TokenRequest": {
+        "properties": {
+          "grant_type": {
+            "type": "string"
+          },
+          "refresh_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "grant_type"
+        ],
+        "type": "object"
+      },
+      "TokenResponse": {
+        "properties": {
+          "access_expires_at": {
+            "type": "string"
+          },
+          "access_token": {
+            "type": "string"
+          },
+          "expires_in": {
+            "type": "integer"
+          },
+          "refresh_token": {
+            "type": "string"
+          },
+          "token_type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "access_token",
+          "refresh_token",
+          "token_type",
+          "access_expires_at",
+          "expires_in"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "paths": {
+    "/api/v1/auth/token": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/capabilities": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilitiesResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
