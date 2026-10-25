@@ -37,6 +37,7 @@ from app.trip_archive import (
 )
 from app.trip_queries import DISPLAY_DISTANCE_SQL, TripFilter
 from app.trip_reads import fetch_trip_detail, trip_position
+from app.trip_writes import apply_human_tag as _apply_human_tag, delete_trip as _delete_trip_in
 from app.trip_warnings import (
     WARNING_KINDS,
     acknowledge as acknowledge_warnings,
@@ -59,7 +60,6 @@ from app.ui._common import (
     _url_with_filters,
     normalize_trip_label,
     parse_date_range,
-    refuse_in_progress_trips,
 )
 from app.ui.manual import (
     MANUAL_ROUTE_UNAVAILABLE_NOTICE,
@@ -178,41 +178,6 @@ async def _submitted_label_fields(
     return values[0], values[1]
 
 
-async def _delete_trip_in(conn, trip_id: int) -> tuple[datetime, int]:
-    """Apply source-appropriate deletion and return the trip's old cursor.
-
-    Every delete entry point shares this helper so review and list/detail
-    cannot drift. The detector advisory lock is intentionally acquired before
-    reading the boundary timestamps: otherwise a background pass could rewrite
-    them between capture and the discard insert. For detected trips, the
-    durable discard and targeted row delete share the caller's transaction;
-    later detector passes honor the override without rewriting unrelated trips.
-    Manual trips remain a direct row DELETE.
-    """
-    await lock_detector(conn)
-    cur = await conn.execute(
-        "SELECT device, tracking_device_id, source::text, imported, started_at, ended_at "
-        "FROM trips WHERE id = %s AND account_id = %s FOR UPDATE",
-        (trip_id, account_id(conn)),
-    )
-    trip = await cur.fetchone()
-    if not trip:
-        raise HTTPException(status_code=404, detail="No such trip")
-    device, tracking_device_id, source, imported, started_at, ended_at = trip
-    if source == "manual" or imported:
-        await conn.execute("DELETE FROM trips WHERE id = %s AND account_id = %s", (trip_id, account_id(conn)))
-    else:
-        await refuse_in_progress_trips(conn, [trip_id])
-        await conn.execute(
-            "INSERT INTO trip_boundary_overrides "
-            "(account_id, tracking_device_id, device, kind, range_start, range_end) "
-            "VALUES (%s, %s, %s, 'discard', %s, %s) ON CONFLICT DO NOTHING",
-            (account_id(conn), tracking_device_id, device, started_at, ended_at),
-        )
-        await conn.execute("DELETE FROM trips WHERE id = %s AND account_id = %s", (trip_id, account_id(conn)))
-    return started_at, trip_id
-
-
 async def _trip_position(conn, trip_id: int) -> tuple[datetime, int] | None:
     """The `(started_at, id)` cursor a review pass advances past. Deliberately
     not filtered by category: tag-and-advance calls this on a trip that has
@@ -221,38 +186,6 @@ async def _trip_position(conn, trip_id: int) -> tuple[datetime, int] | None:
     than 404ing.
     """
     return await trip_position(conn, trip_id)
-
-
-async def _apply_human_tag(
-    conn, trip_id: int, category: str, purpose: str | None = None,
-    *, update_purpose: bool = False,
-) -> None:
-    """Set tag_source='human' unconditionally, even on a clear back to
-    'unclassified'. This is the load-bearing line for human-tag supremacy: the
-    auto-tagger (app.autotag) only touches rows with tag_source NULL or
-    'rule', so a deliberate human choice can never be overwritten by a rule.
-    Shared by the list-view tag buttons and /review's tag-and-advance so the
-    guarantee lives in one place; category validation stays with each caller
-    (the list view allows clearing to 'unclassified', review does not).
-
-    Checks rowcount and 404s if the row is gone: the detector's reconcile
-    deletes and reinserts trips it replaces, and without this guard a human
-    tag racing that delete would silently match zero rows and report success.
-    """
-    if update_purpose:
-        cur = await conn.execute(
-            "UPDATE trips SET category = %s, purpose = %s, tag_source = 'human', "
-            "updated_at = now() WHERE id = %s AND account_id = %s",
-            (category, (purpose or "").strip() or None, trip_id, account_id(conn)),
-        )
-    else:
-        cur = await conn.execute(
-            "UPDATE trips SET category = %s, tag_source = 'human', updated_at = now() "
-            "WHERE id = %s AND account_id = %s",
-            (category, trip_id, account_id(conn)),
-        )
-    if cur.rowcount == 0:
-        raise HTTPException(status_code=404, detail="No such trip")
 
 
 # Shared with the single-month recompute below so a month's trip_count/

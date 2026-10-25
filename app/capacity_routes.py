@@ -74,6 +74,12 @@ async def release_authentication(request):
         await release()
 
 
+def mark_committed_write(request) -> None:
+    """Record a committed write, so a busy stop after it reports the write
+    instead of a plain busy response."""
+    request.state._capacity_mutation_committed = True
+
+
 def capacity_policy(lane):
     """Declare an audited route policy when its router lives in another module."""
     def decorate(endpoint):
