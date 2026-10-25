@@ -112,5 +112,6 @@ def register_api_errors(app) -> None:
     async def unhandled_error(request: Request, exc: Exception):
         # Starlette still logs and re-raises the exception after this response.
         if is_api_path(request.url.path):
-            return error_response("internal_error")
+            # Sent outside the middleware that marks API responses private.
+            return error_response("internal_error", headers={"Cache-Control": "no-store, private"})
         return PlainTextResponse("Internal Server Error", status_code=500)

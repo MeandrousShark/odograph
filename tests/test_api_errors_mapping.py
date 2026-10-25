@@ -65,6 +65,7 @@ def test_framework_errors_use_the_envelope_only_under_api():
             response = await client.get("/api/v1/boom")
             assert response.status_code == 500
             assert response.json() == _envelope("internal_error")
+            assert response.headers["cache-control"] == "no-store, private"
             response = await client.get("/api/v1/missing")
             assert response.json() == _envelope("not_found")
 
@@ -79,6 +80,7 @@ def test_framework_errors_use_the_envelope_only_under_api():
             assert response.status_code == 500
             assert response.headers["content-type"].startswith("text/plain")
             assert response.text == "Internal Server Error"
+            assert "cache-control" not in response.headers
     _run(check)
 
 
