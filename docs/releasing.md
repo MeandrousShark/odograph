@@ -571,7 +571,10 @@ It also accepts `--candidate-image`. The drill stops the app, verifies a fresh
 backup, records `version()`, `postgis_full_version()` and the data manifest,
 stops the database, and starts the candidate database image on the same
 task-owned volume. It requires a different container image with identical
-versions and data, then upgrades the app. Rollback stops the candidate, starts
+versions and data, then upgrades the app. The version check compares the full
+`version()` string, which includes the PostgreSQL package revision, so a
+rebuild that changes that revision fails the drill and stops for review even
+when the identity matches. Rollback stops the candidate, starts
 the base database image on the same volume and checks the same, then restores
 the pre-upgrade backup as the standard rollback does. The two modes are
 mutually exclusive.

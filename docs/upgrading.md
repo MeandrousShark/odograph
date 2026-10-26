@@ -43,8 +43,8 @@ database image was rebuilt with unchanged versions: PostgreSQL, PostGIS,
 GEOS, PROJ, glibc and ICU all stay the same, so the new image runs on the
 existing volume. For such a release, upgrade in place:
 
-1. **Stop writes, then take and verify a backup.** Record the versions the
-   database reports:
+1. **Stop writes, take and verify a backup, record the versions the database
+   reports, then stop the database:**
 
    ```sh
    docker compose stop app
@@ -52,10 +52,12 @@ existing volume. For such a release, upgrade in place:
    scripts/restore_database.sh --verify-only backups/pre-upgrade.dump
    cp .env .env.pre-upgrade
    docker compose exec -T db psql -U mileage -d mileage -Atc 'SELECT version(), postgis_full_version()' > versions-before.txt
+   docker compose stop db
    ```
 
-2. **Check out the target release, verify the app image, then restart the
-   database on the existing project and volume and compare its versions:**
+2. **Check out the target release, verify the app image, then start the new
+   database image on the existing project and volume.** Confirm the running
+   container uses the target's `db.image`, then compare its versions:
 
    ```sh
    git fetch --tags
@@ -64,25 +66,44 @@ existing volume. For such a release, upgrade in place:
    docker compose pull db
    docker compose up -d db
    until docker compose exec -T db pg_isready -U mileage -d mileage; do sleep 2; done
+   db_image="$(sed -n '/^  db:/,/^  [^ ]/s/^    image: *//p' compose.yaml)"
+   test "$(docker inspect --format '{{.Image}}' "$(docker compose ps -q db)")" = \
+     "$(docker image inspect --format '{{.Id}}' "$db_image")" && echo "db runs $db_image"
    docker compose exec -T db psql -U mileage -d mileage -Atc 'SELECT version(), postgis_full_version()' | diff versions-before.txt -
    ```
 
-   `diff` prints nothing when the versions are unchanged. If it prints a
-   difference, do not start the app; roll back as below.
+   With Podman, run `CONTAINER_RUNTIME=podman scripts/verify_image.sh`. A
+   [minimal Compose installation](install-compose.md) has no `scripts/`
+   directory and runs `./verify_image.sh` instead.
+
+   The image check prints `db runs` followed by the image when the swap took
+   effect; the version check alone cannot tell a swap from a database that
+   still runs the old image. `diff` prints nothing when the versions are
+   unchanged. It compares the full `version()` string, which includes the
+   PostgreSQL package revision (for example `Debian 16.15-1.pgdg12+2`), so a
+   package-revision change also stops here for review. If either check fails,
+   do not start the app; roll back as below.
 
 3. **Start the app** with `docker compose up -d`, then run the health and
    sign-in checks of [Upgrade procedure](#upgrade-procedure) step 4.
 
-To roll back, stop the app, check out the previous exact release and run
-`docker compose up -d db`, which starts the previous database image on the
-same volume. If the target release applied migrations, the previous app must
-not run against that database: continue with
+To roll back, stop the app and database, check out the previous exact release
+and run `docker compose up -d db`, which starts the previous database image on
+the same volume. Confirm the container uses the previous release's `db.image`
+with the same image check as step 2. If the target release applied
+migrations, the previous app must not run against that database: continue
+with
 [Rollback after an application-only upgrade](#rollback-after-an-application-only-upgrade),
 which restores the verified backup. Otherwise verify and start the previous
-app as described in [Rollback](#rollback). With Podman, replace each `docker compose`
-command with `podman-compose`. A source checkout can compare two database
-images before upgrading with `scripts/db_image_identity.sh IMAGE`, which
-prints the versions an image contains.
+app as described in [Rollback](#rollback).
+
+With Podman, replace each `docker compose` command with `podman-compose`, and
+find the database container with
+`podman ps -q --filter label=com.docker.compose.project=PROJECT --filter label=com.docker.compose.service=db`
+in place of `docker compose ps -q db`, using `podman inspect` and
+`podman image inspect`. A source checkout can compare two database images
+before upgrading with `scripts/db_image_identity.sh IMAGE`, which prints the
+versions an image contains.
 
 ## Upgrading the PostGIS database image
 
