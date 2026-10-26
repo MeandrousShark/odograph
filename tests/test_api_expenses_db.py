@@ -459,6 +459,12 @@ def test_writes_never_reach_another_account(monkeypatch):
             assert response.status_code == 404
             response = await _api(state, "DELETE", f"/api/v1/expenses/{expense_id}")
             assert (response.status_code, response.json()) == (404, _envelope("not_found"))
+        # The fields are checked before the expense is looked up, as on the
+        # web: another account's id with a vehicle not in this account is 422.
+        response = await _api(state, "PATCH", f"/api/v1/expenses/{theirs['fuel']}",
+                              body={"vehicle_id": theirs["car"]})
+        assert response.status_code == 422
+        assert response.json()["error"]["fields"] == {"vehicle_id": "No such vehicle"}
         for path in ("/api/v1/expenses/0", f"/api/v1/expenses/{2**63}", "/api/v1/expenses/999999"):
             assert (await _api(state, "PATCH", path, body={"notes": "x"})).status_code == 404
             assert (await _api(state, "DELETE", path)).status_code == 404

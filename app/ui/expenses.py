@@ -20,7 +20,7 @@ from app.expenses import (
 )
 from app.expense_ledger import (
     AMOUNT_INVALID, CATEGORY_INVALID, DATE_INVALID, TREATMENT_INVALID, TREATMENT_REQUIRED, TRIP_INVALID,
-    ExpenseValidationError, parse_expense_amount, resolve_treatment,
+    NOT_FOUND, ExpenseNotFound, ExpenseValidationError, parse_expense_amount, resolve_treatment,
 )
 from app.expense_queries import EXPENSE_SELECT_JOIN as _EXPENSE_SELECT_JOIN  # noqa: F401
 from app.vehicles import list_vehicles
@@ -165,6 +165,8 @@ def register(router: APIRouter) -> None:
                     await ledger_service.update_expense(conn, expense_id, values, write_unchanged=True)
                 except ExpenseValidationError as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from None
+                except ExpenseNotFound:
+                    raise HTTPException(status_code=404, detail=NOT_FOUND) from None
             mark_committed_write(request)
             return Response(status_code=204, headers={"HX-Redirect": f"/expenses?year={parsed_date.year}"})
 
@@ -173,6 +175,9 @@ def register(router: APIRouter) -> None:
             request: Request, expense_id: int, user: dict = Depends(require_user)
         ):
             async with request.state.account_pool.connection() as conn:
-                await ledger_service.delete_expense(conn, expense_id)
+                try:
+                    await ledger_service.delete_expense(conn, expense_id)
+                except ExpenseNotFound:
+                    raise HTTPException(status_code=404, detail=NOT_FOUND) from None
             mark_committed_write(request)
             return Response(status_code=204, headers={"HX-Redirect": "/expenses"})

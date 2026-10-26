@@ -28,7 +28,7 @@ from app.api_errors import FIELD_INVALID, ApiError
 from app.api_v1 import ApiUser, require_api_user
 from app.capacity_routes import AdmissionRoute, capacity_policy, mark_committed_write
 from app.expense_ledger import (
-    AMOUNT_INVALID, DATE_INVALID, TRIP_MISSING, VEHICLE_MISSING, ExpenseValidationError,
+    AMOUNT_INVALID, DATE_INVALID, TRIP_MISSING, VEHICLE_MISSING, ExpenseNotFound, ExpenseValidationError,
     IdempotencyKeyReused, create_expense, delete_expense, expense_digest, fetch_expense, fetch_expense_page,
     update_expense, validate_expense,
 )
@@ -298,6 +298,8 @@ def make_router() -> APIRouter:
                 written = await update_expense(conn, expense_id, changes)
             except ExpenseValidationError as exc:
                 raise ApiError("validation_failed", fields=exc.errors) from None
+            except ExpenseNotFound:
+                raise ApiError("not_found") from None
             row = await fetch_expense(conn, expense_id)
         if written:
             mark_committed_write(request)
@@ -309,7 +311,10 @@ def make_router() -> APIRouter:
     async def remove(request: Request, expense_id: int, api_user: ApiUser = Depends(require_api_user)):
         _expense_id(expense_id)
         async with request.state.account_pool.connection() as conn:
-            await delete_expense(conn, expense_id)
+            try:
+                await delete_expense(conn, expense_id)
+            except ExpenseNotFound:
+                raise ApiError("not_found") from None
         mark_committed_write(request)
         return Response(status_code=204)
 

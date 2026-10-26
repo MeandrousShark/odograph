@@ -5,7 +5,7 @@ partial updates and deletes.
 Every function takes an account connection and leaves the commit to the
 caller. Validation failures raise `ExpenseValidationError` with per-field
 messages, in the order the web form checks them; an expense missing from
-this account is a 404.
+this account raises `ExpenseNotFound`.
 """
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ from decimal import Decimal, InvalidOperation
 from typing import Mapping
 from zoneinfo import ZoneInfo
 
-from fastapi import HTTPException
 from psycopg import errors
 from psycopg.rows import dict_row
 
@@ -34,6 +33,10 @@ class ExpenseValidationError(ValueError):
     def __init__(self, errors: dict[str, str]):
         super().__init__(next(iter(errors.values())))
         self.errors = errors
+
+
+class ExpenseNotFound(LookupError):
+    """No such expense in this account."""
 
 
 FIELD_REQUIRED = "This field is required."
@@ -258,7 +261,7 @@ async def update_expense(
     )
     stored = await cur.fetchone()
     if stored is None:
-        raise HTTPException(status_code=404, detail=NOT_FOUND)
+        raise ExpenseNotFound()
     written = normalized if write_unchanged else {
         name: value for name, value in normalized.items() if value != stored[name]}
     if not written and not write_unchanged:
@@ -279,7 +282,7 @@ async def delete_expense(conn, expense_id: int) -> None:
     cur = await conn.execute(
         "DELETE FROM expenses WHERE id = %s AND account_id = %s", (expense_id, account_id(conn)))
     if cur.rowcount == 0:
-        raise HTTPException(status_code=404, detail=NOT_FOUND)
+        raise ExpenseNotFound()
 
 
 # ---------------------------------------------------------------------------
