@@ -206,7 +206,8 @@ def test_api_schema_matches_the_checked_in_contract():
         "/api/v1/auth/revoke", "/api/v1/auth/token", "/api/v1/capabilities", "/api/v1/me",
         "/api/v1/trips", "/api/v1/trips/{trip_id}", "/api/v1/review", "/api/v1/vehicles",
         "/api/v1/purposes/recent", "/api/v1/dashboard/week", "/api/v1/stats", "/api/v1/expenses",
-        "/api/v1/expenses/{expense_id}", "/api/v1/expenses/comparison",
+        "/api/v1/expenses/{expense_id}", "/api/v1/expenses/comparison", "/api/v1/exports/trips",
+        "/api/v1/reports/range", "/api/v1/reports/{year}",
     }
     if os.environ.get("ODOGRAPH_UPDATE_API_SCHEMA") == "1" and SNAPSHOT.exists():
         problems = breaking_changes(json.loads(SNAPSHOT.read_text()), generated)
@@ -301,6 +302,9 @@ def test_comparator_rejects_incompatible_changes(mutate, expected):
     ("expense_comparison_response.json", ExpenseComparison),
     ("expense_create_request.json", ExpenseCreate),
     ("expense_patch_request.json", ExpensePatch),
+    ("error_busy.json", ApiErrorEnvelope),
+    ("error_export_format_invalid.json", ApiErrorEnvelope),
+    ("error_report_range_reversed.json", ApiErrorEnvelope),
 ])
 def test_synthetic_fixtures_match_their_models(filename, model):
     data = json.loads((FIXTURES / filename).read_text())

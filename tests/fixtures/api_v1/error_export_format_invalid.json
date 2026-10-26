@@ -1,0 +1,9 @@
+{
+  "error": {
+    "code": "validation_failed",
+    "message": "The request is not valid.",
+    "fields": {
+      "format": "This value is not valid."
+    }
+  }
+}
