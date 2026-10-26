@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from app.api_errors import ApiError
 
 CURSOR_VERSION = 1
-KINDS = {"trips": 1, "review": 2}
+KINDS = {"trips": 1, "review": 2, "expenses": 3}
 _HEADER = struct.Struct(">BBqq")
 _LAYOUT = struct.Struct(">BBqq16s")
 _TEXT = re.compile(r"[A-Za-z0-9_-]+")
