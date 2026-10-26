@@ -46,6 +46,7 @@ FOREGROUND_ROUTES = frozenset({
 })
 PREPARED_REPORT_ROUTES = frozenset({
     '/export', '/report/range', '/report/range/export', '/report/{year}', '/report/{year}/export',
+    '/api/v1/exports/trips', '/api/v1/reports/range', '/api/v1/reports/{year}',
 })
 INTERACTIVE_ROUTES = frozenset({
     ('POST', '/login/local'), ('POST', '/signup'), ('POST', '/invite'),
@@ -117,7 +118,7 @@ class AdmissionRoute(APIRoute):
         return self.body_field is not None and isinstance(self.body_field.field_info, FormParameter)
 
     def protected_dependency(self):
-        from app.api_v1 import require_api_user
+        from app.api_v1 import require_api_report_user, require_api_user
         from app.auth import require_admin, require_legacy_establishment, require_report_user, require_user
         calls = []
         def visit(dependant):
@@ -125,8 +126,8 @@ class AdmissionRoute(APIRoute):
             for child in dependant.dependencies:
                 visit(child)
         visit(self.dependant)
-        for dependency in (require_api_user, require_admin, require_legacy_establishment,
-                           require_report_user, require_user):
+        for dependency in (require_api_report_user, require_api_user, require_admin,
+                           require_legacy_establishment, require_report_user, require_user):
             if dependency in calls:
                 return dependency
         return None

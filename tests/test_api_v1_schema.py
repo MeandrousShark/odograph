@@ -4,8 +4,13 @@ The OpenAPI document is generated from the application without serving it
 (docs routes stay off), limited to `/api/v1` paths and the component schemas
 they reference, and compared with the checked-in copy in
 `tests/fixtures/api_v1/openapi.json`. v1 changes are additive only: the check
-fails on a removed field, a type change, a newly required request field or a
-response field that becomes nullable or optional. After an additive change,
+fails on a removed field, parameter or media type, a type change, a newly
+required request field, a response field that becomes nullable or optional,
+a changed `format` (or one newly required of a request field), a request
+enum value removed or a request field newly limited to an enum, and a
+request bound tightened (a higher minimum, a lower maximum, a new or changed
+pattern). Added
+request values and added response enum values are additive. After an additive change,
 regenerate the copy with
 
     ODOGRAPH_UPDATE_API_SCHEMA=1 .venv/bin/pytest tests/test_api_v1_schema.py
@@ -22,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from app.api_errors import ApiErrorEnvelope
+from app.api_errors import ERRORS, ApiErrorEnvelope
 from app.api_expenses import Expense, ExpenseComparison, ExpenseCreate, ExpensePage, ExpensePatch
 from app.api_stats import StatsResponse, WeekDashboardResponse
 from app.api_trips import (
@@ -116,11 +121,85 @@ def _members(document, schema):
     return members
 
 
+def _leaves(document, schema):
+    """The non-null alternatives a value may take."""
+    schema = _resolve(document, schema)
+    alternatives = [*schema.get("anyOf", ()), *schema.get("oneOf", ())]
+    if not alternatives:
+        return [] if schema.get("type") == "null" else [schema]
+    return [leaf for member in alternatives for leaf in _leaves(document, member)]
+
+
+def _enum(document, schema) -> set | None:
+    """The values an enumerated field allows, or None when any value of its
+    type is allowed. A `const` is a one-value enum."""
+    values: set = set()
+    for leaf in _leaves(document, schema):
+        if "enum" in leaf:
+            values.update(leaf["enum"])
+        elif "const" in leaf:
+            values.add(leaf["const"])
+        else:
+            return None
+    return values or None
+
+
+def _formats(document, schema) -> set[str]:
+    return {leaf["format"] for leaf in _leaves(document, schema) if "format" in leaf}
+
+
+_LOWER_BOUNDS = ("minimum", "exclusiveMinimum", "minLength", "minItems")
+_UPPER_BOUNDS = ("maximum", "exclusiveMaximum", "maxLength", "maxItems")
+
+
+def _bound(document, schema, keyword):
+    """The loosest `keyword` across a field's alternatives, or None when
+    some alternative does not set it."""
+    values = [leaf.get(keyword) for leaf in _leaves(document, schema)]
+    if not values or None in values:
+        return None
+    return min(values) if keyword in _LOWER_BOUNDS else max(values)
+
+
+def _compare_bounds(old_doc, new_doc, old, new, where, problems):
+    """A request may never accept less than before: a raised lower bound, a
+    lowered upper bound or a new or changed pattern is breaking."""
+    for keyword in (*_LOWER_BOUNDS, *_UPPER_BOUNDS):
+        before, after = _bound(old_doc, old, keyword), _bound(new_doc, new, keyword)
+        if after is None or before == after:
+            continue
+        if before is None or (after > before if keyword in _LOWER_BOUNDS else after < before):
+            problems.append(f"{where}: request {keyword} tightened from {before} to {after}")
+    old_patterns = {leaf["pattern"] for leaf in _leaves(old_doc, old) if "pattern" in leaf}
+    new_patterns = {leaf["pattern"] for leaf in _leaves(new_doc, new) if "pattern" in leaf}
+    if new_patterns and new_patterns != old_patterns:
+        problems.append(f"{where}: request pattern changed from {sorted(old_patterns)} to {sorted(new_patterns)}")
+
+
+def _compare_values(old_doc, new_doc, old, new, where, request, problems):
+    """The freeze's enum and format rules. A request may never lose an
+    accepted value; a response may gain values clients must tolerate."""
+    old_enum, new_enum = _enum(old_doc, old), _enum(new_doc, new)
+    if request and old_enum is None and new_enum is not None:
+        problems.append(f"{where}: request field is newly restricted to {sorted(map(str, new_enum))}")
+    elif request and old_enum is not None and new_enum is not None:
+        for value in sorted(map(str, old_enum - new_enum)):
+            problems.append(f"{where}: request enum value {value} removed")
+    if request:
+        _compare_bounds(old_doc, new_doc, old, new, where, problems)
+    old_formats, new_formats = _formats(old_doc, old), _formats(new_doc, new)
+    if old_formats and old_formats != new_formats:
+        problems.append(f"{where}: format changed from {sorted(old_formats)} to {sorted(new_formats)}")
+    elif request and new_formats and not old_formats:
+        problems.append(f"{where}: request field newly requires format {sorted(new_formats)}")
+
+
 def _compare_schema(old_doc, new_doc, old, new, where, request, problems):
     old_types, new_types = _types(old_doc, old), _types(new_doc, new)
     if old_types - {"null"} != new_types - {"null"}:
         problems.append(f"{where}: type changed from {sorted(old_types)} to {sorted(new_types)}")
         return
+    _compare_values(old_doc, new_doc, old, new, where, request, problems)
     if not request and "null" in new_types and "null" not in old_types:
         problems.append(f"{where}: response field became nullable")
     if request and "null" in old_types and "null" not in new_types:
@@ -169,10 +248,17 @@ def breaking_changes(old: dict, new: dict) -> list[str]:
                 continue
             old_operation = old_item[method]
             old_parameters = {(p["in"], p["name"]): p for p in old_operation.get("parameters", ())}
+            new_parameters = {(p["in"], p["name"]): p for p in new_operation.get("parameters", ())}
             for parameter in new_operation.get("parameters", ()):
                 key = (parameter["in"], parameter["name"])
                 if parameter.get("required") and not old_parameters.get(key, {}).get("required"):
                     problems.append(f"{where}: parameter {parameter['name']} is newly required")
+            for key, parameter in old_parameters.items():
+                if key not in new_parameters:
+                    problems.append(f"{where}: parameter {parameter['name']} removed")
+                elif "schema" in parameter:
+                    _compare_schema(old, new, parameter["schema"], new_parameters[key].get("schema", {}),
+                                    f"{where} parameter {parameter['name']}", True, problems)
             old_body, new_body = old_operation.get("requestBody"), new_operation.get("requestBody")
             if new_body and new_body.get("required") and not (old_body and old_body.get("required")):
                 problems.append(f"{where}: request body is newly required")
@@ -187,6 +273,9 @@ def breaking_changes(old: dict, new: dict) -> list[str]:
                 if new_response is None:
                     problems.append(f"{where}: response {status} removed")
                     continue
+                for media_type in old_response.get("content", {}):
+                    if media_type not in new_response.get("content", {}):
+                        problems.append(f"{where}: response {status} media type {media_type} removed")
                 if _json_schema(old_response) is not None:
                     if _json_schema(new_response) is None:
                         problems.append(f"{where}: response {status} body removed")
@@ -206,7 +295,8 @@ def test_api_schema_matches_the_checked_in_contract():
         "/api/v1/auth/revoke", "/api/v1/auth/token", "/api/v1/capabilities", "/api/v1/me",
         "/api/v1/trips", "/api/v1/trips/{trip_id}", "/api/v1/review", "/api/v1/vehicles",
         "/api/v1/purposes/recent", "/api/v1/dashboard/week", "/api/v1/stats", "/api/v1/expenses",
-        "/api/v1/expenses/{expense_id}", "/api/v1/expenses/comparison",
+        "/api/v1/expenses/{expense_id}", "/api/v1/expenses/comparison", "/api/v1/exports/trips",
+        "/api/v1/reports/range", "/api/v1/reports/{year}",
     }
     if os.environ.get("ODOGRAPH_UPDATE_API_SCHEMA") == "1" and SNAPSHOT.exists():
         problems = breaking_changes(json.loads(SNAPSHOT.read_text()), generated)
@@ -268,6 +358,129 @@ def test_comparator_rejects_incompatible_changes(mutate, expected):
     assert any(problem.startswith(expected) for problem in problems), problems
 
 
+def _enumerate(schema, values):
+    schema.pop("const")
+    schema["enum"] = values
+
+
+def _parameter(document, path, name):
+    return next(p for p in document["paths"][path]["get"]["parameters"] if p["name"] == name)
+
+
+@pytest.mark.parametrize("mutate,expected", [
+    (lambda d: _parameter(d, "/api/v1/exports/trips", "format")["schema"]["enum"].remove("csv"),
+     "GET /api/v1/exports/trips parameter format: request enum value csv removed"),
+    (lambda d: _parameter(d, "/api/v1/trips", "exclusion")["schema"]["anyOf"][0]["enum"].remove("none"),
+     "GET /api/v1/trips parameter exclusion: request enum value none removed"),
+    (lambda d: _schema(d, "ExpenseCreate")["properties"]["treatment"]["enum"].remove("fully_business"),
+     "POST /api/v1/expenses request.treatment: request enum value fully_business removed"),
+    (lambda d: _parameter(d, "/api/v1/reports/{year}", "format")["schema"].update(const="csv"),
+     "GET /api/v1/reports/{year} parameter format: request enum value xlsx removed"),
+    (lambda d: _parameter(d, "/api/v1/exports/trips", "q")["schema"]["anyOf"][0].update(enum=["a"]),
+     "GET /api/v1/exports/trips parameter q: request field is newly restricted"),
+    (lambda d: _schema(d, "TripCreate")["properties"]["started_at"].update(format="date"),
+     "POST /api/v1/trips request.started_at: format changed"),
+    (lambda d: _schema(d, "TripPatch")["properties"]["ended_at"].pop("format"),
+     "PATCH /api/v1/trips/{trip_id} request.ended_at: format changed"),
+    (lambda d: _schema(d, "TripPatch")["properties"]["purpose"]["anyOf"][0].update(format="uuid"),
+     "PATCH /api/v1/trips/{trip_id} request.purpose: request field newly requires format"),
+    (lambda d: d["paths"]["/api/v1/exports/trips"]["get"]["parameters"].pop(),
+     "GET /api/v1/exports/trips: parameter exclusion removed"),
+    (lambda d: d["paths"]["/api/v1/exports/trips"]["get"]["responses"]["200"]["content"].pop(
+        "text/csv; charset=utf-8"),
+     "GET /api/v1/exports/trips: response 200 media type text/csv; charset=utf-8 removed"),
+    (lambda d: _schema(d, "TripCreate")["required"].append("purpose"),
+     "POST /api/v1/trips request.purpose: request field is newly required"),
+    (lambda d: _schema(d, "TripSummary")["properties"].update(category={"anyOf": [{"type": "string"}, {"type": "null"}]}),
+     "GET /api/v1/trips 200.items[items].category: response field became nullable"),
+])
+def test_comparator_applies_the_freeze_rules(mutate, expected):
+    old = _document()
+    new = copy.deepcopy(old)
+    mutate(new)
+    problems = breaking_changes(old, new)
+    assert any(problem.startswith(expected) for problem in problems), problems
+
+
+def _year(document):
+    return _parameter(document, "/api/v1/reports/{year}", "year")["schema"]
+
+
+def _with_labels(document):
+    """The snapshot with an array request field, which v1 does not have yet."""
+    _schema(document, "TripPatch")["properties"]["labels"] = {"type": "array", "items": {"type": "string"}}
+    return document
+
+
+def _labels(document):
+    return _schema(document, "TripPatch")["properties"]["labels"]
+
+
+def _purpose(document):
+    return _schema(document, "TripPatch")["properties"]["purpose"]["anyOf"][0]
+
+
+@pytest.mark.parametrize("mutate,expected", [
+    (lambda d: _year(d).update(minimum=1950), "request minimum tightened from 1900 to 1950"),
+    (lambda d: _year(d).update(maximum=2100), "request maximum tightened from 9998 to 2100"),
+    (lambda d: _year(d).update(exclusiveMinimum=1900), "request exclusiveMinimum tightened from None to 1900"),
+    (lambda d: _year(d).update(exclusiveMaximum=9999), "request exclusiveMaximum tightened from None to 9999"),
+    (lambda d: _purpose(d).update(maxLength=10), "request maxLength tightened from None to 10"),
+    (lambda d: _purpose(d).update(minLength=1), "request minLength tightened from None to 1"),
+    (lambda d: _labels(d).update(minItems=1), "request minItems tightened from None to 1"),
+    (lambda d: _labels(d).update(maxItems=5), "request maxItems tightened from None to 5"),
+    (lambda d: _purpose(d).update(pattern="^[a-z]+$"), "request pattern changed from [] to ['^[a-z]+$']"),
+])
+def test_comparator_rejects_tightened_request_bounds(mutate, expected):
+    old = _with_labels(_document())
+    new = copy.deepcopy(old)
+    mutate(new)
+    problems = breaking_changes(old, new)
+    assert any(expected in problem for problem in problems), problems
+
+
+@pytest.mark.parametrize("tighten", [
+    lambda d: _year(d).update(minimum=1950),
+    lambda d: _year(d).update(maximum=2100),
+    lambda d: _purpose(d).update(maxLength=10, minLength=2, pattern="^[a-z]+$"),
+    lambda d: _labels(d).update(minItems=2, maxItems=5),
+])
+def test_comparator_accepts_loosened_request_bounds(tighten):
+    # The reverse of each tightening: the old document is the strict one.
+    strict = _with_labels(_document())
+    tighten(strict)
+    loose = _with_labels(_document())
+    assert breaking_changes(strict, loose) == []
+    assert breaking_changes(strict, copy.deepcopy(strict)) == []
+
+
+def test_comparator_accepts_a_pattern_dropped_or_a_bound_change_on_responses():
+    old = _document()
+    _schema(old, "MeResponse")["properties"]["display_time_zone"].update(maxLength=64, pattern="^.+$")
+    new = copy.deepcopy(old)
+    _schema(new, "MeResponse")["properties"]["display_time_zone"].update(maxLength=8, pattern="^x$")
+    assert breaking_changes(old, new) == []
+
+
+@pytest.mark.parametrize("mutate", [
+    # Added request values and added response values are additive.
+    lambda d: _parameter(d, "/api/v1/exports/trips", "format")["schema"]["enum"].append("pdf"),
+    lambda d: _enumerate(_parameter(d, "/api/v1/reports/range", "format")["schema"], ["xlsx", "csv"]),
+    lambda d: _schema(d, "TripCreate")["properties"]["category"]["enum"].append("medical"),
+    lambda d: _schema(d, "MultiLineString")["properties"]["type"].update(enum=["MultiLineString", "LineString"]),
+    lambda d: _schema(d, "TripSummary")["properties"]["source"].update(enum=["detected", "manual"]),
+    lambda d: d["paths"]["/api/v1/exports/trips"]["get"]["responses"]["200"]["content"].update(
+        {"application/pdf": {"schema": {"type": "string", "format": "binary"}}}),
+    # A newly declared response format only narrows what clients receive.
+    lambda d: _schema(d, "TripSummary")["properties"]["started_at"].update(format="date-time"),
+])
+def test_comparator_accepts_additive_value_changes(mutate):
+    old = _document()
+    new = copy.deepcopy(old)
+    mutate(new)
+    assert breaking_changes(old, new) == []
+
+
 @pytest.mark.parametrize("filename,model", [
     ("token_request.json", TokenRequest),
     ("token_request_authorization_code.json", TokenRequest),
@@ -282,6 +495,7 @@ def test_comparator_rejects_incompatible_changes(mutate, expected):
     ("trips_page_response.json", TripPage),
     ("trip_detail_gapped.json", TripDetailResponse),
     ("trip_detail_snapped_only.json", TripDetailResponse),
+    ("trip_detail_raw_only.json", TripDetailResponse),
     ("trip_detail_geometry_free.json", TripDetailResponse),
     ("trip_detail_imported.json", TripDetailResponse),
     ("trip_detail_manual.json", TripDetailResponse),
@@ -301,6 +515,9 @@ def test_comparator_rejects_incompatible_changes(mutate, expected):
     ("expense_comparison_response.json", ExpenseComparison),
     ("expense_create_request.json", ExpenseCreate),
     ("expense_patch_request.json", ExpensePatch),
+    ("error_busy.json", ApiErrorEnvelope),
+    ("error_export_format_invalid.json", ApiErrorEnvelope),
+    ("error_report_range_reversed.json", ApiErrorEnvelope),
 ])
 def test_synthetic_fixtures_match_their_models(filename, model):
     data = json.loads((FIXTURES / filename).read_text())
@@ -322,3 +539,15 @@ def test_write_case_fixtures_match_their_models(filename, request_model, record_
         assert response_model.model_validate(case["response"]).model_dump(mode="json") == case["response"]
         if case["status"] < 400:
             request_model.model_validate(case["request"])
+
+
+def test_every_error_code_has_a_fixture_with_its_registry_message():
+    codes = set()
+    for path in sorted(FIXTURES.glob("error_*.json")):
+        data = json.loads(path.read_text())
+        assert ApiErrorEnvelope.model_validate(data).model_dump(mode="json") == data, path.name
+        error = data["error"]
+        assert error["message"] == ERRORS[error["code"]][1], path.name
+        codes.add(error["code"])
+    assert codes == set(ERRORS)
+    assert all((FIXTURES / f"error_{code}.json").exists() for code in ERRORS)

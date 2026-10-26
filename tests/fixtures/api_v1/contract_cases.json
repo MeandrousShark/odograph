@@ -1,0 +1,1032 @@
+{
+  "description": "Requests replayed against the application in order, one world at a time (tests/test_api_contract_db.py). `{kind:name}` in a path and `bind` name rows the world seeds; a `setup` holds for its case only; `walk` lists the rows each page returns while following next_cursor. Responses compare by field presence, null versus value, type and value, ignoring ids, cursors, tokens and instant values (tests/api_contract.py).",
+  "cases": [
+    {
+      "name": "capabilities",
+      "world": "auth",
+      "operation": "GET /api/v1/capabilities",
+      "path": "/api/v1/capabilities",
+      "auth": "none",
+      "status": 200,
+      "response_fixture": "capabilities_response.json"
+    },
+    {
+      "name": "me",
+      "world": "auth",
+      "operation": "GET /api/v1/me",
+      "path": "/api/v1/me",
+      "status": 200,
+      "response_fixture": "me_response.json",
+      "ignore": [
+        "server_version"
+      ],
+      "auth": "owner"
+    },
+    {
+      "name": "me without a token",
+      "world": "auth",
+      "operation": "GET /api/v1/me",
+      "path": "/api/v1/me",
+      "auth": "none",
+      "status": 401,
+      "response_fixture": "error_invalid_token.json",
+      "response_headers": {
+        "www-authenticate": "Bearer"
+      }
+    },
+    {
+      "name": "me with an unknown token",
+      "world": "auth",
+      "operation": "GET /api/v1/me",
+      "path": "/api/v1/me",
+      "auth": "unknown",
+      "status": 401,
+      "response_fixture": "error_invalid_token.json",
+      "response_headers": {
+        "www-authenticate": "Bearer"
+      }
+    },
+    {
+      "name": "refresh",
+      "world": "auth",
+      "operation": "POST /api/v1/auth/token",
+      "path": "/api/v1/auth/token",
+      "body_fixture": "token_request.json",
+      "bind": {
+        "refresh_token": "refresh:spare"
+      },
+      "status": 200,
+      "response_fixture": "token_response.json",
+      "response_headers": {
+        "cache-control": "no-store",
+        "pragma": "no-cache"
+      },
+      "auth": "owner"
+    },
+    {
+      "name": "refresh with an unknown token",
+      "world": "auth",
+      "operation": "POST /api/v1/auth/token",
+      "path": "/api/v1/auth/token",
+      "auth": "none",
+      "body_fixture": "token_request.json",
+      "status": 400,
+      "response_fixture": "error_invalid_grant.json"
+    },
+    {
+      "name": "code exchange while sign-in is off",
+      "world": "auth",
+      "operation": "POST /api/v1/auth/token",
+      "path": "/api/v1/auth/token",
+      "auth": "none",
+      "body_fixture": "token_request_authorization_code.json",
+      "status": 403,
+      "response_fixture": "error_signin_disabled.json"
+    },
+    {
+      "name": "refresh without a token",
+      "world": "auth",
+      "operation": "POST /api/v1/auth/token",
+      "path": "/api/v1/auth/token",
+      "auth": "none",
+      "body": {
+        "grant_type": "refresh_token"
+      },
+      "status": 422,
+      "response_fixture": "error_validation_failed.json"
+    },
+    {
+      "name": "unsupported method",
+      "world": "auth",
+      "operation": "PUT /api/v1/me",
+      "path": "/api/v1/me",
+      "status": 405,
+      "response_fixture": "error_method_not_allowed.json",
+      "auth": "owner"
+    },
+    {
+      "name": "unknown path",
+      "world": "auth",
+      "operation": "GET /api/v1/nothing-here",
+      "path": "/api/v1/nothing-here",
+      "status": 404,
+      "response_fixture": "error_not_found.json",
+      "auth": "owner"
+    },
+    {
+      "name": "revoke",
+      "world": "auth",
+      "operation": "POST /api/v1/auth/revoke",
+      "path": "/api/v1/auth/revoke",
+      "auth": "access:spare",
+      "status": 204
+    },
+    {
+      "name": "me after revoke",
+      "world": "auth",
+      "operation": "GET /api/v1/me",
+      "path": "/api/v1/me",
+      "auth": "access:spare",
+      "status": 401,
+      "response_fixture": "error_invalid_token.json"
+    },
+    {
+      "name": "failed check after the limit",
+      "world": "auth",
+      "operation": "GET /api/v1/me",
+      "path": "/api/v1/me",
+      "auth": "unknown",
+      "setup": "strict_limiter",
+      "prior_failures": 1,
+      "status": 429,
+      "response_fixture": "error_rate_limited.json",
+      "response_headers": {
+        "retry-after": "900"
+      }
+    },
+    {
+      "name": "archive first page",
+      "world": "trips",
+      "operation": "GET /api/v1/trips",
+      "path": "/api/v1/trips",
+      "query": {
+        "limit": 2
+      },
+      "status": 200,
+      "response_fixture": "trips_page_response.json",
+      "auth": "owner"
+    },
+    {
+      "name": "archive pages",
+      "world": "trips",
+      "operation": "GET /api/v1/trips",
+      "path": "/api/v1/trips",
+      "query": {
+        "limit": 2
+      },
+      "status": 200,
+      "walk": [
+        [
+          "trip:routed_manual",
+          "trip:manual"
+        ],
+        [
+          "trip:imported",
+          "trip:geometry_free"
+        ],
+        [
+          "trip:raw_only",
+          "trip:snapped_only"
+        ],
+        [
+          "trip:gapped"
+        ]
+      ],
+      "auth": "owner"
+    },
+    {
+      "name": "archive filtered pages",
+      "world": "trips",
+      "operation": "GET /api/v1/trips",
+      "path": "/api/v1/trips",
+      "query": {
+        "limit": 3,
+        "category": "unclassified"
+      },
+      "status": 200,
+      "walk": [
+        [
+          "trip:routed_manual",
+          "trip:imported",
+          "trip:raw_only"
+        ],
+        [
+          "trip:snapped_only"
+        ]
+      ],
+      "auth": "owner"
+    },
+    {
+      "name": "archive with a tampered cursor",
+      "world": "trips",
+      "operation": "GET /api/v1/trips",
+      "path": "/api/v1/trips",
+      "query": {
+        "cursor": "AQIAtampered"
+      },
+      "status": 400,
+      "response_fixture": "error_invalid_cursor.json",
+      "auth": "owner"
+    },
+    {
+      "name": "archive with an unknown category",
+      "world": "trips",
+      "operation": "GET /api/v1/trips",
+      "path": "/api/v1/trips",
+      "query": {
+        "category": "work"
+      },
+      "status": 422,
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "category": "This value is not valid."
+          }
+        }
+      },
+      "auth": "owner"
+    },
+    {
+      "name": "gapped trip",
+      "world": "trips",
+      "operation": "GET /api/v1/trips/{trip_id}",
+      "path": "/api/v1/trips/{trip:gapped}",
+      "status": 200,
+      "response_fixture": "trip_detail_gapped.json",
+      "auth": "owner"
+    },
+    {
+      "name": "snapped_only trip",
+      "world": "trips",
+      "operation": "GET /api/v1/trips/{trip_id}",
+      "path": "/api/v1/trips/{trip:snapped_only}",
+      "status": 200,
+      "response_fixture": "trip_detail_snapped_only.json",
+      "auth": "owner"
+    },
+    {
+      "name": "raw_only trip",
+      "world": "trips",
+      "operation": "GET /api/v1/trips/{trip_id}",
+      "path": "/api/v1/trips/{trip:raw_only}",
+      "status": 200,
+      "response_fixture": "trip_detail_raw_only.json",
+      "auth": "owner"
+    },
+    {
+      "name": "geometry_free trip",
+      "world": "trips",
+      "operation": "GET /api/v1/trips/{trip_id}",
+      "path": "/api/v1/trips/{trip:geometry_free}",
+      "status": 200,
+      "response_fixture": "trip_detail_geometry_free.json",
+      "auth": "owner"
+    },
+    {
+      "name": "imported trip",
+      "world": "trips",
+      "operation": "GET /api/v1/trips/{trip_id}",
+      "path": "/api/v1/trips/{trip:imported}",
+      "status": 200,
+      "response_fixture": "trip_detail_imported.json",
+      "auth": "owner"
+    },
+    {
+      "name": "manual trip",
+      "world": "trips",
+      "operation": "GET /api/v1/trips/{trip_id}",
+      "path": "/api/v1/trips/{trip:manual}",
+      "status": 200,
+      "response_fixture": "trip_detail_manual.json",
+      "auth": "owner"
+    },
+    {
+      "name": "routed_manual trip",
+      "world": "trips",
+      "operation": "GET /api/v1/trips/{trip_id}",
+      "path": "/api/v1/trips/{trip:routed_manual}",
+      "status": 200,
+      "response_fixture": "trip_detail_routed_manual.json",
+      "auth": "owner"
+    },
+    {
+      "name": "another account's trip",
+      "world": "trips",
+      "operation": "GET /api/v1/trips/{trip_id}",
+      "path": "/api/v1/trips/{other_trip:gapped}",
+      "status": 404,
+      "response_fixture": "error_not_found.json",
+      "auth": "owner"
+    },
+    {
+      "name": "review card",
+      "world": "trips",
+      "operation": "GET /api/v1/review",
+      "path": "/api/v1/review",
+      "status": 200,
+      "response_fixture": "review_response.json",
+      "auth": "owner"
+    },
+    {
+      "name": "review queue",
+      "world": "trips",
+      "operation": "GET /api/v1/review",
+      "path": "/api/v1/review",
+      "status": 200,
+      "walk": [
+        [
+          "trip:snapped_only"
+        ],
+        [
+          "trip:raw_only"
+        ],
+        [
+          "trip:imported"
+        ],
+        [
+          "trip:routed_manual"
+        ],
+        []
+      ],
+      "auth": "owner"
+    },
+    {
+      "name": "empty review",
+      "world": "trips",
+      "operation": "GET /api/v1/review",
+      "path": "/api/v1/review",
+      "query": {
+        "q": "nothing matches"
+      },
+      "status": 200,
+      "response": {
+        "state": "empty",
+        "trip": null,
+        "remaining": 0,
+        "next_cursor": null
+      },
+      "auth": "owner"
+    },
+    {
+      "name": "vehicles",
+      "world": "trips",
+      "operation": "GET /api/v1/vehicles",
+      "path": "/api/v1/vehicles",
+      "status": 200,
+      "response_fixture": "vehicles_response.json",
+      "auth": "owner"
+    },
+    {
+      "name": "recent purposes",
+      "world": "trips",
+      "operation": "GET /api/v1/purposes/recent",
+      "path": "/api/v1/purposes/recent",
+      "status": 200,
+      "response_fixture": "purposes_response.json",
+      "auth": "owner"
+    },
+    {
+      "name": "csv export",
+      "world": "trips",
+      "operation": "GET /api/v1/exports/trips",
+      "path": "/api/v1/exports/trips",
+      "query": {
+        "format": "csv"
+      },
+      "status": 200,
+      "binary": true,
+      "response_headers": {
+        "content-type": "text/csv; charset=utf-8",
+        "content-disposition": "attachment; filename=\"trips.csv\""
+      },
+      "auth": "owner"
+    },
+    {
+      "name": "workbook export",
+      "world": "trips",
+      "operation": "GET /api/v1/exports/trips",
+      "path": "/api/v1/exports/trips",
+      "query": {
+        "format": "xlsx"
+      },
+      "status": 200,
+      "binary": true,
+      "response_headers": {
+        "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "content-disposition": "attachment; filename=\"trips.xlsx\""
+      },
+      "auth": "owner"
+    },
+    {
+      "name": "export in an unknown format",
+      "world": "trips",
+      "operation": "GET /api/v1/exports/trips",
+      "path": "/api/v1/exports/trips",
+      "query": {
+        "format": "pdf"
+      },
+      "status": 422,
+      "response_fixture": "error_export_format_invalid.json",
+      "auth": "owner"
+    },
+    {
+      "name": "annual workbook",
+      "world": "trips",
+      "operation": "GET /api/v1/reports/{year}",
+      "path": "/api/v1/reports/2026",
+      "query": {
+        "format": "xlsx"
+      },
+      "status": 200,
+      "binary": true,
+      "response_headers": {
+        "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "content-disposition": "attachment; filename=\"mileage-report-2026.xlsx\""
+      },
+      "auth": "owner"
+    },
+    {
+      "name": "range workbook",
+      "world": "trips",
+      "operation": "GET /api/v1/reports/range",
+      "path": "/api/v1/reports/range",
+      "query": {
+        "format": "xlsx",
+        "from": "2026-04-01",
+        "to": "2026-06-30"
+      },
+      "status": 200,
+      "binary": true,
+      "response_headers": {
+        "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "content-disposition": "attachment; filename=\"mileage-report-2026-Q2.xlsx\""
+      },
+      "auth": "owner"
+    },
+    {
+      "name": "reversed range",
+      "world": "trips",
+      "operation": "GET /api/v1/reports/range",
+      "path": "/api/v1/reports/range",
+      "query": {
+        "format": "xlsx",
+        "from": "2026-05-01",
+        "to": "2026-04-01"
+      },
+      "status": 422,
+      "response_fixture": "error_report_range_reversed.json",
+      "auth": "owner"
+    },
+    {
+      "name": "annual workbook as html",
+      "world": "trips",
+      "operation": "GET /api/v1/reports/{year}",
+      "path": "/api/v1/reports/2026",
+      "query": {
+        "format": "html"
+      },
+      "status": 422,
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "format": "This value is not valid."
+          }
+        }
+      },
+      "auth": "owner"
+    },
+    {
+      "name": "delete a detected trip at full storage",
+      "world": "trips",
+      "operation": "DELETE /api/v1/trips/{trip_id}",
+      "path": "/api/v1/trips/{trip:gapped}",
+      "auth": "owner",
+      "setup": "full_storage_owner",
+      "status": 409,
+      "response_fixture": "error_storage_full.json"
+    },
+    {
+      "name": "detected trip kept after a refused delete",
+      "world": "trips",
+      "operation": "GET /api/v1/trips/{trip_id}",
+      "path": "/api/v1/trips/{trip:gapped}",
+      "auth": "owner",
+      "status": 200,
+      "response_fixture": "trip_detail_gapped.json"
+    },
+    {
+      "name": "null start label on a detected trip",
+      "world": "trips",
+      "operation": "PATCH /api/v1/trips/{trip_id}",
+      "path": "/api/v1/trips/{trip:raw_only}",
+      "auth": "owner",
+      "body": {
+        "start_label": null
+      },
+      "status": 422,
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "start_label": "This can only be changed on a manual trip."
+          }
+        }
+      }
+    },
+    {
+      "name": "null start label on a routed manual trip",
+      "world": "trips",
+      "operation": "PATCH /api/v1/trips/{trip_id}",
+      "path": "/api/v1/trips/{trip:routed_manual}",
+      "auth": "owner",
+      "body": {
+        "start_label": null
+      },
+      "status": 200,
+      "response_fixture": "trip_detail_routed_manual.json"
+    },
+    {
+      "name": "trip edit",
+      "world": "trips",
+      "operation": "PATCH /api/v1/trips/{trip_id}",
+      "path": "/api/v1/trips/{trip:gapped}",
+      "body_fixture": "trip_patch_request.json",
+      "bind": {
+        "vehicle_id": "vehicle:My Car"
+      },
+      "status": 200,
+      "response": {
+        "id": 1,
+        "source": "detected",
+        "imported": false,
+        "started_at": "2026-04-14T15:00:00.000000Z",
+        "ended_at": "2026-04-14T15:20:00.000000Z",
+        "local_date": "2026-04-14",
+        "distance_m": 2310.25,
+        "distance_raw_m": 2400.5,
+        "distance_snapped_m": 2310.25,
+        "snap_status": "ok",
+        "category": "business",
+        "exclusion": "not_deductible",
+        "purpose": "Client visit",
+        "notes": null,
+        "vehicle_id": 2,
+        "vehicle_name": "My Car",
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.6,
+          "lon": -122.33,
+          "description": "47.6000,-122.3300"
+        },
+        "end": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": 47.62,
+          "lon": -122.31,
+          "description": "47.6200,-122.3100"
+        },
+        "has_gap": true,
+        "point_count": 42,
+        "has_route": true,
+        "expense_count": 1,
+        "route_raw": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.32,
+                47.61
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "route_snapped": {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                -122.33,
+                47.6
+              ],
+              [
+                -122.325,
+                47.605
+              ]
+            ],
+            [
+              [
+                -122.315,
+                47.615
+              ],
+              [
+                -122.31,
+                47.62
+              ]
+            ]
+          ]
+        },
+        "stays": [
+          {
+            "position": "start",
+            "lat": 47.601,
+            "lon": -122.331
+          },
+          {
+            "position": "end",
+            "lat": 47.621,
+            "lon": -122.309
+          }
+        ],
+        "has_previous_trip": false,
+        "has_next_trip": true,
+        "expenses": [
+          {
+            "id": 1,
+            "vehicle_id": 2,
+            "vehicle_name": "My Car",
+            "incurred_on": "2026-04-14",
+            "category": "parking",
+            "amount": "12.34",
+            "treatment": "fully_business",
+            "notes": "Garage",
+            "conflicts": []
+          }
+        ]
+      },
+      "auth": "owner"
+    },
+    {
+      "name": "trip edit with a null category",
+      "world": "trips",
+      "operation": "PATCH /api/v1/trips/{trip_id}",
+      "path": "/api/v1/trips/{trip:gapped}",
+      "body": {
+        "category": null
+      },
+      "status": 422,
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "category": "This value is not valid."
+          }
+        }
+      },
+      "auth": "owner"
+    },
+    {
+      "name": "trip edit over the body limit",
+      "world": "trips",
+      "operation": "PATCH /api/v1/trips/{trip_id}",
+      "path": "/api/v1/trips/{trip:gapped}",
+      "body_bytes": 2097152,
+      "status": 413,
+      "response_fixture": "error_payload_too_large.json",
+      "auth": "owner"
+    },
+    {
+      "name": "manual trip create",
+      "world": "trips",
+      "operation": "POST /api/v1/trips",
+      "path": "/api/v1/trips",
+      "headers": {
+        "Idempotency-Key": "00000000-0000-4000-8000-0000000000c1"
+      },
+      "body_fixture": "trip_create_request.json",
+      "bind": {
+        "vehicle_id": "vehicle:My Car"
+      },
+      "status": 201,
+      "response_fixture": "trip_create_response.json",
+      "response_headers": {
+        "location": "/api/v1/trips/{id}"
+      },
+      "auth": "owner"
+    },
+    {
+      "name": "manual trip create replayed",
+      "world": "trips",
+      "operation": "POST /api/v1/trips",
+      "path": "/api/v1/trips",
+      "headers": {
+        "Idempotency-Key": "00000000-0000-4000-8000-0000000000c1"
+      },
+      "body_fixture": "trip_create_request.json",
+      "bind": {
+        "vehicle_id": "vehicle:My Car"
+      },
+      "status": 200,
+      "response_fixture": "trip_create_response.json",
+      "response_headers": {
+        "idempotent-replayed": "true"
+      },
+      "auth": "owner"
+    },
+    {
+      "name": "manual trip create with a reused key",
+      "world": "trips",
+      "operation": "POST /api/v1/trips",
+      "path": "/api/v1/trips",
+      "headers": {
+        "Idempotency-Key": "00000000-0000-4000-8000-0000000000c1"
+      },
+      "body_fixture": "trip_create_request.json",
+      "bind": {
+        "vehicle_id": "vehicle:My Car"
+      },
+      "body_changes": {
+        "purpose": "Another run"
+      },
+      "status": 409,
+      "response_fixture": "error_idempotency_key_reused.json",
+      "auth": "owner"
+    },
+    {
+      "name": "manual trip create without a key",
+      "world": "trips",
+      "operation": "POST /api/v1/trips",
+      "path": "/api/v1/trips",
+      "body_fixture": "trip_create_request.json",
+      "bind": {
+        "vehicle_id": "vehicle:My Car"
+      },
+      "status": 422,
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "Idempotency-Key": "This field is required."
+          }
+        }
+      },
+      "auth": "owner"
+    },
+    {
+      "name": "manual trip create at full storage",
+      "world": "trips",
+      "operation": "POST /api/v1/trips",
+      "path": "/api/v1/trips",
+      "auth": "other",
+      "setup": "full_storage_other",
+      "headers": {
+        "Idempotency-Key": "00000000-0000-4000-8000-0000000000c2"
+      },
+      "body_fixture": "trip_create_request.json",
+      "body_changes": {
+        "vehicle_id": null
+      },
+      "status": 409,
+      "response_fixture": "error_storage_full.json"
+    },
+    {
+      "name": "delete",
+      "world": "trips",
+      "operation": "DELETE /api/v1/trips/{trip_id}",
+      "path": "/api/v1/trips/{trip:manual}",
+      "status": 204,
+      "auth": "owner"
+    },
+    {
+      "name": "delete again",
+      "world": "trips",
+      "operation": "DELETE /api/v1/trips/{trip_id}",
+      "path": "/api/v1/trips/{trip:manual}",
+      "status": 404,
+      "response_fixture": "error_not_found.json",
+      "auth": "owner"
+    },
+    {
+      "name": "delete a trip in progress",
+      "world": "trips",
+      "operation": "DELETE /api/v1/trips/{trip_id}",
+      "path": "/api/v1/trips/{trip:in_progress}",
+      "setup": "trip_in_progress",
+      "status": 409,
+      "response_fixture": "error_trip_in_progress.json",
+      "auth": "owner"
+    },
+    {
+      "name": "detail while busy",
+      "world": "trips",
+      "operation": "GET /api/v1/trips/{trip_id}",
+      "path": "/api/v1/trips/{trip:gapped}",
+      "setup": "foreground_busy",
+      "status": 503,
+      "response_fixture": "error_busy.json",
+      "response_headers": {
+        "retry-after": "1"
+      },
+      "auth": "owner"
+    },
+    {
+      "name": "week dashboard",
+      "world": "ledger",
+      "operation": "GET /api/v1/dashboard/week",
+      "path": "/api/v1/dashboard/week",
+      "query": {
+        "date": "2026-04-15"
+      },
+      "status": 200,
+      "response_fixture": "dashboard_week_response.json",
+      "auth": "owner"
+    },
+    {
+      "name": "week dashboard with a bad date",
+      "world": "ledger",
+      "operation": "GET /api/v1/dashboard/week",
+      "path": "/api/v1/dashboard/week",
+      "query": {
+        "date": "2026-4-15"
+      },
+      "status": 422,
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "date": "This value is not valid."
+          }
+        }
+      },
+      "auth": "owner"
+    },
+    {
+      "name": "stats",
+      "world": "ledger",
+      "operation": "GET /api/v1/stats",
+      "path": "/api/v1/stats",
+      "query": {
+        "year": 2025
+      },
+      "status": 200,
+      "response_fixture": "stats_response.json",
+      "auth": "owner"
+    },
+    {
+      "name": "stats outside the years",
+      "world": "ledger",
+      "operation": "GET /api/v1/stats",
+      "path": "/api/v1/stats",
+      "query": {
+        "year": 1899
+      },
+      "status": 422,
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "year": "This value is not valid."
+          }
+        }
+      },
+      "auth": "owner"
+    },
+    {
+      "name": "expense list",
+      "world": "ledger",
+      "operation": "GET /api/v1/expenses",
+      "path": "/api/v1/expenses",
+      "query": {
+        "year": 2026,
+        "limit": 3
+      },
+      "status": 200,
+      "response_fixture": "expenses_page_response.json",
+      "auth": "owner"
+    },
+    {
+      "name": "expense pages",
+      "world": "ledger",
+      "operation": "GET /api/v1/expenses",
+      "path": "/api/v1/expenses",
+      "query": {
+        "year": 2026,
+        "limit": 2
+      },
+      "status": 200,
+      "walk": [
+        [
+          "expense:conflicted",
+          "expense:parking"
+        ],
+        [
+          "expense:fuel",
+          "expense:insurance"
+        ]
+      ],
+      "auth": "owner"
+    },
+    {
+      "name": "comparison",
+      "world": "ledger",
+      "operation": "GET /api/v1/expenses/comparison",
+      "path": "/api/v1/expenses/comparison",
+      "query": {
+        "year": 2026
+      },
+      "status": 200,
+      "response_fixture": "expense_comparison_response.json",
+      "auth": "owner"
+    },
+    {
+      "name": "comparison without a year",
+      "world": "ledger",
+      "operation": "GET /api/v1/expenses/comparison",
+      "path": "/api/v1/expenses/comparison",
+      "status": 422,
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "year": "This field is required."
+          }
+        }
+      },
+      "auth": "owner"
+    },
+    {
+      "name": "expense create",
+      "world": "ledger",
+      "operation": "POST /api/v1/expenses",
+      "path": "/api/v1/expenses",
+      "headers": {
+        "Idempotency-Key": "00000000-0000-4000-8000-0000000000c1"
+      },
+      "body_fixture": "expense_create_request.json",
+      "bind": {
+        "vehicle_id": "vehicle:car",
+        "trip_id": "trip:business"
+      },
+      "status": 201,
+      "response": {
+        "id": 11,
+        "vehicle_id": 2,
+        "vehicle_name": "My Car",
+        "incurred_on": "2026-04-16",
+        "category": "tolls",
+        "amount": "4.75",
+        "treatment": "fully_business",
+        "notes": "Bridge",
+        "trip_id": 1,
+        "conflicts": [
+          "date"
+        ]
+      },
+      "response_headers": {
+        "location": "/api/v1/expenses/{id}"
+      },
+      "auth": "owner"
+    },
+    {
+      "name": "expense edit",
+      "world": "ledger",
+      "operation": "PATCH /api/v1/expenses/{expense_id}",
+      "path": "/api/v1/expenses/{expense:fuel}",
+      "body_fixture": "expense_patch_request.json",
+      "status": 200,
+      "response": {
+        "id": 1,
+        "vehicle_id": 2,
+        "vehicle_name": "My Car",
+        "incurred_on": "2026-04-13",
+        "category": "fuel",
+        "amount": "50.10",
+        "treatment": "business_use_allocated",
+        "notes": null,
+        "trip_id": null,
+        "conflicts": []
+      },
+      "auth": "owner"
+    },
+    {
+      "name": "expense edit of another account's expense",
+      "world": "ledger",
+      "operation": "PATCH /api/v1/expenses/{expense_id}",
+      "path": "/api/v1/expenses/{other_expense:fuel}",
+      "body": {
+        "notes": "theirs"
+      },
+      "status": 404,
+      "response_fixture": "error_not_found.json",
+      "auth": "owner"
+    },
+    {
+      "name": "expense delete",
+      "world": "ledger",
+      "operation": "DELETE /api/v1/expenses/{expense_id}",
+      "path": "/api/v1/expenses/{expense:parking}",
+      "status": 204,
+      "auth": "owner"
+    }
+  ]
+}

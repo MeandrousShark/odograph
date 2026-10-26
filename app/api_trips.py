@@ -193,35 +193,35 @@ class PurposeList(BaseModel):
     next_cursor: str | None
 
 
-def _invalid(field: str) -> ApiError:
+def invalid_field(field: str) -> ApiError:
     return ApiError("validation_failed", fields={field: FIELD_INVALID})
 
 
-def _day(field: str, value: str | None) -> date | None:
+def parse_day(field: str, value: str | None) -> date | None:
     if value is None:
         return None
     if not _DAY.fullmatch(value):
-        raise _invalid(field)
+        raise invalid_field(field)
     try:
         return date.fromisoformat(value)
     except ValueError:
-        raise _invalid(field) from None
+        raise invalid_field(field) from None
 
 
-def _search(value: str | None) -> str:
+def parse_search(value: str | None) -> str:
     """The trimmed search term. Control characters, NUL among them, and text
     the database cannot encode are refused: no stored text holds them."""
     if value is not None and (any(unicodedata.category(char) == "Cc" for char in value)
                               or not storable_text(value)):
-        raise _invalid("q")
+        raise invalid_field("q")
     return (value or "").strip()
 
 
-def _vehicle(value: str | None) -> int | str | None:
+def parse_vehicle(value: str | None) -> int | str | None:
     if value is None or value == VEHICLE_FILTER_UNASSIGNED:
         return value
     if not _VEHICLE_ID.fullmatch(value) or int(value) > _MAX_ID:
-        raise _invalid("vehicle")
+        raise invalid_field("vehicle")
     return int(value)
 
 
@@ -358,9 +358,9 @@ def make_router() -> APIRouter:
         cursor: str | None = Query(None),
     ):
         tz = request.state.config.display_tz
-        start, end = _day("from", from_), _day("to", to)
-        vehicle_id = _vehicle(vehicle)
-        term = _search(q)
+        start, end = parse_day("from", from_), parse_day("to", to)
+        vehicle_id = parse_vehicle(vehicle)
+        term = parse_search(q)
         digest = filter_digest("trips", {
             "category": category or "", "from": start.isoformat() if start else "",
             "to": end.isoformat() if end else "", "vehicle": "" if vehicle_id is None else str(vehicle_id),
@@ -461,9 +461,9 @@ def make_router() -> APIRouter:
         cursor: str | None = Query(None),
     ):
         tz = request.state.config.display_tz
-        start, end = _day("from", from_), _day("to", to)
-        vehicle_id = _vehicle(vehicle)
-        term = _search(q)
+        start, end = parse_day("from", from_), parse_day("to", to)
+        vehicle_id = parse_vehicle(vehicle)
+        term = parse_search(q)
         digest = filter_digest("review", {
             "from": start.isoformat() if start else "", "to": end.isoformat() if end else "",
             "vehicle": "" if vehicle_id is None else str(vehicle_id), "q": term,

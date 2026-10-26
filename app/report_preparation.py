@@ -40,6 +40,11 @@ _DETAIL_TEXT = {
 }
 
 
+class AccountBindingChanged(RuntimeError):
+    """The admitted account was disabled or its auth_version changed before
+    the snapshot. Still a RuntimeError, so web routes fail as before."""
+
+
 def _timezone_path_chunks(paths):
     yield b'['
     for i, path in enumerate(paths):
@@ -362,7 +367,7 @@ async def prepare_report(request, user, kind, year=None, start=None, end=None):
             "FROM accounts WHERE id=%s AND is_enabled AND auth_version=%s",
             (*([control.info.parameter_status('client_encoding')] * 2),principal.account_id,principal.auth_version))
         if row is None:
-            raise RuntimeError('report account binding changed')
+            raise AccountBindingChanged('report account binding changed')
         snapshot = await projection.scalar(control,'SELECT pg_export_snapshot() AS snapshot')
         await projection.text(control,'email',row['size'],'email','accounts','id=%s',(principal.account_id,))
         await projection.text(control,'display_name',row['name_size'],'display_name','accounts','id=%s',(principal.account_id,))

@@ -68,6 +68,18 @@ async def get_account(conn, account_id: int) -> dict | None:
     return await cur.fetchone()
 
 
+async def get_report_account(conn, account_id: int) -> dict | None:
+    """The identity a prepared report needs, without variable-size account data."""
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(
+        "SELECT id, is_admin, is_enabled, auth_version, "
+        "avatar_mime IS NOT NULL AS has_avatar, avatar_updated_at "
+        "FROM accounts WHERE id = %s",
+        (account_id,),
+    )
+    return await cur.fetchone()
+
+
 async def get_account_by_email(conn, email: str) -> dict | None:
     """Identity lookup by normalized login email; never a personal-data owner fallback."""
     cur = conn.cursor(row_factory=dict_row)
