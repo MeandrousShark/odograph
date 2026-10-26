@@ -1,5 +1,5 @@
 {
-  "description": "Requests replayed against the application in order, one world at a time (tests/test_api_contract_db.py). `{kind:name}` in a path and `bind` name rows the world seeds; `walk` lists the rows each page returns while following next_cursor. Responses compare by field presence, null versus value, type and value, ignoring ids, cursors, tokens and instant values (tests/api_contract.py).",
+  "description": "Requests replayed against the application in order, one world at a time (tests/test_api_contract_db.py). `{kind:name}` in a path and `bind` name rows the world seeds; a `setup` holds for its case only; `walk` lists the rows each page returns while following next_cursor. Responses compare by field presence, null versus value, type and value, ignoring ids, cursors, tokens and instant values (tests/api_contract.py).",
   "cases": [
     {
       "name": "capabilities",
@@ -131,21 +131,13 @@
       "response_fixture": "error_invalid_token.json"
     },
     {
-      "name": "failed check under a strict limiter",
+      "name": "failed check after the limit",
       "world": "auth",
       "operation": "GET /api/v1/me",
       "path": "/api/v1/me",
       "auth": "unknown",
       "setup": "strict_limiter",
-      "status": 401,
-      "response_fixture": "error_invalid_token.json"
-    },
-    {
-      "name": "failed check while blocked",
-      "world": "auth",
-      "operation": "GET /api/v1/me",
-      "path": "/api/v1/me",
-      "auth": "unknown",
+      "prior_failures": 1,
       "status": 429,
       "response_fixture": "error_rate_limited.json",
       "response_headers": {

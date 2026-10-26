@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
 
 import pytest
@@ -69,9 +70,12 @@ async def _seed_world(world, state) -> dict[str, object]:
 _EXPENSES = ("fuel", "parking", "conflicted", "insurance", "old")
 
 
-async def _setup(name, state, refs, monkeypatch):
+@asynccontextmanager
+async def _setup(name, state, refs, patch):
+    """A condition that lasts for one case only."""
     if name == "strict_limiter":
-        state.app.state.api_auth_limiter = FailedAuthLimiter(1, 900)
+        patch.setattr(state.app.state, "api_auth_limiter", FailedAuthLimiter(1, 900))
+        yield
     elif name == "foreground_busy":
         original = AdmissionManager.operation
 
@@ -79,7 +83,8 @@ async def _setup(name, state, refs, monkeypatch):
             if lane == "foreground":
                 raise CapacityBusy("contract case")
             return original(manager, lane, *args, **kwargs)
-        monkeypatch.setattr(AdmissionManager, "operation", operation)
+        patch.setattr(AdmissionManager, "operation", operation)
+        yield
     elif name == "full_storage_other":
         async with state.raw.connection() as conn:
             used = (await (await conn.execute(
@@ -88,6 +93,10 @@ async def _setup(name, state, refs, monkeypatch):
             await conn.execute(
                 "UPDATE storage_grants SET limit_mode = 'custom', account_limit_bytes = %s, "
                 "raw_limit_bytes = NULL, enhancement_limit_bytes = NULL WHERE account_id = %s", (used, OTHER))
+        yield
+        async with state.raw.connection() as conn:
+            await conn.execute("UPDATE storage_grants SET limit_mode = 'default', account_limit_bytes = NULL "
+                               "WHERE account_id = %s", (OTHER,))
     elif name == "trip_in_progress":
         async with state.pools[state.owner].connection() as conn:
             device = await seed_tracking_device(conn, "car")
@@ -100,6 +109,10 @@ async def _setup(name, state, refs, monkeypatch):
                 "INSERT INTO trips (account_id, tracking_device_id, device, source, started_at, ended_at, "
                 "distance_m) VALUES (%s, %s, 'car', 'detected', now() - interval '10 minutes', "
                 "now() - interval '1 minute', 700) RETURNING id", (account_id(conn), device))).fetchone())[0]
+        yield
+        async with state.pools[state.owner].connection() as conn:
+            await conn.execute("DELETE FROM trips WHERE id = %s", (refs.pop("trip:in_progress"),))
+            await conn.execute("DELETE FROM points WHERE tracking_device_id = %s", (device,))
     else:
         raise AssertionError(f"unknown setup {name}")
 
@@ -137,6 +150,10 @@ def _ids(body) -> list:
 
 async def _replay(case, state, refs) -> tuple[list[str], object]:
     method, path, kwargs = _request(case, state, refs)
+    for _ in range(case.get("prior_failures", 0)):
+        prior = await state.client.request(method, _resolve(case["path"], refs), **kwargs)
+        if prior.status_code != 401:
+            return [f"prior request status {prior.status_code}, expected 401"], None
     template = re.escape(case["operation"].split(" ", 1)[1])
     assert re.fullmatch(re.sub(r"\\\{[a-z_]+\\\}", "[^/]+", template), path) or case["status"] == 404, path
     response = await state.client.request(method, path, **kwargs)
@@ -191,9 +208,9 @@ def _replay_world(world, monkeypatch):
     async def check(state):
         refs = await _seed_world(world, state)
         for case in cases:
-            if "setup" in case:
-                await _setup(case["setup"], state, refs, monkeypatch)
-            problems, body = await _replay(case, state, refs)
+            with monkeypatch.context() as patch:
+                async with (_setup(case["setup"], state, refs, patch) if "setup" in case else nullcontext()):
+                    problems, body = await _replay(case, state, refs)
             failures.extend(f"{case['name']}: {problem}" for problem in problems)
             if body is not None:
                 generated[case["name"]] = body
