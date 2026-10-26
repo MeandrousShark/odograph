@@ -256,7 +256,7 @@ def load_drill_workflow(uses: str) -> dict:
 
 
 def test_drill_bases_are_the_supported_releases():
-    assert json.loads(DRILL_BASES.read_text()) == ["v1.0.0"]
+    assert json.loads(DRILL_BASES.read_text()) == ["v1.0.0", "v1.1.0"]
 
 
 def test_preflight_and_published_drills_call_the_base_matrix_with_exact_candidate():

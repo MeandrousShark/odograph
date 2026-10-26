@@ -14,11 +14,12 @@ import hashlib
 from collections.abc import Iterable
 from math import ceil
 
-# Calibrated from the v1.0.0 release preflight: 1,155 db and 3,247 other cases,
-# suite 1,138 s; these constants estimate 1,165 s. Recheck them when a release
-# run's measured time differs from the estimate by more than 20 percent.
-DB_CENTISECONDS = 70
-OTHER_CENTISECONDS = 11
+# Calibrated from the slower v1.1.0 serial run (release `test`): 1,202 db and
+# 3,519 other cases, suite 1,039 s; these constants estimate 1,026 s. Recheck
+# them when a release run's measured time differs from the estimate by more
+# than 20 percent.
+DB_CENTISECONDS = 59
+OTHER_CENTISECONDS = 9
 
 # Model cost each CI shard is planned to hold, and the most shards one run
 # may queue.
