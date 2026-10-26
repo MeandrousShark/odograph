@@ -85,18 +85,19 @@ async def _setup(name, state, refs, patch):
             return original(manager, lane, *args, **kwargs)
         patch.setattr(AdmissionManager, "operation", operation)
         yield
-    elif name == "full_storage_other":
+    elif name in ("full_storage_owner", "full_storage_other"):
+        account = state.owner if name == "full_storage_owner" else OTHER
         async with state.raw.connection() as conn:
             used = (await (await conn.execute(
                 "SELECT actual_bytes + reserved_bytes FROM account_usage WHERE account_id = %s",
-                (OTHER,))).fetchone())[0]
+                (account,))).fetchone())[0]
             await conn.execute(
                 "UPDATE storage_grants SET limit_mode = 'custom', account_limit_bytes = %s, "
-                "raw_limit_bytes = NULL, enhancement_limit_bytes = NULL WHERE account_id = %s", (used, OTHER))
+                "raw_limit_bytes = NULL, enhancement_limit_bytes = NULL WHERE account_id = %s", (used, account))
         yield
         async with state.raw.connection() as conn:
             await conn.execute("UPDATE storage_grants SET limit_mode = 'default', account_limit_bytes = NULL "
-                               "WHERE account_id = %s", (OTHER,))
+                               "WHERE account_id = %s", (account,))
     elif name == "trip_in_progress":
         async with state.pools[state.owner].connection() as conn:
             device = await seed_tracking_device(conn, "car")

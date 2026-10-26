@@ -490,6 +490,57 @@
       "auth": "owner"
     },
     {
+      "name": "delete a detected trip at full storage",
+      "world": "trips",
+      "operation": "DELETE /api/v1/trips/{trip_id}",
+      "path": "/api/v1/trips/{trip:gapped}",
+      "auth": "owner",
+      "setup": "full_storage_owner",
+      "status": 409,
+      "response_fixture": "error_storage_full.json"
+    },
+    {
+      "name": "detected trip kept after a refused delete",
+      "world": "trips",
+      "operation": "GET /api/v1/trips/{trip_id}",
+      "path": "/api/v1/trips/{trip:gapped}",
+      "auth": "owner",
+      "status": 200,
+      "response_fixture": "trip_detail_gapped.json"
+    },
+    {
+      "name": "null start label on a detected trip",
+      "world": "trips",
+      "operation": "PATCH /api/v1/trips/{trip_id}",
+      "path": "/api/v1/trips/{trip:raw_only}",
+      "auth": "owner",
+      "body": {
+        "start_label": null
+      },
+      "status": 422,
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "start_label": "This can only be changed on a manual trip."
+          }
+        }
+      }
+    },
+    {
+      "name": "null start label on a routed manual trip",
+      "world": "trips",
+      "operation": "PATCH /api/v1/trips/{trip_id}",
+      "path": "/api/v1/trips/{trip:routed_manual}",
+      "auth": "owner",
+      "body": {
+        "start_label": null
+      },
+      "status": 200,
+      "response_fixture": "trip_detail_routed_manual.json"
+    },
+    {
       "name": "trip edit",
       "world": "trips",
       "operation": "PATCH /api/v1/trips/{trip_id}",
