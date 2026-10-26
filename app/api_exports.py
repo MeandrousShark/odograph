@@ -8,6 +8,7 @@ reports are web pages and are not offered here.
 """
 from __future__ import annotations
 
+import re
 from datetime import date
 from typing import Literal
 
@@ -16,7 +17,7 @@ from starlette.responses import Response
 
 from app.api_errors import ApiError, ApiErrorEnvelope
 from app.api_trips import (
-    MAX_INSTANT_YEAR, MIN_INSTANT_YEAR, Category, parse_day, parse_search, parse_vehicle,
+    MAX_INSTANT_YEAR, MIN_INSTANT_YEAR, Category, invalid_field, parse_day, parse_search, parse_vehicle,
 )
 from app.api_v1 import BEARER_HEADERS, ApiUser, require_api_report_user
 from app.capacity_routes import AdmissionRoute, capacity_policy
@@ -27,6 +28,7 @@ XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.s
 DATE_OUT_OF_RANGE = "Enter a date from 1900 through 9998."
 RANGE_REVERSED = "End the range on or after its start."
 RANGE_CROSSES_YEAR = "Keep the range within one calendar year."
+_YEAR = re.compile(r"[0-9]{4}")
 
 
 def _responses(*media_types: str) -> dict:
@@ -106,6 +108,9 @@ def make_router() -> APIRouter:
         year: int = Path(ge=MIN_INSTANT_YEAR, le=MAX_INSTANT_YEAR),
         api_user: ApiUser = Depends(require_api_report_user),
     ):
+        # The integer conversion accepts "+2026", "02026" and the like.
+        if not _YEAR.fullmatch(request.path_params["year"]):
+            raise invalid_field("year")
         from app.report_preparation import prepare_report
         return await _prepared(prepare_report(request, api_user.user, "annual_xlsx", year=year))
 
