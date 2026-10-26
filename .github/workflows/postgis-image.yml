@@ -11,6 +11,7 @@ on:
     paths:
       - docker/postgis/**
       - .github/workflows/postgis-image.yml
+      - scripts/db_image_identity.sh
       - scripts/release_preflight_smoke.sh
       - tests/test_postgis_image_workflow.py
   workflow_dispatch:
@@ -31,6 +32,8 @@ jobs:
     timeout-minutes: 40
     permissions:
       contents: read
+    outputs:
+      identity: ${{ steps.identity.outputs.identity }}
     env:
       LOCAL_IMAGE: odograph-postgis:test-${{ github.sha }}-amd64
       ARCHIVE: postgis-image-linux-amd64.tar
@@ -68,6 +71,14 @@ jobs:
           test "$(docker image inspect "$LOCAL_IMAGE" --format '{{.Architecture}}')" = "$EXPECTED_ARCH"
           test "$(docker image inspect "$LOCAL_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "https://github.com/MeandrousShark/odograph"
           test "$(docker image inspect "$LOCAL_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+      - name: Probe amd64 database identity
+        id: identity
+        run: |
+          set -euo pipefail
+          identity="$(CONTAINER_RUNTIME=docker scripts/db_image_identity.sh "$LOCAL_IMAGE")"
+          printf '%s\n' "$identity" > evidence/identity-amd64.txt
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
+          echo "linux/amd64 database identity: \`$identity\`" >> "$GITHUB_STEP_SUMMARY"
       - name: Scan amd64 archive
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -140,6 +151,8 @@ jobs:
     timeout-minutes: 40
     permissions:
       contents: read
+    outputs:
+      identity: ${{ steps.identity.outputs.identity }}
     env:
       LOCAL_IMAGE: odograph-postgis:test-${{ github.sha }}-arm64
       ARCHIVE: postgis-image-linux-arm64.tar
@@ -177,6 +190,14 @@ jobs:
           test "$(docker image inspect "$LOCAL_IMAGE" --format '{{.Architecture}}')" = "$EXPECTED_ARCH"
           test "$(docker image inspect "$LOCAL_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "https://github.com/MeandrousShark/odograph"
           test "$(docker image inspect "$LOCAL_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+      - name: Probe arm64 database identity
+        id: identity
+        run: |
+          set -euo pipefail
+          identity="$(CONTAINER_RUNTIME=docker scripts/db_image_identity.sh "$LOCAL_IMAGE")"
+          printf '%s\n' "$identity" > evidence/identity-arm64.txt
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
+          echo "linux/arm64 database identity: \`$identity\`" >> "$GITHUB_STEP_SUMMARY"
       - name: Scan arm64 archive
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -244,6 +265,38 @@ jobs:
           if-no-files-found: error
           retention-days: 2
 
+  identity:
+    needs:
+      - build-amd64
+      - build-arm64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      identity: ${{ steps.compare.outputs.identity }}
+    steps:
+      - name: Require one database identity on both architectures
+        id: compare
+        env:
+          AMD64_IDENTITY: ${{ needs.build-amd64.outputs.identity }}
+          ARM64_IDENTITY: ${{ needs.build-arm64.outputs.identity }}
+        run: |
+          set -euo pipefail
+          identity_re='^postgresql=[0-9.]+ postgis=[0-9.]+ geos=[0-9.]+ proj=[0-9.]+ glibc=[0-9.]+ icu=[0-9.]+$'
+          if [[ ! "$AMD64_IDENTITY" =~ $identity_re ]] || [[ ! "$ARM64_IDENTITY" =~ $identity_re ]]; then
+            echo "A build job reported no complete database identity" >&2
+            exit 1
+          fi
+          if [ "$AMD64_IDENTITY" != "$ARM64_IDENTITY" ]; then
+            echo "Architectures report different database identities:" >&2
+            echo "  linux/amd64: $AMD64_IDENTITY" >&2
+            echo "  linux/arm64: $ARM64_IDENTITY" >&2
+            exit 1
+          fi
+          echo "identity=$AMD64_IDENTITY" >> "$GITHUB_OUTPUT"
+          echo "Database identity on both architectures: \`$AMD64_IDENTITY\`" >> "$GITHUB_STEP_SUMMARY"
+
   publish:
     if: >-
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
@@ -251,6 +304,7 @@ jobs:
     needs:
       - build-amd64
       - build-arm64
+      - identity
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -339,6 +393,7 @@ jobs:
           IMAGE: ${{ env.IMAGE }}
           AMD64_DIGEST: ${{ steps.children.outputs.amd64_digest }}
           ARM64_DIGEST: ${{ steps.children.outputs.arm64_digest }}
+          IDENTITY: ${{ needs.identity.outputs.identity }}
         run: |
           set -euo pipefail
           docker buildx imagetools create \
@@ -359,6 +414,7 @@ jobs:
             echo "- manifest: \`$manifest_digest\`"
             echo "- linux/amd64: \`$AMD64_DIGEST\`"
             echo "- linux/arm64: \`$ARM64_DIGEST\`"
+            echo "- database identity: \`$IDENTITY\`"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Generate linux/amd64 SPDX SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
