@@ -816,3 +816,26 @@ def test_unstorable_text_and_undecodable_bodies_are_validation_failed(monkeypatc
         assert await _row(state, trip) == before and await _count(state) == 1
         assert commits.take() == []
     _run(check)
+
+
+def test_a_create_retry_after_its_vehicle_was_deleted_is_refused_not_replayed():
+    async def check(state):
+        async with state.pools[state.owner].connection() as conn:
+            vehicle = (await (await conn.execute(
+                "INSERT INTO vehicles (account_id, name) VALUES (%s, 'Loaner') RETURNING id",
+                (account_id(conn),))).fetchone())[0]
+        key = _key()
+        first = await _create(state, _create_body(vehicle_id=vehicle), key)
+        assert first.status_code == 201
+        await _sql(state, "DELETE FROM vehicles WHERE id = %s", (vehicle,))
+        # Validation runs before the key is looked up, so the retry is refused
+        # rather than replaying the trip it created.
+        retry = await _create(state, _create_body(vehicle_id=vehicle), key)
+        assert retry.status_code == 422
+        assert retry.json()["error"]["code"] == "validation_failed"
+        assert set(retry.json()["error"]["fields"]) == {"vehicle_id"}
+        assert "idempotent-replayed" not in retry.headers
+        async with state.raw.connection() as conn:
+            assert await (await conn.execute(
+                "SELECT count(*), min(vehicle_id) FROM trips WHERE idempotency_key = %s", (key,))).fetchone() == (1, None)
+    _run(check)
