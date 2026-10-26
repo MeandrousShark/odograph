@@ -9,6 +9,7 @@ from starlette.responses import Response
 
 from app import expense_ledger as ledger_service
 from app.auth import require_csrf, require_user
+from app.capacity_routes import mark_committed_write
 from app.page import render_page
 from app.expenses import (
     CATEGORY_LABELS,
@@ -136,7 +137,7 @@ def register(router: APIRouter) -> None:
                     await ledger_service.insert_expense(conn, expense)
                 except ExpenseValidationError as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from None
-            request.state._capacity_mutation_committed = True
+            mark_committed_write(request)
             return Response(status_code=204, headers={"HX-Redirect": f"/expenses?year={parsed_date.year}"})
 
         @router.post("/expenses/{expense_id}/update", dependencies=[Depends(require_csrf)])
@@ -164,7 +165,7 @@ def register(router: APIRouter) -> None:
                     await ledger_service.update_expense(conn, expense_id, values, write_unchanged=True)
                 except ExpenseValidationError as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from None
-            request.state._capacity_mutation_committed = True
+            mark_committed_write(request)
             return Response(status_code=204, headers={"HX-Redirect": f"/expenses?year={parsed_date.year}"})
 
         @router.post("/expenses/{expense_id}/delete", dependencies=[Depends(require_csrf)])
@@ -173,5 +174,5 @@ def register(router: APIRouter) -> None:
         ):
             async with request.state.account_pool.connection() as conn:
                 await ledger_service.delete_expense(conn, expense_id)
-            request.state._capacity_mutation_committed = True
+            mark_committed_write(request)
             return Response(status_code=204, headers={"HX-Redirect": "/expenses"})
