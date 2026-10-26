@@ -68,13 +68,14 @@ def test_debian_facts_give_the_canonical_identity(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == DEBIAN_IDENTITY + "\n"
-    assert runtime_args[:8] == [
+    assert runtime_args[:12] == [
         "run", "--rm", "--network", "none", "--read-only",
+        "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
         "--entrypoint", "/bin/sh", IMAGE,
     ]
-    assert runtime_args[8] == "-c"
+    assert runtime_args[12] == "-c"
     # No volume, environment or port reaches the probe container.
-    assert not {"-v", "--volume", "--mount", "-e", "--env", "-p", "--publish"} & set(runtime_args[:8])
+    assert not {"-v", "--volume", "--mount", "-e", "--env", "-p", "--publish"} & set(runtime_args[:12])
 
 
 def test_package_revisions_are_not_part_of_the_identity(tmp_path):

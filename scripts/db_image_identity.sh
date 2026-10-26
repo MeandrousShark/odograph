@@ -14,7 +14,8 @@
 #
 # The image runs with its entrypoint replaced by a shell that only reads
 # files and version output: no database server starts, no volume is mounted,
-# and the container has no network and a read-only root filesystem. Any
+# and the container has no network, no capabilities, no privilege escalation
+# and a read-only root filesystem. Any
 # component that cannot be determined fails the probe.
 #
 # Env vars:
@@ -134,6 +135,7 @@ parse_identity() {
 
 runtime="$(detect_runtime)"
 if ! FACTS="$("$runtime" run --rm --network none --read-only \
+    --cap-drop ALL --security-opt no-new-privileges \
     --entrypoint /bin/sh "$IMAGE" -c "$COLLECT" </dev/null)"; then
     die "could not run the image with $runtime"
 fi
