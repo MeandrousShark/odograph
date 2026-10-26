@@ -13,7 +13,7 @@ VERSION="$2"
 REVISION="$3"
 EVIDENCE="$4"
 DB_PLATFORM="${5:-linux/$(docker version --format '{{.Server.Arch}}')}"
-DB_IMAGE="${POSTGIS_IMAGE:-ghcr.io/meandrousshark/odograph-postgis@sha256:06b6d9eee52766e4b77f748a962612c8ef00343adba7c5ea09261bc223d1aa56}"
+DB_IMAGE="${POSTGIS_IMAGE:-ghcr.io/meandrousshark/odograph-postgis@sha256:4dc09eaaabbde791dee120e3fdb5f32cfd7d6c707a08cd38c1f9c7fe16b66982}"
 
 stamp="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}-${RUNNER_ARCH:-unknown}-$$"
 stamp="$(printf '%s' "$stamp" | tr '[:upper:]' '[:lower:]')"

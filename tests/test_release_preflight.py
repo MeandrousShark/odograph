@@ -197,7 +197,7 @@ def test_preflight_runs_full_policy_and_native_local_image_matrix():
     quality_steps = steps_by_name(quality)
 
     assert quality["services"]["postgres"]["image"] == (
-        "ghcr.io/meandrousshark/odograph-postgis@sha256:06b6d9eee52766e4b77f748a962612c8ef00343adba7c5ea09261bc223d1aa56"
+        "ghcr.io/meandrousshark/odograph-postgis@sha256:4dc09eaaabbde791dee120e3fdb5f32cfd7d6c707a08cd38c1f9c7fe16b66982"
     )
     assert quality_steps["Install pinned Gitleaks"]["env"]["GITLEAKS_VERSION"] == "8.30.1"
     assert "python -m pytest -q" in quality_steps["Run full locked test suite"]["run"]
@@ -232,7 +232,7 @@ def test_preflight_runs_full_policy_and_native_local_image_matrix():
     assert is_pinned(postgis_scan["uses"], "aquasecurity/trivy-action")
     assert postgis_scan["env"]["TRIVY_PLATFORM"] == "${{ matrix.platform }}"
     assert postgis_scan["with"] == {
-        "image-ref": "ghcr.io/meandrousshark/odograph-postgis@sha256:06b6d9eee52766e4b77f748a962612c8ef00343adba7c5ea09261bc223d1aa56",
+        "image-ref": "ghcr.io/meandrousshark/odograph-postgis@sha256:4dc09eaaabbde791dee120e3fdb5f32cfd7d6c707a08cd38c1f9c7fe16b66982",
         "format": "table",
         "output": "evidence/trivy-${{ matrix.architecture }}-postgis.txt",
         "exit-code": "1",
@@ -245,7 +245,7 @@ def test_preflight_runs_full_policy_and_native_local_image_matrix():
     smoke = steps["Smoke-test native application image"]
     assert smoke["env"]["ARCHITECTURE"] == "${{ matrix.architecture }}"
     assert smoke["env"]["POSTGIS_IMAGE"] == (
-        "ghcr.io/meandrousshark/odograph-postgis@sha256:06b6d9eee52766e4b77f748a962612c8ef00343adba7c5ea09261bc223d1aa56"
+        "ghcr.io/meandrousshark/odograph-postgis@sha256:4dc09eaaabbde791dee120e3fdb5f32cfd7d6c707a08cd38c1f9c7fe16b66982"
     )
     assert '"linux/${ARCHITECTURE}"' in smoke["run"]
 
@@ -310,6 +310,7 @@ def test_upgrade_drill_workflow_runs_every_base_and_selects_migration_mode():
     assert paths == [
         "migrations/**",
         "scripts/upgrade_check.sh",
+        "scripts/db_image_identity.sh",
         "scripts/upgrade_drill_bases.json",
         "scripts/backup_database.sh",
         "scripts/restore_database.sh",
@@ -357,7 +358,10 @@ def test_upgrade_drill_workflow_runs_every_base_and_selects_migration_mode():
     assert 'args=(--base "$BASE" --candidate "$REVISION")' in run
     assert 'args+=(--candidate-image "$CANDIDATE_IMAGE")' in run
     assert 'args+=(--database-image-migration)' in run
+    assert 'args+=(--database-image-swap)' in run
     assert '"${args[@]}" --database-image-migration' not in run
+    assert 'CONTAINER_RUNTIME=docker scripts/db_image_identity.sh "$base_db"' in run
+    assert 'CONTAINER_RUNTIME=docker scripts/db_image_identity.sh "$candidate_db"' in run
     assert 'COMPOSE_CMD="docker compose" scripts/upgrade_check.sh' in run
     assert 'tee "evidence/upgrade-drill-${BASE}.txt"' in run
 

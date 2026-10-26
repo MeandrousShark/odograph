@@ -28,6 +28,7 @@ def test_release_is_tag_only_repo_scoped_and_serialized_per_tag():
 
     prepare = workflow["jobs"]["prepare"]
     assert prepare["steps"][0]["with"]["ref"] == "${{ github.sha }}"
+    assert prepare["steps"][0]["with"]["fetch-depth"] == "0"
     validate = steps_by_name(prepare)["Validate tagged release inputs"]
     assert validate["env"]["REPOSITORY"] == "${{ github.repository }}"
     assert 'image="ghcr.io/${REPOSITORY,,}"' in validate["run"]
@@ -40,7 +41,7 @@ def test_release_is_tag_only_repo_scoped_and_serialized_per_tag():
 
     source = WORKFLOW.read_text()
     assert "ghcr.io/meandrousshark/odograph:" not in source.lower()
-    assert source.count("ghcr.io/meandrousshark/odograph-postgis@sha256:06b6d9eee52766e4b77f748a962612c8ef00343adba7c5ea09261bc223d1aa56") == 3
+    assert source.count("ghcr.io/meandrousshark/odograph-postgis@sha256:4dc09eaaabbde791dee120e3fdb5f32cfd7d6c707a08cd38c1f9c7fe16b66982") == 3
     assert ":latest" not in source
 
 
@@ -51,7 +52,7 @@ def test_release_test_gate_runs_full_postgis_suite_and_pip_audit():
     assert test["env"]["TEST_DATABASE_URL"].startswith("postgresql://")
     postgres = test["services"]["postgres"]
     assert postgres["image"] == (
-        "ghcr.io/meandrousshark/odograph-postgis@sha256:06b6d9eee52766e4b77f748a962612c8ef00343adba7c5ea09261bc223d1aa56"
+        "ghcr.io/meandrousshark/odograph-postgis@sha256:4dc09eaaabbde791dee120e3fdb5f32cfd7d6c707a08cd38c1f9c7fe16b66982"
     )
     assert "pg_isready" in postgres["options"]
 
@@ -142,7 +143,7 @@ def test_each_architecture_is_built_from_tagged_tree_and_scanned_by_digest():
         assert is_pinned(postgis_scan["uses"], "aquasecurity/trivy-action")
         assert postgis_scan["env"] == {"TRIVY_PLATFORM": platform}
         assert postgis_scan["with"] == {
-            "image-ref": "ghcr.io/meandrousshark/odograph-postgis@sha256:06b6d9eee52766e4b77f748a962612c8ef00343adba7c5ea09261bc223d1aa56",
+            "image-ref": "ghcr.io/meandrousshark/odograph-postgis@sha256:4dc09eaaabbde791dee120e3fdb5f32cfd7d6c707a08cd38c1f9c7fe16b66982",
             "format": "table",
             "exit-code": "1",
             "ignore-unfixed": "true",
