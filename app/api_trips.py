@@ -1,26 +1,28 @@
-"""API v1 trip reads: the archive, trip detail, the review queue, vehicles
-and recent purposes.
+"""API v1 trips: the archive, trip detail, the review queue, vehicles and
+recent purposes, and trip edits, manual creates and deletes.
 
-Every read goes through the services the web pages use. Unlike the web's
-forgiving query strings, filters accept only documented values: anything
-else is `validation_failed`, never silently "no filter".
+Every read and write goes through the services the web pages use. Unlike the
+web's forgiving query strings and forms, requests accept only documented
+values: anything else is `validation_failed`, never silently "no filter".
 """
 from __future__ import annotations
 
 import re
 import unicodedata
+import uuid
 from datetime import date, datetime, timedelta
-from typing import Literal
+from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Query, Request
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, Field
+from starlette.responses import JSONResponse, Response
 
 from app.api_cursor import decode_cursor, encode_cursor, filter_digest
 from app.api_errors import FIELD_INVALID, ApiError, ApiErrorEnvelope
 from app.api_grants import format_instant
 from app.api_v1 import ApiUser, require_api_user
-from app.capacity_routes import AdmissionRoute, capacity_policy
+from app.capacity_routes import AdmissionRoute, capacity_policy, mark_committed_write
 from app.expenses import expense_conflicts
 from app.places_desc import describe_endpoint
 from app.review_queue import next_review_trip, review_filter
@@ -29,6 +31,10 @@ from app.trip_queries import VEHICLE_FILTER_UNASSIGNED, TripFilter
 from app.trip_reads import (
     TripDetail, detail_for_trip, fetch_recent_purposes, fetch_trip_detail, route_parts,
 )
+from app.trip_writes import (
+    TIME_INVALID, VEHICLE_MISSING, IdempotencyKeyReused, ManualTripValidationError, create_manual_trip,
+    delete_trip, manual_trip_digest, update_trip, validate_manual_trip,
+)
 from app.vehicles import list_vehicles
 
 DEFAULT_PAGE_SIZE = 50
@@ -36,6 +42,15 @@ MAX_PAGE_SIZE = 200
 _DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 _VEHICLE_ID = re.compile(r"[1-9][0-9]{0,18}")
 _MAX_ID = 2**63 - 1
+_INSTANT = re.compile(
+    r"(\d{4}-\d{2}-\d{2})[Tt](\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?([Zz]|[+-]\d{2}:\d{2})")
+_UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+_INSTANT_FIELDS = ("started_at", "ended_at")
+# Instants in these years survive conversion to UTC and to any display zone.
+MIN_INSTANT_YEAR, MAX_INSTANT_YEAR = 1900, 9998
+TIME_OUT_OF_RANGE = "Enter a time from 1900 through 9998."
+IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
+IDEMPOTENT_REPLAYED_HEADER = "Idempotent-Replayed"
 
 
 class MultiLineString(BaseModel):
@@ -114,6 +129,50 @@ class ReviewResponse(BaseModel):
     trip: TripDetailResponse | None
     remaining: int
     next_cursor: str | None
+
+
+Category = Literal["business", "personal", "unclassified"]
+Exclusion = Literal["not_my_vehicle", "not_deductible"]
+# RFC 3339 with an offset, parsed by the handler so a number or a local time
+# is refused rather than coerced.
+Instant = Annotated[str, Field(json_schema_extra={"format": "date-time"})]
+
+
+class _WriteBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class TripPatch(_WriteBody):
+    """Only the fields present change. `null` clears a nullable field;
+    `category`, the times and `distance_m` cannot be null. Times, distance
+    and labels exist only on manual trips, and a label only on an endpoint
+    with no place or route."""
+
+    category: Category = None
+    purpose: str | None = None
+    notes: str | None = None
+    vehicle_id: int | None = None
+    exclusion: Exclusion | None = None
+    started_at: Instant = None
+    ended_at: Instant = None
+    distance_m: float = None
+    start_label: str | None = None
+    end_label: str | None = None
+
+
+class TripCreate(_WriteBody):
+    """A plain manual trip, with no route."""
+
+    started_at: Instant
+    ended_at: Instant
+    distance_m: float
+    category: Category = "unclassified"
+    purpose: str | None = None
+    notes: str | None = None
+    vehicle_id: int | None = None
+    exclusion: Exclusion | None = None
+    start_label: str | None = None
+    end_label: str | None = None
 
 
 class Vehicle(BaseModel):
@@ -217,6 +276,55 @@ def _summary_fields(row: dict, tz: ZoneInfo) -> dict:
     }
 
 
+def _instant(value: str) -> datetime | None:
+    match = _INSTANT.fullmatch(value)
+    if match is None:
+        return None
+    day, clock, fraction, offset = match.groups()
+    fraction = (fraction or "")[:6].ljust(6, "0")
+    offset = "+00:00" if offset in ("Z", "z") else offset
+    try:
+        return datetime.fromisoformat(f"{day}T{clock}.{fraction}{offset}")
+    except ValueError:
+        return None
+
+
+def _write_values(values: dict) -> dict:
+    """Parse instants, and refuse NUL, which no stored text can hold, and
+    ids no stored vehicle can have."""
+    problems = {}
+    for name, value in values.items():
+        if isinstance(value, str) and "\x00" in value:
+            problems[name] = FIELD_INVALID
+    vehicle_id = values.get("vehicle_id")
+    if vehicle_id is not None and not 1 <= vehicle_id <= _MAX_ID:
+        problems["vehicle_id"] = VEHICLE_MISSING
+    for name in _INSTANT_FIELDS:
+        if isinstance(values.get(name), str) and name not in problems:
+            parsed = _instant(values[name])
+            if parsed is None:
+                problems[name] = TIME_INVALID
+            elif not MIN_INSTANT_YEAR <= parsed.year <= MAX_INSTANT_YEAR:
+                problems[name] = TIME_OUT_OF_RANGE
+            else:
+                values[name] = parsed
+    if problems:
+        raise ApiError("validation_failed", fields=problems)
+    return values
+
+
+def _idempotency_key(value: str) -> uuid.UUID:
+    if not _UUID.fullmatch(value):
+        raise ApiError("validation_failed", fields={IDEMPOTENCY_KEY_HEADER: FIELD_INVALID})
+    return uuid.UUID(value)
+
+
+def _trip_id(trip_id: int) -> int:
+    if not 1 <= trip_id <= _MAX_ID:
+        raise ApiError("not_found")
+    return trip_id
+
+
 def _route(geojson: str | None) -> MultiLineString | None:
     parts = route_parts(geojson)
     return None if parts is None else MultiLineString(type="MultiLineString", coordinates=parts)
@@ -294,6 +402,66 @@ def make_router() -> APIRouter:
         if detail is None:
             raise ApiError("not_found")
         return _detail(detail, tz)
+
+    @router.patch("/api/v1/trips/{trip_id}", response_model=TripDetailResponse,
+                  responses=_errors(401, 404, 409, 413, 422, 429, 503))
+    @capacity_policy("form")
+    async def patch_trip(request: Request, trip_id: int, body: TripPatch,
+                         api_user: ApiUser = Depends(require_api_user)):
+        tz = request.state.config.display_tz
+        _trip_id(trip_id)
+        changes = _write_values(body.model_dump(include=body.model_fields_set))
+        async with request.state.account_pool.connection() as conn:
+            try:
+                written = await update_trip(conn, trip_id, changes)
+            except ManualTripValidationError as exc:
+                raise ApiError("validation_failed", fields=exc.errors) from None
+            detail = await fetch_trip_detail(conn, trip_id, tz)
+        if written:
+            mark_committed_write(request)
+        return _detail(detail, tz)
+
+    @router.delete("/api/v1/trips/{trip_id}", status_code=204, response_class=Response,
+                   responses=_errors(401, 404, 409, 413, 422, 429, 503))
+    @capacity_policy("form")
+    async def remove_trip(request: Request, trip_id: int, api_user: ApiUser = Depends(require_api_user)):
+        _trip_id(trip_id)
+        try:
+            async with request.state.account_pool.connection() as conn:
+                await delete_trip(conn, trip_id)
+        except HTTPException as exc:
+            if exc.status_code == 409:
+                raise ApiError("trip_in_progress") from None
+            raise
+        mark_committed_write(request)
+        return Response(status_code=204)
+
+    @router.post("/api/v1/trips", status_code=201, response_model=TripDetailResponse,
+                 responses={200: {"model": TripDetailResponse, "description": "Replayed"},
+                            **_errors(401, 409, 413, 422, 429, 503)})
+    @capacity_policy("foreground")
+    async def create_trip(
+        request: Request, body: TripCreate,
+        idempotency_key: str = Header(alias=IDEMPOTENCY_KEY_HEADER),
+        api_user: ApiUser = Depends(require_api_user),
+    ):
+        tz = request.state.config.display_tz
+        key = _idempotency_key(idempotency_key)
+        values = _write_values(body.model_dump())
+        async with request.state.account_pool.connection() as conn:
+            try:
+                trip = await validate_manual_trip(conn, values)
+                trip_id, created = await create_manual_trip(conn, trip, key, manual_trip_digest(trip))
+            except ManualTripValidationError as exc:
+                raise ApiError("validation_failed", fields=exc.errors) from None
+            except IdempotencyKeyReused:
+                raise ApiError("idempotency_key_reused") from None
+            detail = await fetch_trip_detail(conn, trip_id, tz)
+        content = _detail(detail, tz).model_dump(mode="json")
+        if not created:
+            return JSONResponse(content, status_code=200, headers={IDEMPOTENT_REPLAYED_HEADER: "true"})
+        mark_committed_write(request)
+        return JSONResponse(content, status_code=201, headers={"Location": f"/api/v1/trips/{trip_id}"})
 
     @router.get("/api/v1/review", response_model=ReviewResponse, responses=_errors(400, 401, 422, 429, 503))
     async def review_next(

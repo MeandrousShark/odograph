@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import math
 from dataclasses import dataclass
@@ -15,11 +14,13 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 
 from app.account_context import account_id
 from app.auth import require_csrf, require_user
+from app.capacity_routes import mark_committed_write
 from app.formatting import format_miles
 from app.page import render_page
 from app.rates import METERS_PER_MILE
 from app.snap import ProviderOutputTooLarge, route_distance_m, route_line
 from app.storage import storage_status
+from app.trip_writes import ManualTrip, distance_problem, insert_manual_trip
 from app.validation import parse_finite_number
 from app.vehicles import list_vehicles
 
@@ -129,7 +130,7 @@ def parse_manual_trip_input(
         distance_m = None
     else:
         distance_m = distance_miles * METERS_PER_MILE
-        if not math.isfinite(distance_m):
+        if distance_problem(distance_m):
             raise ManualTripValidationError(
                 {"distance": "Distance must be a positive finite number."}
             )
@@ -521,40 +522,20 @@ def register(router: APIRouter) -> None:
                     start_place_id = endpoints.start_place_id
                     end_place_id = endpoints.end_place_id
 
+            trip = ManualTrip(
+                started_at=started_at, ended_at=ended_at, distance_m=distance_m,
+                category=category, exclusion=exclusion or None,
+                purpose=purpose.strip() or None, notes=notes.strip() or None,
+                vehicle_id=parsed_vehicle_id,
+                start_label=normalized_labels["start_label"], end_label=normalized_labels["end_label"],
+                path_geojson=path_geojson, start_point=start_point, end_point=end_point,
+                start_place_id=start_place_id, end_place_id=end_place_id,
+            )
             async with request.state.account_pool.connection() as conn:
                 try:
-                    if path_geojson is not None:
-                        await conn.execute(
-                            "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m,"
-                            " category, exclusion, purpose, notes, vehicle_id, path, start_geom, end_geom,"
-                            " start_place_id, end_place_id, snap_status, start_label, end_label)"
-                            " VALUES (%s, 'manual', 'manual', %s, %s, %s, %s, %s, %s, %s, %s,"
-                            " ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326),"
-                            " ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,"
-                            " ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,"
-                            " %s, %s, NULL, %s, %s)",
-                            (account_id(conn), started_at, ended_at, distance_m, category, exclusion or None,
-                             purpose.strip() or None,
-                             notes.strip() or None, parsed_vehicle_id,
-                             json.dumps(path_geojson),
-                             start_point[0], start_point[1],
-                             end_point[0], end_point[1],
-                             start_place_id, end_place_id,
-                             normalized_labels["start_label"], normalized_labels["end_label"]),
-                        )
-                    else:
-                        await conn.execute(
-                            "INSERT INTO trips (account_id, device, source, started_at, ended_at, distance_m,"
-                            " category, exclusion, purpose, notes, vehicle_id, start_label, end_label)"
-                            " VALUES (%s, 'manual', 'manual', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                            (account_id(conn), started_at, ended_at, distance_m, category, exclusion or None,
-                             purpose.strip() or None,
-                             notes.strip() or None,
-                             parsed_vehicle_id,
-                             normalized_labels["start_label"], normalized_labels["end_label"]),
-                        )
+                    await insert_manual_trip(conn, trip)
                 except errors.ForeignKeyViolation:
                     raise HTTPException(status_code=400, detail="No such vehicle")
-            request.state._capacity_mutation_committed = True
+            mark_committed_write(request)
             redirect = "/trips" if notice is None else f"/trips?notice={notice}"
             return Response(status_code=204, headers={"HX-Redirect": redirect})

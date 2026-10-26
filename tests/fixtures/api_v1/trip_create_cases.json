@@ -1,0 +1,318 @@
+{
+  "description": "POST /api/v1/trips applied in order. Location carries the created trip's id.",
+  "vehicles": {
+    "2": "My Car"
+  },
+  "cases": [
+    {
+      "case": "created",
+      "headers": {
+        "Idempotency-Key": "00000000-0000-4000-8000-000000000001"
+      },
+      "request": {
+        "started_at": "2026-04-20T16:00:00Z",
+        "ended_at": "2026-04-20T16:30:00Z",
+        "distance_m": 6759.2448,
+        "category": "business",
+        "purpose": "Supplies run",
+        "notes": null,
+        "vehicle_id": 2,
+        "exclusion": null,
+        "start_label": "Office",
+        "end_label": "Hardware store"
+      },
+      "status": 201,
+      "response_headers": {
+        "location": "/api/v1/trips/8"
+      },
+      "response": {
+        "id": 8,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-20T16:00:00.000000Z",
+        "ended_at": "2026-04-20T16:30:00.000000Z",
+        "local_date": "2026-04-20",
+        "distance_m": 6759.2446,
+        "distance_raw_m": 6759.2446,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Supplies run",
+        "notes": null,
+        "vehicle_id": 2,
+        "vehicle_name": "My Car",
+        "start": {
+          "name": "Office",
+          "label": "Office",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Office"
+        },
+        "end": {
+          "name": "Hardware store",
+          "label": "Hardware store",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Hardware store"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "case": "replayed",
+      "headers": {
+        "Idempotency-Key": "00000000-0000-4000-8000-000000000001"
+      },
+      "request": {
+        "started_at": "2026-04-20T09:00:00-07:00",
+        "ended_at": "2026-04-20T16:30:00Z",
+        "distance_m": 6759.2448,
+        "category": "business",
+        "purpose": " Supplies run ",
+        "notes": null,
+        "vehicle_id": 2,
+        "exclusion": null,
+        "start_label": "Office",
+        "end_label": "Hardware store"
+      },
+      "status": 200,
+      "response_headers": {
+        "idempotent-replayed": "true"
+      },
+      "response": {
+        "id": 8,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-20T16:00:00.000000Z",
+        "ended_at": "2026-04-20T16:30:00.000000Z",
+        "local_date": "2026-04-20",
+        "distance_m": 6759.2446,
+        "distance_raw_m": 6759.2446,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "business",
+        "exclusion": null,
+        "purpose": "Supplies run",
+        "notes": null,
+        "vehicle_id": 2,
+        "vehicle_name": "My Car",
+        "start": {
+          "name": "Office",
+          "label": "Office",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Office"
+        },
+        "end": {
+          "name": "Hardware store",
+          "label": "Hardware store",
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "Hardware store"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    },
+    {
+      "case": "key_reused",
+      "headers": {
+        "Idempotency-Key": "00000000-0000-4000-8000-000000000001"
+      },
+      "request": {
+        "started_at": "2026-04-20T16:00:00Z",
+        "ended_at": "2026-04-20T16:30:00Z",
+        "distance_m": 7000.0,
+        "category": "business",
+        "purpose": "Supplies run",
+        "notes": null,
+        "vehicle_id": 2,
+        "exclusion": null,
+        "start_label": "Office",
+        "end_label": "Hardware store"
+      },
+      "status": 409,
+      "response_headers": {},
+      "response": {
+        "error": {
+          "code": "idempotency_key_reused",
+          "message": "This idempotency key was already used for a different request.",
+          "fields": null
+        }
+      }
+    },
+    {
+      "case": "key_missing",
+      "headers": {},
+      "request": {
+        "started_at": "2026-04-20T16:00:00Z",
+        "ended_at": "2026-04-20T16:30:00Z",
+        "distance_m": 6759.2448,
+        "category": "business",
+        "purpose": "Supplies run",
+        "notes": null,
+        "vehicle_id": 2,
+        "exclusion": null,
+        "start_label": "Office",
+        "end_label": "Hardware store"
+      },
+      "status": 422,
+      "response_headers": {},
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "Idempotency-Key": "This field is required."
+          }
+        }
+      }
+    },
+    {
+      "case": "key_malformed",
+      "headers": {
+        "Idempotency-Key": "not-a-uuid"
+      },
+      "request": {
+        "started_at": "2026-04-20T16:00:00Z",
+        "ended_at": "2026-04-20T16:30:00Z",
+        "distance_m": 6759.2448,
+        "category": "business",
+        "purpose": "Supplies run",
+        "notes": null,
+        "vehicle_id": 2,
+        "exclusion": null,
+        "start_label": "Office",
+        "end_label": "Hardware store"
+      },
+      "status": 422,
+      "response_headers": {},
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "Idempotency-Key": "This value is not valid."
+          }
+        }
+      }
+    },
+    {
+      "case": "invalid_body",
+      "headers": {
+        "Idempotency-Key": "00000000-0000-4000-8000-000000000002"
+      },
+      "request": {
+        "started_at": "2026-04-20T16:00:00Z",
+        "ended_at": "2026-04-20T16:30:00Z",
+        "distance_m": 0,
+        "category": "business",
+        "purpose": "Supplies run",
+        "notes": null,
+        "vehicle_id": 2,
+        "exclusion": null,
+        "start_label": "Office",
+        "end_label": "Hardware store"
+      },
+      "status": 422,
+      "response_headers": {},
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "distance_m": "Distance must be a positive finite number."
+          }
+        }
+      }
+    },
+    {
+      "case": "created_after_invalid",
+      "headers": {
+        "Idempotency-Key": "00000000-0000-4000-8000-000000000002"
+      },
+      "request": {
+        "started_at": "2026-04-20T16:00:00Z",
+        "ended_at": "2026-04-20T16:30:00Z",
+        "distance_m": 6759.2448,
+        "category": "personal",
+        "purpose": "Supplies run",
+        "notes": null,
+        "vehicle_id": 2,
+        "exclusion": null,
+        "start_label": null,
+        "end_label": null
+      },
+      "status": 201,
+      "response_headers": {
+        "location": "/api/v1/trips/11"
+      },
+      "response": {
+        "id": 11,
+        "source": "manual",
+        "imported": false,
+        "started_at": "2026-04-20T16:00:00.000000Z",
+        "ended_at": "2026-04-20T16:30:00.000000Z",
+        "local_date": "2026-04-20",
+        "distance_m": 6759.2446,
+        "distance_raw_m": 6759.2446,
+        "distance_snapped_m": null,
+        "snap_status": null,
+        "category": "personal",
+        "exclusion": null,
+        "purpose": "Supplies run",
+        "notes": null,
+        "vehicle_id": 2,
+        "vehicle_name": "My Car",
+        "start": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "--"
+        },
+        "end": {
+          "name": null,
+          "label": null,
+          "address": null,
+          "lat": null,
+          "lon": null,
+          "description": "--"
+        },
+        "has_gap": false,
+        "point_count": 0,
+        "has_route": false,
+        "expense_count": 0,
+        "route_raw": null,
+        "route_snapped": null,
+        "stays": [],
+        "has_previous_trip": false,
+        "has_next_trip": false,
+        "expenses": []
+      }
+    }
+  ]
+}

@@ -74,6 +74,12 @@ async def release_authentication(request):
         await release()
 
 
+def mark_committed_write(request) -> None:
+    """Record a committed write, so a busy stop after it reports the write
+    instead of a plain busy response."""
+    request.state._capacity_mutation_committed = True
+
+
 def capacity_policy(lane):
     """Declare an audited route policy when its router lives in another module."""
     def decorate(endpoint):
@@ -227,9 +233,10 @@ class AdmissionRoute(APIRoute):
                 return message
 
             active_receive = bounded_receive if body_timeout is not None else receive
-            if lane in ('auth_interactive', 'form') and scope['method'] == 'POST':
+            if lane in ('auth_interactive', 'form') and scope['method'] in ('POST', 'PATCH', 'DELETE'):
                 # Buffer only the bounded tiny form, so framework multipart cleanup
                 # never receives a timeout/overflow while it owns partial spools.
+                # API edits and deletes on this lane release it the same way.
                 body = bytearray()
                 disconnected = False
                 while True:
@@ -334,7 +341,7 @@ class AdmissionRoute(APIRoute):
                             file_cap = cfg.account_avatar_max_bytes if avatar_upload else cfg.portable_import_max_bytes
                             await invoke(file_cap + capacity_setting(manager, "capacity_multipart_overhead_bytes"),
                                          capacity_setting(manager, "capacity_import_body_timeout_s"))
-                        elif self.path in ('/trips/manual', '/trips/manual/route-preview') and scope['method'] == 'POST':
+                        elif self.path in ('/trips/manual', '/trips/manual/route-preview', '/api/v1/trips') and scope['method'] == 'POST':
                             await invoke(capacity_setting(manager, "capacity_auth_form_max_bytes"),
                                          capacity_setting(manager, "capacity_auth_body_timeout_s"))
                         else:
@@ -343,7 +350,7 @@ class AdmissionRoute(APIRoute):
         except (CapacityBusy, TimeoutError, PreparationBusy, PreparationResourceError):
             if response_started:
                 raise
-            if getattr(request.state, '_capacity_mutation_committed', False):
+            if not is_api_path(request.url.path) and getattr(request.state, '_capacity_mutation_committed', False):
                 response = Response(status_code=204, headers={'HX-Refresh': 'true'})
                 await response(scope, receive, send)
             else:

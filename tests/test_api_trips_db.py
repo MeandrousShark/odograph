@@ -402,7 +402,7 @@ def test_api_routes_authenticate_by_bearer_never_by_cookie():
             assert response.json() == _envelope("invalid_token")
             assert "set-cookie" not in response.headers
             assert (await _get(state, path)).status_code == 200
-        response = await state.client.post("/api/v1/trips", headers=_bearer(state.tokens[state.owner]))
+        response = await state.client.put("/api/v1/trips", headers=_bearer(state.tokens[state.owner]))
         assert response.status_code == 405
         assert response.json() == _envelope("method_not_allowed")
     _run(check)

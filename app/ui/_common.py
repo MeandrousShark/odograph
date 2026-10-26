@@ -8,7 +8,6 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException, Request
 from starlette.responses import Response
 
-from app.account_context import account_id
 from app.detector.core import haversine_m
 from app.trip_queries import (  # noqa: F401
     CATEGORIES,
@@ -27,6 +26,13 @@ from app.trip_queries import (  # noqa: F401
 )
 from app.trip_archive import month_bounds as _month_bounds  # noqa: F401
 from app.trip_reads import fetch_recent_purposes as _fetch_recent_purposes, fetch_trip  # noqa: F401
+from app.trip_writes import (  # noqa: F401
+    IN_PROGRESS_DETAIL,
+    TRIP_LABEL_MAX_LENGTH,
+    ManualTripValidationError,
+    normalize_trip_label,
+    refuse_in_progress_trips,
+)
 
 RULE_CATEGORIES = ("business", "personal")
 # One definition of these exact user-facing strings, so trip detail, review,
@@ -41,47 +47,6 @@ EXPORT_MEDIA_TYPES = {
     "csv": "text/csv",
     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 }
-
-
-class ManualTripValidationError(ValueError):
-    """Lives here (not app/ui/manual.py, which defines it conceptually)
-    because the trip-edit path in app/ui/trips.py needs to raise/catch the
-    same error class as manual-trip create, and app/ui/manual.py already
-    imports from this module -- defining it there instead would make this
-    module import back from manual.py, a cycle. app/ui/manual.py imports
-    this name from here so every existing `from app.ui.manual import
-    ManualTripValidationError` (including app/ui/__init__.py's re-export)
-    keeps working unchanged.
-    """
-    def __init__(self, errors: dict[str, str]):
-        super().__init__(next(iter(errors.values())))
-        self.errors = errors
-
-
-# Matches the database's own char_length cap on trips.start_label/end_label
-# (migrations/025_manual_trip_labels.sql) so a value this function accepts
-# can never be rejected by the constraint, and vice versa.
-TRIP_LABEL_MAX_LENGTH = 100
-
-
-def normalize_trip_label(value: str, field: str) -> str | None:
-    """Shared trim/blank/length handling for a manual trip's optional start
-    or end display label, used identically by manual create
-    (app/ui/manual.py) and trip edit (app/ui/trips.py) so a direct request
-    to either route sees the same behavior instead of two normalizers
-    silently drifting apart. Length is counted in characters, not bytes, so
-    a name written in a multi-byte script isn't penalized for its encoded
-    size -- the same reasoning the database constraint's `char_length`
-    (rather than `octet_length`) follows.
-    """
-    trimmed = value.strip()
-    if not trimmed:
-        return None
-    if len(trimmed) > TRIP_LABEL_MAX_LENGTH:
-        raise ManualTripValidationError(
-            {field: f"Keep it to {TRIP_LABEL_MAX_LENGTH} characters or fewer."}
-        )
-    return trimmed
 
 
 def parse_date_range(
@@ -191,38 +156,6 @@ def _month_page_url(
         f"/trips/month/{year}/{month}", from_str, to_str, vehicle, q,
         offset=offset, category=category, exclusion=exclusion,
     )
-
-
-IN_PROGRESS_DETAIL = "This trip is still in progress. Try again once it ends."
-
-
-async def refuse_in_progress_trips(conn, trip_ids: list[int]) -> None:
-    """Refuse an edit to a trip whose end the detector has not settled.
-
-    A trip ending at an arrival the detector has only provisionally accepted,
-    or kept while the drive goes on, can still grow: a discard override over
-    it could later hide the longer real trip, and a merge or split of it has
-    no settled trip to produce. Such a trip is its device's latest detected
-    trip and has no persisted stay at its end. A device that has sent nothing
-    for a day is not waiting on a next fix, so its trip is editable again.
-    Callers hold the detector lock.
-    """
-    cur = await conn.execute(
-        "SELECT 1 FROM trips t WHERE t.account_id = %s AND t.id = ANY(%s) "
-        "AND t.source = 'detected' AND NOT t.imported "
-        "AND NOT EXISTS (SELECT 1 FROM stays s WHERE s.account_id = t.account_id "
-        " AND s.tracking_device_id = t.tracking_device_id AND s.started_at = t.ended_at) "
-        "AND EXISTS (SELECT 1 FROM points p WHERE p.account_id = t.account_id "
-        " AND p.tracking_device_id = t.tracking_device_id "
-        " AND p.received_at > now() - interval '24 hours') "
-        "AND NOT EXISTS (SELECT 1 FROM trips l WHERE l.account_id = t.account_id "
-        " AND l.tracking_device_id = t.tracking_device_id AND l.source = 'detected' "
-        " AND NOT l.imported AND l.started_at > t.started_at) "
-        "LIMIT 1",
-        (account_id(conn), trip_ids),
-    )
-    if await cur.fetchone():
-        raise HTTPException(status_code=409, detail=IN_PROGRESS_DETAIL)
 
 
 async def _fetch_trip(pool, trip_id: int) -> dict:

@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "storage_full",
+    "message": "Storage is full. This change was not saved.",
+    "fields": null
+  }
+}

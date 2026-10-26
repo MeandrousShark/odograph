@@ -13,6 +13,7 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 
 from app.account_context import account_id
 from app.capacity import owned_thread
+from app.capacity_routes import mark_committed_write
 from app.config import DEFAULT_MISSING_TRIP_GAP_M
 from app.auth import require_csrf, require_user
 from app.page import _fetch_review_count, render_page, render_template
@@ -43,6 +44,12 @@ from app.trip_warnings import (
     current_fingerprints,
     unacknowledge as unacknowledge_warning,
 )
+from app.trip_writes import (
+    apply_human_tag as _apply_human_tag,
+    delete_trip as _delete_trip_in,
+    lock_trip,
+    update_locked_trip,
+)
 from app.vehicles import list_vehicles
 
 from app.ui._common import (
@@ -59,7 +66,6 @@ from app.ui._common import (
     _url_with_filters,
     normalize_trip_label,
     parse_date_range,
-    refuse_in_progress_trips,
 )
 from app.ui.manual import (
     MANUAL_ROUTE_UNAVAILABLE_NOTICE,
@@ -178,41 +184,6 @@ async def _submitted_label_fields(
     return values[0], values[1]
 
 
-async def _delete_trip_in(conn, trip_id: int) -> tuple[datetime, int]:
-    """Apply source-appropriate deletion and return the trip's old cursor.
-
-    Every delete entry point shares this helper so review and list/detail
-    cannot drift. The detector advisory lock is intentionally acquired before
-    reading the boundary timestamps: otherwise a background pass could rewrite
-    them between capture and the discard insert. For detected trips, the
-    durable discard and targeted row delete share the caller's transaction;
-    later detector passes honor the override without rewriting unrelated trips.
-    Manual trips remain a direct row DELETE.
-    """
-    await lock_detector(conn)
-    cur = await conn.execute(
-        "SELECT device, tracking_device_id, source::text, imported, started_at, ended_at "
-        "FROM trips WHERE id = %s AND account_id = %s FOR UPDATE",
-        (trip_id, account_id(conn)),
-    )
-    trip = await cur.fetchone()
-    if not trip:
-        raise HTTPException(status_code=404, detail="No such trip")
-    device, tracking_device_id, source, imported, started_at, ended_at = trip
-    if source == "manual" or imported:
-        await conn.execute("DELETE FROM trips WHERE id = %s AND account_id = %s", (trip_id, account_id(conn)))
-    else:
-        await refuse_in_progress_trips(conn, [trip_id])
-        await conn.execute(
-            "INSERT INTO trip_boundary_overrides "
-            "(account_id, tracking_device_id, device, kind, range_start, range_end) "
-            "VALUES (%s, %s, %s, 'discard', %s, %s) ON CONFLICT DO NOTHING",
-            (account_id(conn), tracking_device_id, device, started_at, ended_at),
-        )
-        await conn.execute("DELETE FROM trips WHERE id = %s AND account_id = %s", (trip_id, account_id(conn)))
-    return started_at, trip_id
-
-
 async def _trip_position(conn, trip_id: int) -> tuple[datetime, int] | None:
     """The `(started_at, id)` cursor a review pass advances past. Deliberately
     not filtered by category: tag-and-advance calls this on a trip that has
@@ -221,38 +192,6 @@ async def _trip_position(conn, trip_id: int) -> tuple[datetime, int] | None:
     than 404ing.
     """
     return await trip_position(conn, trip_id)
-
-
-async def _apply_human_tag(
-    conn, trip_id: int, category: str, purpose: str | None = None,
-    *, update_purpose: bool = False,
-) -> None:
-    """Set tag_source='human' unconditionally, even on a clear back to
-    'unclassified'. This is the load-bearing line for human-tag supremacy: the
-    auto-tagger (app.autotag) only touches rows with tag_source NULL or
-    'rule', so a deliberate human choice can never be overwritten by a rule.
-    Shared by the list-view tag buttons and /review's tag-and-advance so the
-    guarantee lives in one place; category validation stays with each caller
-    (the list view allows clearing to 'unclassified', review does not).
-
-    Checks rowcount and 404s if the row is gone: the detector's reconcile
-    deletes and reinserts trips it replaces, and without this guard a human
-    tag racing that delete would silently match zero rows and report success.
-    """
-    if update_purpose:
-        cur = await conn.execute(
-            "UPDATE trips SET category = %s, purpose = %s, tag_source = 'human', "
-            "updated_at = now() WHERE id = %s AND account_id = %s",
-            (category, (purpose or "").strip() or None, trip_id, account_id(conn)),
-        )
-    else:
-        cur = await conn.execute(
-            "UPDATE trips SET category = %s, tag_source = 'human', updated_at = now() "
-            "WHERE id = %s AND account_id = %s",
-            (category, trip_id, account_id(conn)),
-        )
-    if cur.rowcount == 0:
-        raise HTTPException(status_code=404, detail="No such trip")
 
 
 # Shared with the single-month recompute below so a month's trip_count/
@@ -921,144 +860,50 @@ def register(router: APIRouter) -> None:
                 "start_label": start_label or "",
                 "end_label": end_label or "",
             }
+            # Category, exclusion and vehicle existence are checked by the
+            # update service; only the form's own text parsing happens here.
             field_errors: dict[str, str] = {}
-            if category not in CATEGORIES:
-                field_errors["category"] = "Choose a valid category."
-            if exclusion and exclusion not in EXCLUSIONS:
-                field_errors["exclusion"] = "Choose a valid exclusion."
+            changes: dict[str, object] = {
+                "category": category, "exclusion": exclusion, "purpose": purpose, "notes": notes,
+            }
             try:
-                parsed_vehicle_id = int(vehicle_id) if vehicle_id else None
+                changes["vehicle_id"] = int(vehicle_id) if vehicle_id else None
             except ValueError:
-                parsed_vehicle_id = None
                 field_errors["vehicle_id"] = "Choose a valid vehicle."
-
-            normalized_purpose = purpose.strip() or None
-            normalized_notes = notes.strip() or None
             pool = request.state.account_pool
             try:
                 async with request.state.account_pool.connection() as conn:
                     async with conn.transaction():
-                        cur = conn.cursor(row_factory=dict_row)
-                        await cur.execute(
-                            "SELECT source::text AS source, category::text AS category, purpose, "
-                            "tag_source::text AS tag_source, start_place_id, end_place_id, "
-                            "start_geom IS NOT NULL AS has_start_geom, "
-                            "end_geom IS NOT NULL AS has_end_geom "
-                            "FROM trips WHERE id = %s AND account_id = %s FOR UPDATE",
-                            (trip_id, account_id(conn)),
-                        )
-                        stored = await cur.fetchone()
-                        if stored is None:
-                            raise HTTPException(status_code=404, detail="No such trip")
-
-                        if parsed_vehicle_id is not None and "vehicle_id" not in field_errors:
-                            vehicle_cur = await conn.execute(
-                                "SELECT 1 FROM vehicles WHERE id = %s AND account_id = %s", (parsed_vehicle_id, account_id(conn))
-                            )
-                            if await vehicle_cur.fetchone() is None:
-                                field_errors["vehicle_id"] = "Choose a vehicle that still exists."
-
-                        # A label only names an endpoint that has nothing
-                        # else naming it (see migrations/025_manual_trip_labels.sql):
-                        # a detected trip or a routed manual trip's endpoint
-                        # already has a saved place or geometry describing
-                        # it, so a nonblank label submitted for one is
-                        # rejected rather than silently dropped. Checked per
-                        # endpoint, matching the database constraint's own
-                        # per-column shape rather than assuming the two
-                        # endpoints are always equally eligible.
-                        label_eligible = {
-                            "start_label": (
-                                stored["source"] == "manual"
-                                and stored["start_place_id"] is None
-                                and not stored["has_start_geom"]
-                            ),
-                            "end_label": (
-                                stored["source"] == "manual"
-                                and stored["end_place_id"] is None
-                                and not stored["has_end_geom"]
-                            ),
-                        }
-                        # A field this request never submitted (raw_value is
-                        # None from `_submitted_label_fields`) is left out
-                        # of `normalized_labels` entirely, and the
-                        # UPDATE below only assigns the columns present in
-                        # that dict, so an absent field leaves the stored
-                        # label untouched. A field that *was* submitted,
-                        # even blank, still normalizes to None and clears
-                        # it, matching the add/change/clear behavior the
-                        # plan requires.
-                        normalized_labels: dict[str, str | None] = {}
+                        stored = await lock_trip(conn, trip_id)
+                        manual = stored["source"] == "manual"
+                        # A label field this request never submitted (None
+                        # from `_submitted_label_fields`) stays out of the
+                        # changes, so the stored label is left alone. A
+                        # submitted blank clears a manual trip's label; on a
+                        # detected trip it means nothing and is dropped,
+                        # while a nonblank one is refused by the service.
                         for field, raw_value in (
                             ("start_label", start_label), ("end_label", end_label),
                         ):
-                            if raw_value is None:
+                            if raw_value is None or (not manual and not raw_value.strip()):
                                 continue
+                            changes[field] = raw_value
+                        if manual:
                             try:
-                                normalized_labels[field] = normalize_trip_label(raw_value, field)
-                            except ManualTripValidationError as exc:
-                                field_errors.update(exc.errors)
-                                continue
-                            if normalized_labels[field] is not None and not label_eligible[field]:
-                                field_errors[field] = (
-                                    "Location names are only available for a trip with no route."
-                                )
-
-                        manual_values = None
-                        if stored["source"] == "manual":
-                            try:
-                                manual_values = parse_manual_trip_input(
+                                started_at, ended_at, distance_m = parse_manual_trip_input(
                                     date, start_time, end_time, distance,
                                     request.state.config.display_tz,
                                 )
                             except ManualTripValidationError as exc:
                                 field_errors.update(exc.errors)
-
-                        if field_errors:
-                            raise ManualTripValidationError(field_errors)
-
-                        tag_source = stored["tag_source"]
-                        if category != stored["category"] or normalized_purpose != stored["purpose"]:
-                            tag_source = "human"
-                        try:
-                            if stored["source"] == "manual":
-                                assert manual_values is not None
-                                # Only assign the label columns that were
-                                # actually submitted (present in
-                                # `normalized_labels`), so an omitted field
-                                # is excluded from the SET clause entirely
-                                # and its stored value is left alone rather
-                                # than overwritten with NULL.
-                                label_clauses: list[str] = []
-                                label_params: list[str | None] = []
-                                for field in ("start_label", "end_label"):
-                                    if field in normalized_labels:
-                                        label_clauses.append(f"{field} = %s")
-                                        label_params.append(normalized_labels[field])
-                                await conn.execute(
-                                    "UPDATE trips SET started_at = %s, ended_at = %s, distance_m = %s, "
-                                    "category = %s, exclusion = %s, purpose = %s, notes = %s, vehicle_id = %s"
-                                    + "".join(f", {clause}" for clause in label_clauses)
-                                    + ", tag_source = %s, updated_at = now() WHERE id = %s AND account_id = %s",
-                                    (*manual_values, category, exclusion or None,
-                                     normalized_purpose, normalized_notes,
-                                     parsed_vehicle_id,
-                                     *label_params,
-                                     tag_source, trip_id, account_id(conn)),
-                                )
                             else:
-                                await conn.execute(
-                                    "UPDATE trips SET category = %s, exclusion = %s, purpose = %s, notes = %s, "
-                                    "vehicle_id = %s, tag_source = %s, updated_at = now() WHERE id = %s AND account_id = %s",
-                                    (category, exclusion or None, normalized_purpose, normalized_notes,
-                                     parsed_vehicle_id,
-                                     tag_source, trip_id, account_id(conn)),
-                                )
-                        except errors.ForeignKeyViolation:
-                            raise ManualTripValidationError(
-                                {"vehicle_id": "Choose a vehicle that still exists."}
-                            )
-                request.state._capacity_mutation_committed = True
+                                changes.update(started_at=started_at, ended_at=ended_at,
+                                               distance_m=distance_m)
+                        await update_locked_trip(
+                            conn, trip_id, stored, changes,
+                            write_unchanged=True, prior_errors=field_errors,
+                        )
+                mark_committed_write(request)
             except ManualTripValidationError as exc:
                 ctx = await _fetch_trip_card_context(pool, trip_id)
                 ctx.update({"values": values, "errors": exc.errors})
@@ -1292,7 +1137,7 @@ def register(router: APIRouter) -> None:
             pool = request.state.account_pool
             async with request.state.account_pool.connection() as conn:
                 await _apply_human_tag(conn, trip_id, category)
-            request.state._capacity_mutation_committed = True
+            mark_committed_write(request)
             if dashboard_week:
                 # Importing here avoids coupling the trips module's import
                 # path to stats while the router is assembled.
@@ -1456,14 +1301,8 @@ def register(router: APIRouter) -> None:
         ):
             pool = request.state.account_pool
             async with request.state.account_pool.connection() as conn:
-                cur = await conn.execute(
-                    "UPDATE trips SET purpose = %s, tag_source = 'human', updated_at = now() "
-                    "WHERE id = %s AND account_id = %s",
-                    (purpose.strip() or None, trip_id, account_id(conn)),
-                )
-                if cur.rowcount == 0:
-                    raise HTTPException(status_code=404, detail="No such trip")
-            request.state._capacity_mutation_committed = True
+                await _apply_human_tag(conn, trip_id, None, purpose)
+            mark_committed_write(request)
             ctx = await _fetch_trip_card_context(pool, trip_id)
             return _mark_archive_write(
                 await render_template(
@@ -1508,7 +1347,7 @@ def register_delete(router: APIRouter) -> None:
         ):
             async with request.state.account_pool.connection() as conn:
                 await _delete_trip_in(conn, trip_id)
-            request.state._capacity_mutation_committed = True
+            mark_committed_write(request)
             if dashboard_week:
                 return Response(status_code=200, headers={"HX-Refresh": "true"})
             if fragment:

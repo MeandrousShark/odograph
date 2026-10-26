@@ -23,7 +23,9 @@ from pathlib import Path
 import pytest
 
 from app.api_errors import ApiErrorEnvelope
-from app.api_trips import PurposeList, ReviewResponse, TripDetailResponse, TripPage, VehicleList
+from app.api_trips import (
+    PurposeList, ReviewResponse, TripCreate, TripDetailResponse, TripPage, TripPatch, VehicleList,
+)
 from app.api_v1 import CapabilitiesResponse, MeResponse, TokenRequest, TokenResponse
 
 FIXTURES = Path(__file__).parent / "fixtures" / "api_v1"
@@ -284,10 +286,28 @@ def test_comparator_rejects_incompatible_changes(mutate, expected):
     ("review_response.json", ReviewResponse),
     ("vehicles_response.json", VehicleList),
     ("purposes_response.json", PurposeList),
+    ("trip_patch_request.json", TripPatch),
+    ("trip_create_request.json", TripCreate),
+    ("trip_create_response.json", TripDetailResponse),
+    ("error_idempotency_key_reused.json", ApiErrorEnvelope),
+    ("error_storage_full.json", ApiErrorEnvelope),
+    ("error_trip_in_progress.json", ApiErrorEnvelope),
 ])
 def test_synthetic_fixtures_match_their_models(filename, model):
     data = json.loads((FIXTURES / filename).read_text())
     parsed = model.model_validate(data)
-    if not filename.startswith("token_request"):
+    if "_request" not in filename:
         # Every documented response field is present, null rather than omitted.
         assert parsed.model_dump(mode="json") == data
+
+
+@pytest.mark.parametrize("filename,request_model", [
+    ("trip_patch_cases.json", TripPatch),
+    ("trip_create_cases.json", TripCreate),
+])
+def test_write_case_fixtures_match_their_models(filename, request_model):
+    for case in json.loads((FIXTURES / filename).read_text())["cases"]:
+        response_model = TripDetailResponse if case["status"] < 400 else ApiErrorEnvelope
+        assert response_model.model_validate(case["response"]).model_dump(mode="json") == case["response"]
+        if case["status"] < 400:
+            request_model.model_validate(case["request"])

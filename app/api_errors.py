@@ -28,6 +28,9 @@ ERRORS = {
     "method_not_allowed": (405, "This method is not allowed here."),
     "payload_too_large": (413, "The request body is too large."),
     "internal_error": (500, "The server could not complete the request."),
+    "idempotency_key_reused": (409, "This idempotency key was already used for a different request."),
+    "storage_full": (409, "Storage is full. This change was not saved."),
+    "trip_in_progress": (409, "This trip is still in progress. Try again once it ends."),
 }
 # Framework HTTP errors on API paths, answered in the envelope.
 HTTP_STATUS_CODES = {404: "not_found", 405: "method_not_allowed", 413: "payload_too_large"}
@@ -80,7 +83,7 @@ def _validation_fields(exc: RequestValidationError) -> dict[str, str]:
     for error in exc.errors():
         location = tuple(error.get("loc") or ())
         kind = error.get("type", "")
-        path = location[1:] if location[:1] in (("body",), ("query",), ("path",)) else location
+        path = location[1:] if location[:1] in (("body",), ("query",), ("path",), ("header",)) else location
         if kind in ("json_invalid", "model_attributes_type", "dict_type") or not path:
             fields.setdefault("body", BODY_NOT_JSON)
             continue

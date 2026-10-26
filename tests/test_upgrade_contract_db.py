@@ -13,6 +13,7 @@ security disabled; migration 028 must activate it.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
 from dataclasses import replace
@@ -553,9 +554,11 @@ def test_warning_ack_upgrade_keeps_contract_without_reprovisioning(monkeypatch, 
             await prepare_application_roles(TEST_DB)
             async with pool.connection() as conn:
                 assert await (await conn.execute(
-                    "SELECT MAX(version) FROM schema_migrations")).fetchone() == (50,)
-                assert await (await conn.execute(
-                    "SELECT row_to_json(t)::text FROM trips t WHERE id=%s", (trip_id,))).fetchone() == (trip_before,)
+                    "SELECT MAX(version) FROM schema_migrations")).fetchone() == (51,)
+                # Later migrations add nullable trip columns; every earlier value is unchanged.
+                assert json.loads((await (await conn.execute(
+                    "SELECT row_to_json(t)::text FROM trips t WHERE id=%s", (trip_id,))).fetchone())[0]) == {
+                        **json.loads(trip_before), "idempotency_key": None, "idempotency_digest": None}
                 assert await (await conn.execute(
                     "SELECT relrowsecurity,relforcerowsecurity FROM pg_class "
                     "WHERE oid='public.trip_warning_acks'::regclass")).fetchone() == (True, True)
@@ -742,7 +745,100 @@ def test_api_grant_list_upgrade_keeps_contract_without_reprovisioning(monkeypatc
                         await conn.execute("SELECT * FROM public.api_grant_list(42)")
             async with pool.connection() as conn:
                 assert await (await conn.execute(
-                    "SELECT MAX(version) FROM schema_migrations")).fetchone() == (50,)
+                    "SELECT MAX(version) FROM schema_migrations")).fetchone() == (51,)
+                assert await (await conn.execute("SELECT public.storage_usage_consistent()")).fetchone() == (True,)
+        finally:
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
+            await pool.close()
+    asyncio.run(scenario())
+
+
+def test_create_idempotency_upgrade_keeps_contract_without_reprovisioning(monkeypatch, tmp_path):
+    async def scenario():
+        from app.account_context import AccountPool, AccountPrincipal
+        pool = make_pool(TEST_DB)
+        await pool.open(wait=True)
+        try:
+            await drop_and_recreate_schema(pool)
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR",
+                                _migration_dir(tmp_path, "before_create_idempotency", through=50))
+            await run_migrations(pool)
+            await prepare_application_roles(TEST_DB)
+            async with pool.connection() as conn:
+                for account in (43, 44):
+                    await conn.execute(
+                        "INSERT INTO accounts(id,email,password_hash,is_admin) "
+                        "VALUES(%s,%s,'unused',true)", (account, f"upgrade-keys-{account}@example.invalid"))
+                vehicle = (await (await conn.execute(
+                    "INSERT INTO vehicles(account_id,name) VALUES(43,'Car') RETURNING id")).fetchone())[0]
+                trip_id = (await (await conn.execute(
+                    "INSERT INTO trips(account_id,device,source,started_at,ended_at,distance_m,notes) "
+                    "VALUES(43,'manual','manual','2026-07-01T10:00Z','2026-07-01T11:00Z',100,'kept') "
+                    "RETURNING id")).fetchone())[0]
+                expense_id = (await (await conn.execute(
+                    "INSERT INTO expenses(account_id,vehicle_id,incurred_on,category,amount,treatment) "
+                    "VALUES(43,%s,'2026-07-01','fuel',12.34,'business_use_allocated') RETURNING id",
+                    (vehicle,))).fetchone())[0]
+                rows_before = {
+                    table: json.loads((await (await conn.execute(
+                        sql.SQL("SELECT row_to_json(t)::text FROM {} t WHERE id=%s").format(
+                            sql.Identifier(table)), (row_id,))).fetchone())[0])
+                    for table, row_id in (("trips", trip_id), ("expenses", expense_id))}
+                before = (await (await conn.execute(
+                    "SELECT actual_bytes,reserved_bytes,raw_bytes,enhancement_bytes "
+                    "FROM account_usage WHERE account_id=43")).fetchone())
+            monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
+            await run_migrations(pool)
+
+            async def forbidden_reprovision(conn):
+                raise AssertionError("upgrade must validate rather than provision")
+
+            monkeypatch.setattr(application_roles, "_provision", forbidden_reprovision)
+            await prepare_application_roles(TEST_DB)
+            async with pool.connection() as conn:
+                for table, row_id in (("trips", trip_id), ("expenses", expense_id)):
+                    after = json.loads((await (await conn.execute(
+                        sql.SQL("SELECT row_to_json(t)::text FROM {} t WHERE id=%s").format(
+                            sql.Identifier(table)), (row_id,))).fetchone())[0])
+                    assert after == {**rows_before[table], "idempotency_key": None, "idempotency_digest": None}
+                assert await (await conn.execute(
+                    "SELECT actual_bytes,reserved_bytes,raw_bytes,enhancement_bytes "
+                    "FROM account_usage WHERE account_id=43")).fetchone() == before
+                assert await (await conn.execute("SELECT public.storage_usage_consistent()")).fetchone() == (True,)
+            key, digest = "6f1c2c8e-8d1e-4c55-9b7a-0d3f9a1e2b4c", b"\x01" * 32
+            insert = ("INSERT INTO trips(account_id,device,source,started_at,ended_at,distance_m,"
+                      "idempotency_key,idempotency_digest) VALUES(%s,'manual','manual',"
+                      "'2026-07-02T10:00Z','2026-07-02T11:00Z',100,%s,%s)")
+            async with application_roles.application_role_pools(TEST_DB) as roles:
+                owner = AccountPool(roles.runtime, AccountPrincipal(43, True, 1))
+                other = AccountPool(roles.runtime, AccountPrincipal(44, True, 1))
+                async with owner.connection() as conn:
+                    await conn.execute(insert, (43, None, None))
+                async with pool.connection() as conn:
+                    plain = (await (await conn.execute(
+                        "SELECT actual_bytes FROM account_usage WHERE account_id=43")).fetchone())[0]
+                async with owner.connection() as conn:
+                    await conn.execute(insert, (43, key, digest))
+                async with pool.connection() as conn:
+                    keyed = (await (await conn.execute(
+                        "SELECT actual_bytes FROM account_usage WHERE account_id=43")).fetchone())[0]
+                # The key is not charged: a keyed create costs what a plain one does.
+                assert keyed - plain == plain - before[0]
+                with pytest.raises(errors.UniqueViolation):
+                    async with owner.connection() as conn:
+                        await conn.execute(insert, (43, key, b"\x02" * 32))
+                with pytest.raises(errors.CheckViolation):
+                    async with owner.connection() as conn:
+                        await conn.execute(insert, (43, "0f1c2c8e-8d1e-4c55-9b7a-0d3f9a1e2b4c", None))
+                with pytest.raises(errors.CheckViolation):
+                    async with owner.connection() as conn:
+                        await conn.execute(insert, (43, "1f1c2c8e-8d1e-4c55-9b7a-0d3f9a1e2b4c", b"\x01"))
+                async with other.connection() as conn:
+                    await conn.execute(insert, (44, key, digest))
+            async with pool.connection() as conn:
+                assert await (await conn.execute(
+                    "SELECT account_id, count(*) FROM trips WHERE idempotency_key=%s "
+                    "GROUP BY account_id ORDER BY account_id", (key,))).fetchall() == [(43, 1), (44, 1)]
                 assert await (await conn.execute("SELECT public.storage_usage_consistent()")).fetchone() == (True,)
         finally:
             monkeypatch.setattr(db_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)

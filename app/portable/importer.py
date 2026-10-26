@@ -43,7 +43,8 @@ log = logging.getLogger(__name__)
 # limit editor functions. Schema 48 adds API grants, authentication state the
 # bundle never carries. Schema 49 adds mobile authorization requests and
 # codes, which it never carries either. Schema 50 adds the signed-in apps
-# list function.
+# list function. Schema 51 adds create idempotency keys on trips and
+# expenses, which the bundle leaves out.
 # None changes the portable bundle.
 # Keep the tuples explicit so a future migration never becomes cross-schema
 # compatible merely because its version is adjacent.
@@ -141,6 +142,13 @@ _COMPATIBLE_SCHEMA_TRANSITIONS = {
     (3, 36, 50), (3, 37, 50), (3, 38, 50), (3, 39, 50), (3, 40, 50),
     (3, 41, 50), (3, 42, 50), (3, 43, 50), (3, 44, 50), (3, 45, 50),
     (3, 46, 50), (3, 47, 50), (3, 48, 50), (3, 49, 50), (3, 50, 50),
+    (1, 21, 51), (2, 22, 51), (2, 23, 51), (2, 24, 51), (2, 25, 51),
+    (3, 26, 51), (3, 27, 51), (3, 28, 51), (3, 29, 51), (3, 30, 51),
+    (3, 31, 51), (3, 32, 51), (3, 33, 51), (3, 34, 51), (3, 35, 51),
+    (3, 36, 51), (3, 37, 51), (3, 38, 51), (3, 39, 51), (3, 40, 51),
+    (3, 41, 51), (3, 42, 51), (3, 43, 51), (3, 44, 51), (3, 45, 51),
+    (3, 46, 51), (3, 47, 51), (3, 48, 51), (3, 49, 51), (3, 50, 51),
+    (3, 51, 51),
 }
 
 
