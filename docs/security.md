@@ -114,10 +114,10 @@ Every network-reachable route, and what actually guards it:
   [Mobile app sign-in and signed-in apps](accounts.md#mobile-app-sign-in-and-signed-in-apps).
   The data routes (trips, review, vehicles, purposes, dashboard, Stats,
   expenses, exports and reports) act only on the token's account and answer
-  404 for another account's records. They run under the same capacity limits
-  as the matching web pages, and an export or report is prepared completely,
-  within the web's preparation budgets, before its first byte is sent. A
-  browser session cookie never authenticates an `/api/` request.
+  404 for another account's records. Exports and reports share the web
+  downloads' admission, preparation budgets and cleanup, and each file is
+  prepared completely before its first byte is sent. A browser session cookie
+  never authenticates an `/api/` request.
 - **`/signup`**: reachable only when `INITIAL_ADMIN_SIGNUP=1`, no account
   exists, and development auth bypass is off. The first successful transaction
   creates the administrator. A durable bootstrap marker then closes public
