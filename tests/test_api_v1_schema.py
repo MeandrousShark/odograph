@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from app.api_errors import ApiErrorEnvelope
+from app.api_errors import ERRORS, ApiErrorEnvelope
 from app.api_expenses import Expense, ExpenseComparison, ExpenseCreate, ExpensePage, ExpensePatch
 from app.api_stats import StatsResponse, WeekDashboardResponse
 from app.api_trips import (
@@ -446,3 +446,15 @@ def test_write_case_fixtures_match_their_models(filename, request_model, record_
         assert response_model.model_validate(case["response"]).model_dump(mode="json") == case["response"]
         if case["status"] < 400:
             request_model.model_validate(case["request"])
+
+
+def test_every_error_code_has_a_fixture_with_its_registry_message():
+    codes = set()
+    for path in sorted(FIXTURES.glob("error_*.json")):
+        data = json.loads(path.read_text())
+        assert ApiErrorEnvelope.model_validate(data).model_dump(mode="json") == data, path.name
+        error = data["error"]
+        assert error["message"] == ERRORS[error["code"]][1], path.name
+        codes.add(error["code"])
+    assert codes == set(ERRORS)
+    assert all((FIXTURES / f"error_{code}.json").exists() for code in ERRORS)

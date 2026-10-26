@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "rate_limited",
+    "message": "Too many failed attempts. Try again later.",
+    "fields": null
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "internal_error",
+    "message": "The server could not complete the request.",
+    "fields": null
+  }
+}

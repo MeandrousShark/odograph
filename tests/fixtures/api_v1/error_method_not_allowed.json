@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "method_not_allowed",
+    "message": "This method is not allowed here.",
+    "fields": null
+  }
+}
