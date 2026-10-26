@@ -751,3 +751,41 @@ def test_instants_outside_the_display_safe_years_write_nothing():
         assert (await _api(state, "GET", "/api/v1/trips")).status_code == 200
         assert (await state.client.get("/trips")).status_code == 200
     _run(check)
+
+
+def test_distances_a_real_cannot_hold_are_validation_errors(monkeypatch):
+    async def check(state):
+        commits = _Commits(monkeypatch)
+        manual = await _insert(state, BASE)
+        before = await _row(state, manual)
+        refused = {"distance_m": "Distance must be a positive finite number."}
+        for distance in (1e300, 3.5e38, 1e-50):
+            response = await _create(state, _create_body(distance_m=distance))
+            assert (response.status_code, response.json()["error"]["fields"]) == (422, refused), distance
+            response = await _api(state, "PATCH", f"/api/v1/trips/{manual}", body={"distance_m": distance})
+            assert (response.status_code, response.json()["error"]["fields"]) == (422, refused), distance
+        # The web form gives its normal distance error instead of a 500.
+        for miles in ("3e35", "1e-50"):
+            response = await _web(state, "/trips/manual", {
+                "date": "2026-04-20", "start_time": "09:00", "end_time": "09:30", "distance": miles})
+            assert (response.status_code, response.json()) == (400, {"detail": "Invalid distance"}), miles
+            response = await _web(state, f"/trips/{manual}/edit", {
+                **_web_edit_form(before), "date": "2026-04-14", "start_time": "08:00",
+                "end_time": "08:05", "distance": miles})
+            assert response.status_code == 200
+            assert "Distance must be a positive finite number." in response.text
+        assert await _count(state) == 1
+        assert await _row(state, manual) == before
+        assert commits.take() == []
+    _run(check)
+
+
+def test_review_tag_with_an_overflowing_vehicle_id_is_a_bad_request():
+    async def check(state):
+        trip = await _detected(state, BASE)
+        before = await _row(state, trip)
+        response = await _web(state, f"/review/{trip}/tag", {
+            "category": "business", "vehicle_id": str(2**64)})
+        assert (response.status_code, response.json()) == (400, {"detail": "No such vehicle"})
+        assert await _row(state, trip) == before
+    _run(check)
