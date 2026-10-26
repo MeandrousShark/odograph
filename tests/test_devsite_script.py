@@ -20,6 +20,7 @@ exercised for real rather than simulated.
 from __future__ import annotations
 
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -31,6 +32,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "devsite.sh"
+DEFAULT_DB_IMAGE = re.search(r"\$\{DEVSITE_DB_IMAGE:-([^}]+)\}", SCRIPT.read_text())[1]
 TEST_DB_SCRIPT = REPO_ROOT / "scripts" / "test_db.sh"
 
 _FAKE_PODMAN_SCRIPT = """#!/usr/bin/env bash
@@ -59,10 +61,38 @@ case "$1" in
             *) echo "unexpected podman command: $*" >&2; exit 2 ;;
         esac
         ;;
-    run) printf 'devsite-container\\n'; exit 0 ;;
+    run)
+        case " $* " in
+            *" --entrypoint "*)
+                # The identity probe: image $8. Any image other than the
+                # container's reports a newer PostgreSQL when asked to.
+                [ "$8" != "${FAKE_PODMAN_UNPROBEABLE_IMAGE:-}" ] || exit 125
+                version=16.15
+                if [ -n "${FAKE_PODMAN_NEW_IDENTITY:-}" ] && [ "$8" != "$FAKE_PODMAN_CONTAINER_IMAGE" ]; then
+                    version=16.16
+                fi
+                printf '%s\\n' \
+                    "postgres_version=postgres (PostgreSQL) $version (Debian $version-1.pgdg12+2)" \
+                    "postgis_default_version=default_version = '3.6.4'" \
+                    "postgis_library=/usr/lib/postgresql/16/lib/postgis-3.so" \
+                    "geos_library=libgeos.so.3.11.1" \
+                    "proj_library=libproj.so.25.9.8.1" \
+                    "icu_library=libicuuc.so.72.1" \
+                    "glibc_version=glibc 2.36"
+                exit 0
+                ;;
+        esac
+        printf 'devsite-container\\n'; exit 0 ;;
     start) exit 0 ;;
     stop) exit 0 ;;
-    inspect) printf '%s\\n' "${FAKE_PODMAN_CONTAINER_RUNNING:-false}"; exit 0 ;;
+    rm) exit 0 ;;
+    inspect)
+        case "$*" in
+            *ImageName*) printf '%s\\n' "$FAKE_PODMAN_CONTAINER_IMAGE" ;;
+            *) printf '%s\\n' "${FAKE_PODMAN_CONTAINER_RUNNING:-false}" ;;
+        esac
+        exit 0
+        ;;
     exec) exit "${FAKE_PODMAN_EXEC_EXIT:-0}" ;;
     logs) printf 'fake db log line\\n'; exit 0 ;;
     *) echo "unexpected podman command: $*" >&2; exit 2 ;;
@@ -135,6 +165,7 @@ def _base_env(tmp_path: Path, bin_dir: Path, log: Path, **overrides: str) -> dic
         **os.environ,
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "FAKE_PODMAN_LOG": str(log),
+        "FAKE_PODMAN_CONTAINER_IMAGE": DEFAULT_DB_IMAGE,
         "DEVSITE_STATE_DIR": str(tmp_path / "state"),
         "DEVSITE_ENV_FILE": str(tmp_path / ".env.devsite"),
         "DEVSITE_DB_PORT": "15432",
@@ -268,6 +299,72 @@ def test_up_does_not_recreate_an_already_running_database_container(tmp_path):
     assert not any(line.startswith("run -d") for line in lines)
     assert not any(line.startswith("start ") for line in lines)
     assert "already running" in result.stdout
+
+
+def _image_change_env(tmp_path: Path, **overrides: str) -> tuple[dict[str, str], Path]:
+    bin_dir, log = _fake_podman(tmp_path)
+    settings = {
+        "DEVSITE_UVICORN": str(tmp_path / "no-such-uvicorn"),
+        "FAKE_PODMAN_CONTAINER_EXISTS": "0",
+        "FAKE_PODMAN_CONTAINER_RUNNING": "true",
+        "FAKE_PODMAN_CONTAINER_IMAGE": "registry.example.test/postgis@sha256:" + "1" * 64,
+        "DEVSITE_DB_IMAGE": "registry.example.test/postgis@sha256:" + "2" * 64,
+        **overrides,
+    }
+    return _base_env(tmp_path, bin_dir, log, **settings), log
+
+
+def _probes(lines: list[str]) -> list[str]:
+    return [line.split()[7] for line in lines if line.startswith("run ") and " --entrypoint " in line]
+
+
+def test_up_moves_the_qa_volume_to_a_same_identity_database_image(tmp_path):
+    env, log = _image_change_env(tmp_path)
+
+    result = _run_devsite(tmp_path, "up", env=env)
+
+    assert result.returncode == 1  # still fails fast at the missing uvicorn
+    assert "on its existing volume (same identity: postgresql=16.15" in result.stdout
+    lines = log.read_text().splitlines()
+    assert _probes(lines) == [env["FAKE_PODMAN_CONTAINER_IMAGE"], env["DEVSITE_DB_IMAGE"]]
+    stop = lines.index("stop odograph-devsite-db")
+    remove = lines.index("rm odograph-devsite-db")
+    create = next(i for i, line in enumerate(lines) if line.startswith("run -d --name odograph-devsite-db"))
+    assert stop < remove < create
+    assert "-v odograph-devsite-dbdata:/var/lib/postgresql/data" in lines[create]
+    assert lines[create].endswith(" " + env["DEVSITE_DB_IMAGE"])
+    assert not any(line.startswith(("volume create", "volume rm")) for line in lines)
+    assert [line for line in lines if line.startswith("rm ")] == ["rm odograph-devsite-db"]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"FAKE_PODMAN_NEW_IDENTITY": "1"}, "refusing to attach a different database identity"),
+        (
+            {"FAKE_PODMAN_UNPROBEABLE_IMAGE": "registry.example.test/postgis@sha256:" + "2" * 64},
+            "could not compare the database identities",
+        ),
+    ],
+)
+def test_up_refuses_a_database_image_change_it_cannot_prove_safe(tmp_path, overrides, message):
+    env, log = _image_change_env(tmp_path, **overrides)
+
+    result = _run_devsite(tmp_path, "up", env=env)
+
+    assert result.returncode == 1
+    assert message in result.stderr
+    lines = log.read_text().splitlines()
+    assert not any(line.startswith(("stop ", "rm ", "run -d", "start ", "volume ")) for line in lines)
+
+
+def test_up_does_not_probe_an_unchanged_database_image(tmp_path):
+    env, log = _image_change_env(tmp_path, DEVSITE_DB_IMAGE="registry.example.test/postgis@sha256:" + "1" * 64)
+
+    result = _run_devsite(tmp_path, "up", env=env)
+
+    assert "already running" in result.stdout
+    assert _probes(log.read_text().splitlines()) == []
 
 
 def test_migrate_and_reseed_refuse_without_an_env_file(tmp_path):
