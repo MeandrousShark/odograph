@@ -285,10 +285,6 @@ async def delete_expense(conn, expense_id: int) -> None:
         raise ExpenseNotFound()
 
 
-# ---------------------------------------------------------------------------
-# Reads
-
-
 async def fetch_expense(conn, expense_id: int) -> dict | None:
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(

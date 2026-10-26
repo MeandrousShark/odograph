@@ -20,11 +20,11 @@ from starlette.responses import JSONResponse, Response
 
 from app.api_cursor import decode_cursor, encode_cursor, filter_digest
 from app.api_common import (
-    IDEMPOTENCY_KEY_HEADER, IDEMPOTENT_REPLAYED_HEADER, MAX_YEAR, MIN_YEAR, error_responses, unstorable_fields,
-    year_in_range,
+    IDEMPOTENCY_KEY_HEADER, IDEMPOTENT_REPLAYED_HEADER, MAX_YEAR, MIN_YEAR, api_day, current_year,
+    error_responses, money, unstorable_fields,
 )
 from app.api_common import idempotency_key as parse_idempotency_key
-from app.api_errors import FIELD_INVALID, ApiError
+from app.api_errors import ApiError
 from app.api_v1 import ApiUser, require_api_user
 from app.capacity_routes import AdmissionRoute, capacity_policy, mark_committed_write
 from app.expense_ledger import (
@@ -37,10 +37,9 @@ from app.report_data import build_comparison, fetch_comparison_inputs
 
 DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 200
-_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 # Digits with an optional fraction; the shared rule then limits it to whole
 # cents within the column's range.
-_AMOUNT = re.compile(r"\d{1,20}(?:\.\d{1,20})?")
+_AMOUNT = re.compile(r"[0-9]{1,20}(?:\.[0-9]{1,20})?")
 _MAX_ID = 2**63 - 1
 
 ExpenseCategory = Literal[EXPENSE_CATEGORIES]
@@ -124,27 +123,6 @@ class ExpenseComparison(BaseModel):
     allocated_total: str
     fully_business_total: str
     ledger_total: str
-
-
-def money(value: Decimal | float | None) -> str | None:
-    return None if value is None else format(value, ".2f")
-
-
-def api_day(field: str, value: str) -> date:
-    """A `YYYY-MM-DD` date in the accepted years, or `validation_failed`."""
-    parsed = None
-    if _DAY.fullmatch(value):
-        try:
-            parsed = date.fromisoformat(value)
-        except ValueError:
-            pass
-    if parsed is None or not year_in_range(parsed.year):
-        raise ApiError("validation_failed", fields={field: FIELD_INVALID})
-    return parsed
-
-
-def current_year(request: Request) -> int:
-    return datetime.now(request.state.config.display_tz).year
 
 
 def _write_values(values: dict) -> dict:

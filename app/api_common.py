@@ -1,11 +1,15 @@
 """Request rules shared by the API v1 resource routes: the years every date,
 instant and year parameter accepts, text the database can store,
-idempotency keys on creates, and the error responses documented for an
-operation."""
+idempotency keys on creates, money formatting, and the error responses
+documented for an operation."""
 from __future__ import annotations
 
 import re
 import uuid
+from datetime import date, datetime
+from decimal import Decimal
+
+from fastapi import Request
 
 from app.api_errors import FIELD_INVALID, ApiError, ApiErrorEnvelope
 
@@ -14,6 +18,7 @@ from app.api_errors import FIELD_INVALID, ApiError, ApiErrorEnvelope
 MIN_YEAR, MAX_YEAR = 1900, 9998
 IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
 IDEMPOTENT_REPLAYED_HEADER = "Idempotent-Replayed"
+_DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 _UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 
@@ -38,6 +43,27 @@ def unstorable_fields(values: dict) -> dict[str, str]:
     column can hold."""
     return {name: FIELD_INVALID for name, value in values.items()
             if isinstance(value, str) and not storable_text(value)}
+
+
+def api_day(field: str, value: str) -> date:
+    """A `YYYY-MM-DD` date in the accepted years, or `validation_failed`."""
+    parsed = None
+    if _DAY.fullmatch(value):
+        try:
+            parsed = date.fromisoformat(value)
+        except ValueError:
+            pass
+    if parsed is None or not year_in_range(parsed.year):
+        raise ApiError("validation_failed", fields={field: FIELD_INVALID})
+    return parsed
+
+
+def current_year(request: Request) -> int:
+    return datetime.now(request.state.config.display_tz).year
+
+
+def money(value: Decimal | float | None) -> str | None:
+    return None if value is None else format(value, ".2f")
 
 
 def idempotency_key(value: str) -> uuid.UUID:

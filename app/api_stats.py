@@ -13,8 +13,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
 
-from app.api_common import MAX_YEAR, MIN_YEAR, error_responses
-from app.api_expenses import api_day, current_year, money
+from app.api_common import MAX_YEAR, MIN_YEAR, api_day, current_year, error_responses, money
 from app.api_v1 import ApiUser, require_api_user
 from app.capacity_routes import AdmissionRoute, capacity_policy
 from app.stats import CATEGORIES as STATS_CATEGORIES

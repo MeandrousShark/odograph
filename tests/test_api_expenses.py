@@ -11,7 +11,8 @@ import pytest
 
 from app.api_cursor import decode_cursor, encode_cursor, filter_digest
 from app.api_errors import ApiError
-from app.api_expenses import _write_values, api_day
+from app.api_common import api_day
+from app.api_expenses import _write_values
 from app.api_stats import _stats
 from app.expense_ledger import Expense, expense_digest, parse_expense_amount, resolve_treatment
 from app.stats_queries import stats_period, summarize_stats
