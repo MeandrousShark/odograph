@@ -5,31 +5,83 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 from pathlib import Path
 
-from release_notes import ReleaseNotesError, extract_release_notes
+from release_notes import HEADING_RE, ReleaseNotesError, extract_release_notes
+
+
+# A release whose db image differs from the previous release's names the kind
+# of change in its changelog section, in one of these phrases.
+DB_IMAGE_REBUILD_PHRASE = "rebuilt with unchanged versions"
+DB_IMAGE_MIGRATION_PHRASE = "database-image migration"
 
 
 class ReleaseContractError(ValueError):
     pass
 
 
-def _app_image(compose_text: str) -> str:
-    in_app = False
+def _service_image(compose_text: str, service: str) -> str:
+    in_service = False
     for line in compose_text.splitlines():
         if re.fullmatch(r"  [A-Za-z0-9_-]+:", line):
-            in_app = line == "  app:"
+            in_service = line == f"  {service}:"
             continue
-        if in_app:
+        if in_service:
             match = re.fullmatch(r"    image:\s*(\S+)\s*", line)
             if match:
                 return match.group(1)
-    raise ReleaseContractError("compose.yaml has no app image")
+    raise ReleaseContractError(f"compose.yaml has no {service} image")
+
+
+def _app_image(compose_text: str) -> str:
+    return _service_image(compose_text, "app")
+
+
+def _previous_release(changelog: str, tag: str) -> str | None:
+    """The release whose changelog section follows this tag's, if any."""
+    version = tag.removeprefix("v")
+    found = False
+    for line in changelog.splitlines():
+        heading = HEADING_RE.fullmatch(line)
+        if not heading:
+            continue
+        if found and re.fullmatch(r"\d+\.\d+\.\d+", heading.group("version")):
+            return f"v{heading.group('version')}"
+        found = found or heading.group("version") == version
+    return None
+
+
+def _validate_db_image_change(root: Path, changelog: str, tag: str, body: str) -> None:
+    previous = _previous_release(changelog, tag)
+    if previous is None:
+        return
+    result = subprocess.run(
+        ["git", "-C", str(root), "show", f"{previous}^{{commit}}:compose.yaml"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise ReleaseContractError(
+            f"cannot read compose.yaml at the previous release tag {previous}; "
+            "check out full history with tags"
+        )
+    previous_image = _service_image(result.stdout, "db")
+    current_image = _service_image((root / "compose.yaml").read_text(), "db")
+    if previous_image == current_image:
+        return
+    text = " ".join(body.split()).lower()
+    if DB_IMAGE_REBUILD_PHRASE not in text and DB_IMAGE_MIGRATION_PHRASE not in text:
+        raise ReleaseContractError(
+            f"the db image changed since {previous}, so the {tag} changelog section "
+            f"must say either {DB_IMAGE_REBUILD_PHRASE!r} or {DB_IMAGE_MIGRATION_PHRASE!r}"
+        )
 
 
 def validate_release_contract(root: Path, tag: str, image: str) -> None:
     changelog = (root / "CHANGELOG.md").read_text()
-    extract_release_notes(changelog, tag)
+    notes = extract_release_notes(changelog, tag)
+    _validate_db_image_change(root, changelog, tag, notes.body)
 
     expected_image = f"{image}:{tag}"
     actual_image = _app_image((root / "compose.yaml").read_text())

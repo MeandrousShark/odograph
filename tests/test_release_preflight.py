@@ -310,6 +310,7 @@ def test_upgrade_drill_workflow_runs_every_base_and_selects_migration_mode():
     assert paths == [
         "migrations/**",
         "scripts/upgrade_check.sh",
+        "scripts/db_image_identity.sh",
         "scripts/upgrade_drill_bases.json",
         "scripts/backup_database.sh",
         "scripts/restore_database.sh",
@@ -357,7 +358,10 @@ def test_upgrade_drill_workflow_runs_every_base_and_selects_migration_mode():
     assert 'args=(--base "$BASE" --candidate "$REVISION")' in run
     assert 'args+=(--candidate-image "$CANDIDATE_IMAGE")' in run
     assert 'args+=(--database-image-migration)' in run
+    assert 'args+=(--database-image-swap)' in run
     assert '"${args[@]}" --database-image-migration' not in run
+    assert 'CONTAINER_RUNTIME=docker scripts/db_image_identity.sh "$base_db"' in run
+    assert 'CONTAINER_RUNTIME=docker scripts/db_image_identity.sh "$candidate_db"' in run
     assert 'COMPOSE_CMD="docker compose" scripts/upgrade_check.sh' in run
     assert 'tee "evidence/upgrade-drill-${BASE}.txt"' in run
 

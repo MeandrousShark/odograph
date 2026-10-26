@@ -18,6 +18,9 @@
 # `up` is idempotent: running it twice never starts a second database
 # container or a second uvicorn process. `down` stops both and leaves the
 # database's named volume in place, so a following `up` sees the same data.
+# When the database image changes, `up` moves the existing volume to it only
+# if both images report the same database identity
+# (scripts/db_image_identity.sh), and refuses otherwise.
 #
 # The QA database is named mileage_devsite, never mileage, so it falls
 # outside tests/conftest.py's reset allowlist and a stray TEST_DATABASE_URL
@@ -192,8 +195,11 @@ create_db_container() {
         exit 1
     fi
     podman volume create "$DB_VOLUME" >/dev/null
+    run_db_container
+}
 
-    local db_password
+run_db_container() {
+    local image="${1:-$DB_IMAGE}" db_password
     db_password="$(db_password_from_url "$DATABASE_URL")"
 
     echo "Creating QA database container ($DB_CONTAINER) on 127.0.0.1:$DB_PORT..."
@@ -202,14 +208,74 @@ create_db_container() {
         -e POSTGRES_DB="$DB_NAME" -e POSTGRES_USER="$DB_USER" -e POSTGRES_PASSWORD="$db_password" \
         -v "$DB_VOLUME:/var/lib/postgresql/data" \
         -p "127.0.0.1:$DB_PORT:5432" \
-        "$DB_IMAGE" >/dev/null
+        "$image" >/dev/null
+}
+
+db_identity() {
+    CONTAINER_RUNTIME=podman "$REPO_ROOT/scripts/db_image_identity.sh" "$1"
+}
+
+# A new DB_IMAGE keeps the QA volume only when it reports the same database
+# identity as the container's image (scripts/db_image_identity.sh); the
+# container is then recreated on the same named volume. Any other change
+# needs a verified backup and a fresh volume.
+replace_db_container_image() {
+    local current="$1" current_identity new_identity
+    if ! current_identity="$(db_identity "$current")" || ! new_identity="$(db_identity "$DB_IMAGE")"; then
+        echo "error: could not compare the database identities of $current and $DB_IMAGE; leaving the QA database as it is." >&2
+        exit 1
+    fi
+    if [ "$current_identity" != "$new_identity" ]; then
+        echo "error: QA database $DB_CONTAINER runs $current ($current_identity), but $DB_IMAGE reports $new_identity; refusing to attach a different database identity to existing data." >&2
+        echo "Use a verified backup and a fresh volume. See docs/backups.md." >&2
+        exit 1
+    fi
+    echo "Moving the QA database to $DB_IMAGE on its existing volume (same identity: $new_identity)..."
+    local was_running=0
+    if db_container_running; then
+        was_running=1
+        podman stop "$DB_CONTAINER" >/dev/null
+    fi
+    # The old container stays until the new one can take the port, so a
+    # refusal here leaves the QA site exactly as it was.
+    if port_in_use "127.0.0.1" "$DB_PORT"; then
+        echo "error: port $DB_PORT (QA database) is already in use. Set DEVSITE_DB_PORT to use a different one." >&2
+        if [ "$was_running" -eq 1 ]; then
+            podman start "$DB_CONTAINER" >/dev/null || true
+        fi
+        exit 1
+    fi
+    podman rm "$DB_CONTAINER" >/dev/null
+    if run_db_container "$DB_IMAGE"; then
+        return
+    fi
+    echo "error: could not start $DB_IMAGE on $DB_VOLUME; recreating the QA database from $current." >&2
+    # Only this script's failed new container can hold the name now.
+    if db_container_exists; then
+        podman rm -f "$DB_CONTAINER" >/dev/null || true
+    fi
+    if ! run_db_container "$current"; then
+        echo "error: could not recreate $DB_CONTAINER from $current; its volume $DB_VOLUME is intact. Recreate the container from $current on that volume by hand." >&2
+        exit 1
+    fi
+    if [ "$was_running" -eq 0 ]; then
+        podman stop "$DB_CONTAINER" >/dev/null || true
+    fi
+    exit 1
 }
 
 # Used by `up`: create the persistent container on first run, otherwise
-# start the existing one if it isn't already running. Never removes or
-# recreates an existing container, so its named volume's data is untouched.
+# start the existing one if it isn't already running. An existing container
+# is recreated only for a same-identity DB_IMAGE change, and never with its
+# named volume, so the volume's data is untouched.
 start_or_create_db_container() {
+    local current
     if db_container_exists; then
+        current="$(podman inspect -f '{{.ImageName}}' "$DB_CONTAINER")"
+        if [ "$current" != "$DB_IMAGE" ]; then
+            replace_db_container_image "$current"
+            return
+        fi
         if db_container_running; then
             echo "QA database container already running."
         else

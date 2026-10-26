@@ -26,6 +26,7 @@ on:
     paths:
       - migrations/**
       - scripts/upgrade_check.sh
+      - scripts/db_image_identity.sh
       - scripts/upgrade_drill_bases.json
       - scripts/backup_database.sh
       - scripts/restore_database.sh
@@ -116,11 +117,20 @@ jobs:
           if [ -n "$CANDIDATE_IMAGE" ]; then
             args+=(--candidate-image "$CANDIDATE_IMAGE")
           fi
-          # Migration mode applies only when the db image changed; the script
-          # rejects the flag for an unchanged image.
+          # A changed db image swaps on the existing volume only when both
+          # images report the same database identity; any other change takes
+          # the fresh-volume migration. The script rejects either flag for an
+          # unchanged image, and a probe that fails stops the drill.
           if [ "$base_db" != "$candidate_db" ]; then
-            echo "db image changed ($base_db -> $candidate_db): database image migration mode"
-            args+=(--database-image-migration)
+            base_identity="$(CONTAINER_RUNTIME=docker scripts/db_image_identity.sh "$base_db")"
+            candidate_identity="$(CONTAINER_RUNTIME=docker scripts/db_image_identity.sh "$candidate_db")"
+            if [ "$base_identity" = "$candidate_identity" ]; then
+              echo "db image rebuilt ($base_db -> $candidate_db) with the same identity ($base_identity): database image swap mode"
+              args+=(--database-image-swap)
+            else
+              echo "db image changed ($base_db -> $candidate_db), identity $base_identity -> $candidate_identity: database image migration mode"
+              args+=(--database-image-migration)
+            fi
           else
             echo "db image unchanged ($base_db): standard mode"
           fi

@@ -1,3 +1,5 @@
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -30,6 +32,7 @@ def test_workflow_only_builds_for_scoped_changes_and_serializes_refs():
     ]
     pull_request_paths = [
         *push_paths,
+        "scripts/db_image_identity.sh",
         "scripts/release_preflight_smoke.sh",
         "tests/test_postgis_image_workflow.py",
     ]
@@ -88,12 +91,23 @@ def test_native_build_jobs_build_scan_and_test_the_same_archive(
     build = steps[f"Build {arch} archive"]
     verify = steps[f"Load and verify {arch} archive"]
     scan = steps[f"Scan {arch} archive"]
+    identity = steps[f"Probe {arch} database identity"]
     database = steps[f"Test fresh {arch} PostgreSQL"]
     upload = steps[f"Upload {arch} archive"]
 
     assert job["runs-on"] == runner
     assert job["permissions"] == {"contents": "read"}
     assert not any("setup-qemu" in step.get("uses", "") for step in job["steps"])
+    names = [step.get("name") for step in job["steps"]]
+    assert names.index(f"Load and verify {arch} archive") < names.index(
+        f"Probe {arch} database identity"
+    )
+    assert job["outputs"] == {"identity": "${{ steps.identity.outputs.identity }}"}
+    assert identity["id"] == "identity"
+    assert 'CONTAINER_RUNTIME=docker scripts/db_image_identity.sh "$LOCAL_IMAGE"' in identity["run"]
+    assert f"evidence/identity-{arch}.txt" in identity["run"]
+    assert 'echo "identity=$identity" >> "$GITHUB_OUTPUT"' in identity["run"]
+    assert "GITHUB_STEP_SUMMARY" in identity["run"]
     native = steps[f"Verify native {arch} runner"]
     expected_runner_arch = "X64" if arch == "amd64" else "ARM64"
     expected_uname = "x86_64" if arch == "amd64" else "aarch64"
@@ -158,7 +172,7 @@ def test_publish_is_main_only_and_consumes_exact_archives_without_rebuilding():
     assert "github.event_name == 'push'" in publish["if"]
     assert "github.ref == 'refs/heads/main'" in publish["if"]
     assert "github.event_name == 'workflow_dispatch'" in publish["if"]
-    assert publish["needs"] == ["build-amd64", "build-arm64"]
+    assert publish["needs"] == ["build-amd64", "build-arm64", "identity"]
     assert publish["permissions"] == {
         "contents": "read",
         "packages": "write",
@@ -192,9 +206,76 @@ def test_publish_is_main_only_and_consumes_exact_archives_without_rebuilding():
     assert "linux/amd64" in manifest
     assert "linux/arm64" in manifest
     assert "manifest_digest" in manifest
+    assert steps["Publish two-architecture index"]["env"]["IDENTITY"] == (
+        "${{ needs.identity.outputs.identity }}"
+    )
+    assert "database identity: \\`$IDENTITY\\`" in manifest
     assert names.index("Push tested architecture images") < names.index(
         "Publish two-architecture index"
     )
+
+
+_IDENTITY = "postgresql=16.15 postgis=3.6.4 geos=3.11.1 proj=9.8.1 glibc=2.36 icu=72.1"
+
+
+def _run_identity_comparison(tmp_path: Path, amd64: str, arm64: str):
+    job = load_workflow()["jobs"]["identity"]
+    step = steps_by_name(job)["Require one database identity on both architectures"]
+    output = tmp_path / "output"
+    summary = tmp_path / "summary"
+    result = subprocess.run(
+        ["bash", "-c", step["run"]],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env={
+            **os.environ,
+            "AMD64_IDENTITY": amd64,
+            "ARM64_IDENTITY": arm64,
+            "GITHUB_OUTPUT": str(output),
+            "GITHUB_STEP_SUMMARY": str(summary),
+        },
+    )
+    return result, output.read_text() if output.exists() else ""
+
+
+def test_identity_job_runs_on_every_event_before_publish():
+    job = load_workflow()["jobs"]["identity"]
+
+    assert "if" not in job
+    assert job["needs"] == ["build-amd64", "build-arm64"]
+    assert job["permissions"] == {"contents": "read"}
+    assert job["outputs"] == {"identity": "${{ steps.compare.outputs.identity }}"}
+    step = steps_by_name(job)["Require one database identity on both architectures"]
+    assert step["env"] == {
+        "AMD64_IDENTITY": "${{ needs.build-amd64.outputs.identity }}",
+        "ARM64_IDENTITY": "${{ needs.build-arm64.outputs.identity }}",
+    }
+
+
+def test_identity_job_records_an_identity_both_architectures_share(tmp_path):
+    result, output = _run_identity_comparison(tmp_path, _IDENTITY, _IDENTITY)
+
+    assert result.returncode == 0, result.stderr
+    assert output == f"identity={_IDENTITY}\n"
+    assert _IDENTITY in (tmp_path / "summary").read_text()
+
+
+@pytest.mark.parametrize(
+    ("amd64", "arm64", "message"),
+    [
+        (_IDENTITY, _IDENTITY.replace("proj=9.8.1", "proj=9.8.2"), "different database identities"),
+        (_IDENTITY, "", "no complete database identity"),
+        ("", "", "no complete database identity"),
+        (_IDENTITY.replace(" icu=72.1", ""), _IDENTITY.replace(" icu=72.1", ""), "no complete database identity"),
+    ],
+)
+def test_identity_job_refuses_differing_or_incomplete_identities(tmp_path, amd64, arm64, message):
+    result, output = _run_identity_comparison(tmp_path, amd64, arm64)
+
+    assert result.returncode != 0
+    assert message in result.stderr
+    assert output == ""
 
 
 def test_publish_attaches_per_child_sboms_and_signs_every_digest():

@@ -131,6 +131,7 @@ def _install_repo(
         "printf 'project|child|%s\\n' \"${COMPOSE_PROJECT_NAME-unset}\" >> \"$FAKE_LOG\"\n"
         "exit 0",
     )
+    _write_executable(scripts_dir / "db_image_identity.sh", _FAKE_IDENTITY_PROBE)
     (repo / "compose.build.override.yml").write_text(
         "services:\n  app:\n    build: .\n"
     )
@@ -138,6 +139,20 @@ def _install_repo(
     _git(repo, "commit", "-qm", "candidate")
     candidate_ref = _git(repo, "rev-parse", "HEAD")
     return repo, base_ref, candidate_ref
+
+
+# The candidate's identity probe: the base image db:stable and every other
+# image agree unless FAKE_IDENTITY_DIFFERS is set.
+_FAKE_IDENTITY_PROBE = r"""#!/usr/bin/env bash
+printf 'identity|%s|%s\n' "$1" "${CONTAINER_RUNTIME-}" >> "$FAKE_LOG"
+if [ "$1" = "${FAKE_IDENTITY_FAIL_IMAGE:-}" ]; then
+    echo "error: $1: no postgres binary found" >&2
+    exit 1
+fi
+version=16.15
+if [ "${FAKE_IDENTITY_DIFFERS:-}" = 1 ] && [ "$1" != db:stable ]; then version=16.16; fi
+printf 'postgresql=%s postgis=3.6.4 geos=3.11.1 proj=9.8.1 glibc=2.36 icu=72.1\n' "$version"
+"""
 
 
 def _install_repo_with_db_service_drift(tmp_path: Path) -> tuple[Path, str, str]:
@@ -310,6 +325,13 @@ case "${1-}" in
                 exit 0
                 ;;
             *schema_migrations*) printf '%s\n' "${FAKE_SCHEMA_VERSION:-1}"; exit 0 ;;
+            *postgis_full_version*)
+                case "$PWD" in
+                    */cand/*) printf '%s\n' "${FAKE_CANDIDATE_DB_VERSIONS:-PostgreSQL 16.15|POSTGIS=3.6.4}" ;;
+                    *) printf '%s\n' 'PostgreSQL 16.15|POSTGIS=3.6.4' ;;
+                esac
+                exit 0
+                ;;
             *psql*) printf '%s\n' row; exit 0 ;;
         esac
         exit 93
@@ -610,6 +632,8 @@ def test_help_documents_candidate_tree_and_stable_db_constraint(tmp_path):
     assert "exact release" in result.stderr
     assert "rendered db" in result.stderr
     assert "service must be identical" in result.stderr
+    assert "--database-image-swap" in result.stderr
+    assert "same database identity" in result.stderr
 
 
 @pytest.mark.parametrize("frontend", ["docker", "podman"])
@@ -1407,6 +1431,188 @@ def test_database_image_migration_fails_closed_when_candidate_db_cannot_start(
     assert list(scratch_root.glob("upgrade_check.*")) == []
 
 
+def _swap_args(base_ref: str, candidate_ref: str, *extra: str) -> list[str]:
+    return ["--base", base_ref, "--candidate", candidate_ref, "--database-image-swap", *extra]
+
+
+def _identity_probes(log_path: Path) -> list[str]:
+    return [line for line in log_path.read_text().splitlines() if line.startswith("identity|")]
+
+
+@pytest.mark.parametrize("first", ["--database-image-swap", "--database-image-migration"])
+def test_database_image_modes_are_mutually_exclusive(tmp_path, first):
+    repo, base_ref, candidate_ref = _install_repo(tmp_path, candidate_db_image="db:native")
+    second = ({"--database-image-swap", "--database-image-migration"} - {first}).pop()
+
+    result, log_path, _, _ = _run(
+        repo, ["--base", base_ref, "--candidate", candidate_ref, first, second], tmp_path,
+        fail_up=False,
+    )
+
+    assert result.returncode != 0
+    assert "mutually exclusive" in result.stderr
+    assert not log_path.exists()
+
+
+def test_database_image_swap_rejects_a_different_identity_before_startup(tmp_path):
+    repo, base_ref, candidate_ref = _install_repo(tmp_path, candidate_db_image="db:native")
+
+    result, log_path, _, scratch_root = _run(
+        repo, _swap_args(base_ref, candidate_ref), tmp_path, fail_up=False,
+        extra_env={"FAKE_IDENTITY_DIFFERS": "1"},
+    )
+
+    assert result.returncode != 0
+    assert "requires the same database identity" in result.stderr
+    assert "postgresql=16.15" in result.stderr
+    assert "postgresql=16.16" in result.stderr
+    assert "needs --database-image-migration" in result.stderr
+    assert _identity_probes(log_path) == ["identity|db:stable|podman", "identity|db:native|podman"]
+    assert not any(" up " in f" {line} " for line in log_path.read_text().splitlines())
+    assert list(scratch_root.glob("upgrade_check.*")) == []
+
+
+@pytest.mark.parametrize("failing", ["db:stable", "db:native"])
+def test_database_image_swap_fails_closed_when_an_identity_cannot_be_read(tmp_path, failing):
+    repo, base_ref, candidate_ref = _install_repo(tmp_path, candidate_db_image="db:native")
+
+    result, log_path, _, _ = _run(
+        repo, _swap_args(base_ref, candidate_ref), tmp_path, fail_up=False,
+        extra_env={"FAKE_IDENTITY_FAIL_IMAGE": failing},
+    )
+
+    side = "base" if failing == "db:stable" else "candidate"
+    assert result.returncode != 0
+    assert f"could not determine the database identity of the {side} image {failing}" in result.stderr
+    assert not any(" up " in f" {line} " for line in log_path.read_text().splitlines())
+
+
+def test_database_image_swap_rejects_unchanged_image_before_startup(tmp_path):
+    repo, base_ref, candidate_ref = _install_repo(tmp_path)
+
+    result, log_path, _, _ = _run(repo, _swap_args(base_ref, candidate_ref), tmp_path, fail_up=False)
+
+    assert result.returncode != 0
+    assert "--database-image-swap requires a changed db image" in result.stderr
+    assert _identity_probes(log_path) == []
+    assert " up " not in log_path.read_text()
+
+
+def test_database_image_swap_rejects_non_image_db_service_drift(tmp_path):
+    repo, base_ref, candidate_ref = _install_repo_with_db_service_drift(tmp_path)
+
+    result, log_path, _, scratch_root = _run(
+        repo, _swap_args(base_ref, candidate_ref), tmp_path, fail_up=False
+    )
+
+    assert result.returncode != 0
+    assert "--database-image-swap permits only the rendered db image change" in result.stderr
+    assert "POSTGRES_USER" in result.stderr
+    assert _identity_probes(log_path) == []
+    assert not any(" up " in f" {line} " for line in log_path.read_text().splitlines())
+    assert list(scratch_root.glob("upgrade_check.*")) == []
+
+
+@pytest.mark.parametrize("frontend", ["docker", "podman"])
+@pytest.mark.parametrize("candidate_image", ["", "registry.example.test/odograph@sha256:" + "a" * 64])
+def test_database_image_swap_upgrades_and_rolls_back_on_the_same_volume(
+    tmp_path, frontend, candidate_image,
+):
+    repo, base_ref, candidate_ref = _install_repo(tmp_path, candidate_db_image="db:native")
+    extra = ("--candidate-image", candidate_image) if candidate_image else ()
+
+    result, log_path, _, scratch_root = _run(
+        repo, _swap_args(base_ref, candidate_ref, *extra), tmp_path,
+        fail_up=False, frontend=frontend,
+    )
+
+    assert result.returncode == 0, result.stderr
+    lines = log_path.read_text().splitlines()
+    assert _identity_probes(log_path) == [
+        f"identity|db:stable|{frontend}", f"identity|db:native|{frontend}",
+    ]
+    first_up = next(i for i, line in enumerate(lines) if " up " in f" {line} ")
+    assert all(i < first_up for i, line in enumerate(lines) if line.startswith("identity|"))
+    # Base install, fresh restore, candidate on the same volume, base back on
+    # that volume, then the standard fresh-volume rollback.
+    assert (tmp_path / "db-events").read_text().splitlines() == [
+        "base", "base", "candidate", "base", "base",
+    ]
+    assert (tmp_path / "inspect-events").read_text().splitlines() == [
+        "base-image-id", "candidate-image-id", "base-image-id", "base-image-id",
+    ]
+    db_ups = [
+        i for i, line in enumerate(lines)
+        if line.startswith("compose|") and " up " in f" {line} " and " db" in line
+    ]
+    candidate_db_up, swap_back_up, fresh_rollback_up = db_ups[2], db_ups[3], db_ups[4]
+    assert "/cand/" in lines[candidate_db_up]
+    assert "/base/" in lines[swap_back_up]
+    assert any(
+        "/base/" in lines[i] and lines[i].endswith(" down")
+        for i in range(db_ups[1], candidate_db_up)
+    )
+    assert any(
+        "/cand/" in lines[i] and lines[i].endswith(" down")
+        for i in range(candidate_db_up, swap_back_up)
+    )
+    # No volume is listed or removed between the swap and the swap back.
+    assert not any(
+        line.startswith("runtime|") and "|volume " in line
+        for line in lines[db_ups[1] + 1:swap_back_up]
+    )
+    assert any(
+        line.startswith("runtime|") and "|volume ls" in line
+        for line in lines[swap_back_up:fresh_rollback_up]
+    )
+    app_up = [i for i, line in enumerate(lines) if "/cand/" in line and " up " in f" {line} " and line.endswith(" app")]
+    assert len(app_up) == 1 and candidate_db_up < app_up[0] < swap_back_up
+    if candidate_image:
+        assert lines[app_up[0]].endswith(" up -d --no-build app")
+    children = [line for line in lines if line.startswith("child|")]
+    assert len(children) == 6
+    assert "same database identity (postgresql=16.15" in result.stdout
+    assert "step 7a: candidate db image on the existing volume serves the same data" in result.stdout
+    assert "step 8: db on the existing volume uses the original base image again" in result.stdout
+    assert "serves the candidate's data unchanged" in result.stdout
+    assert "step 8a: rollback restored the prior release" in result.stdout
+    assert "db image mode: swap" in result.stdout
+    assert list(scratch_root.glob("upgrade_check.*")) == []
+
+
+def test_database_image_swap_fails_closed_when_candidate_db_cannot_start(tmp_path):
+    repo, base_ref, candidate_ref = _install_repo(tmp_path, candidate_db_image="db:native")
+
+    result, log_path, _, scratch_root = _run(
+        repo, _swap_args(base_ref, candidate_ref), tmp_path, fail_up=False, db_up_failure="73",
+    )
+
+    assert result.returncode != 0
+    assert "step 7: candidate-image db failed to start on the existing volume" in result.stderr
+    assert (tmp_path / "db-events").read_text().splitlines() == ["base", "base", "candidate"]
+    assert not any(
+        "/cand/" in line and " up " in f" {line} " and " app" in line
+        for line in log_path.read_text().splitlines()
+    )
+    assert list(scratch_root.glob("upgrade_check.*")) == []
+
+
+def test_database_image_swap_fails_closed_when_versions_change_on_the_volume(tmp_path):
+    repo, base_ref, candidate_ref = _install_repo(tmp_path, candidate_db_image="db:native")
+
+    result, log_path, _, _ = _run(
+        repo, _swap_args(base_ref, candidate_ref), tmp_path, fail_up=False,
+        extra_env={"FAKE_CANDIDATE_DB_VERSIONS": "PostgreSQL 16.16|POSTGIS=3.6.4"},
+    )
+
+    assert result.returncode != 0
+    assert "step 7a: candidate db image on the existing volume: version() or postgis_full_version() changed" in result.stderr
+    assert not any(
+        "/cand/" in line and " up " in f" {line} " and " app" in line
+        for line in log_path.read_text().splitlines()
+    )
+
+
 @pytest.mark.parametrize(
     ("auth_fault", "message"),
     [
@@ -1585,6 +1791,16 @@ def _drill_workflow_refs(tmp_path: Path, base_db: str, candidate_db: str):
         "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" > \"$ARGS_FILE\"\n"
         "printf 'compose_cmd=%s\\n' \"${COMPOSE_CMD-}\" >> \"$ARGS_FILE\"",
     )
+    # Identities come from IDENTITY_<image>, with ":" and "." as "_"; an
+    # image without one fails like an unreadable image.
+    _write_executable(
+        repo / "scripts" / "db_image_identity.sh",
+        "#!/usr/bin/env bash\n"
+        "printf '%s|%s\\n' \"$1\" \"${CONTAINER_RUNTIME-}\" >> \"$PROBE_LOG\"\n"
+        "name=\"IDENTITY_${1//[:.]/_}\"\n"
+        "[ -n \"${!name:-}\" ] || { echo \"error: $1: cannot probe\" >&2; exit 1; }\n"
+        "printf '%s\\n' \"${!name}\"",
+    )
     _git(repo, "init", "-q")
     _git(repo, "config", "user.name", "Upgrade Test")
     _git(repo, "config", "user.email", "upgrade@example.test")
@@ -1597,13 +1813,20 @@ def _drill_workflow_refs(tmp_path: Path, base_db: str, candidate_db: str):
     return repo, base, _git(repo, "rev-parse", "HEAD")
 
 
-def _run_drill_workflow_step(repo: Path, base: str, revision: str, tmp_path: Path, candidate_image=""):
+def _run_drill_workflow_step(
+    repo: Path, base: str, revision: str, tmp_path: Path, candidate_image="", identities=None
+):
     script = _write_executable(tmp_path / "drill-step.sh", "#!/usr/bin/env bash\n" + _drill_workflow_run_script())
     args_file = tmp_path / "drill-args"
+    identity_env = {
+        "IDENTITY_" + re.sub(r"[:.]", "_", image): identity
+        for image, identity in (identities or {}).items()
+    }
     result = subprocess.run(
         ["bash", str(script)], cwd=repo, capture_output=True, text=True, timeout=30,
-        env={**os.environ, "BASE": base, "REVISION": revision,
+        env={**os.environ, **identity_env, "BASE": base, "REVISION": revision,
              "CANDIDATE_IMAGE": candidate_image, "ARGS_FILE": str(args_file),
+             "PROBE_LOG": str(tmp_path / "probe-log"),
              # The workflow's setup-python provides `python` with PyYAML; here
              # it is the interpreter running the suite.
              "PATH": f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}"},
@@ -1611,26 +1834,50 @@ def _run_drill_workflow_step(repo: Path, base: str, revision: str, tmp_path: Pat
     return result, args_file
 
 
+_SAME_IDENTITY = "postgresql=16.15 postgis=3.6.4 geos=3.11.1 proj=9.8.1 glibc=2.36 icu=72.1"
+_NEW_IDENTITY = "postgresql=16.16 postgis=3.6.4 geos=3.11.1 proj=9.8.1 glibc=2.36 icu=72.1"
+
+
 @pytest.mark.parametrize("candidate_image", ["", "registry.example.test/odograph@sha256:" + "a" * 64])
 @pytest.mark.parametrize(
-    ("base_db", "candidate_db", "migration"),
-    [("db:one", "db:one", False), ("db:one", "db:two", True)],
+    ("base_db", "candidate_db", "candidate_identity", "mode"),
+    [
+        ("db:one", "db:one", None, ""),
+        ("db:one", "db:two", _SAME_IDENTITY, " --database-image-swap"),
+        ("db:one", "db:two", _NEW_IDENTITY, " --database-image-migration"),
+    ],
 )
-def test_drill_workflow_passes_migration_mode_only_for_a_changed_db_image(
-    tmp_path, base_db, candidate_db, migration, candidate_image
+def test_drill_workflow_selects_the_mode_from_db_images_and_identities(
+    tmp_path, base_db, candidate_db, candidate_identity, mode, candidate_image
 ):
     repo, base, revision = _drill_workflow_refs(tmp_path, base_db, candidate_db)
-    result, args_file = _run_drill_workflow_step(repo, base, revision, tmp_path, candidate_image)
+    identities = {"db:one": _SAME_IDENTITY}
+    if candidate_identity:
+        identities[candidate_db] = candidate_identity
+    result, args_file = _run_drill_workflow_step(
+        repo, base, revision, tmp_path, candidate_image, identities
+    )
     assert result.returncode == 0, result.stderr
     args, compose_cmd = args_file.read_text().splitlines()
     assert compose_cmd == "compose_cmd=docker compose"
     expected = f"--base {base} --candidate {revision}"
     if candidate_image:
         expected += f" --candidate-image {candidate_image}"
-    if migration:
-        expected += " --database-image-migration"
-    assert args == expected
+    assert args == expected + mode
+    probes = (tmp_path / "probe-log").read_text().splitlines() if mode else []
+    assert probes == ([f"{base_db}|docker", f"{candidate_db}|docker"] if mode else [])
     assert (tmp_path / "workflow-repo" / "evidence" / f"upgrade-drill-{base}.txt").exists()
+
+
+@pytest.mark.parametrize("unreadable", ["db:one", "db:two"])
+def test_drill_workflow_fails_closed_when_an_identity_cannot_be_read(tmp_path, unreadable):
+    repo, base, revision = _drill_workflow_refs(tmp_path, "db:one", "db:two")
+    identities = {"db:one": _SAME_IDENTITY, "db:two": _SAME_IDENTITY}
+    del identities[unreadable]
+    result, args_file = _run_drill_workflow_step(repo, base, revision, tmp_path, identities=identities)
+    assert result.returncode != 0
+    assert "cannot probe" in result.stderr
+    assert not args_file.exists()
 
 
 @pytest.mark.parametrize("malformed", ["!no-image", "!null-image", "!no-image-next-header-comment"])
