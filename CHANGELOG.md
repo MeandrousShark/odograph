@@ -22,6 +22,22 @@ reproduced here.
 - `/api/v1` foundation endpoints for the mobile app: capabilities (public),
   the signed-in account, token exchange and refresh, and sign-out. Apart from
   capabilities and the token endpoint they accept a bearer token only.
+- `/api/v1` data endpoints for the mobile app: the trip archive with keyset
+  paging, trip detail, edits, manual trips and deletes, the review queue,
+  vehicles and recent purposes, the weekly dashboard, Stats totals, the
+  expense ledger and its actual-expense comparison, trip exports as CSV or a
+  workbook, and the annual and range report workbooks. They accept a bearer
+  token only and act on that token's account. Creates need an
+  `Idempotency-Key` header, so a retried create never makes a second record.
+  Nothing can reach them until an app has signed in.
+
+### Fixed
+
+- A manual trip or trip edit whose distance is outside the range the database
+  can store shows the form's distance error instead of failing with a server
+  error.
+- Tagging a review card with a vehicle that does not exist answers "No such
+  vehicle" (400) instead of failing with a server error.
 
 ### Migrations
 
@@ -31,6 +47,8 @@ reproduced here.
   tables and their protected functions.
 - Migration 050 (`additive`) adds the protected function behind the signed-in
   apps list.
+- Migration 051 (`additive`) adds idempotency key columns to trips and
+  expenses for creates through the API.
 
 ## [1.1.0] - 2026-10-23
 
