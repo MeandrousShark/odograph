@@ -166,84 +166,22 @@ def _assert_clean(state, operations):
         assert operation.process.returncode is not None
 
 
-@pytest.mark.parametrize("params", [
+# Each case shares one application across its requests: the database reset
+# per case, not the request, is what these cost.
+FILE_PATHS = [
+    ("/api/v1/exports/trips", {"format": "csv"}, "/export"),
+    ("/api/v1/reports/2026", {"format": "xlsx"}, "/report/2026/export"),
+    ("/api/v1/reports/range", {"format": "xlsx", "from": "2026-04-01", "to": "2026-06-30"},
+     "/report/range/export"),
+]
+EXPORT_FILTERS = [
     {},
     {"category": "business", "q": "literal%_\\"},
     {"from": "2026-04-16", "to": "2026-04-17", "exclusion": "none"},
     {"vehicle": "none"},
     {"exclusion": "not_deductible", "q": "  Client  "},
-])
-@pytest.mark.parametrize("format", ["csv", "xlsx"])
-def test_trip_export_matches_the_web_file(tmp_path, monkeypatch, format, params):
-    operations = _observe(monkeypatch)
-
-    async def run():
-        async with application(tmp_path) as state:
-            web = await state.client.get("/export", params={"format": format, **params})
-            api = await state.client.get("/api/v1/exports/trips", params={"format": format, **params},
-                                         headers=_bearer(state))
-            _same_file(api, web, CSV if format == "csv" else XLSX, f"trips.{format}")
-            assert OTHER_MARKER.encode() not in api.content
-            if format == "csv" and not params:
-                assert api.content.count(b"Client visit") == 4
-            assert len(operations) == 2
-            _assert_clean(state, operations)
-    asyncio.run(run())
-
-
-def test_trip_export_vehicle_filter_matches_the_web_file(tmp_path):
-    async def run():
-        async with application(tmp_path) as state:
-            async with state.raw.connection() as conn:
-                vehicle = (await (await conn.execute(
-                    "SELECT id FROM vehicles WHERE account_id = %s", (state.owner,))).fetchone())[0]
-            params = {"format": "csv", "vehicle": str(vehicle)}
-            web = await state.client.get("/export", params=params)
-            api = await state.client.get("/api/v1/exports/trips", params=params, headers=_bearer(state))
-            _same_file(api, web, CSV, "trips.csv")
-            assert api.content.count(b"Client visit") == 3
-    asyncio.run(run())
-
-
-@pytest.mark.parametrize("api_path,web_path,params,filename", [
-    ("/api/v1/reports/2026", "/report/2026/export", {}, "mileage-report-2026.xlsx"),
-    ("/api/v1/reports/range", "/report/range/export", {"from": "2026-04-01", "to": "2026-06-30"},
-     "mileage-report-2026-Q2.xlsx"),
-    ("/api/v1/reports/range", "/report/range/export", {"from": "2026-04-16", "to": "2026-04-17"},
-     "mileage-report-2026-04-16_2026-04-17.xlsx"),
-])
-def test_report_workbooks_match_the_web_file(tmp_path, monkeypatch, api_path, web_path, params, filename):
-    operations = _observe(monkeypatch)
-
-    async def run():
-        async with application(tmp_path) as state:
-            web = await state.client.get(web_path, params=params)
-            api = await state.client.get(api_path, params={"format": "xlsx", **params}, headers=_bearer(state))
-            _same_file(api, web, XLSX, filename)
-            assert OTHER_MARKER.encode() not in b"".join(part[2] for part in _xlsx_parts(api.content))
-            _assert_clean(state, operations)
-    asyncio.run(run())
-
-
-def test_another_account_gets_only_its_own_rows(tmp_path):
-    async def run():
-        async with application(tmp_path) as state:
-            mine = await state.client.get("/api/v1/exports/trips", params={"format": "csv"},
-                                          headers=_bearer(state))
-            theirs = await state.client.get("/api/v1/exports/trips", params={"format": "csv"},
-                                            headers=_bearer(state, OTHER))
-            assert mine.status_code == theirs.status_code == 200
-            assert OTHER_MARKER.encode() not in mine.content and b"Their car" not in mine.content
-            assert theirs.content.count(OTHER_MARKER.encode()) == 4
-            assert b"Client visit" not in theirs.content and "Route car 車".encode() not in theirs.content
-            report = await state.client.get("/api/v1/reports/2026", params={"format": "xlsx"},
-                                            headers=_bearer(state, OTHER))
-            text = b"".join(part[2] for part in _xlsx_parts(report.content))
-            assert b"Their car" in text and "Route car 車".encode() not in text
-    asyncio.run(run())
-
-
-@pytest.mark.parametrize("path,params,fields", [
+]
+BAD_PARAMETERS = [
     ("/api/v1/exports/trips", {}, {"format": "This field is required."}),
     ("/api/v1/exports/trips", {"format": "pdf"}, {"format": "This value is not valid."}),
     ("/api/v1/exports/trips", {"format": "html"}, {"format": "This value is not valid."}),
@@ -272,24 +210,73 @@ def test_another_account_gets_only_its_own_rows(tmp_path):
      {"to": "Keep the range within one calendar year."}),
     ("/api/v1/reports/range", {"format": "xlsx", "from": "1899-01-01", "to": "1899-03-31"},
      {"from": "Enter a date from 1900 through 9998."}),
-])
-def test_bad_parameters_are_validation_envelopes_before_preparation(tmp_path, monkeypatch, path, params, fields):
+]
+
+
+def test_trip_exports_match_the_web_files(tmp_path, monkeypatch):
     operations = _observe(monkeypatch)
 
     async def run():
         async with application(tmp_path) as state:
-            response = await state.client.get(path, params=params, headers=_bearer(state))
-            assert response.status_code == 422
-            assert response.headers["content-type"] == "application/json"
-            assert response.json() == _envelope("validation_failed", fields)
-            assert not operations
+            async with state.raw.connection() as conn:
+                vehicle = (await (await conn.execute(
+                    "SELECT id FROM vehicles WHERE account_id = %s", (state.owner,))).fetchone())[0]
+            for format in ("csv", "xlsx"):
+                for filters in [*EXPORT_FILTERS, {"vehicle": str(vehicle)}]:
+                    params = {"format": format, **filters}
+                    web = await state.client.get("/export", params=params)
+                    api = await state.client.get("/api/v1/exports/trips", params=params, headers=_bearer(state))
+                    _same_file(api, web, CSV if format == "csv" else XLSX, f"trips.{format}")
+                    assert OTHER_MARKER.encode() not in api.content
+                    if format == "csv" and not filters:
+                        assert api.content.count(b"Client visit") == 4
+                    if format == "csv" and filters.get("vehicle") == str(vehicle):
+                        assert api.content.count(b"Client visit") == 3
+            assert len(operations) == 24
             _assert_clean(state, operations)
     asyncio.run(run())
 
 
-def test_documented_error_fixtures_match_live_responses(tmp_path, monkeypatch):
+def test_report_workbooks_match_the_web_files_and_stay_in_the_account(tmp_path, monkeypatch):
+    operations = _observe(monkeypatch)
+
     async def run():
         async with application(tmp_path) as state:
+            for api_path, web_path, params, filename in (
+                ("/api/v1/reports/2026", "/report/2026/export", {}, "mileage-report-2026.xlsx"),
+                ("/api/v1/reports/range", "/report/range/export", {"from": "2026-04-01", "to": "2026-06-30"},
+                 "mileage-report-2026-Q2.xlsx"),
+                ("/api/v1/reports/range", "/report/range/export", {"from": "2026-04-16", "to": "2026-04-17"},
+                 "mileage-report-2026-04-16_2026-04-17.xlsx"),
+            ):
+                web = await state.client.get(web_path, params=params)
+                api = await state.client.get(api_path, params={"format": "xlsx", **params}, headers=_bearer(state))
+                _same_file(api, web, XLSX, filename)
+                assert OTHER_MARKER.encode() not in b"".join(part[2] for part in _xlsx_parts(api.content))
+            _assert_clean(state, operations)
+            # Another account's token sees only that account's rows.
+            theirs = await state.client.get("/api/v1/exports/trips", params={"format": "csv"},
+                                            headers=_bearer(state, OTHER))
+            assert theirs.status_code == 200
+            assert theirs.content.count(OTHER_MARKER.encode()) == 4
+            assert b"Client visit" not in theirs.content and "Route car 車".encode() not in theirs.content
+            report = await state.client.get("/api/v1/reports/2026", params={"format": "xlsx"},
+                                            headers=_bearer(state, OTHER))
+            text = b"".join(part[2] for part in _xlsx_parts(report.content))
+            assert b"Their car" in text and "Route car 車".encode() not in text
+    asyncio.run(run())
+
+
+def test_bad_parameters_missing_bearers_and_unknown_shapes_are_envelopes(tmp_path, monkeypatch):
+    operations = _observe(monkeypatch)
+
+    async def run():
+        async with application(tmp_path) as state:
+            for path, params, fields in BAD_PARAMETERS:
+                response = await state.client.get(path, params=params, headers=_bearer(state))
+                assert response.status_code == 422, (path, params)
+                assert response.headers["content-type"] == "application/json"
+                assert response.json() == _envelope("validation_failed", fields), (path, params)
             response = await state.client.get("/api/v1/exports/trips", params={"format": "pdf"},
                                               headers=_bearer(state))
             assert response.json() == _fixture("error_export_format_invalid.json")
@@ -298,52 +285,33 @@ def test_documented_error_fixtures_match_live_responses(tmp_path, monkeypatch):
                 headers=_bearer(state))
             assert response.status_code == 422
             assert response.json() == _fixture("error_report_range_reversed.json")
-
-            async def busy(*args, **kwargs):
-                raise PreparationBusy("fixture busy")
-            monkeypatch.setattr(PreparationOperation, "__aenter__", busy)
-            response = await state.client.get("/api/v1/reports/2026", params={"format": "xlsx"},
-                                              headers=_bearer(state))
-            assert response.status_code == 503 and response.headers["retry-after"] == "1"
-            assert response.json() == _fixture("error_busy.json")
-    asyncio.run(run())
-
-
-@pytest.mark.parametrize("path,params", [
-    ("/api/v1/exports/trips", {"format": "csv"}),
-    ("/api/v1/exports/trips", {"format": "xlsx"}),
-    ("/api/v1/reports/2026", {"format": "xlsx"}),
-    ("/api/v1/reports/range", {"format": "xlsx", "from": "2026-04-01", "to": "2026-06-30"}),
-])
-def test_missing_bearer_and_cookie_only_requests_are_refused(tmp_path, monkeypatch, path, params):
-    operations = _observe(monkeypatch)
-
-    async def run():
-        async with application(tmp_path) as state:
             # The client still carries the web session cookie from signup.
             assert state.client.cookies.get("session")
-            for headers in ({}, {"Authorization": "Bearer " + "A" * 43}, {"Authorization": "Basic eDp5"}):
-                response = await state.client.get(path, params=params, headers=headers)
-                assert response.status_code == 401
-                assert response.headers["www-authenticate"] == "Bearer"
-                assert response.json() == _fixture("error_invalid_token.json")
+            for path, params, _ in FILE_PATHS:
+                for headers in ({}, {"Authorization": "Bearer " + "A" * 43}, {"Authorization": "Basic eDp5"}):
+                    response = await state.client.get(path, params=params, headers=headers)
+                    assert response.status_code == 401
+                    assert response.headers["www-authenticate"] == "Bearer"
+                    assert response.json() == _fixture("error_invalid_token.json")
+            # The HTML reports and the web's URL shapes are not API routes.
+            for path in ("/api/v1/reports/2026/export", "/api/v1/reports/2026/html",
+                         "/api/v1/reports/range/export", "/api/v1/report/2026"):
+                response = await state.client.get(path, params={"format": "html"}, headers=_bearer(state))
+                assert response.status_code == 404
+                assert response.json() == _envelope("not_found")
             assert not operations
             _assert_clean(state, operations)
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("change", ["auth_version = auth_version + 1", "is_enabled = false"])
-@pytest.mark.parametrize("path,params", [
-    ("/api/v1/exports/trips", {"format": "csv"}),
-    ("/api/v1/reports/2026", {"format": "xlsx"}),
-    ("/api/v1/reports/range", {"format": "xlsx", "from": "2026-04-01", "to": "2026-06-30"}),
-])
-def test_binding_change_after_admission_fails_at_the_snapshot(tmp_path, monkeypatch, change, path, params):
+def test_binding_change_after_admission_fails_at_the_snapshot(tmp_path, monkeypatch):
     operations = []
     original = PreparationOperation.start_helper
 
     async def run():
         async with application(tmp_path) as state:
+            change = None
+
             async def start(operation, *args, **kwargs):
                 operations.append(operation)
                 session = await original(operation, *args, **kwargs)
@@ -352,74 +320,59 @@ def test_binding_change_after_admission_fails_at_the_snapshot(tmp_path, monkeypa
                     await conn.execute(f"UPDATE accounts SET {change} WHERE id = %s", (state.owner,))
                 return session
             monkeypatch.setattr(PreparationOperation, "start_helper", start)
-            response = await state.client.get(path, params=params, headers=_bearer(state))
-            assert response.status_code == 401
-            assert response.headers["www-authenticate"] == "Bearer"
-            assert response.json() == _envelope("invalid_token")
-            assert len(operations) == 1
-            _assert_clean(state, operations)
-            # The grant no longer authenticates either.
-            response = await state.client.get(path, params=params, headers=_bearer(state))
-            assert response.status_code == 401 and len(operations) == 1
+            for change in ("auth_version = auth_version + 1", "is_enabled = false"):
+                for path, params, _ in FILE_PATHS:
+                    operations.clear()
+                    response = await state.client.get(path, params=params, headers=_bearer(state))
+                    assert response.status_code == 401
+                    assert response.headers["www-authenticate"] == "Bearer"
+                    assert response.json() == _envelope("invalid_token")
+                    assert len(operations) == 1
+                    _assert_clean(state, operations)
+                    # The grant no longer authenticates either.
+                    response = await state.client.get(path, params=params, headers=_bearer(state))
+                    assert response.status_code == 401 and len(operations) == 1
+                    async with state.raw.connection() as conn:
+                        await conn.execute("UPDATE accounts SET auth_version = 1, is_enabled = true WHERE id = %s",
+                                           (state.owner,))
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("stop", ["admission", "preparation_busy", "resource_stop"])
-@pytest.mark.parametrize("path,params", [
-    ("/api/v1/exports/trips", {"format": "csv"}),
-    ("/api/v1/reports/2026", {"format": "xlsx"}),
-    ("/api/v1/reports/range", {"format": "xlsx", "from": "2026-04-01", "to": "2026-06-30"}),
-])
-def test_busy_and_resource_stops_are_busy_envelopes(tmp_path, monkeypatch, stop, path, params):
+def test_busy_and_resource_stops_are_busy_envelopes_and_the_web_keeps_its_own(tmp_path, monkeypatch):
+    original = AdmissionManager.operation
+
+    def admission(manager, lane, *args, **kwargs):
+        if lane == "foreground":
+            raise CapacityBusy("fixture admission busy")
+        return original(manager, lane, *args, **kwargs)
+
+    async def preparation_busy(*args, **kwargs):
+        raise PreparationBusy("fixture preparation busy")
+
+    async def resource_stop(*args, **kwargs):
+        raise PreparationResourceError("fixture resource stop")
+
     async def run():
         async with application(tmp_path) as state:
-            if stop == "admission":
-                original = AdmissionManager.operation
-
-                def operation(manager, lane, *args, **kwargs):
-                    if lane == "foreground":
-                        raise CapacityBusy("fixture admission busy")
-                    return original(manager, lane, *args, **kwargs)
-                monkeypatch.setattr(AdmissionManager, "operation", operation)
-            elif stop == "preparation_busy":
-                async def enter(*args, **kwargs):
-                    raise PreparationBusy("fixture preparation busy")
-                monkeypatch.setattr(PreparationOperation, "__aenter__", enter)
-            else:
-                async def start(*args, **kwargs):
-                    raise PreparationResourceError("fixture resource stop")
-                monkeypatch.setattr(PreparationOperation, "start_helper", start)
-            response = await state.client.get(path, params=params, headers=_bearer(state))
-            assert response.status_code == 503
-            assert response.headers["retry-after"] == "1"
-            assert response.json() == _envelope("busy")
-            _assert_clean(state, [])
-            # The web keeps its own busy response on the same failure.
-            web_path = {"/api/v1/exports/trips": "/export", "/api/v1/reports/2026": "/report/2026/export",
-                        "/api/v1/reports/range": "/report/range/export"}[path]
-            web = await state.client.get(web_path, params=params)
-            assert web.status_code == 503 and web.headers["retry-after"] == "1"
-            assert web.json() == {"ok": False, "error": "capacity_busy",
-                                  "detail": "The server is busy. Please try again."}
+            for owner, name, replacement in ((AdmissionManager, "operation", admission),
+                                             (PreparationOperation, "__aenter__", preparation_busy),
+                                             (PreparationOperation, "start_helper", resource_stop)):
+                with monkeypatch.context() as patch:
+                    patch.setattr(owner, name, replacement)
+                    for path, params, web_path in FILE_PATHS:
+                        response = await state.client.get(path, params=params, headers=_bearer(state))
+                        assert response.status_code == 503
+                        assert response.headers["retry-after"] == "1"
+                        assert response.json() == _fixture("error_busy.json")
+                        _assert_clean(state, [])
+                        web = await state.client.get(web_path, params=params)
+                        assert web.status_code == 503 and web.headers["retry-after"] == "1"
+                        assert web.json() == {"ok": False, "error": "capacity_busy",
+                                              "detail": "The server is busy. Please try again."}
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("path", ["/api/v1/reports/2026/export", "/api/v1/reports/2026/html",
-                                  "/api/v1/reports/range/export", "/api/v1/report/2026"])
-def test_html_and_web_report_shapes_are_not_routes(tmp_path, path):
-    async def run():
-        async with application(tmp_path) as state:
-            response = await state.client.get(path, params={"format": "html"}, headers=_bearer(state))
-            assert response.status_code == 404
-            assert response.json() == _envelope("not_found")
-    asyncio.run(run())
-
-
-@pytest.mark.parametrize("path,params", [
-    ("/api/v1/exports/trips", {"format": "csv"}),
-    ("/api/v1/reports/2026", {"format": "xlsx"}),
-])
-def test_a_non_ascii_pipeline_filename_is_sent_encoded(tmp_path, monkeypatch, path, params):
+def test_a_non_ascii_pipeline_filename_is_sent_encoded(tmp_path, monkeypatch):
     original = PreparationOperation.prepared
 
     def prepared(operation, name, *, media_type, filename=None):
@@ -429,9 +382,10 @@ def test_a_non_ascii_pipeline_filename_is_sent_encoded(tmp_path, monkeypatch, pa
 
     async def run():
         async with application(tmp_path) as state:
-            response = await state.client.get(path, params=params, headers=_bearer(state))
-            assert response.status_code == 200
-            assert response.headers["content-disposition"] == (
-                "attachment; filename*=utf-8''Fahrtenbuch%20%C3%A4%E8%BB%8A.xlsx")
-            assert response.headers["content-length"] == str(len(response.content))
+            for path, params, _ in FILE_PATHS[:2]:
+                response = await state.client.get(path, params=params, headers=_bearer(state))
+                assert response.status_code == 200
+                assert response.headers["content-disposition"] == (
+                    "attachment; filename*=utf-8''Fahrtenbuch%20%C3%A4%E8%BB%8A.xlsx")
+                assert response.headers["content-length"] == str(len(response.content))
     asyncio.run(run())
