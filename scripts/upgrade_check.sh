@@ -1255,7 +1255,7 @@ capture_db_versions() {
 assert_db_versions_equal() {
     local expected="$1" actual="$2" desc="$3"
     if cmp -s "$expected" "$actual"; then
-        step_pass "$desc: version() and postgis_full_version() unchanged"
+        step_pass "$desc: version() and postgis_full_version() unchanged ($(cat "$actual"))"
         return 0
     fi
     echo "expected: $(cat "$expected")" >&2
