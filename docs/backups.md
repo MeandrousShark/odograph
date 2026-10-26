@@ -210,13 +210,17 @@ this is not a successful restore. Correct the image or configuration and
 restore into another fresh target. Do not grant broad permissions or change
 RLS manually to get past the check.
 
-When changing the PostGIS database image, keep the old project and volume
-stopped and restore into a fresh project with a new `COMPOSE_PROJECT_NAME`.
+When a PostGIS database image change is a database-image migration, a
+version change, keep the old project and volume stopped and restore into a
+fresh project with a new `COMPOSE_PROJECT_NAME`.
 Use the target release's restore script after starting only its database. Do
 not reuse the old `dbdata` volume, swap `PGDATA` directories, or run
 `docker compose down -v` against the old project. The complete migration and
 rollback sequence is in
 [Upgrading the PostGIS database image](upgrading.md#upgrading-the-postgis-database-image).
+A rebuild with unchanged versions instead upgrades in place after a verified
+backup; see
+[Database image security rebuilds](upgrading.md#database-image-security-rebuilds).
 
 An operator who has separately verified a relocated archive's integrity can
 skip the checksum check with `--skip-checksum` (archive-structure validation

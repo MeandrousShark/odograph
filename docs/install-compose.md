@@ -305,8 +305,11 @@ The download leaves the old `compose.yaml`, `.env`, project, and database volume
 untouched, saves the target file as `compose.yaml.target`, and replaces
 `verify_image.sh` with the target release's copy. Do not run
 `docker compose up -d` yet. If the target's `db.image` differs from
-the current installation, including the transition from
-`postgis/postgis:16-3.4` to the signed native image above, use the
+the current installation, its release notes say which kind of change it is. A
+rebuild with unchanged versions upgrades in place on the existing volume; see
+[Database image security rebuilds](upgrading.md#database-image-security-rebuilds).
+For a database-image migration, a version change, including the transition
+from `postgis/postgis:16-3.4` to the signed native image above, use the
 [PostGIS database image migration](upgrading.md#upgrading-the-postgis-database-image)
 procedure first. It stops the app for the final backup, preserves the old
 project and volume, then replaces `compose.yaml` only after the backup and
@@ -323,9 +326,11 @@ backup and `.env` copy are ready, replace the old Compose file:
 mv compose.yaml.target compose.yaml
 ```
 
-Only when the database image is unchanged may you complete an application-only
-upgrade. Verify the target image first, then start it; do not skip
-`verify_image.sh`, because Compose will not pull the app image itself:
+Only when the database image is unchanged, or the release notes say it was
+rebuilt with unchanged versions, may you complete an upgrade in place. For a
+rebuild, check the database versions as that procedure describes. Verify the
+target image first, then start it; do not skip `verify_image.sh`, because
+Compose will not pull the app image itself:
 
 ```sh
 ./verify_image.sh

@@ -98,7 +98,9 @@ Every release section must state:
 - all breaking application, database, configuration, and operational changes,
   or an explicit statement that there are none;
 - each new migration in the release with its `-- migration-class:` header
-  value, or an explicit statement that the release adds none; and
+  value, or an explicit statement that the release adds none;
+- when `services.db.image` differs from the previous release's, which kind of
+  change it is (see [Database image changes](#database-image-changes)); and
 - no security scan acceptances (see
   [Blocking dependency and image scans](#blocking-dependency-and-image-scans)).
 
@@ -111,6 +113,32 @@ version boundary.
 
 State which prior-release artifact upgrade gate ran, or why it did not apply.
 Do not imply that a gate ran when it did not.
+
+### Database image changes
+
+A database image's identity is the upstream PostgreSQL, PostGIS, GEOS, PROJ,
+glibc and ICU versions it contains, without Debian package revisions.
+`scripts/db_image_identity.sh IMAGE` prints it by running the image with no
+database server, volume or network, and fails when a component cannot be
+determined or the image is not a PostGIS image:
+
+```text
+postgresql=16.15 postgis=3.6.4 geos=3.11.1 proj=9.8.1 glibc=2.36 icu=72.1
+```
+
+A release whose `db.image` differs from the previous release's states the kind
+of change in its changelog section, using one of these exact phrases (case and
+line wrapping do not matter):
+
+- `rebuilt with unchanged versions`, when both images report the same
+  identity. Operators upgrade in place, as in
+  [Database image security rebuilds](upgrading.md#database-image-security-rebuilds).
+- `database-image migration`, when the identity changes. Operators follow
+  [Upgrading the PostGIS database image](upgrading.md#upgrading-the-postgis-database-image).
+
+`scripts/check_release_contract.py` reads the previous release from the next
+changelog section and its `compose.yaml` from that release tag, so it needs
+the tags; it fails when the image changed without either phrase.
 
 Validate that the Compose image, changelog section, documented exact-tag
 install path, and runtime-reported version contract all agree. Then confirm
@@ -209,22 +237,28 @@ each, and runs the HTTPS authentication smoke: health, protected settings,
 administrator signup, Secure session cookie, and authenticated version and
 revision checks. The application image, application smoke, and PostGIS
 database remain native on each runner. The preflight also runs the source
-upgrade and rollback drill with Docker Compose. The drill uses the
-database-image migration mode only for a base whose database image differs
-from the candidate's, because the rendered database image is part of the
-candidate release contract.
+upgrade and rollback drill with Docker Compose. The drill uses a database
+image mode only for a base whose database image differs from the candidate's,
+because the rendered database image is part of the candidate release contract.
 
 The drill lives in the reusable `Upgrade drill` workflow
 (`.github/workflows/upgrade-drill.yml`). It reads its base releases from
 `scripts/upgrade_drill_bases.json` and drills from each one as a separate
 matrix job, with the exact revision as `--candidate`. For each base the
 workflow compares the `db` service image line in `compose.yaml` at the base
-and at the revision, and passes `--database-image-migration` only when they
-differ. When they match it runs the standard mode, because the script rejects
-the migration flag for an unchanged database image. The comparison reads the
-literal image line, so keep the `db` image a literal reference. Besides both
+and at the revision and selects one of three modes:
+
+- the lines match: the standard mode, because the script rejects both database
+  image flags for an unchanged database image;
+- the lines differ and `scripts/db_image_identity.sh` reports the same
+  identity for both images: `--database-image-swap`;
+- the lines differ and the identities differ: `--database-image-migration`.
+
+A probe that fails stops the drill. The comparison reads the literal image
+line, so keep the `db` image a literal reference. Besides both
 preflight modes, it runs on pull requests that change migrations, the drill
-script, the bases file, the backup or restore scripts, or the workflow itself.
+script, the identity probe, the bases file, the backup or restore scripts, or
+the workflow itself.
 To drill any branch or tag on demand:
 
 ```sh
@@ -456,10 +490,11 @@ runs this drill with Docker Compose for every base, through
 `preflight` mode and against the published image in `verify-published` mode.
 The bases are v1.0.0 and, from the first release after it, the previous
 release. In addition, run the drill manually with Podman Compose from the
-newest base. Add the [database image migration
-drill](#database-image-migration-drill) option only when the candidate's `db`
-image differs from the base's, as the workflow does; the script rejects it for
-an unchanged image. `--base` and `--candidate` are both required even when the
+newest base. When the candidate's `db` image differs from the base's, add the
+[database image swap drill](#database-image-swap-drill) option if both images
+report the same identity, or the [database image migration
+drill](#database-image-migration-drill) option otherwise, as the workflow does;
+the script rejects either for an unchanged image. `--base` and `--candidate` are both required even when the
 candidate application comes from an image:
 
 ```sh
@@ -513,6 +548,34 @@ then starts the candidate app. It rolls back by starting the original database
 image on a fresh volume and restoring the pre-upgrade backup; writes made after
 that backup must be lost. It never swaps `PGDATA` directories directly.
 
+### Database image swap drill
+
+When a candidate changes only the rendered database image and
+`scripts/db_image_identity.sh` reports the same identity for both images, use
+the same-volume swap mode. The script probes both images itself and refuses a
+different identity, an unchanged image, and any other database-service change:
+
+```sh
+COMPOSE_CMD="docker compose" scripts/upgrade_check.sh \
+  --base vPREVIOUS \
+  --candidate "$VERSION" \
+  --database-image-swap
+
+COMPOSE_CMD=podman-compose scripts/upgrade_check.sh \
+  --base vPREVIOUS \
+  --candidate "$VERSION" \
+  --database-image-swap
+```
+
+It also accepts `--candidate-image`. The drill stops the app, verifies a fresh
+backup, records `version()`, `postgis_full_version()` and the data manifest,
+stops the database, and starts the candidate database image on the same
+task-owned volume. It requires a different container image with identical
+versions and data, then upgrades the app. Rollback stops the candidate, starts
+the base database image on the same volume and checks the same, then restores
+the pre-upgrade backup as the standard rollback does. The two modes are
+mutually exclusive.
+
 A clean-install verification on both architectures is still required for every
 release.
 
@@ -533,16 +596,22 @@ uses the separate GHCR package `ghcr.io/meandrousshark/odograph-postgis`.
 The publish job loads the exact tested AMD64 and ARM64 archives, publishes
 `sha-<full-source-SHA>` tags and their architecture tags, creates the signed
 multi-architecture index, signs both child digests, and attaches an SPDX
-attestation to each child digest.
+attestation to each child digest. Each native job probes its image with
+`scripts/db_image_identity.sh`, and a separate job requires both architectures
+to report the same identity before publication; the identity is written to the
+job summaries and to each job's evidence.
 
 Before updating the upstream base or gosu source pins, maintainers must review
 the upstream changes and rerun both native architecture builds, fresh database
 checks, blocking Trivy scans, and the v0.11.0 application smoke. Record and
 verify the resulting index and child digests, signatures and SPDX subjects
 before pinning the index in repository references. The current default is the
-immutable index recorded above. Updating it is a database-image migration and
-requires the fresh-target backup and rollback procedure in
-[Upgrading](upgrading.md#upgrading-the-postgis-database-image). This image
+immutable index recorded above. Updating it to an index with the same identity
+is a rebuild with unchanged versions, which operators apply in place; any
+other update is a database-image migration and requires the fresh-target
+backup and rollback procedure in
+[Upgrading](upgrading.md#upgrading-the-postgis-database-image). See
+[Database image changes](#database-image-changes). This image
 change does not announce a new application release or imply a production
 deployment.
 

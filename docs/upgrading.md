@@ -35,7 +35,61 @@ is a release pair whose notes explicitly document it as drilled; see
 one-way door. The supported way back is restoring the pre-upgrade backup,
 described in [Rollback](#rollback) below.
 
+## Database image security rebuilds
+
+A target release can move `db.image` to a rebuild of the same database image
+that only refreshes operating system packages. Its release notes say the
+database image was rebuilt with unchanged versions: PostgreSQL, PostGIS,
+GEOS, PROJ, glibc and ICU all stay the same, so the new image runs on the
+existing volume. For such a release, upgrade in place:
+
+1. **Stop writes, then take and verify a backup.** Record the versions the
+   database reports:
+
+   ```sh
+   docker compose stop app
+   scripts/backup_database.sh --output backups/pre-upgrade.dump
+   scripts/restore_database.sh --verify-only backups/pre-upgrade.dump
+   cp .env .env.pre-upgrade
+   docker compose exec -T db psql -U mileage -d mileage -Atc 'SELECT version(), postgis_full_version()' > versions-before.txt
+   ```
+
+2. **Check out the target release, verify the app image, then restart the
+   database on the existing project and volume and compare its versions:**
+
+   ```sh
+   git fetch --tags
+   git checkout vX.Y.Z
+   scripts/verify_image.sh
+   docker compose pull db
+   docker compose up -d db
+   until docker compose exec -T db pg_isready -U mileage -d mileage; do sleep 2; done
+   docker compose exec -T db psql -U mileage -d mileage -Atc 'SELECT version(), postgis_full_version()' | diff versions-before.txt -
+   ```
+
+   `diff` prints nothing when the versions are unchanged. If it prints a
+   difference, do not start the app; roll back as below.
+
+3. **Start the app** with `docker compose up -d`, then run the health and
+   sign-in checks of [Upgrade procedure](#upgrade-procedure) step 4.
+
+To roll back, stop the app, check out the previous exact release and run
+`docker compose up -d db`, which starts the previous database image on the
+same volume. If the target release applied migrations, the previous app must
+not run against that database: continue with
+[Rollback after an application-only upgrade](#rollback-after-an-application-only-upgrade),
+which restores the verified backup. Otherwise verify and start the previous
+app as described in [Rollback](#rollback). With Podman, replace each `docker compose`
+command with `podman-compose`. A source checkout can compare two database
+images before upgrading with `scripts/db_image_identity.sh IMAGE`, which
+prints the versions an image contains.
+
 ## Upgrading the PostGIS database image
+
+This section applies when the database versions change: the release notes call
+the upgrade a database-image migration. A rebuild with unchanged versions
+follows [Database image security rebuilds](#database-image-security-rebuilds)
+instead.
 
 When a target release's `compose.yaml` uses the signed native PostgreSQL
 16.15/PostGIS 3.6.4 index
@@ -420,9 +474,12 @@ even after a passing rehearsal.
 4. **If the database image is unchanged, pull and verify the pinned app image,
    restart, then check health:**
 
-   If the target Compose file changes the `db.image` value, stop here and use
+   If the target Compose file changes the `db.image` value, its release notes
+   say which kind of change it is. For a rebuild with unchanged versions, use
+   [Database image security rebuilds](#database-image-security-rebuilds). For
+   a database-image migration, a version change, stop here and use
    [Upgrading the PostGIS database image](#upgrading-the-postgis-database-image)
-   above. Do not run `up -d` against the old project for that transition.
+   above; do not run `up -d` against the old project for that transition.
 
    `scripts/verify_image.sh` pulls the exact release tag named in `compose.yaml`
    and checks its cosign signature; it exits non-zero if the check fails, and
@@ -494,7 +551,7 @@ ID 1 by hand to bypass that check.
 Stop the app, ingest and background writes before the final pre-upgrade
 backup. Keep that verified archive, its sidecars, the previous exact image,
 and the original `.env` until acceptance and the observation window finish.
-If this upgrade also changes the database image, follow the fresh-volume
+If this upgrade also changes the database versions, follow the fresh-volume
 procedure above.
 
 The migration imports effective personal settings and mileage-rate overrides
