@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from openpyxl import load_workbook
 
 from app.account_context import AccountPool, AccountPrincipal, account_id, control_connection
 from app.api_errors import ERRORS
@@ -25,6 +26,7 @@ from app.db import make_pool
 from app.main import create_app
 from app.preparation import PreparationOperation
 from app.preparation_resources import PreparationBusy, PreparationResourceError
+from app.report_preparation import AccountBindingChanged
 from auth_db_fixtures import auth_config
 from conftest import add_test_account, reset_db
 from test_report_projection_db import TZ
@@ -131,6 +133,16 @@ def _xlsx_parts(raw):
         return parts
 
 
+def _cell_text(raw):
+    """Every cell value in the workbook, as one string."""
+    book = load_workbook(BytesIO(raw), read_only=True)
+    try:
+        return "\n".join(str(value) for sheet in book for row in sheet.iter_rows(values_only=True)
+                         for value in row if value is not None)
+    finally:
+        book.close()
+
+
 def _same_file(api, web, media_type, filename):
     assert web.status_code == 200 and api.status_code == 200
     if media_type == CSV:
@@ -173,6 +185,12 @@ FILE_PATHS = [
     ("/api/v1/reports/2026", {"format": "xlsx"}, "/report/2026/export"),
     ("/api/v1/reports/range", {"format": "xlsx", "from": "2026-04-01", "to": "2026-06-30"},
      "/report/range/export"),
+]
+WEB_FILE_PATHS = [
+    ("/export", {"format": "csv"}),
+    ("/report/2026/export", {}),
+    ("/report/range/export", {"from": "2026-04-01", "to": "2026-06-30"}),
+    ("/report/2026", {}),
 ]
 EXPORT_FILTERS = [
     {},
@@ -252,7 +270,9 @@ def test_report_workbooks_match_the_web_files_and_stay_in_the_account(tmp_path, 
                 web = await state.client.get(web_path, params=params)
                 api = await state.client.get(api_path, params={"format": "xlsx", **params}, headers=_bearer(state))
                 _same_file(api, web, XLSX, filename)
-                assert OTHER_MARKER.encode() not in b"".join(part[2] for part in _xlsx_parts(api.content))
+                text = _cell_text(api.content)
+                assert "Route car 車" in text and "Client visit" in text
+                assert OTHER_MARKER not in text
             _assert_clean(state, operations)
             # Another account's token sees only that account's rows.
             theirs = await state.client.get("/api/v1/exports/trips", params={"format": "csv"},
@@ -262,8 +282,9 @@ def test_report_workbooks_match_the_web_files_and_stay_in_the_account(tmp_path, 
             assert b"Client visit" not in theirs.content and "Route car 車".encode() not in theirs.content
             report = await state.client.get("/api/v1/reports/2026", params={"format": "xlsx"},
                                             headers=_bearer(state, OTHER))
-            text = b"".join(part[2] for part in _xlsx_parts(report.content))
-            assert b"Their car" in text and "Route car 車".encode() not in text
+            text = _cell_text(report.content)
+            assert "Their car" in text and OTHER_MARKER in text
+            assert "Route car 車" not in text and "Client visit" not in text
     asyncio.run(run())
 
 
@@ -320,6 +341,11 @@ def test_binding_change_after_admission_fails_at_the_snapshot(tmp_path, monkeypa
                     await conn.execute(f"UPDATE accounts SET {change} WHERE id = %s", (state.owner,))
                 return session
             monkeypatch.setattr(PreparationOperation, "start_helper", start)
+
+            async def restore():
+                async with state.raw.connection() as conn:
+                    await conn.execute("UPDATE accounts SET auth_version = 1, is_enabled = true WHERE id = %s",
+                                       (state.owner,))
             for change in ("auth_version = auth_version + 1", "is_enabled = false"):
                 for path, params, _ in FILE_PATHS:
                     operations.clear()
@@ -332,9 +358,15 @@ def test_binding_change_after_admission_fails_at_the_snapshot(tmp_path, monkeypa
                     # The grant no longer authenticates either.
                     response = await state.client.get(path, params=params, headers=_bearer(state))
                     assert response.status_code == 401 and len(operations) == 1
-                    async with state.raw.connection() as conn:
-                        await conn.execute("UPDATE accounts SET auth_version = 1, is_enabled = true WHERE id = %s",
-                                           (state.owner,))
+                    await restore()
+                # The web routes still fail the same way they always have.
+                for web_path, params in WEB_FILE_PATHS:
+                    operations.clear()
+                    with pytest.raises(AccountBindingChanged, match="account binding changed"):
+                        await state.client.get(web_path, params=params)
+                    assert len(operations) == 1
+                    _assert_clean(state, operations)
+                    await restore()
     asyncio.run(run())
 
 
