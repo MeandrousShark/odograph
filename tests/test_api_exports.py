@@ -124,3 +124,33 @@ def test_prepared_file_attachment_header(filename, disposition):
     assert response.headers["content-disposition"] == disposition
     assert response.headers["content-length"] == "1234"
     assert response.headers["content-type"] == XLSX_MEDIA_TYPE
+
+
+def test_a_cached_report_identity_never_satisfies_a_full_profile_request(monkeypatch):
+    calls = _install(monkeypatch, _profile())
+    full_account = {"id": 7, "is_enabled": True, "auth_version": 3, "email": "owner@example.invalid"}
+
+    async def get_account(conn, owner):
+        calls.append(("full", owner))
+        return full_account
+
+    async def bind_account(request, account, **kwargs):
+        request.state.principal = AccountPrincipal(account["id"], True, 3)
+        return {"id": account["id"], "profile": "report" if kwargs.get("report_profile") else "full"}
+
+    monkeypatch.setattr(api_v1, "get_account", get_account)
+    monkeypatch.setattr(api_v1, "_bind_account", bind_account)
+    request = _request()
+    thin = asyncio.run(require_api_report_user(request))
+    assert thin.report_profile and thin.user["profile"] == "report"
+    request.state._capacity_authenticated_user = thin
+    assert asyncio.run(require_api_report_user(request)) is thin
+    full = asyncio.run(api_v1.require_api_user(request))
+    assert not full.report_profile and full.user["profile"] == "full"
+    assert full.account is full_account
+    assert calls == [("check", TOKEN), ("lookup", 7), ("check", TOKEN), ("full", 7)]
+    # A full binding already holds everything a report needs.
+    request.state._capacity_authenticated_user = full
+    assert asyncio.run(require_api_report_user(request)) is full
+    assert asyncio.run(api_v1.require_api_user(request)) is full
+    assert len(calls) == 4

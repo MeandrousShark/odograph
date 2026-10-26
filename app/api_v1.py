@@ -63,6 +63,8 @@ class ApiUser:
     user: dict
     account: dict
     grant_id: str
+    # A report-profile account lacks email, display name and settings.
+    report_profile: bool = False
 
 
 def _limiter(request: Request) -> FailedAuthLimiter:
@@ -113,7 +115,7 @@ async def require_api_report_user(request: Request) -> ApiUser:
 async def _require_api_user(request: Request, *, report_profile: bool = False) -> ApiUser:
     # Admission already ran this check for a route with a capacity lane.
     cached = getattr(request.state, "_capacity_authenticated_user", None)
-    if isinstance(cached, ApiUser):
+    if isinstance(cached, ApiUser) and (report_profile or not cached.report_profile):
         return cached
     limiter = _limiter(request)
     ip = client_ip(request)
@@ -142,7 +144,7 @@ async def _require_api_user(request: Request, *, report_profile: bool = False) -
     except errors.InsufficientPrivilege:
         # Disabled or signed out between the grant check and admission.
         raise _refuse(limiter, ip, ApiError("invalid_token", headers=BEARER_HEADERS), count=False) from None
-    return ApiUser(user, account, principal.grant_id)
+    return ApiUser(user, account, principal.grant_id, report_profile)
 
 
 class TokenRequest(BaseModel):
