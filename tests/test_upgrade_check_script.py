@@ -1791,6 +1791,16 @@ def _drill_workflow_refs(tmp_path: Path, base_db: str, candidate_db: str):
         "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" > \"$ARGS_FILE\"\n"
         "printf 'compose_cmd=%s\\n' \"${COMPOSE_CMD-}\" >> \"$ARGS_FILE\"",
     )
+    # Identities come from IDENTITY_<image>, with ":" and "." as "_"; an
+    # image without one fails like an unreadable image.
+    _write_executable(
+        repo / "scripts" / "db_image_identity.sh",
+        "#!/usr/bin/env bash\n"
+        "printf '%s|%s\\n' \"$1\" \"${CONTAINER_RUNTIME-}\" >> \"$PROBE_LOG\"\n"
+        "name=\"IDENTITY_${1//[:.]/_}\"\n"
+        "[ -n \"${!name:-}\" ] || { echo \"error: $1: cannot probe\" >&2; exit 1; }\n"
+        "printf '%s\\n' \"${!name}\"",
+    )
     _git(repo, "init", "-q")
     _git(repo, "config", "user.name", "Upgrade Test")
     _git(repo, "config", "user.email", "upgrade@example.test")
@@ -1803,13 +1813,20 @@ def _drill_workflow_refs(tmp_path: Path, base_db: str, candidate_db: str):
     return repo, base, _git(repo, "rev-parse", "HEAD")
 
 
-def _run_drill_workflow_step(repo: Path, base: str, revision: str, tmp_path: Path, candidate_image=""):
+def _run_drill_workflow_step(
+    repo: Path, base: str, revision: str, tmp_path: Path, candidate_image="", identities=None
+):
     script = _write_executable(tmp_path / "drill-step.sh", "#!/usr/bin/env bash\n" + _drill_workflow_run_script())
     args_file = tmp_path / "drill-args"
+    identity_env = {
+        "IDENTITY_" + re.sub(r"[:.]", "_", image): identity
+        for image, identity in (identities or {}).items()
+    }
     result = subprocess.run(
         ["bash", str(script)], cwd=repo, capture_output=True, text=True, timeout=30,
-        env={**os.environ, "BASE": base, "REVISION": revision,
+        env={**os.environ, **identity_env, "BASE": base, "REVISION": revision,
              "CANDIDATE_IMAGE": candidate_image, "ARGS_FILE": str(args_file),
+             "PROBE_LOG": str(tmp_path / "probe-log"),
              # The workflow's setup-python provides `python` with PyYAML; here
              # it is the interpreter running the suite.
              "PATH": f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}"},
@@ -1817,26 +1834,50 @@ def _run_drill_workflow_step(repo: Path, base: str, revision: str, tmp_path: Pat
     return result, args_file
 
 
+_SAME_IDENTITY = "postgresql=16.15 postgis=3.6.4 geos=3.11.1 proj=9.8.1 glibc=2.36 icu=72.1"
+_NEW_IDENTITY = "postgresql=16.16 postgis=3.6.4 geos=3.11.1 proj=9.8.1 glibc=2.36 icu=72.1"
+
+
 @pytest.mark.parametrize("candidate_image", ["", "registry.example.test/odograph@sha256:" + "a" * 64])
 @pytest.mark.parametrize(
-    ("base_db", "candidate_db", "migration"),
-    [("db:one", "db:one", False), ("db:one", "db:two", True)],
+    ("base_db", "candidate_db", "candidate_identity", "mode"),
+    [
+        ("db:one", "db:one", None, ""),
+        ("db:one", "db:two", _SAME_IDENTITY, " --database-image-swap"),
+        ("db:one", "db:two", _NEW_IDENTITY, " --database-image-migration"),
+    ],
 )
-def test_drill_workflow_passes_migration_mode_only_for_a_changed_db_image(
-    tmp_path, base_db, candidate_db, migration, candidate_image
+def test_drill_workflow_selects_the_mode_from_db_images_and_identities(
+    tmp_path, base_db, candidate_db, candidate_identity, mode, candidate_image
 ):
     repo, base, revision = _drill_workflow_refs(tmp_path, base_db, candidate_db)
-    result, args_file = _run_drill_workflow_step(repo, base, revision, tmp_path, candidate_image)
+    identities = {"db:one": _SAME_IDENTITY}
+    if candidate_identity:
+        identities[candidate_db] = candidate_identity
+    result, args_file = _run_drill_workflow_step(
+        repo, base, revision, tmp_path, candidate_image, identities
+    )
     assert result.returncode == 0, result.stderr
     args, compose_cmd = args_file.read_text().splitlines()
     assert compose_cmd == "compose_cmd=docker compose"
     expected = f"--base {base} --candidate {revision}"
     if candidate_image:
         expected += f" --candidate-image {candidate_image}"
-    if migration:
-        expected += " --database-image-migration"
-    assert args == expected
+    assert args == expected + mode
+    probes = (tmp_path / "probe-log").read_text().splitlines() if mode else []
+    assert probes == ([f"{base_db}|docker", f"{candidate_db}|docker"] if mode else [])
     assert (tmp_path / "workflow-repo" / "evidence" / f"upgrade-drill-{base}.txt").exists()
+
+
+@pytest.mark.parametrize("unreadable", ["db:one", "db:two"])
+def test_drill_workflow_fails_closed_when_an_identity_cannot_be_read(tmp_path, unreadable):
+    repo, base, revision = _drill_workflow_refs(tmp_path, "db:one", "db:two")
+    identities = {"db:one": _SAME_IDENTITY, "db:two": _SAME_IDENTITY}
+    del identities[unreadable]
+    result, args_file = _run_drill_workflow_step(repo, base, revision, tmp_path, identities=identities)
+    assert result.returncode != 0
+    assert "cannot probe" in result.stderr
+    assert not args_file.exists()
 
 
 @pytest.mark.parametrize("malformed", ["!no-image", "!null-image", "!no-image-next-header-comment"])
