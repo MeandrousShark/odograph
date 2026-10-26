@@ -422,7 +422,7 @@ def make_router() -> APIRouter:
         return _detail(detail, tz)
 
     @router.delete("/api/v1/trips/{trip_id}", status_code=204, response_class=Response,
-                   responses=_errors(401, 404, 409, 422, 429, 503))
+                   responses=_errors(401, 404, 409, 413, 422, 429, 503))
     @capacity_policy("form")
     async def remove_trip(request: Request, trip_id: int, api_user: ApiUser = Depends(require_api_user)):
         _trip_id(trip_id)
