@@ -21,7 +21,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import JSONResponse, Response
 
 from app.account_context import control_connection
-from app.accounts import get_account
+from app.accounts import get_account, get_report_account
 from app.api_errors import ApiError, ApiErrorEnvelope, FIELD_REQUIRED, FIELD_UNSUPPORTED, is_api_path
 from app.api_grants import (
     ACCESS_TOKEN_SECONDS, GrantLimitReached, IssuedTokens, check_access_token, format_instant,
@@ -99,6 +99,18 @@ def _bearer_token(request: Request) -> str | None:
 
 
 async def require_api_user(request: Request) -> ApiUser:
+    return await _require_api_user(request)
+
+
+async def require_api_report_user(request: Request) -> ApiUser:
+    """The bearer check for prepared files. Like the web's report identity,
+    it binds the account without reading its settings or other variable
+    data before admission; the preparation snapshot reads those and
+    re-checks `is_enabled` and `auth_version`."""
+    return await _require_api_user(request, report_profile=True)
+
+
+async def _require_api_user(request: Request, *, report_profile: bool = False) -> ApiUser:
     # Admission already ran this check for a route with a capacity lane.
     cached = getattr(request.state, "_capacity_authenticated_user", None)
     if isinstance(cached, ApiUser):
@@ -118,14 +130,15 @@ async def require_api_user(request: Request) -> ApiUser:
         check = await check_access_token(conn, token)
         principal, known = check.principal, check.known
         if principal is not None:
-            account = await get_account(conn, principal.account_id)
+            lookup = get_report_account if report_profile else get_account
+            account = await lookup(conn, principal.account_id)
     # Only guesses count toward the limiter: an expired or otherwise outdated
     # token of a real grant is normal client behavior. The 401 is identical.
     if (principal is None or account is None or not account["is_enabled"]
             or account["auth_version"] != principal.auth_version):
         raise _refuse(limiter, ip, ApiError("invalid_token", headers=BEARER_HEADERS), count=not known)
     try:
-        user = await _bind_account(request, account)
+        user = await _bind_account(request, account, **({"report_profile": True} if report_profile else {}))
     except errors.InsufficientPrivilege:
         # Disabled or signed out between the grant check and admission.
         raise _refuse(limiter, ip, ApiError("invalid_token", headers=BEARER_HEADERS), count=False) from None

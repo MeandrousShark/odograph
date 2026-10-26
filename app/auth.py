@@ -16,7 +16,6 @@ from authlib.integrations.base_client import OAuthError
 from authlib.integrations.starlette_client import OAuth
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
 from psycopg import errors
-from psycopg.rows import dict_row
 from starlette.datastructures import UploadFile
 from starlette.responses import JSONResponse, RedirectResponse
 
@@ -29,6 +28,7 @@ from app.accounts import (
     get_account,
     get_account_avatar,
     get_account_by_email,
+    get_report_account as _get_report_account,
     normalize_display_name,
     normalize_email,
     replace_password,
@@ -413,17 +413,6 @@ async def require_user(request: Request) -> dict:
 async def require_report_user(request: Request) -> dict:
     """Authenticate report identity before admitting variable-size preparation."""
     return await _require_user(request, report_profile=True)
-
-
-async def _get_report_account(conn, owner: int) -> dict | None:
-    cur = conn.cursor(row_factory=dict_row)
-    await cur.execute(
-        "SELECT id, is_admin, is_enabled, auth_version, "
-        "avatar_mime IS NOT NULL AS has_avatar, avatar_updated_at "
-        "FROM accounts WHERE id = %s",
-        (owner,),
-    )
-    return await cur.fetchone()
 
 
 def import_busy_response() -> JSONResponse:

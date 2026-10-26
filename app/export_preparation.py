@@ -12,7 +12,7 @@ from app.account_context import account_id
 from app.capacity import owned_thread
 from app.export_filters import RECORD, SEARCH_SETTING
 from app.preparation import FRAME_BYTES, _settle
-from app.report_preparation import Projection, FETCH_ROWS, TEXT_CHARS, _DETAIL_TEXT
+from app.report_preparation import AccountBindingChanged, Projection, FETCH_ROWS, TEXT_CHARS, _DETAIL_TEXT
 from app.trip_queries import DISPLAY_DISTANCE_SQL
 from app.ui._common import _trip_filter_sql, _START_PLACE_NAME_SQL, _END_PLACE_NAME_SQL, _START_ADDRESS_SQL, _END_ADDRESS_SQL
 
@@ -200,7 +200,7 @@ async def prepare_export(request,user,format='csv',category='',from_='',to='',ve
         await control.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
         guard = await projection.scalar(control,'SELECT id FROM accounts WHERE id=%s AND is_enabled AND auth_version=%s',(principal.account_id,principal.auth_version))
         if guard is None:
-            raise RuntimeError('export account binding changed')
+            raise AccountBindingChanged('export account binding changed')
         snapshot = await projection.scalar(control,'SELECT pg_export_snapshot() AS snapshot')
         async with request.state.account_pool.connection(snapshot_id=snapshot['snapshot']) as conn:
             owner = account_id(conn)
