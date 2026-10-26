@@ -38,6 +38,13 @@ def test_api_days_refuse_anything_else(text):
     assert refused.value.fields == {"date": "This value is not valid."}
 
 
+@pytest.mark.parametrize("amount", ["\u0661\u0662.\u0663\u0664", "\uff11\uff12", "1.\u0665"])
+def test_amounts_take_only_ascii_digits(amount):
+    with pytest.raises(ApiError) as refused:
+        _write_values({"amount": amount})
+    assert refused.value.fields == {"amount": "Invalid expense amount"}
+
+
 def test_write_values_parse_dates_and_amounts_by_field():
     parsed = _write_values({"incurred_on": "2026-04-15", "amount": "12.30", "notes": "n", "trip_id": None})
     assert parsed == {"incurred_on": date(2026, 4, 15), "amount": Decimal("12.30"), "notes": "n", "trip_id": None}
