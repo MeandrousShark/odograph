@@ -45,7 +45,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-DB_IMAGE="${DEVSITE_DB_IMAGE:-ghcr.io/meandrousshark/odograph-postgis@sha256:06b6d9eee52766e4b77f748a962612c8ef00343adba7c5ea09261bc223d1aa56}"
+DB_IMAGE="${DEVSITE_DB_IMAGE:-ghcr.io/meandrousshark/odograph-postgis@sha256:4dc09eaaabbde791dee120e3fdb5f32cfd7d6c707a08cd38c1f9c7fe16b66982}"
 DB_NAME="mileage_devsite"
 DB_USER="mileage"
 DB_CONTAINER="odograph-devsite-db"
