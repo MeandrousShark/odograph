@@ -13,8 +13,8 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
 
-from app.api_expenses import MAX_YEAR, MIN_YEAR, api_day, current_year, money
-from app.api_trips import _errors
+from app.api_common import MAX_YEAR, MIN_YEAR, error_responses
+from app.api_expenses import api_day, current_year, money
 from app.api_v1 import ApiUser, require_api_user
 from app.capacity_routes import AdmissionRoute, capacity_policy
 from app.stats import CATEGORIES as STATS_CATEGORIES
@@ -180,7 +180,7 @@ def make_router() -> APIRouter:
     router = APIRouter(route_class=AdmissionRoute)
 
     @router.get("/api/v1/dashboard/week", response_model=WeekDashboardResponse,
-                responses=_errors(401, 422, 429, 503))
+                responses=error_responses(401, 422, 429, 503))
     @capacity_policy("navigation")
     async def week(
         request: Request,
@@ -208,7 +208,7 @@ def make_router() -> APIRouter:
             missing_trip_count=0 if dashboard.attention is None else dashboard.attention.missing_trip_count,
         )
 
-    @router.get("/api/v1/stats", response_model=StatsResponse, responses=_errors(401, 422, 429, 503))
+    @router.get("/api/v1/stats", response_model=StatsResponse, responses=error_responses(401, 422, 429, 503))
     @capacity_policy("foreground")
     async def stats(
         request: Request,

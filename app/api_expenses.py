@@ -19,8 +19,11 @@ from pydantic import BaseModel, ConfigDict
 from starlette.responses import JSONResponse, Response
 
 from app.api_cursor import decode_cursor, encode_cursor, filter_digest
+from app.api_common import (
+    IDEMPOTENCY_KEY_HEADER, IDEMPOTENT_REPLAYED_HEADER, MAX_YEAR, MIN_YEAR, error_responses, year_in_range,
+)
+from app.api_common import idempotency_key as parse_idempotency_key
 from app.api_errors import FIELD_INVALID, ApiError
-from app.api_trips import IDEMPOTENCY_KEY_HEADER, IDEMPOTENT_REPLAYED_HEADER, _errors, _idempotency_key
 from app.api_v1 import ApiUser, require_api_user
 from app.capacity_routes import AdmissionRoute, capacity_policy, mark_committed_write
 from app.expense_ledger import (
@@ -33,9 +36,6 @@ from app.report_data import fetch_expense_comparison
 
 DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 200
-# The years every API date and year accepts.
-MIN_YEAR = 1900
-MAX_YEAR = 9998
 _DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 # Digits with an optional fraction; the shared rule then limits it to whole
 # cents within the column's range.
@@ -137,7 +137,7 @@ def api_day(field: str, value: str) -> date:
             parsed = date.fromisoformat(value)
         except ValueError:
             pass
-    if parsed is None or not MIN_YEAR <= parsed.year <= MAX_YEAR:
+    if parsed is None or not year_in_range(parsed.year):
         raise ApiError("validation_failed", fields={field: FIELD_INVALID})
     return parsed
 
@@ -219,7 +219,7 @@ def _cursor_position(day: date, expense_id: int) -> tuple[datetime, int]:
 def make_router() -> APIRouter:
     router = APIRouter(route_class=AdmissionRoute)
 
-    @router.get("/api/v1/expenses", response_model=ExpensePage, responses=_errors(400, 401, 422, 429, 503))
+    @router.get("/api/v1/expenses", response_model=ExpensePage, responses=error_responses(400, 401, 422, 429, 503))
     @capacity_policy("foreground")
     async def list_expenses(
         request: Request,
@@ -247,7 +247,7 @@ def make_router() -> APIRouter:
 
     # Registered ahead of the {expense_id} routes, so "comparison" is never an id.
     @router.get("/api/v1/expenses/comparison", response_model=ExpenseComparison,
-                responses=_errors(401, 422, 429, 503))
+                responses=error_responses(401, 422, 429, 503))
     @capacity_policy("foreground")
     async def comparison(
         request: Request,
@@ -261,7 +261,7 @@ def make_router() -> APIRouter:
 
     @router.post("/api/v1/expenses", status_code=201, response_model=Expense,
                  responses={200: {"model": Expense, "description": "Replayed"},
-                            **_errors(401, 409, 413, 422, 429, 503)})
+                            **error_responses(401, 409, 413, 422, 429, 503)})
     @capacity_policy("form")
     async def create(
         request: Request, body: ExpenseCreate,
@@ -269,7 +269,7 @@ def make_router() -> APIRouter:
         api_user: ApiUser = Depends(require_api_user),
     ):
         tz = request.state.config.display_tz
-        key = _idempotency_key(idempotency_key)
+        key = parse_idempotency_key(idempotency_key)
         values = _write_values(body.model_dump())
         async with request.state.account_pool.connection() as conn:
             try:
@@ -287,7 +287,7 @@ def make_router() -> APIRouter:
         return JSONResponse(content, status_code=201, headers={"Location": f"/api/v1/expenses/{expense_id}"})
 
     @router.patch("/api/v1/expenses/{expense_id}", response_model=Expense,
-                  responses=_errors(401, 404, 409, 413, 422, 429, 503))
+                  responses=error_responses(401, 404, 409, 413, 422, 429, 503))
     @capacity_policy("form")
     async def patch(request: Request, expense_id: int, body: ExpensePatch,
                     api_user: ApiUser = Depends(require_api_user)):
@@ -305,7 +305,7 @@ def make_router() -> APIRouter:
         return expense_item(row, tz)
 
     @router.delete("/api/v1/expenses/{expense_id}", status_code=204, response_class=Response,
-                   responses=_errors(401, 404, 422, 429, 503))
+                   responses=error_responses(401, 404, 422, 429, 503))
     # No lane, like the web delete, which posts no form.
     async def remove(request: Request, expense_id: int, api_user: ApiUser = Depends(require_api_user)):
         _expense_id(expense_id)

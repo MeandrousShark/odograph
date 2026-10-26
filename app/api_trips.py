@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import re
 import unicodedata
-import uuid
 from datetime import date, datetime, timedelta
 from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
@@ -19,7 +18,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import JSONResponse, Response
 
 from app.api_cursor import decode_cursor, encode_cursor, filter_digest
-from app.api_errors import FIELD_INVALID, ApiError, ApiErrorEnvelope
+from app.api_common import (
+    IDEMPOTENCY_KEY_HEADER, IDEMPOTENT_REPLAYED_HEADER, MAX_YEAR, MIN_YEAR, year_in_range,
+)
+from app.api_common import error_responses as _errors, idempotency_key as _idempotency_key
+from app.api_errors import FIELD_INVALID, ApiError
 from app.api_grants import format_instant
 from app.api_v1 import ApiUser, require_api_user
 from app.capacity_routes import AdmissionRoute, capacity_policy, mark_committed_write
@@ -44,13 +47,8 @@ _VEHICLE_ID = re.compile(r"[1-9][0-9]{0,18}")
 _MAX_ID = 2**63 - 1
 _INSTANT = re.compile(
     r"(\d{4}-\d{2}-\d{2})[Tt](\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?([Zz]|[+-]\d{2}:\d{2})")
-_UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 _INSTANT_FIELDS = ("started_at", "ended_at")
-# Instants in these years survive conversion to UTC and to any display zone.
-MIN_INSTANT_YEAR, MAX_INSTANT_YEAR = 1900, 9998
-TIME_OUT_OF_RANGE = "Enter a time from 1900 through 9998."
-IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
-IDEMPOTENT_REPLAYED_HEADER = "Idempotent-Replayed"
+TIME_OUT_OF_RANGE = f"Enter a time from {MIN_YEAR} through {MAX_YEAR}."
 
 
 class MultiLineString(BaseModel):
@@ -194,10 +192,6 @@ class PurposeList(BaseModel):
     next_cursor: str | None
 
 
-def _errors(*statuses: int) -> dict:
-    return {status: {"model": ApiErrorEnvelope} for status in statuses}
-
-
 def _invalid(field: str) -> ApiError:
     return ApiError("validation_failed", fields={field: FIELD_INVALID})
 
@@ -304,19 +298,13 @@ def _write_values(values: dict) -> dict:
             parsed = _instant(values[name])
             if parsed is None:
                 problems[name] = TIME_INVALID
-            elif not MIN_INSTANT_YEAR <= parsed.year <= MAX_INSTANT_YEAR:
+            elif not year_in_range(parsed.year):
                 problems[name] = TIME_OUT_OF_RANGE
             else:
                 values[name] = parsed
     if problems:
         raise ApiError("validation_failed", fields=problems)
     return values
-
-
-def _idempotency_key(value: str) -> uuid.UUID:
-    if not _UUID.fullmatch(value):
-        raise ApiError("validation_failed", fields={IDEMPOTENCY_KEY_HEADER: FIELD_INVALID})
-    return uuid.UUID(value)
 
 
 def _trip_id(trip_id: int) -> int:
