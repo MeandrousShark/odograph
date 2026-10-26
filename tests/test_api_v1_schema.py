@@ -403,6 +403,7 @@ def test_comparator_accepts_additive_value_changes(mutate):
     ("trips_page_response.json", TripPage),
     ("trip_detail_gapped.json", TripDetailResponse),
     ("trip_detail_snapped_only.json", TripDetailResponse),
+    ("trip_detail_raw_only.json", TripDetailResponse),
     ("trip_detail_geometry_free.json", TripDetailResponse),
     ("trip_detail_imported.json", TripDetailResponse),
     ("trip_detail_manual.json", TripDetailResponse),
