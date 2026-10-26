@@ -29,7 +29,7 @@ def test_api_days_accept_years_1900_through_9998(text, expected):
 
 @pytest.mark.parametrize("text", [
     "0001-01-01", "1899-12-31", "9999-01-01", "9999-12-31", "2026-02-30", "20260415", "2026-4-15",
-    "2026-W16-3", " 2026-04-15", "2026-04-15\n", "",
+    "2026W163", " 2026-04-15", "2026-04-15\n", "",
 ])
 def test_api_days_refuse_anything_else(text):
     with pytest.raises(ApiError) as refused:
