@@ -157,3 +157,21 @@ def test_instants_outside_the_display_safe_years_are_refused(text):
 def test_instants_at_the_display_safe_bounds_are_kept():
     assert _write_values({"started_at": "1900-01-01T00:00:00+14:00"})["started_at"].year == 1900
     assert _write_values({"ended_at": "9998-12-31T23:59:59-12:00"})["ended_at"].year == 9998
+
+
+@pytest.mark.parametrize("distance", ["3e35", "1e-50", "1e300"])
+def test_the_web_form_refuses_distances_a_real_cannot_hold(distance):
+    from zoneinfo import ZoneInfo
+
+    from app.trip_writes import ManualTripValidationError
+    from app.ui.manual import parse_manual_trip_input
+    with pytest.raises(ManualTripValidationError) as refused:
+        parse_manual_trip_input("2026-07-14", "09:00", "10:00", distance, ZoneInfo("America/Los_Angeles"))
+    assert refused.value.errors == {"distance": "Distance must be a positive finite number."}
+
+
+def test_distance_bounds_follow_the_real_column():
+    from app.trip_writes import REAL_MAX, REAL_MIN_NORMAL, distance_problem
+    assert distance_problem(REAL_MAX) is None and distance_problem(REAL_MIN_NORMAL) is None
+    for value in (3.5e38, 1e300, 1e-50, REAL_MIN_NORMAL / 2, 0, -1, float("nan"), float("inf")):
+        assert distance_problem(value) == "Distance must be a positive finite number.", value

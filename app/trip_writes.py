@@ -97,10 +97,16 @@ def _instant_problem(value) -> str | None:
     return None
 
 
-def _distance_problem(value) -> str | None:
+# trips.distance_m is a `real`: past these bounds a distance overflows, or
+# underflows to a different stored value.
+REAL_MIN_NORMAL = 1.1754943508222875e-38
+REAL_MAX = 3.4028234663852886e38
+
+
+def distance_problem(value) -> str | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return DISTANCE_INVALID
-    if not math.isfinite(value) or value <= 0:
+    if not math.isfinite(value) or not REAL_MIN_NORMAL <= value <= REAL_MAX:
         return DISTANCE_INVALID
     return None
 
@@ -234,7 +240,7 @@ async def _normalize_changes(
             if not manual:
                 problems[name] = MANUAL_ONLY
                 continue
-            problem = _distance_problem(value)
+            problem = distance_problem(value)
             if problem:
                 problems[name] = problem
                 continue
@@ -340,7 +346,7 @@ async def validate_manual_trip(conn, values: Mapping[str, object]) -> ManualTrip
             problems[name] = TIME_INVALID
     if values.get("distance_m") is None:
         problems["distance_m"] = FIELD_REQUIRED
-    elif _distance_problem(values["distance_m"]):
+    elif distance_problem(values["distance_m"]):
         problems["distance_m"] = DISTANCE_INVALID
     if not problems.keys() & {"started_at", "ended_at"} and values["ended_at"] <= values["started_at"]:
         problems["ended_at"] = END_BEFORE_START

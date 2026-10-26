@@ -20,7 +20,7 @@ from app.page import render_page
 from app.rates import METERS_PER_MILE
 from app.snap import ProviderOutputTooLarge, route_distance_m, route_line
 from app.storage import storage_status
-from app.trip_writes import ManualTrip, insert_manual_trip
+from app.trip_writes import ManualTrip, distance_problem, insert_manual_trip
 from app.validation import parse_finite_number
 from app.vehicles import list_vehicles
 
@@ -130,7 +130,7 @@ def parse_manual_trip_input(
         distance_m = None
     else:
         distance_m = distance_miles * METERS_PER_MILE
-        if not math.isfinite(distance_m):
+        if distance_problem(distance_m):
             raise ManualTripValidationError(
                 {"distance": "Distance must be a positive finite number."}
             )
