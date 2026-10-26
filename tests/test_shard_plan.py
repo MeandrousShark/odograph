@@ -18,7 +18,7 @@ WEIGHTS = {
 
 
 def test_costs_match_the_calibrated_model():
-    assert (suite_cost.DB_CENTISECONDS, suite_cost.OTHER_CENTISECONDS) == (70, 11)
+    assert (suite_cost.DB_CENTISECONDS, suite_cost.OTHER_CENTISECONDS) == (59, 9)
     assert (BUDGET, SHARD_CAP) == (22500, 8)
 
 
@@ -26,7 +26,7 @@ def test_file_weights_sum_case_costs_per_file():
     cases = [("tests/test_a_db.py::test_x", True), ("tests/test_a_db.py::test_y[1]", True),
              ("tests/test_b.py::test_z", False), ("tests/test_b.py::C::test_w", False)]
 
-    assert file_weights(cases) == {"tests/test_a_db.py": 140, "tests/test_b.py": 22}
+    assert file_weights(cases) == {"tests/test_a_db.py": 118, "tests/test_b.py": 18}
 
 
 @pytest.mark.parametrize("count", [1, 2, 3, 4, 5])

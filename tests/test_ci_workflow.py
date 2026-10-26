@@ -328,17 +328,17 @@ def test_plan_plugin_plans_a_small_suite_as_one_shard(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     plan = json.loads(output.read_text())
     assert plan["matrix"] == {"include": [{"shard": "shard-1", "spec": "1/1"}]}
-    assert (plan["count"], plan["cases"], plan["estimate_seconds"]) == (1, 4, 2.21)
+    assert (plan["count"], plan["cases"], plan["estimate_seconds"]) == (1, 4, 1.86)
 
 
 def test_plan_plugin_stops_with_the_capacity_message_beyond_the_cap(tmp_path):
-    # 2,580 db cases in ten files and one other case are 1,806.11
+    # 3,060 db cases in ten files and one other case are 1,805.49
     # model-seconds, just past 8 shards of 225.
-    result, output = _run_plan_plugin(tmp_path, 258, files=10)
+    result, output = _run_plan_plugin(tmp_path, 306, files=10)
 
     assert result.returncode == 4
     assert "needs 9 shards of 225 model-seconds, but SHARD_CAP allows 8" in result.stdout
-    assert "1806 model-seconds (30.1 minutes)" in result.stdout
+    assert "1805 model-seconds (30.1 minutes)" in result.stdout
     assert not output.exists()
 
 
