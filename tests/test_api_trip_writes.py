@@ -142,3 +142,18 @@ def test_api_edits_and_deletes_authenticate_first_and_free_the_form_slot():
         assert reads == 1 and calls == [("patch", "hello"), ("delete", 2)]
         assert not any(manager._active.values())
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("text", [
+    "0001-01-01T05:00:00Z", "0001-01-01T00:00:00+01:00", "9999-12-31T20:00:00-05:00",
+    "1899-12-31T23:59:59Z", "9999-01-01T00:00:00Z",
+])
+def test_instants_outside_the_display_safe_years_are_refused(text):
+    with pytest.raises(ApiError) as refused:
+        _write_values({"started_at": text})
+    assert refused.value.fields == {"started_at": "Enter a time from 1900 through 9998."}
+
+
+def test_instants_at_the_display_safe_bounds_are_kept():
+    assert _write_values({"started_at": "1900-01-01T00:00:00+14:00"})["started_at"].year == 1900
+    assert _write_values({"ended_at": "9998-12-31T23:59:59-12:00"})["ended_at"].year == 9998

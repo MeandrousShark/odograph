@@ -46,6 +46,9 @@ _INSTANT = re.compile(
     r"(\d{4}-\d{2}-\d{2})[Tt](\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?([Zz]|[+-]\d{2}:\d{2})")
 _UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 _INSTANT_FIELDS = ("started_at", "ended_at")
+# Instants in these years survive conversion to UTC and to any display zone.
+MIN_INSTANT_YEAR, MAX_INSTANT_YEAR = 1900, 9998
+TIME_OUT_OF_RANGE = "Enter a time from 1900 through 9998."
 IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
 IDEMPOTENT_REPLAYED_HEADER = "Idempotent-Replayed"
 
@@ -301,6 +304,8 @@ def _write_values(values: dict) -> dict:
             parsed = _instant(values[name])
             if parsed is None:
                 problems[name] = TIME_INVALID
+            elif not MIN_INSTANT_YEAR <= parsed.year <= MAX_INSTANT_YEAR:
+                problems[name] = TIME_OUT_OF_RANGE
             else:
                 values[name] = parsed
     if problems:

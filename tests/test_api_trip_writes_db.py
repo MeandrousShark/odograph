@@ -729,3 +729,25 @@ def test_create_cases_match_the_synthetic_fixture():
                 assert headers["idempotent-replayed"] == "true"
         assert await _count(state) == 2
     _run(check)
+
+
+def test_instants_outside_the_display_safe_years_write_nothing():
+    async def check(state):
+        manual = await _insert(state, BASE)
+        before = await _row(state, manual)
+        out_of_range = {"started_at": "Enter a time from 1900 through 9998."}
+        for started, ended in (("0001-01-01T05:00:00Z", "0001-01-01T06:00:00Z"),
+                               ("0001-01-01T00:00:00+01:00", "2026-01-01T00:00:00Z"),
+                               ("9999-12-31T20:00:00-05:00", "9999-12-31T21:00:00-05:00")):
+            response = await _create(state, {"started_at": started, "ended_at": ended, "distance_m": 10})
+            assert response.status_code == 422, started
+            assert response.json()["error"]["fields"]["started_at"] == out_of_range["started_at"]
+            response = await _api(state, "PATCH", f"/api/v1/trips/{manual}",
+                                  body={"started_at": started, "ended_at": ended})
+            assert response.status_code == 422, started
+            assert response.json()["error"]["fields"]["started_at"] == out_of_range["started_at"]
+        assert await _count(state) == 1
+        assert await _row(state, manual) == before
+        assert (await _api(state, "GET", "/api/v1/trips")).status_code == 200
+        assert (await state.client.get("/trips")).status_code == 200
+    _run(check)
