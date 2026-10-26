@@ -789,3 +789,30 @@ def test_review_tag_with_an_overflowing_vehicle_id_is_a_bad_request():
         assert (response.status_code, response.json()) == (400, {"detail": "No such vehicle"})
         assert await _row(state, trip) == before
     _run(check)
+
+
+def test_unstorable_text_and_undecodable_bodies_are_validation_failed(monkeypatch):
+    async def check(state):
+        commits = _Commits(monkeypatch)
+        trip = await _insert(state, BASE)
+        before = await _row(state, trip)
+        headers = {"Content-Type": "application/json"}
+        body_problem = {"body": "The request body must be a JSON object."}
+        for content, fields in (
+            (json.dumps(_create_body(notes="\ud800")), {"notes": "This value is not valid."}),
+            (json.dumps(_create_body(purpose="\udfff x", start_label="a\ud83d")),
+             {"purpose": "This value is not valid.", "start_label": "This value is not valid."}),
+            (json.dumps(_create_body())[:-1] + ', "vehicle_id": ' + "9" * 5000 + "}", body_problem),
+        ):
+            response = await _api(state, "POST", "/api/v1/trips", content=content,
+                                  headers={**headers, "Idempotency-Key": _key()})
+            assert (response.status_code, response.json()["error"]["fields"]) == (422, fields), response.text
+        for content, fields in (
+            ('{"notes": "\\udfff x"}', {"notes": "This value is not valid."}),
+            ('{"vehicle_id": ' + "9" * 5000 + "}", body_problem),
+        ):
+            response = await _api(state, "PATCH", f"/api/v1/trips/{trip}", content=content, headers=headers)
+            assert (response.status_code, response.json()["error"]["fields"]) == (422, fields), response.text
+        assert await _row(state, trip) == before and await _count(state) == 1
+        assert commits.take() == []
+    _run(check)

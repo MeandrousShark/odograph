@@ -1,6 +1,7 @@
 """Request rules shared by the API v1 resource routes: the years every date,
-instant and year parameter accepts, idempotency keys on creates, and the
-error responses documented for an operation."""
+instant and year parameter accepts, text the database can store,
+idempotency keys on creates, and the error responses documented for an
+operation."""
 from __future__ import annotations
 
 import re
@@ -18,6 +19,25 @@ _UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}
 
 def year_in_range(year: int) -> bool:
     return MIN_YEAR <= year <= MAX_YEAR
+
+
+def storable_text(value: str) -> bool:
+    """Whether a database text column can hold `value`: no NUL, and no lone
+    surrogate (which JSON can spell but UTF-8 cannot encode)."""
+    if "\x00" in value:
+        return False
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def unstorable_fields(values: dict) -> dict[str, str]:
+    """`validation_failed` field messages for the string values no text
+    column can hold."""
+    return {name: FIELD_INVALID for name, value in values.items()
+            if isinstance(value, str) and not storable_text(value)}
 
 
 def idempotency_key(value: str) -> uuid.UUID:

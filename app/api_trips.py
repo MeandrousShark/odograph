@@ -19,7 +19,8 @@ from starlette.responses import JSONResponse, Response
 
 from app.api_cursor import decode_cursor, encode_cursor, filter_digest
 from app.api_common import (
-    IDEMPOTENCY_KEY_HEADER, IDEMPOTENT_REPLAYED_HEADER, MAX_YEAR, MIN_YEAR, year_in_range,
+    IDEMPOTENCY_KEY_HEADER, IDEMPOTENT_REPLAYED_HEADER, MAX_YEAR, MIN_YEAR, storable_text, unstorable_fields,
+    year_in_range,
 )
 from app.api_common import error_responses as _errors, idempotency_key as _idempotency_key
 from app.api_errors import FIELD_INVALID, ApiError
@@ -208,9 +209,10 @@ def _day(field: str, value: str | None) -> date | None:
 
 
 def _search(value: str | None) -> str:
-    """The trimmed search term. Control characters, NUL among them, are
-    refused: no stored text holds them, and the database rejects NUL."""
-    if value is not None and any(unicodedata.category(char) == "Cc" for char in value):
+    """The trimmed search term. Control characters, NUL among them, and text
+    the database cannot encode are refused: no stored text holds them."""
+    if value is not None and (any(unicodedata.category(char) == "Cc" for char in value)
+                              or not storable_text(value)):
         raise _invalid("q")
     return (value or "").strip()
 
@@ -284,12 +286,9 @@ def _instant(value: str) -> datetime | None:
 
 
 def _write_values(values: dict) -> dict:
-    """Parse instants, and refuse NUL, which no stored text can hold, and
-    ids no stored vehicle can have."""
-    problems = {}
-    for name, value in values.items():
-        if isinstance(value, str) and "\x00" in value:
-            problems[name] = FIELD_INVALID
+    """Parse instants, and refuse text no column can hold and ids no stored
+    vehicle can have."""
+    problems = unstorable_fields(values)
     vehicle_id = values.get("vehicle_id")
     if vehicle_id is not None and not 1 <= vehicle_id <= _MAX_ID:
         problems["vehicle_id"] = VEHICLE_MISSING

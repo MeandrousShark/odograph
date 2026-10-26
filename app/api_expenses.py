@@ -20,7 +20,8 @@ from starlette.responses import JSONResponse, Response
 
 from app.api_cursor import decode_cursor, encode_cursor, filter_digest
 from app.api_common import (
-    IDEMPOTENCY_KEY_HEADER, IDEMPOTENT_REPLAYED_HEADER, MAX_YEAR, MIN_YEAR, error_responses, year_in_range,
+    IDEMPOTENCY_KEY_HEADER, IDEMPOTENT_REPLAYED_HEADER, MAX_YEAR, MIN_YEAR, error_responses, unstorable_fields,
+    year_in_range,
 )
 from app.api_common import idempotency_key as parse_idempotency_key
 from app.api_errors import FIELD_INVALID, ApiError
@@ -147,12 +148,9 @@ def current_year(request: Request) -> int:
 
 
 def _write_values(values: dict) -> dict:
-    """Parse dates and amounts, and refuse NUL, which no stored text can
-    hold, and ids no stored row can have."""
-    problems = {}
-    for name, value in values.items():
-        if isinstance(value, str) and "\x00" in value:
-            problems[name] = FIELD_INVALID
+    """Parse dates and amounts, and refuse text no column can hold and ids
+    no stored row can have."""
+    problems = unstorable_fields(values)
     for name, missing in (("vehicle_id", VEHICLE_MISSING), ("trip_id", TRIP_MISSING)):
         if values.get(name) is not None and not 1 <= values[name] <= _MAX_ID:
             problems[name] = missing

@@ -240,6 +240,17 @@ def test_create_without_a_valid_key_or_body_claims_nothing(monkeypatch):
             assert response.json() == {"error": {"code": "validation_failed",
                                                  "message": ERRORS["validation_failed"][1],
                                                  "fields": fields}}, body
+        body_problem = {"body": "The request body must be a JSON object."}
+        for content, fields in (
+            (json.dumps(_body(vehicle_id=car, notes="\ud800")), {"notes": INVALID}),
+            (json.dumps(_body(vehicle_id=car, notes="\udfff x", amount="1\ud800")),
+             {"notes": INVALID, "amount": INVALID}),
+            (json.dumps(_body(vehicle_id=car))[:-1] + ', "trip_id": ' + "9" * 5000 + "}", body_problem),
+        ):
+            response = await _api(state, "POST", "/api/v1/expenses", content=content,
+                                  headers={"Idempotency-Key": key, "Content-Type": "application/json"})
+            assert response.status_code == 422, response.text
+            assert response.json()["error"]["fields"] == fields
         assert await _count(state) == count and commits.take() == []
         # A corrected request may use the key; the boundary years and amounts are accepted.
         for body in (_body(vehicle_id=car), _body(vehicle_id=car, incurred_on="1900-01-01", amount="0.01"),
@@ -420,6 +431,15 @@ def test_patch_refuses_what_the_expense_cannot_hold():
             response = await _api(state, "PATCH", f"/api/v1/expenses/{expense}", content=content,
                                   headers={"Content-Type": "application/json"})
             assert response.status_code == 422, content
+        for content, fields in (
+            ('{"notes": "\\udfff x"}', {"notes": INVALID}),
+            ('{"incurred_on": "\\ud800"}', {"incurred_on": INVALID}),
+            ('{"vehicle_id": ' + "9" * 5000 + "}", {"body": "The request body must be a JSON object."}),
+        ):
+            response = await _api(state, "PATCH", f"/api/v1/expenses/{expense}", content=content,
+                                  headers={"Content-Type": "application/json"})
+            assert response.status_code == 422, (content[:30], response.text)
+            assert response.json()["error"]["fields"] == fields
         assert await _row(state, expense) == before
     _run(check)
 
