@@ -9,6 +9,8 @@ reproduced here.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-25
+
 ### Added
 
 - Mobile app sign-in for the first-party Odograph app, off by default. Set
@@ -31,6 +33,19 @@ reproduced here.
   `Idempotency-Key` header, so a retried create never makes a second record.
   Nothing can reach them until an app has signed in.
 
+### Changed
+
+- Reports: filters sit in the shared disclosure, the summary comes first,
+  tables use consistent headings and the notes are gathered at the end.
+  Figures are unchanged.
+- Expenses: the add form opens from a disclosure (open when the ledger is
+  empty), and deleting an expense asks in an in-page dialog, as Trips does.
+- Settings is grouped into sections (Account and storage, Preferences,
+  Notifications, Vehicles and rates, Places and rules, Data, System) with a
+  section list on wide screens and a jump menu on phones. Time zone and
+  notifications save separately, the tracking link moves into Account, and
+  destructive actions ask in an in-page dialog.
+
 ### Fixed
 
 - A manual trip or trip edit whose distance is outside the range the database
@@ -50,6 +65,26 @@ reproduced here.
   apps list.
 - Migration 051 (`additive`) adds idempotency key columns to trips and
   expenses for creates through the API.
+- See [Upgrading from 1.1](docs/upgrading.md#upgrading-from-11).
+
+### Supported upgrade path
+
+- `v1.1.0` upgrades directly. `v1.0.0` may also upgrade directly; its
+  database image differs, so it follows
+  [Upgrading the PostGIS database image](docs/upgrading.md#upgrading-the-postgis-database-image)
+  and reads the 1.1 notes. A 0.x installation first upgrades to `v1.0.0`.
+- Prior-release artifact upgrade gate: release preflight ran the Docker
+  Compose upgrade drill from `v1.1.0` in standard mode and from `v1.0.0` in
+  database-image migration mode before this release was tagged.
+
+### Breaking changes
+
+- None. Mobile sign-in is off unless `MOBILE_SIGNIN=1` is set, so the new
+  `/api/v1` data endpoints cannot be reached until an app signs in. The
+  database image is unchanged from 1.1.0.
+- As with any release that adds migrations, rollback to 1.1 restores the
+  verified pre-upgrade backup and loses writes made after it. See
+  [Rollback](docs/upgrading.md#rollback).
 
 ## [1.1.0] - 2026-10-23
 

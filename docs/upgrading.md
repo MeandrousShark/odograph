@@ -125,6 +125,24 @@ For a Podman installation, replace each `docker compose` command with
 This procedure is also the model used by the release preflight database-image
 migration drill.
 
+## Upgrading from 1.1
+
+Migrations 048 to 051 are class `additive`: they add the API grant, mobile
+authorization request and code tables with their protected functions, the
+signed-in apps list function, and nullable idempotency key columns on trips
+and expenses. Existing rows and stored data are unchanged, and the database
+image is the same as 1.1.0, so the standard [upgrade procedure](#upgrade-procedure)
+applies.
+
+No configuration change is required. Mobile app sign-in stays off unless
+`MOBILE_SIGNIN=1` is set; see
+[Mobile app sign-in and signed-in apps](accounts.md#mobile-app-sign-in-and-signed-in-apps).
+Account Settings gains a **Signed-in apps** section, empty until an app signs
+in.
+
+Rollback across these migrations requires the verified pre-upgrade backup,
+as described in [Rollback](#rollback).
+
 ## Upgrading from 1.0
 
 Migration 046 is class `rewrite`: it makes storage limits optional and
