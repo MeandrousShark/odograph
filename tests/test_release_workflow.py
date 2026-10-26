@@ -28,6 +28,7 @@ def test_release_is_tag_only_repo_scoped_and_serialized_per_tag():
 
     prepare = workflow["jobs"]["prepare"]
     assert prepare["steps"][0]["with"]["ref"] == "${{ github.sha }}"
+    assert prepare["steps"][0]["with"]["fetch-depth"] == "0"
     validate = steps_by_name(prepare)["Validate tagged release inputs"]
     assert validate["env"]["REPOSITORY"] == "${{ github.repository }}"
     assert 'image="ghcr.io/${REPOSITORY,,}"' in validate["run"]
