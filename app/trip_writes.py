@@ -22,6 +22,7 @@ from psycopg import errors
 from psycopg.rows import dict_row
 
 from app.account_context import account_id
+from app.api_errors import ERRORS
 from app.detector.lock import lock_detector
 from app.trip_queries import CATEGORIES, EXCLUSIONS
 
@@ -59,7 +60,7 @@ MANUAL_FIELDS = ("started_at", "ended_at", "distance_m", *LABEL_FIELDS)
 UPDATE_FIELDS = ("category", "exclusion", "purpose", "notes", "vehicle_id", *MANUAL_FIELDS)
 REQUIRED_FIELDS = ("category", "started_at", "ended_at", "distance_m")
 
-IN_PROGRESS_DETAIL = "This trip is still in progress. Try again once it ends."
+IN_PROGRESS_DETAIL = ERRORS["trip_in_progress"][1]
 
 
 def normalize_trip_label(value: str, field: str) -> str | None:
@@ -111,8 +112,6 @@ def distance_problem(value) -> str | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Human tags
 
 
 async def apply_human_tag(
@@ -154,8 +153,6 @@ async def apply_human_tag(
         raise HTTPException(status_code=404, detail="No such trip")
 
 
-# ---------------------------------------------------------------------------
-# Partial updates
 
 _STORED_COLUMNS = (
     "source::text AS source, category::text AS category, exclusion::text AS exclusion, "
@@ -309,8 +306,6 @@ async def update_trip(conn, trip_id: int, changes: Mapping[str, object], **optio
     return await update_locked_trip(conn, trip_id, stored, changes, **options)
 
 
-# ---------------------------------------------------------------------------
-# Manual creates
 
 
 @dataclass(frozen=True)
@@ -466,8 +461,6 @@ async def create_manual_trip(
     raise RuntimeError("idempotent create did not settle")
 
 
-# ---------------------------------------------------------------------------
-# Deletion
 
 
 async def refuse_in_progress_trips(conn, trip_ids: list[int]) -> None:

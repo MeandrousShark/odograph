@@ -13,6 +13,7 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 
 from app.account_context import account_id
 from app.capacity import owned_thread
+from app.capacity_routes import mark_committed_write
 from app.config import DEFAULT_MISSING_TRIP_GAP_M
 from app.auth import require_csrf, require_user
 from app.page import _fetch_review_count, render_page, render_template
@@ -37,18 +38,17 @@ from app.trip_archive import (
 )
 from app.trip_queries import DISPLAY_DISTANCE_SQL, TripFilter
 from app.trip_reads import fetch_trip_detail, trip_position
-from app.trip_writes import (
-    apply_human_tag as _apply_human_tag,
-    delete_trip as _delete_trip_in,
-    lock_trip,
-    update_locked_trip,
-)
-from app.capacity_routes import mark_committed_write
 from app.trip_warnings import (
     WARNING_KINDS,
     acknowledge as acknowledge_warnings,
     current_fingerprints,
     unacknowledge as unacknowledge_warning,
+)
+from app.trip_writes import (
+    apply_human_tag as _apply_human_tag,
+    delete_trip as _delete_trip_in,
+    lock_trip,
+    update_locked_trip,
 )
 from app.vehicles import list_vehicles
 
