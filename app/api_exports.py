@@ -15,17 +15,15 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Path, Query, Request
 from starlette.responses import Response
 
-from app.api_errors import ApiError, ApiErrorEnvelope
-from app.api_trips import (
-    MAX_INSTANT_YEAR, MIN_INSTANT_YEAR, Category, invalid_field, parse_day, parse_search, parse_vehicle,
-)
+from app.api_common import MAX_YEAR, MIN_YEAR, api_day, error_responses
+from app.api_errors import ApiError
+from app.api_trips import Category, invalid_field, parse_search, parse_vehicle
 from app.api_v1 import BEARER_HEADERS, ApiUser, require_api_report_user
 from app.capacity_routes import AdmissionRoute, capacity_policy
 from app.report_preparation import AccountBindingChanged
 
 CSV_MEDIA_TYPE = "text/csv; charset=utf-8"
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-DATE_OUT_OF_RANGE = "Enter a date from 1900 through 9998."
 RANGE_REVERSED = "End the range on or after its start."
 RANGE_CROSSES_YEAR = "Keep the range within one calendar year."
 _YEAR = re.compile(r"[0-9]{4}")
@@ -35,15 +33,12 @@ def _responses(*media_types: str) -> dict:
     binary = {"schema": {"type": "string", "format": "binary"}}
     responses = {200: {"description": "The complete file, sent as an attachment.",
                        "content": {media_type: binary for media_type in media_types}}}
-    responses.update({status: {"model": ApiErrorEnvelope} for status in (401, 422, 429, 503)})
+    responses.update(error_responses(401, 422, 429, 503))
     return responses
 
 
 def _day(field: str, value: str | None) -> date | None:
-    day = parse_day(field, value)
-    if day is not None and not MIN_INSTANT_YEAR <= day.year <= MAX_INSTANT_YEAR:
-        raise ApiError("validation_failed", fields={field: DATE_OUT_OF_RANGE})
-    return day
+    return None if value is None else api_day(field, value)
 
 
 async def _prepared(preparation):
@@ -92,7 +87,7 @@ def make_router() -> APIRouter:
         to: str = Query(),
         api_user: ApiUser = Depends(require_api_report_user),
     ):
-        start, end = _day("from", from_), _day("to", to)
+        start, end = api_day("from", from_), api_day("to", to)
         if start > end:
             raise ApiError("validation_failed", fields={"to": RANGE_REVERSED})
         if start.year != end.year:
@@ -105,7 +100,7 @@ def make_router() -> APIRouter:
     async def annual_report(
         request: Request,
         format: Literal["xlsx"],
-        year: int = Path(ge=MIN_INSTANT_YEAR, le=MAX_INSTANT_YEAR),
+        year: int = Path(ge=MIN_YEAR, le=MAX_YEAR),
         api_user: ApiUser = Depends(require_api_report_user),
     ):
         # The integer conversion accepts "+2026", "02026" and the like.

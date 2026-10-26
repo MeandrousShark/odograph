@@ -154,3 +154,14 @@ def test_a_cached_report_identity_never_satisfies_a_full_profile_request(monkeyp
     assert asyncio.run(require_api_report_user(request)) is full
     assert asyncio.run(api_v1.require_api_user(request)) is full
     assert len(calls) == 4
+
+
+@pytest.mark.parametrize("term", ["\ud800", "a\udfffb", "a\x00b"])
+def test_export_search_refuses_text_the_database_cannot_hold(term):
+    # HTTP query decoding replaces invalid UTF-8, so only a direct call can
+    # pass a lone surrogate; the export takes the archive's search parser.
+    endpoint = next(route.endpoint for route in make_router().routes if route.path == "/api/v1/exports/trips")
+    with pytest.raises(ApiError) as raised:
+        asyncio.run(endpoint(request=None, format="csv", api_user=None, category=None, from_=None,
+                             to=None, vehicle=None, q=term, exclusion=None))
+    assert raised.value.code == "validation_failed" and raised.value.fields == {"q": "This value is not valid."}

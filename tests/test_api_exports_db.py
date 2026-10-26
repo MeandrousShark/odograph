@@ -207,8 +207,8 @@ BAD_PARAMETERS = [
     ("/api/v1/exports/trips", {"format": "csv", "exclusion": "all"}, {"exclusion": "This value is not valid."}),
     ("/api/v1/exports/trips", {"format": "csv", "from": "2026-4-1"}, {"from": "This value is not valid."}),
     ("/api/v1/exports/trips", {"format": "csv", "to": "2026-02-30"}, {"to": "This value is not valid."}),
-    ("/api/v1/exports/trips", {"format": "csv", "to": "9999-12-31"}, {"to": "Enter a date from 1900 through 9998."}),
-    ("/api/v1/exports/trips", {"format": "csv", "from": "1899-12-31"}, {"from": "Enter a date from 1900 through 9998."}),
+    ("/api/v1/exports/trips", {"format": "csv", "to": "9999-12-31"}, {"to": "This value is not valid."}),
+    ("/api/v1/exports/trips", {"format": "csv", "from": "1899-12-31"}, {"from": "This value is not valid."}),
     ("/api/v1/exports/trips", {"format": "csv", "vehicle": "car"}, {"vehicle": "This value is not valid."}),
     ("/api/v1/exports/trips", {"format": "csv", "vehicle": "0"}, {"vehicle": "This value is not valid."}),
     ("/api/v1/exports/trips", {"format": "csv", "q": "a\x00b"}, {"q": "This value is not valid."}),
@@ -235,7 +235,7 @@ BAD_PARAMETERS = [
     ("/api/v1/reports/range", {"format": "xlsx", "from": "2026-04-01", "to": "2027-03-31"},
      {"to": "Keep the range within one calendar year."}),
     ("/api/v1/reports/range", {"format": "xlsx", "from": "1899-01-01", "to": "1899-03-31"},
-     {"from": "Enter a date from 1900 through 9998."}),
+     {"from": "This value is not valid."}),
 ]
 
 
