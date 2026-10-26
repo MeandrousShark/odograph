@@ -23,6 +23,8 @@ from pathlib import Path
 import pytest
 
 from app.api_errors import ApiErrorEnvelope
+from app.api_expenses import Expense, ExpenseComparison, ExpenseCreate, ExpensePage, ExpensePatch
+from app.api_stats import StatsResponse, WeekDashboardResponse
 from app.api_trips import (
     PurposeList, ReviewResponse, TripCreate, TripDetailResponse, TripPage, TripPatch, VehicleList,
 )
@@ -203,7 +205,8 @@ def test_api_schema_matches_the_checked_in_contract():
     assert set(generated["paths"]) == {
         "/api/v1/auth/revoke", "/api/v1/auth/token", "/api/v1/capabilities", "/api/v1/me",
         "/api/v1/trips", "/api/v1/trips/{trip_id}", "/api/v1/review", "/api/v1/vehicles",
-        "/api/v1/purposes/recent",
+        "/api/v1/purposes/recent", "/api/v1/dashboard/week", "/api/v1/stats", "/api/v1/expenses",
+        "/api/v1/expenses/{expense_id}", "/api/v1/expenses/comparison",
     }
     if os.environ.get("ODOGRAPH_UPDATE_API_SCHEMA") == "1" and SNAPSHOT.exists():
         problems = breaking_changes(json.loads(SNAPSHOT.read_text()), generated)
@@ -292,6 +295,12 @@ def test_comparator_rejects_incompatible_changes(mutate, expected):
     ("error_idempotency_key_reused.json", ApiErrorEnvelope),
     ("error_storage_full.json", ApiErrorEnvelope),
     ("error_trip_in_progress.json", ApiErrorEnvelope),
+    ("dashboard_week_response.json", WeekDashboardResponse),
+    ("stats_response.json", StatsResponse),
+    ("expenses_page_response.json", ExpensePage),
+    ("expense_comparison_response.json", ExpenseComparison),
+    ("expense_create_request.json", ExpenseCreate),
+    ("expense_patch_request.json", ExpensePatch),
 ])
 def test_synthetic_fixtures_match_their_models(filename, model):
     data = json.loads((FIXTURES / filename).read_text())
@@ -301,13 +310,15 @@ def test_synthetic_fixtures_match_their_models(filename, model):
         assert parsed.model_dump(mode="json") == data
 
 
-@pytest.mark.parametrize("filename,request_model", [
-    ("trip_patch_cases.json", TripPatch),
-    ("trip_create_cases.json", TripCreate),
+@pytest.mark.parametrize("filename,request_model,record_model", [
+    ("trip_patch_cases.json", TripPatch, TripDetailResponse),
+    ("trip_create_cases.json", TripCreate, TripDetailResponse),
+    ("expense_patch_cases.json", ExpensePatch, Expense),
+    ("expense_create_cases.json", ExpenseCreate, Expense),
 ])
-def test_write_case_fixtures_match_their_models(filename, request_model):
+def test_write_case_fixtures_match_their_models(filename, request_model, record_model):
     for case in json.loads((FIXTURES / filename).read_text())["cases"]:
-        response_model = TripDetailResponse if case["status"] < 400 else ApiErrorEnvelope
+        response_model = record_model if case["status"] < 400 else ApiErrorEnvelope
         assert response_model.model_validate(case["response"]).model_dump(mode="json") == case["response"]
         if case["status"] < 400:
             request_model.model_validate(case["request"])

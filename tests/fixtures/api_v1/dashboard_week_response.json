@@ -1,0 +1,76 @@
+{
+  "week_start": "2026-04-13",
+  "week_end": "2026-04-19",
+  "previous_week_start": "2026-04-06",
+  "next_week_start": "2026-04-20",
+  "is_current_week": false,
+  "trip_count": 6,
+  "distance": {
+    "total_m": 34921.88,
+    "business_m": 18828.440000000002,
+    "personal_m": 8046.72,
+    "unclassified_m": 3218.69,
+    "nondeductible_m": 4828.03
+  },
+  "days": [
+    {
+      "total_m": 16093.44,
+      "business_m": 16093.44,
+      "personal_m": 0.0,
+      "unclassified_m": 0.0,
+      "nondeductible_m": 0.0,
+      "date": "2026-04-13"
+    },
+    {
+      "total_m": 8046.72,
+      "business_m": 0.0,
+      "personal_m": 8046.72,
+      "unclassified_m": 0.0,
+      "nondeductible_m": 0.0,
+      "date": "2026-04-14"
+    },
+    {
+      "total_m": 8046.719999999999,
+      "business_m": 0.0,
+      "personal_m": 0.0,
+      "unclassified_m": 3218.69,
+      "nondeductible_m": 4828.03,
+      "date": "2026-04-15"
+    },
+    {
+      "total_m": 0.0,
+      "business_m": 0.0,
+      "personal_m": 0.0,
+      "unclassified_m": 0.0,
+      "nondeductible_m": 0.0,
+      "date": "2026-04-16"
+    },
+    {
+      "total_m": 1500.5,
+      "business_m": 1500.5,
+      "personal_m": 0.0,
+      "unclassified_m": 0.0,
+      "nondeductible_m": 0.0,
+      "date": "2026-04-17"
+    },
+    {
+      "total_m": 1234.5,
+      "business_m": 1234.5,
+      "personal_m": 0.0,
+      "unclassified_m": 0.0,
+      "nondeductible_m": 0.0,
+      "date": "2026-04-18"
+    },
+    {
+      "total_m": 0.0,
+      "business_m": 0.0,
+      "personal_m": 0.0,
+      "unclassified_m": 0.0,
+      "nondeductible_m": 0.0,
+      "date": "2026-04-19"
+    }
+  ],
+  "expense_total": "58.01",
+  "deduction": "8.48",
+  "missing_trip_count": 0
+}

@@ -1,0 +1,58 @@
+{
+  "year": 2026,
+  "vehicles": [
+    {
+      "vehicle_id": 2,
+      "vehicle_name": "My Car",
+      "business_m": 83327.94,
+      "denominator_m": 250000.0,
+      "denominator_source": "odometer",
+      "provisional": false,
+      "invalid_odometer": false,
+      "business_share": 0.33331176,
+      "allocated_expenses": "45.67",
+      "fully_business_expenses": "12.34",
+      "standard_total": "50.13",
+      "actual_total": "27.56",
+      "difference": "22.57",
+      "larger_estimate": "standard"
+    },
+    {
+      "vehicle_id": 4,
+      "vehicle_name": "Van",
+      "business_m": 0.0,
+      "denominator_m": 8046.719999999999,
+      "denominator_source": "gps",
+      "provisional": true,
+      "invalid_odometer": false,
+      "business_share": 0.0,
+      "allocated_expenses": "1200.00",
+      "fully_business_expenses": "3.10",
+      "standard_total": "3.10",
+      "actual_total": "3.10",
+      "difference": "0.00",
+      "larger_estimate": "tie"
+    }
+  ],
+  "category_totals": [
+    {
+      "category": "fuel",
+      "amount": "45.67"
+    },
+    {
+      "category": "insurance",
+      "amount": "1200.00"
+    },
+    {
+      "category": "parking",
+      "amount": "12.34"
+    },
+    {
+      "category": "tolls",
+      "amount": "3.10"
+    }
+  ],
+  "allocated_total": "1245.67",
+  "fully_business_total": "15.44",
+  "ledger_total": "1261.11"
+}
