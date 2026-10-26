@@ -367,14 +367,24 @@ def test_binding_change_after_admission_fails_at_the_snapshot(tmp_path, monkeypa
                     response = await state.client.get(path, params=params, headers=_bearer(state))
                     assert response.status_code == 401 and len(operations) == 1
                     await restore()
-                # The web routes still fail the same way they always have.
-                for web_path, params in WEB_FILE_PATHS:
-                    operations.clear()
-                    with pytest.raises(AccountBindingChanged, match="account binding changed"):
-                        await state.client.get(web_path, params=params)
-                    assert len(operations) == 1
-                    _assert_clean(state, operations)
-                    await restore()
+                # The web routes still fail the same way they always have: the
+                # pipeline's error escapes as a plain 500.
+                async with httpx.AsyncClient(
+                        transport=httpx.ASGITransport(app=state.app, raise_app_exceptions=False),
+                        base_url="https://test", cookies=state.client.cookies) as web:
+                    for web_path, params in WEB_FILE_PATHS:
+                        operations.clear()
+                        with pytest.raises(AccountBindingChanged, match="account binding changed"):
+                            await state.client.get(web_path, params=params)
+                        assert len(operations) == 1
+                        _assert_clean(state, operations)
+                        await restore()
+                        response = await web.get(web_path, params=params)
+                        assert response.status_code == 500
+                        assert response.text == "Internal Server Error"
+                        assert len(operations) == 2
+                        _assert_clean(state, operations)
+                        await restore()
     asyncio.run(run())
 
 
