@@ -9,9 +9,21 @@ reproduced here.
 
 ## [Unreleased]
 
-## [1.2.0] - 2026-10-25
+## [1.2.0] - 2026-10-26
+
+### Security
+
+- Rebuild the native PostGIS database image with `libbrotli1`
+  `1.0.9-2+deb12u1` (CVE-2026-111497). PostgreSQL 16.15, PostGIS 3.6.4,
+  GEOS 3.11.1, PROJ 9.8.1, glibc 2.36 and ICU 72.1 are unchanged, so the
+  image was rebuilt with unchanged versions and upgrades in place on the
+  existing volume.
 
 ### Added
+
+- A database image rebuilt with unchanged versions is swapped in place on
+  the existing volume instead of the fresh-volume database-image migration.
+  See [Database image security rebuilds](docs/upgrading.md#database-image-security-rebuilds).
 
 - Mobile app sign-in for the first-party Odograph app, off by default. Set
   `MOBILE_SIGNIN=1` to allow new sign-ins; it needs HTTPS. The browser
@@ -69,19 +81,22 @@ reproduced here.
 
 ### Supported upgrade path
 
-- `v1.1.0` upgrades directly. `v1.0.0` may also upgrade directly; its
-  database image differs, so it follows
-  [Upgrading the PostGIS database image](docs/upgrading.md#upgrading-the-postgis-database-image)
-  and reads the 1.1 notes. A 0.x installation first upgrades to `v1.0.0`.
+- `v1.1.0` and `v1.0.0` upgrade directly. Both database images have the
+  same versions as this release's, so either upgrades in place through
+  [Database image security rebuilds](docs/upgrading.md#database-image-security-rebuilds);
+  a `v1.0.0` installation also reads the 1.1 notes. A 0.x installation
+  first upgrades to `v1.0.0`.
 - Prior-release artifact upgrade gate: release preflight ran the Docker
-  Compose upgrade drill from `v1.1.0` in standard mode and from `v1.0.0` in
-  database-image migration mode before this release was tagged.
+  Compose upgrade drill from `v1.1.0` and from `v1.0.0` in database image
+  swap mode before this release was tagged.
 
 ### Breaking changes
 
 - None. Mobile sign-in is off unless `MOBILE_SIGNIN=1` is set, so the new
   `/api/v1` data endpoints cannot be reached until an app signs in. The
-  database image is unchanged from 1.1.0.
+  database image was rebuilt with unchanged versions; stop the database and
+  swap it in place as the upgrading guide describes rather than running a
+  plain `up -d`.
 - As with any release that adds migrations, rollback to 1.1 restores the
   verified pre-upgrade backup and loses writes made after it. See
   [Rollback](docs/upgrading.md#rollback).

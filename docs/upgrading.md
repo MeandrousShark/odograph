@@ -205,9 +205,12 @@ migration drill.
 Migrations 048 to 051 are class `additive`: they add the API grant, mobile
 authorization request and code tables with their protected functions, the
 signed-in apps list function, and nullable idempotency key columns on trips
-and expenses. Existing rows and stored data are unchanged, and the database
-image is the same as 1.1.0, so the standard [upgrade procedure](#upgrade-procedure)
-applies.
+and expenses. Existing rows and stored data are unchanged.
+
+1.2 also moves `db.image` to a rebuild with unchanged versions, so follow
+[Database image security rebuilds](#database-image-security-rebuilds) to
+swap the database image in place, then complete the
+[upgrade procedure](#upgrade-procedure) for the application.
 
 No configuration change is required. Mobile app sign-in stays off unless
 `MOBILE_SIGNIN=1` is set; see
