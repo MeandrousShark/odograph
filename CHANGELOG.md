@@ -36,8 +36,9 @@ reproduced here.
 - A manual trip or trip edit whose distance is outside the range the database
   can store shows the form's distance error instead of failing with a server
   error.
-- Tagging a review card with a vehicle that does not exist answers "No such
-  vehicle" (400) instead of failing with a server error.
+- Tagging a review card with a vehicle id outside the range the database can
+  store answers "No such vehicle" (400), as a missing vehicle already did,
+  instead of failing with a server error.
 
 ### Migrations
 
