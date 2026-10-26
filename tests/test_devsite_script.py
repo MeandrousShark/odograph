@@ -64,11 +64,18 @@ case "$1" in
     run)
         case " $* " in
             *" --entrypoint "*)
-                # The identity probe: image $8. Any image other than the
-                # container's reports a newer PostgreSQL when asked to.
-                [ "$8" != "${FAKE_PODMAN_UNPROBEABLE_IMAGE:-}" ] || exit 125
+                # The identity probe: the image follows "--entrypoint /bin/sh".
+                # Any image other than the container's reports a newer
+                # PostgreSQL when asked to.
+                image=""
+                previous=""
+                for arg in "$@"; do
+                    if [ "$previous" = /bin/sh ] && [ -z "$image" ]; then image="$arg"; fi
+                    previous="$arg"
+                done
+                [ "$image" != "${FAKE_PODMAN_UNPROBEABLE_IMAGE:-}" ] || exit 125
                 version=16.15
-                if [ -n "${FAKE_PODMAN_NEW_IDENTITY:-}" ] && [ "$8" != "$FAKE_PODMAN_CONTAINER_IMAGE" ]; then
+                if [ -n "${FAKE_PODMAN_NEW_IDENTITY:-}" ] && [ "$image" != "$FAKE_PODMAN_CONTAINER_IMAGE" ]; then
                     version=16.16
                 fi
                 printf '%s\\n' \
@@ -82,6 +89,7 @@ case "$1" in
                 exit 0
                 ;;
         esac
+        [ "${!#}" != "${FAKE_PODMAN_RUN_FAIL_IMAGE:-}" ] || exit 126
         printf 'devsite-container\\n'; exit 0 ;;
     start) exit 0 ;;
     stop) exit 0 ;;
@@ -315,7 +323,10 @@ def _image_change_env(tmp_path: Path, **overrides: str) -> tuple[dict[str, str],
 
 
 def _probes(lines: list[str]) -> list[str]:
-    return [line.split()[7] for line in lines if line.startswith("run ") and " --entrypoint " in line]
+    return [
+        line.split(" --entrypoint /bin/sh ", 1)[1].split()[0]
+        for line in lines if line.startswith("run ") and " --entrypoint " in line
+    ]
 
 
 def test_up_moves_the_qa_volume_to_a_same_identity_database_image(tmp_path):
@@ -356,6 +367,48 @@ def test_up_refuses_a_database_image_change_it_cannot_prove_safe(tmp_path, overr
     assert message in result.stderr
     lines = log.read_text().splitlines()
     assert not any(line.startswith(("stop ", "rm ", "run -d", "start ", "volume ")) for line in lines)
+
+
+def test_up_keeps_the_old_container_when_the_qa_port_is_taken(tmp_path):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        env, log = _image_change_env(tmp_path, DEVSITE_DB_PORT=str(listener.getsockname()[1]))
+
+        result = _run_devsite(tmp_path, "up", env=env)
+
+    assert result.returncode == 1
+    assert "already in use" in result.stderr
+    lines = log.read_text().splitlines()
+    assert lines.index("stop odograph-devsite-db") < lines.index("start odograph-devsite-db")
+    assert not any(line.startswith(("rm ", "run -d", "volume ")) for line in lines)
+
+
+@pytest.mark.parametrize("running", ["true", "false"])
+def test_up_recreates_the_old_container_when_the_new_image_cannot_start(tmp_path, running):
+    old_image = "registry.example.test/postgis@sha256:" + "1" * 64
+    new_image = "registry.example.test/postgis@sha256:" + "2" * 64
+    env, log = _image_change_env(
+        tmp_path, FAKE_PODMAN_RUN_FAIL_IMAGE=new_image, FAKE_PODMAN_CONTAINER_RUNNING=running
+    )
+
+    result = _run_devsite(tmp_path, "up", env=env)
+
+    assert result.returncode == 1
+    assert f"could not start {new_image}" in result.stderr
+    lines = log.read_text().splitlines()
+    creates = [line for line in lines if line.startswith("run -d --name odograph-devsite-db")]
+    assert len(creates) == 2
+    assert creates[0].endswith(" " + new_image) and creates[1].endswith(" " + old_image)
+    assert all("-v odograph-devsite-dbdata:/var/lib/postgresql/data" in line for line in creates)
+    removes = [line for line in lines if line.startswith("rm ")]
+    assert removes == ["rm odograph-devsite-db", "rm -f odograph-devsite-db"]
+    assert lines.index("rm -f odograph-devsite-db") < lines.index(creates[1])
+    assert not any(line.startswith("volume ") for line in lines)
+    stops = [line for line in lines if line.startswith("stop ")]
+    assert len(stops) == 1  # before the swap if it ran, else after the recreate
+    if running == "false":
+        assert lines.index(creates[1]) < lines.index("stop odograph-devsite-db")
 
 
 def test_up_does_not_probe_an_unchanged_database_image(tmp_path):

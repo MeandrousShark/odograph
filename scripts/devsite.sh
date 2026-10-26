@@ -199,7 +199,7 @@ create_db_container() {
 }
 
 run_db_container() {
-    local db_password
+    local image="${1:-$DB_IMAGE}" db_password
     db_password="$(db_password_from_url "$DATABASE_URL")"
 
     echo "Creating QA database container ($DB_CONTAINER) on 127.0.0.1:$DB_PORT..."
@@ -208,7 +208,7 @@ run_db_container() {
         -e POSTGRES_DB="$DB_NAME" -e POSTGRES_USER="$DB_USER" -e POSTGRES_PASSWORD="$db_password" \
         -v "$DB_VOLUME:/var/lib/postgresql/data" \
         -p "127.0.0.1:$DB_PORT:5432" \
-        "$DB_IMAGE" >/dev/null
+        "$image" >/dev/null
 }
 
 db_identity() {
@@ -231,15 +231,37 @@ replace_db_container_image() {
         exit 1
     fi
     echo "Moving the QA database to $DB_IMAGE on its existing volume (same identity: $new_identity)..."
+    local was_running=0
     if db_container_running; then
+        was_running=1
         podman stop "$DB_CONTAINER" >/dev/null
     fi
-    podman rm "$DB_CONTAINER" >/dev/null
+    # The old container stays until the new one can take the port, so a
+    # refusal here leaves the QA site exactly as it was.
     if port_in_use "127.0.0.1" "$DB_PORT"; then
         echo "error: port $DB_PORT (QA database) is already in use. Set DEVSITE_DB_PORT to use a different one." >&2
+        if [ "$was_running" -eq 1 ]; then
+            podman start "$DB_CONTAINER" >/dev/null || true
+        fi
         exit 1
     fi
-    run_db_container
+    podman rm "$DB_CONTAINER" >/dev/null
+    if run_db_container "$DB_IMAGE"; then
+        return
+    fi
+    echo "error: could not start $DB_IMAGE on $DB_VOLUME; recreating the QA database from $current." >&2
+    # Only this script's failed new container can hold the name now.
+    if db_container_exists; then
+        podman rm -f "$DB_CONTAINER" >/dev/null || true
+    fi
+    if ! run_db_container "$current"; then
+        echo "error: could not recreate $DB_CONTAINER from $current; its volume $DB_VOLUME is intact. Recreate the container from $current on that volume by hand." >&2
+        exit 1
+    fi
+    if [ "$was_running" -eq 0 ]; then
+        podman stop "$DB_CONTAINER" >/dev/null || true
+    fi
+    exit 1
 }
 
 # Used by `up`: create the persistent container on first run, otherwise
