@@ -1,12 +1,13 @@
 """Opaque keyset cursors for API list and queue endpoints.
 
 A cursor is unpadded base64url over a fixed binary layout: format version,
-cursor kind, the last row's `started_at` (microseconds since the Unix
-epoch) and `id`, and a check value: a truncated SHA-256 over those fields
-and the normalized filter set. The check is keyed by nothing secret, so a
-cursor is not signed; it catches edits and reuse with other filters, and a
-deliberately forged position still moves only within the caller's own
-account-scoped rows. Anything that does not decode exactly or fails the
+cursor kind, the last row's position (microseconds since the Unix epoch)
+and `id`, and a check value: a truncated SHA-256 over those fields and the
+normalized filter set. Trip and review cursors carry `started_at`; expense
+cursors carry `incurred_on` as midnight UTC of that date. The check is keyed
+by nothing secret, so a cursor is not signed; it catches edits and reuse
+with other filters, and a deliberately forged position still moves only
+within the caller's own account-scoped rows. Anything that does not decode exactly or fails the
 check is `invalid_cursor`.
 """
 from __future__ import annotations
@@ -22,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 from app.api_errors import ApiError
 
 CURSOR_VERSION = 1
-KINDS = {"trips": 1, "review": 2}
+KINDS = {"trips": 1, "review": 2, "expenses": 3}
 _HEADER = struct.Struct(">BBqq")
 _LAYOUT = struct.Struct(">BBqq16s")
 _TEXT = re.compile(r"[A-Za-z0-9_-]+")

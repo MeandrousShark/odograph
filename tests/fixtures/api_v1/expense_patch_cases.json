@@ -1,0 +1,497 @@
+{
+  "description": "PATCH /api/v1/expenses/{expense_id} applied in order to one synthetic fuel expense linked to a trip. `written` says whether the expense was updated; it is not part of the response.",
+  "vehicles": {
+    "2": "My Car",
+    "4": "Van"
+  },
+  "trips": {
+    "1": "business",
+    "3": "unclassified"
+  },
+  "cases": [
+    {
+      "field": "all",
+      "case": "omitted",
+      "request": {},
+      "status": 200,
+      "written": false,
+      "response": {
+        "id": 1,
+        "vehicle_id": 2,
+        "vehicle_name": "My Car",
+        "incurred_on": "2026-04-13",
+        "category": "fuel",
+        "amount": "45.67",
+        "treatment": "business_use_allocated",
+        "notes": "Fill up",
+        "trip_id": 1,
+        "conflicts": []
+      }
+    },
+    {
+      "field": "vehicle_id",
+      "case": "unchanged",
+      "request": {
+        "vehicle_id": 2
+      },
+      "status": 200,
+      "written": false,
+      "response": {
+        "id": 1,
+        "vehicle_id": 2,
+        "vehicle_name": "My Car",
+        "incurred_on": "2026-04-13",
+        "category": "fuel",
+        "amount": "45.67",
+        "treatment": "business_use_allocated",
+        "notes": "Fill up",
+        "trip_id": 1,
+        "conflicts": []
+      }
+    },
+    {
+      "field": "vehicle_id",
+      "case": "modified",
+      "request": {
+        "vehicle_id": 4
+      },
+      "status": 200,
+      "written": true,
+      "response": {
+        "id": 1,
+        "vehicle_id": 4,
+        "vehicle_name": "Van",
+        "incurred_on": "2026-04-13",
+        "category": "fuel",
+        "amount": "45.67",
+        "treatment": "business_use_allocated",
+        "notes": "Fill up",
+        "trip_id": 1,
+        "conflicts": [
+          "vehicle"
+        ]
+      }
+    },
+    {
+      "field": "vehicle_id",
+      "case": "null",
+      "request": {
+        "vehicle_id": null
+      },
+      "status": 422,
+      "written": false,
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "vehicle_id": "This value is not valid."
+          }
+        }
+      }
+    },
+    {
+      "field": "incurred_on",
+      "case": "unchanged",
+      "request": {
+        "incurred_on": "2026-04-13"
+      },
+      "status": 200,
+      "written": false,
+      "response": {
+        "id": 1,
+        "vehicle_id": 4,
+        "vehicle_name": "Van",
+        "incurred_on": "2026-04-13",
+        "category": "fuel",
+        "amount": "45.67",
+        "treatment": "business_use_allocated",
+        "notes": "Fill up",
+        "trip_id": 1,
+        "conflicts": [
+          "vehicle"
+        ]
+      }
+    },
+    {
+      "field": "incurred_on",
+      "case": "modified",
+      "request": {
+        "incurred_on": "2026-04-14"
+      },
+      "status": 200,
+      "written": true,
+      "response": {
+        "id": 1,
+        "vehicle_id": 4,
+        "vehicle_name": "Van",
+        "incurred_on": "2026-04-14",
+        "category": "fuel",
+        "amount": "45.67",
+        "treatment": "business_use_allocated",
+        "notes": "Fill up",
+        "trip_id": 1,
+        "conflicts": [
+          "vehicle",
+          "date"
+        ]
+      }
+    },
+    {
+      "field": "incurred_on",
+      "case": "null",
+      "request": {
+        "incurred_on": null
+      },
+      "status": 422,
+      "written": false,
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "incurred_on": "This value is not valid."
+          }
+        }
+      }
+    },
+    {
+      "field": "category",
+      "case": "unchanged",
+      "request": {
+        "category": "fuel"
+      },
+      "status": 200,
+      "written": false,
+      "response": {
+        "id": 1,
+        "vehicle_id": 4,
+        "vehicle_name": "Van",
+        "incurred_on": "2026-04-14",
+        "category": "fuel",
+        "amount": "45.67",
+        "treatment": "business_use_allocated",
+        "notes": "Fill up",
+        "trip_id": 1,
+        "conflicts": [
+          "vehicle",
+          "date"
+        ]
+      }
+    },
+    {
+      "field": "category",
+      "case": "modified",
+      "request": {
+        "category": "tolls"
+      },
+      "status": 200,
+      "written": true,
+      "response": {
+        "id": 1,
+        "vehicle_id": 4,
+        "vehicle_name": "Van",
+        "incurred_on": "2026-04-14",
+        "category": "tolls",
+        "amount": "45.67",
+        "treatment": "business_use_allocated",
+        "notes": "Fill up",
+        "trip_id": 1,
+        "conflicts": [
+          "vehicle",
+          "date"
+        ]
+      }
+    },
+    {
+      "field": "category",
+      "case": "null",
+      "request": {
+        "category": null
+      },
+      "status": 422,
+      "written": false,
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "category": "This value is not valid."
+          }
+        }
+      }
+    },
+    {
+      "field": "amount",
+      "case": "unchanged",
+      "request": {
+        "amount": "45.670"
+      },
+      "status": 200,
+      "written": false,
+      "response": {
+        "id": 1,
+        "vehicle_id": 4,
+        "vehicle_name": "Van",
+        "incurred_on": "2026-04-14",
+        "category": "tolls",
+        "amount": "45.67",
+        "treatment": "business_use_allocated",
+        "notes": "Fill up",
+        "trip_id": 1,
+        "conflicts": [
+          "vehicle",
+          "date"
+        ]
+      }
+    },
+    {
+      "field": "amount",
+      "case": "modified",
+      "request": {
+        "amount": "50.1"
+      },
+      "status": 200,
+      "written": true,
+      "response": {
+        "id": 1,
+        "vehicle_id": 4,
+        "vehicle_name": "Van",
+        "incurred_on": "2026-04-14",
+        "category": "tolls",
+        "amount": "50.10",
+        "treatment": "business_use_allocated",
+        "notes": "Fill up",
+        "trip_id": 1,
+        "conflicts": [
+          "vehicle",
+          "date"
+        ]
+      }
+    },
+    {
+      "field": "amount",
+      "case": "null",
+      "request": {
+        "amount": null
+      },
+      "status": 422,
+      "written": false,
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "amount": "This value is not valid."
+          }
+        }
+      }
+    },
+    {
+      "field": "treatment",
+      "case": "unchanged",
+      "request": {
+        "treatment": "business_use_allocated"
+      },
+      "status": 200,
+      "written": false,
+      "response": {
+        "id": 1,
+        "vehicle_id": 4,
+        "vehicle_name": "Van",
+        "incurred_on": "2026-04-14",
+        "category": "tolls",
+        "amount": "50.10",
+        "treatment": "business_use_allocated",
+        "notes": "Fill up",
+        "trip_id": 1,
+        "conflicts": [
+          "vehicle",
+          "date"
+        ]
+      }
+    },
+    {
+      "field": "treatment",
+      "case": "modified",
+      "request": {
+        "treatment": "fully_business"
+      },
+      "status": 200,
+      "written": true,
+      "response": {
+        "id": 1,
+        "vehicle_id": 4,
+        "vehicle_name": "Van",
+        "incurred_on": "2026-04-14",
+        "category": "tolls",
+        "amount": "50.10",
+        "treatment": "fully_business",
+        "notes": "Fill up",
+        "trip_id": 1,
+        "conflicts": [
+          "vehicle",
+          "date"
+        ]
+      }
+    },
+    {
+      "field": "treatment",
+      "case": "null",
+      "request": {
+        "treatment": null
+      },
+      "status": 422,
+      "written": false,
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "treatment": "This value is not valid."
+          }
+        }
+      }
+    },
+    {
+      "field": "notes",
+      "case": "unchanged",
+      "request": {
+        "notes": " Fill up "
+      },
+      "status": 200,
+      "written": false,
+      "response": {
+        "id": 1,
+        "vehicle_id": 4,
+        "vehicle_name": "Van",
+        "incurred_on": "2026-04-14",
+        "category": "tolls",
+        "amount": "50.10",
+        "treatment": "fully_business",
+        "notes": "Fill up",
+        "trip_id": 1,
+        "conflicts": [
+          "vehicle",
+          "date"
+        ]
+      }
+    },
+    {
+      "field": "notes",
+      "case": "modified",
+      "request": {
+        "notes": "Receipt in the glovebox"
+      },
+      "status": 200,
+      "written": true,
+      "response": {
+        "id": 1,
+        "vehicle_id": 4,
+        "vehicle_name": "Van",
+        "incurred_on": "2026-04-14",
+        "category": "tolls",
+        "amount": "50.10",
+        "treatment": "fully_business",
+        "notes": "Receipt in the glovebox",
+        "trip_id": 1,
+        "conflicts": [
+          "vehicle",
+          "date"
+        ]
+      }
+    },
+    {
+      "field": "notes",
+      "case": "null",
+      "request": {
+        "notes": null
+      },
+      "status": 200,
+      "written": true,
+      "response": {
+        "id": 1,
+        "vehicle_id": 4,
+        "vehicle_name": "Van",
+        "incurred_on": "2026-04-14",
+        "category": "tolls",
+        "amount": "50.10",
+        "treatment": "fully_business",
+        "notes": null,
+        "trip_id": 1,
+        "conflicts": [
+          "vehicle",
+          "date"
+        ]
+      }
+    },
+    {
+      "field": "trip_id",
+      "case": "unchanged",
+      "request": {
+        "trip_id": 1
+      },
+      "status": 200,
+      "written": false,
+      "response": {
+        "id": 1,
+        "vehicle_id": 4,
+        "vehicle_name": "Van",
+        "incurred_on": "2026-04-14",
+        "category": "tolls",
+        "amount": "50.10",
+        "treatment": "fully_business",
+        "notes": null,
+        "trip_id": 1,
+        "conflicts": [
+          "vehicle",
+          "date"
+        ]
+      }
+    },
+    {
+      "field": "trip_id",
+      "case": "modified",
+      "request": {
+        "trip_id": 3
+      },
+      "status": 200,
+      "written": true,
+      "response": {
+        "id": 1,
+        "vehicle_id": 4,
+        "vehicle_name": "Van",
+        "incurred_on": "2026-04-14",
+        "category": "tolls",
+        "amount": "50.10",
+        "treatment": "fully_business",
+        "notes": null,
+        "trip_id": 3,
+        "conflicts": [
+          "date"
+        ]
+      }
+    },
+    {
+      "field": "trip_id",
+      "case": "null",
+      "request": {
+        "trip_id": null
+      },
+      "status": 200,
+      "written": true,
+      "response": {
+        "id": 1,
+        "vehicle_id": 4,
+        "vehicle_name": "Van",
+        "incurred_on": "2026-04-14",
+        "category": "tolls",
+        "amount": "50.10",
+        "treatment": "fully_business",
+        "notes": null,
+        "trip_id": null,
+        "conflicts": []
+      }
+    }
+  ]
+}

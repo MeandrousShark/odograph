@@ -1,0 +1,154 @@
+{
+  "description": "POST /api/v1/expenses applied in order. Location carries the created expense's id.",
+  "vehicles": {
+    "2": "My Car",
+    "4": "Van"
+  },
+  "trips": {
+    "1": "business",
+    "3": "unclassified"
+  },
+  "cases": [
+    {
+      "case": "created",
+      "headers": {
+        "Idempotency-Key": "00000000-0000-4000-8000-000000000001"
+      },
+      "request": {
+        "vehicle_id": 2,
+        "incurred_on": "2026-04-16",
+        "category": "tolls",
+        "amount": "4.75",
+        "notes": " Bridge ",
+        "trip_id": 1
+      },
+      "status": 201,
+      "response_headers": {
+        "location": "/api/v1/expenses/6"
+      },
+      "response": {
+        "id": 6,
+        "vehicle_id": 2,
+        "vehicle_name": "My Car",
+        "incurred_on": "2026-04-16",
+        "category": "tolls",
+        "amount": "4.75",
+        "treatment": "fully_business",
+        "notes": "Bridge",
+        "trip_id": 1,
+        "conflicts": [
+          "date"
+        ]
+      }
+    },
+    {
+      "case": "replayed",
+      "headers": {
+        "Idempotency-Key": "00000000-0000-4000-8000-000000000001"
+      },
+      "request": {
+        "vehicle_id": 2,
+        "incurred_on": "2026-04-16",
+        "category": "tolls",
+        "amount": "4.750",
+        "notes": "Bridge",
+        "trip_id": 1,
+        "treatment": "fully_business"
+      },
+      "status": 200,
+      "response_headers": {
+        "idempotent-replayed": "true"
+      },
+      "response": {
+        "id": 6,
+        "vehicle_id": 2,
+        "vehicle_name": "My Car",
+        "incurred_on": "2026-04-16",
+        "category": "tolls",
+        "amount": "4.75",
+        "treatment": "fully_business",
+        "notes": "Bridge",
+        "trip_id": 1,
+        "conflicts": [
+          "date"
+        ]
+      }
+    },
+    {
+      "case": "key_reused",
+      "headers": {
+        "Idempotency-Key": "00000000-0000-4000-8000-000000000001"
+      },
+      "request": {
+        "vehicle_id": 2,
+        "incurred_on": "2026-04-16",
+        "category": "tolls",
+        "amount": "4.76",
+        "notes": " Bridge ",
+        "trip_id": 1
+      },
+      "status": 409,
+      "response_headers": {},
+      "response": {
+        "error": {
+          "code": "idempotency_key_reused",
+          "message": "This idempotency key was already used for a different request.",
+          "fields": null
+        }
+      }
+    },
+    {
+      "case": "other_needs_treatment",
+      "headers": {
+        "Idempotency-Key": "00000000-0000-4000-8000-000000000002"
+      },
+      "request": {
+        "vehicle_id": 2,
+        "incurred_on": "2026-04-16",
+        "category": "other",
+        "amount": "4.75",
+        "notes": " Bridge ",
+        "trip_id": 1
+      },
+      "status": 422,
+      "response_headers": {},
+      "response": {
+        "error": {
+          "code": "validation_failed",
+          "message": "The request is not valid.",
+          "fields": {
+            "treatment": "Other expenses require a tax treatment"
+          }
+        }
+      }
+    },
+    {
+      "case": "minimal",
+      "headers": {
+        "Idempotency-Key": "00000000-0000-4000-8000-000000000002"
+      },
+      "request": {
+        "vehicle_id": 2,
+        "incurred_on": "2026-04-17",
+        "category": "fuel",
+        "amount": "30"
+      },
+      "status": 201,
+      "response_headers": {
+        "location": "/api/v1/expenses/9"
+      },
+      "response": {
+        "id": 9,
+        "vehicle_id": 2,
+        "vehicle_name": "My Car",
+        "incurred_on": "2026-04-17",
+        "category": "fuel",
+        "amount": "30.00",
+        "treatment": "business_use_allocated",
+        "notes": null,
+        "trip_id": null,
+        "conflicts": []
+      }
+    }
+  ]
+}

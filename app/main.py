@@ -17,7 +17,7 @@ from starlette.datastructures import MutableHeaders
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.staticfiles import StaticFiles
 
-from app import admin, api_trips, api_v1, auth, ingest, mobile_routes, portable, ui
+from app import admin, api_expenses, api_stats, api_trips, api_v1, auth, ingest, mobile_routes, portable, ui
 from app.api_errors import is_api_path, register_api_errors
 from app.api_v1 import WebSessionMiddleware
 from app.auth import AuthRedirect
@@ -535,6 +535,8 @@ def create_app(config: Config | None = None) -> FastAPI:
     app.include_router(portable.make_router())
     app.include_router(api_v1.make_router())
     app.include_router(api_trips.make_router())
+    app.include_router(api_expenses.make_router())
+    app.include_router(api_stats.make_router())
     # Fixed for the process, so with the setting off the routes do not exist
     # and every request to them, signed in or not, is a plain 404.
     if cfg.mobile_signin:

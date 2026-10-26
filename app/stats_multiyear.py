@@ -164,13 +164,14 @@ def _multi_year_bar_chart(
     )
 
 
-def build_multiyear_chart(
+def multiyear_series(
     rows: Iterable[tuple[int, int, str, int, float]],
     years: list[int],
     cutoff_month: int,
     cutoff_day: int,
-    link_fn: Callable[[int, int], str | None] | None = None,
-) -> MultiYearChart:
+) -> tuple[list[YearSeries], int]:
+    """Each year's monthly category meters through the last complete month,
+    and that month (0 when none is complete yet)."""
     last_month = _last_included_month(cutoff_month, cutoff_day)
     row_map: dict[tuple[int, int, str], float] = {}
     for year, month, category, _count, meters in rows:
@@ -178,7 +179,17 @@ def build_multiyear_chart(
             continue
         key = (year, month, category)
         row_map[key] = row_map.get(key, 0.0) + float(meters)
-    year_series_list = [_year_series_for(year, last_month, row_map) for year in years]
+    return [_year_series_for(year, last_month, row_map) for year in years], last_month
+
+
+def build_multiyear_chart(
+    rows: Iterable[tuple[int, int, str, int, float]],
+    years: list[int],
+    cutoff_month: int,
+    cutoff_day: int,
+    link_fn: Callable[[int, int], str | None] | None = None,
+) -> MultiYearChart:
+    year_series_list, last_month = multiyear_series(rows, years, cutoff_month, cutoff_day)
     chart_svg = _multi_year_bar_chart("Year-over-year monthly miles", year_series_list, link_fn)
     coverage_note = None
     if 0 < last_month < 12:

@@ -38,6 +38,9 @@ FIELD_REQUIRED = "This field is required."
 FIELD_INVALID = "This value is not valid."
 FIELD_UNSUPPORTED = "This value is not supported."
 BODY_NOT_JSON = "The request body must be a JSON object."
+# FastAPI's 400 for a body that fails to decode before validation, such as
+# an integer with more digits than Python parses.
+FRAMEWORK_BODY_PARSE_DETAIL = "There was an error parsing the body"
 
 
 class ApiErrorBody(BaseModel):
@@ -105,6 +108,9 @@ def register_api_errors(app) -> None:
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, exc: StarletteHTTPException):
+        if (is_api_path(request.url.path) and exc.status_code == 400
+                and exc.detail == FRAMEWORK_BODY_PARSE_DETAIL):
+            return error_response("validation_failed", fields={"body": BODY_NOT_JSON})
         code = HTTP_STATUS_CODES.get(exc.status_code)
         if is_api_path(request.url.path) and code is not None:
             # Keeps headers such as a 405's Allow.

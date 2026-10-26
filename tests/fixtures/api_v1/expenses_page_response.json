@@ -1,0 +1,45 @@
+{
+  "items": [
+    {
+      "id": 3,
+      "vehicle_id": 4,
+      "vehicle_name": "Van",
+      "incurred_on": "2026-04-20",
+      "category": "tolls",
+      "amount": "3.10",
+      "treatment": "fully_business",
+      "notes": null,
+      "trip_id": 5,
+      "conflicts": [
+        "vehicle",
+        "date",
+        "not_my_vehicle"
+      ]
+    },
+    {
+      "id": 2,
+      "vehicle_id": 2,
+      "vehicle_name": "My Car",
+      "incurred_on": "2026-04-14",
+      "category": "parking",
+      "amount": "12.34",
+      "treatment": "fully_business",
+      "notes": null,
+      "trip_id": null,
+      "conflicts": []
+    },
+    {
+      "id": 1,
+      "vehicle_id": 2,
+      "vehicle_name": "My Car",
+      "incurred_on": "2026-04-13",
+      "category": "fuel",
+      "amount": "45.67",
+      "treatment": "business_use_allocated",
+      "notes": "Fill up",
+      "trip_id": 1,
+      "conflicts": []
+    }
+  ],
+  "next_cursor": "AQMABk9MKfCAAAAAAAAAAAABJgq_EmmJdYMe0FdNTMjNFA"
+}

@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
-from psycopg import errors
-from psycopg.rows import dict_row
 from starlette.responses import Response
 
-from app.account_context import account_id
+from app import expense_ledger as ledger_service
 from app.auth import require_csrf, require_user
+from app.capacity_routes import mark_committed_write
 from app.page import render_page
 from app.expenses import (
     CATEGORY_LABELS,
@@ -18,12 +17,12 @@ from app.expenses import (
     EXPENSE_CATEGORIES,
     EXPENSE_TREATMENTS,
     TREATMENT_LABELS,
-    default_treatment,
 )
-from app.expense_queries import (
-    EXPENSE_SELECT_JOIN as _EXPENSE_SELECT_JOIN,
-    annotate_expense as _annotate_expense,
+from app.expense_ledger import (
+    AMOUNT_INVALID, CATEGORY_INVALID, DATE_INVALID, TREATMENT_INVALID, TREATMENT_REQUIRED, TRIP_INVALID,
+    NOT_FOUND, ExpenseNotFound, ExpenseValidationError, parse_expense_amount, resolve_treatment,
 )
+from app.expense_queries import EXPENSE_SELECT_JOIN as _EXPENSE_SELECT_JOIN  # noqa: F401
 from app.vehicles import list_vehicles
 
 from app.ui._common import VEHICLE_FILTER_UNASSIGNED, _parse_vehicle_id
@@ -36,32 +35,25 @@ def _parse_expense_input(
     try:
         parsed_date = date.fromisoformat(incurred_on)
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid expense date")
+        raise HTTPException(status_code=400, detail=DATE_INVALID)
     if category not in EXPENSE_CATEGORIES:
-        raise HTTPException(status_code=400, detail="Invalid expense category")
-    try:
-        raw_amount = Decimal(amount)
-        parsed_amount = raw_amount.quantize(Decimal("0.01"))
-    except (InvalidOperation, ValueError):
-        raise HTTPException(status_code=400, detail="Invalid expense amount")
-    if (
-        not parsed_amount.is_finite() or parsed_amount != raw_amount
-        or parsed_amount <= 0 or parsed_amount > Decimal("9999999999.99")
-    ):
-        raise HTTPException(status_code=400, detail="Invalid expense amount")
-    if not treatment:
-        if category == "other":
-            raise HTTPException(status_code=400, detail="Other expenses require a tax treatment")
-        treatment = default_treatment(category)
+        raise HTTPException(status_code=400, detail=CATEGORY_INVALID)
+    parsed_amount = parse_expense_amount(amount)
+    if parsed_amount is None:
+        raise HTTPException(status_code=400, detail=AMOUNT_INVALID)
+    resolved = resolve_treatment(category, treatment)
+    if resolved is None:
+        raise HTTPException(status_code=400, detail=TREATMENT_REQUIRED)
+    treatment = resolved
     if treatment not in EXPENSE_TREATMENTS:
-        raise HTTPException(status_code=400, detail="Invalid expense treatment")
+        raise HTTPException(status_code=400, detail=TREATMENT_INVALID)
     if isinstance(trip_id, str) and trip_id:
         try:
             parsed_trip_id = int(trip_id)
         except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="Invalid trip")
+            raise HTTPException(status_code=400, detail=TRIP_INVALID)
         if parsed_trip_id < 1:
-            raise HTTPException(status_code=400, detail="Invalid trip")
+            raise HTTPException(status_code=400, detail=TRIP_INVALID)
     return parsed_date, category, parsed_amount, treatment
 
 
@@ -71,10 +63,16 @@ def _parse_optional_trip_id(trip_id: str | None) -> int | None:
     try:
         parsed = int(trip_id)
     except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="Invalid trip")
+        raise HTTPException(status_code=400, detail=TRIP_INVALID)
     if parsed < 1:
-        raise HTTPException(status_code=400, detail="Invalid trip")
+        raise HTTPException(status_code=400, detail=TRIP_INVALID)
     return parsed
+
+
+def _form_expense(vehicle_id: int, incurred_on: date, category: str, amount: Decimal, treatment: str,
+                  notes: str, trip_id: int | None) -> dict:
+    return {"vehicle_id": vehicle_id, "incurred_on": incurred_on, "category": category, "amount": amount,
+            "treatment": treatment, "notes": notes, "trip_id": trip_id}
 
 
 def register(router: APIRouter) -> None:
@@ -94,46 +92,17 @@ def register(router: APIRouter) -> None:
                 raise HTTPException(status_code=400, detail="Invalid vehicle")
             async with request.state.account_pool.connection() as conn:
                 vehicles = await list_vehicles(conn, include_inactive=True)
-                cur = conn.cursor(row_factory=dict_row)
-                clauses = ["expenses.account_id = %s", "expenses.incurred_on >= %s", "expenses.incurred_on < %s"]
-                params: list = [account_id(conn), date(selected_year, 1, 1), date(selected_year + 1, 1, 1)]
-                if vehicle_id is not None:
-                    clauses.append("expenses.vehicle_id = %s")
-                    params.append(vehicle_id)
-                await cur.execute(
-                    _EXPENSE_SELECT_JOIN
-                    + "WHERE "
-                    + " AND ".join(clauses)
-                    + " ORDER BY expenses.incurred_on DESC, expenses.id DESC",
-                    params,
-                )
-                expenses = [
-                    _annotate_expense(row, tz) for row in await cur.fetchall()
-                ]
-                trip_cur = conn.cursor(row_factory=dict_row)
-                await trip_cur.execute(
-                    "SELECT trips.id, trips.started_at, trips.ended_at, trips.vehicle_id, "
-                    "trips.exclusion::text AS exclusion, vehicles.name AS vehicle_name FROM trips "
-                    "LEFT JOIN vehicles ON vehicles.id = trips.vehicle_id AND vehicles.account_id = trips.account_id "
-                    "WHERE trips.account_id = %s ORDER BY trips.started_at DESC, trips.id DESC",
-                    (account_id(conn),),
-                )
-                trips = await trip_cur.fetchall()
-            category_totals: dict[str, Decimal] = {}
-            for expense in expenses:
-                category_totals[expense["category"]] = (
-                    category_totals.get(expense["category"], Decimal("0")) + expense["amount"]
-                )
+                ledger = await ledger_service.fetch_ledger(conn, selected_year, vehicle_id, tz)
             return await render_page(
                 request, "expenses.html",
                 {
-                    "expenses": expenses,
-                    "trips": trips,
+                    "expenses": ledger.expenses,
+                    "trips": ledger.trips,
                     "vehicles": vehicles,
                     "selected_year": selected_year,
                     "selected_vehicle": vehicle,
-                    "category_totals": category_totals,
-                    "ledger_total": sum(category_totals.values(), Decimal("0")),
+                    "category_totals": ledger.category_totals,
+                    "ledger_total": ledger.total,
                     "category_labels": CATEGORY_LABELS,
                     "treatment_labels": TREATMENT_LABELS,
                     "expense_conflict_labels": EXPENSE_CONFLICT_LABELS,
@@ -160,30 +129,15 @@ def register(router: APIRouter) -> None:
             parsed_date, category, parsed_amount, treatment = _parse_expense_input(
                 incurred_on, category, amount, treatment, trip_id
             )
+            values = _form_expense(vehicle_id, parsed_date, category, parsed_amount, treatment, notes,
+                                   parsed_trip_id)
             async with request.state.account_pool.connection() as conn:
-                vehicle_cur = await conn.execute(
-                    "SELECT 1 FROM vehicles WHERE id = %s AND account_id = %s", (vehicle_id, account_id(conn))
-                )
-                if await vehicle_cur.fetchone() is None:
-                    raise HTTPException(status_code=400, detail="No such vehicle")
-                if parsed_trip_id is not None:
-                    trip_cur = await conn.execute(
-                        "SELECT 1 FROM trips WHERE id = %s AND account_id = %s", (parsed_trip_id, account_id(conn))
-                    )
-                    if await trip_cur.fetchone() is None:
-                        raise HTTPException(status_code=400, detail="No such trip")
                 try:
-                    await conn.execute(
-                        "INSERT INTO expenses (account_id, vehicle_id, incurred_on, category, amount, treatment, notes, trip_id) "
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                        (
-                            account_id(conn), vehicle_id, parsed_date, category, parsed_amount, treatment,
-                            notes.strip() or None, parsed_trip_id,
-                        ),
-                    )
-                except errors.ForeignKeyViolation:
-                    raise HTTPException(status_code=400, detail="Invalid expense reference")
-            request.state._capacity_mutation_committed = True
+                    expense = await ledger_service.validate_expense(conn, values)
+                    await ledger_service.insert_expense(conn, expense)
+                except ExpenseValidationError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from None
+            mark_committed_write(request)
             return Response(status_code=204, headers={"HX-Redirect": f"/expenses?year={parsed_date.year}"})
 
         @router.post("/expenses/{expense_id}/update", dependencies=[Depends(require_csrf)])
@@ -203,33 +157,17 @@ def register(router: APIRouter) -> None:
             parsed_date, category, parsed_amount, treatment = _parse_expense_input(
                 incurred_on, category, amount, treatment, trip_id
             )
+            values = _form_expense(vehicle_id, parsed_date, category, parsed_amount, treatment, notes,
+                                   parsed_trip_id)
             async with request.state.account_pool.connection() as conn:
-                vehicle_cur = await conn.execute(
-                    "SELECT 1 FROM vehicles WHERE id = %s AND account_id = %s", (vehicle_id, account_id(conn))
-                )
-                if await vehicle_cur.fetchone() is None:
-                    raise HTTPException(status_code=400, detail="No such vehicle")
-                if parsed_trip_id is not None:
-                    trip_cur = await conn.execute(
-                        "SELECT 1 FROM trips WHERE id = %s AND account_id = %s", (parsed_trip_id, account_id(conn))
-                    )
-                    if await trip_cur.fetchone() is None:
-                        raise HTTPException(status_code=400, detail="No such trip")
                 try:
-                    cur = await conn.execute(
-                        "UPDATE expenses SET vehicle_id = %s, incurred_on = %s, category = %s, "
-                        "amount = %s, treatment = %s, notes = %s, trip_id = %s, "
-                        "updated_at = now() WHERE id = %s AND account_id = %s",
-                        (
-                            vehicle_id, parsed_date, category, parsed_amount, treatment,
-                            notes.strip() or None, parsed_trip_id, expense_id, account_id(conn),
-                        ),
-                    )
-                except errors.ForeignKeyViolation:
-                    raise HTTPException(status_code=400, detail="Invalid expense reference")
-                if cur.rowcount == 0:
-                    raise HTTPException(status_code=404, detail="No such expense")
-            request.state._capacity_mutation_committed = True
+                    # Every save refreshes updated_at, as the form always has.
+                    await ledger_service.update_expense(conn, expense_id, values, write_unchanged=True)
+                except ExpenseValidationError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from None
+                except ExpenseNotFound:
+                    raise HTTPException(status_code=404, detail=NOT_FOUND) from None
+            mark_committed_write(request)
             return Response(status_code=204, headers={"HX-Redirect": f"/expenses?year={parsed_date.year}"})
 
         @router.post("/expenses/{expense_id}/delete", dependencies=[Depends(require_csrf)])
@@ -237,8 +175,9 @@ def register(router: APIRouter) -> None:
             request: Request, expense_id: int, user: dict = Depends(require_user)
         ):
             async with request.state.account_pool.connection() as conn:
-                cur = await conn.execute("DELETE FROM expenses WHERE id = %s AND account_id = %s", (expense_id, account_id(conn)))
-                if cur.rowcount == 0:
-                    raise HTTPException(status_code=404, detail="No such expense")
-            request.state._capacity_mutation_committed = True
+                try:
+                    await ledger_service.delete_expense(conn, expense_id)
+                except ExpenseNotFound:
+                    raise HTTPException(status_code=404, detail=NOT_FOUND) from None
+            mark_committed_write(request)
             return Response(status_code=204, headers={"HX-Redirect": "/expenses"})

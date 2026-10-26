@@ -82,6 +82,442 @@
         ],
         "type": "object"
       },
+      "CategoryAmount": {
+        "properties": {
+          "amount": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "amount"
+        ],
+        "type": "object"
+      },
+      "CategoryTotal": {
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "distance_m": {
+            "type": "number"
+          },
+          "trip_count": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "category",
+          "trip_count",
+          "distance_m"
+        ],
+        "type": "object"
+      },
+      "ComparisonLine": {
+        "properties": {
+          "actual_total": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "allocated_expenses": {
+            "type": "string"
+          },
+          "business_m": {
+            "type": "number"
+          },
+          "business_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "denominator_m": {
+            "type": "number"
+          },
+          "denominator_source": {
+            "type": "string"
+          },
+          "difference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fully_business_expenses": {
+            "type": "string"
+          },
+          "invalid_odometer": {
+            "type": "boolean"
+          },
+          "larger_estimate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provisional": {
+            "type": "boolean"
+          },
+          "standard_total": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "vehicle_id": {
+            "type": "integer"
+          },
+          "vehicle_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "vehicle_id",
+          "vehicle_name",
+          "business_m",
+          "denominator_m",
+          "denominator_source",
+          "provisional",
+          "invalid_odometer",
+          "business_share",
+          "allocated_expenses",
+          "fully_business_expenses",
+          "standard_total",
+          "actual_total",
+          "difference",
+          "larger_estimate"
+        ],
+        "type": "object"
+      },
+      "DayDistance": {
+        "properties": {
+          "business_m": {
+            "type": "number"
+          },
+          "date": {
+            "type": "string"
+          },
+          "nondeductible_m": {
+            "type": "number"
+          },
+          "personal_m": {
+            "type": "number"
+          },
+          "total_m": {
+            "type": "number"
+          },
+          "unclassified_m": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "total_m",
+          "business_m",
+          "personal_m",
+          "unclassified_m",
+          "nondeductible_m",
+          "date"
+        ],
+        "type": "object"
+      },
+      "Distance": {
+        "properties": {
+          "business_m": {
+            "type": "number"
+          },
+          "nondeductible_m": {
+            "type": "number"
+          },
+          "personal_m": {
+            "type": "number"
+          },
+          "total_m": {
+            "type": "number"
+          },
+          "unclassified_m": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "total_m",
+          "business_m",
+          "personal_m",
+          "unclassified_m",
+          "nondeductible_m"
+        ],
+        "type": "object"
+      },
+      "Expense": {
+        "properties": {
+          "amount": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "conflicts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "incurred_on": {
+            "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "treatment": {
+            "type": "string"
+          },
+          "trip_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "vehicle_id": {
+            "type": "integer"
+          },
+          "vehicle_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "vehicle_id",
+          "vehicle_name",
+          "incurred_on",
+          "category",
+          "amount",
+          "treatment",
+          "notes",
+          "trip_id",
+          "conflicts"
+        ],
+        "type": "object"
+      },
+      "ExpenseComparison": {
+        "properties": {
+          "allocated_total": {
+            "type": "string"
+          },
+          "category_totals": {
+            "items": {
+              "$ref": "#/components/schemas/CategoryAmount"
+            },
+            "type": "array"
+          },
+          "fully_business_total": {
+            "type": "string"
+          },
+          "ledger_total": {
+            "type": "string"
+          },
+          "vehicles": {
+            "items": {
+              "$ref": "#/components/schemas/ComparisonLine"
+            },
+            "type": "array"
+          },
+          "year": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "year",
+          "vehicles",
+          "category_totals",
+          "allocated_total",
+          "fully_business_total",
+          "ledger_total"
+        ],
+        "type": "object"
+      },
+      "ExpenseCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "type": "string"
+          },
+          "category": {
+            "enum": [
+              "fuel",
+              "maintenance_repairs",
+              "tires",
+              "insurance",
+              "registration_taxes",
+              "lease_payments",
+              "depreciation",
+              "parking",
+              "tolls",
+              "other"
+            ],
+            "type": "string"
+          },
+          "incurred_on": {
+            "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "treatment": {
+            "enum": [
+              "business_use_allocated",
+              "fully_business"
+            ],
+            "type": "string"
+          },
+          "trip_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "vehicle_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "vehicle_id",
+          "incurred_on",
+          "category",
+          "amount"
+        ],
+        "type": "object"
+      },
+      "ExpensePage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Expense"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "ExpensePatch": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "type": "string"
+          },
+          "category": {
+            "enum": [
+              "fuel",
+              "maintenance_repairs",
+              "tires",
+              "insurance",
+              "registration_taxes",
+              "lease_payments",
+              "depreciation",
+              "parking",
+              "tolls",
+              "other"
+            ],
+            "type": "string"
+          },
+          "incurred_on": {
+            "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "treatment": {
+            "enum": [
+              "business_use_allocated",
+              "fully_business"
+            ],
+            "type": "string"
+          },
+          "trip_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "vehicle_id": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "MeResponse": {
         "properties": {
           "account_id": {
@@ -120,6 +556,37 @@
         ],
         "type": "object"
       },
+      "MonthDistance": {
+        "properties": {
+          "business_m": {
+            "type": "number"
+          },
+          "month": {
+            "type": "integer"
+          },
+          "nondeductible_m": {
+            "type": "number"
+          },
+          "personal_m": {
+            "type": "number"
+          },
+          "total_m": {
+            "type": "number"
+          },
+          "unclassified_m": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "total_m",
+          "business_m",
+          "personal_m",
+          "unclassified_m",
+          "nondeductible_m",
+          "month"
+        ],
+        "type": "object"
+      },
       "MultiLineString": {
         "properties": {
           "coordinates": {
@@ -145,6 +612,24 @@
         ],
         "type": "object"
       },
+      "Multiyear": {
+        "properties": {
+          "through_month": {
+            "type": "integer"
+          },
+          "years": {
+            "items": {
+              "$ref": "#/components/schemas/YearSeriesItem"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "through_month",
+          "years"
+        ],
+        "type": "object"
+      },
       "PurposeList": {
         "properties": {
           "items": {
@@ -167,6 +652,44 @@
         "required": [
           "items",
           "next_cursor"
+        ],
+        "type": "object"
+      },
+      "QuarterShare": {
+        "properties": {
+          "business_m": {
+            "type": "number"
+          },
+          "business_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "nondeductible_m": {
+            "type": "number"
+          },
+          "personal_m": {
+            "type": "number"
+          },
+          "quarter": {
+            "type": "integer"
+          },
+          "year": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "year",
+          "quarter",
+          "business_m",
+          "personal_m",
+          "nondeductible_m",
+          "business_share"
         ],
         "type": "object"
       },
@@ -204,6 +727,59 @@
           "trip",
           "remaining",
           "next_cursor"
+        ],
+        "type": "object"
+      },
+      "ShareTrend": {
+        "properties": {
+          "future_quarters_excluded": {
+            "type": "boolean"
+          },
+          "quarters": {
+            "items": {
+              "$ref": "#/components/schemas/QuarterShare"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "quarters",
+          "future_quarters_excluded"
+        ],
+        "type": "object"
+      },
+      "StatsResponse": {
+        "properties": {
+          "multiyear": {
+            "$ref": "#/components/schemas/Multiyear"
+          },
+          "period_end": {
+            "type": "string"
+          },
+          "period_start": {
+            "type": "string"
+          },
+          "share_trend": {
+            "$ref": "#/components/schemas/ShareTrend"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/YearTotals"
+          },
+          "vehicles": {
+            "$ref": "#/components/schemas/VehicleBreakdown"
+          },
+          "year": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "year",
+          "period_start",
+          "period_end",
+          "totals",
+          "multiyear",
+          "share_trend",
+          "vehicles"
         ],
         "type": "object"
       },
@@ -1006,6 +1582,24 @@
         ],
         "type": "object"
       },
+      "VehicleBreakdown": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/VehicleTotals"
+            },
+            "type": "array"
+          },
+          "unassigned_trip_count": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "unassigned_trip_count"
+        ],
+        "type": "object"
+      },
       "VehicleList": {
         "properties": {
           "items": {
@@ -1028,6 +1622,182 @@
         "required": [
           "items",
           "next_cursor"
+        ],
+        "type": "object"
+      },
+      "VehicleTotals": {
+        "properties": {
+          "business_m": {
+            "type": "number"
+          },
+          "deduction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expense_total": {
+            "type": "string"
+          },
+          "nondeductible_m": {
+            "type": "number"
+          },
+          "personal_m": {
+            "type": "number"
+          },
+          "total_m": {
+            "type": "number"
+          },
+          "unclassified_m": {
+            "type": "number"
+          },
+          "vehicle_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "vehicle_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "vehicle_id",
+          "vehicle_name",
+          "total_m",
+          "business_m",
+          "personal_m",
+          "unclassified_m",
+          "nondeductible_m",
+          "expense_total",
+          "deduction"
+        ],
+        "type": "object"
+      },
+      "WeekDashboardResponse": {
+        "properties": {
+          "days": {
+            "items": {
+              "$ref": "#/components/schemas/DayDistance"
+            },
+            "type": "array"
+          },
+          "deduction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "distance": {
+            "$ref": "#/components/schemas/Distance"
+          },
+          "expense_total": {
+            "type": "string"
+          },
+          "is_current_week": {
+            "type": "boolean"
+          },
+          "missing_trip_count": {
+            "type": "integer"
+          },
+          "next_week_start": {
+            "type": "string"
+          },
+          "previous_week_start": {
+            "type": "string"
+          },
+          "trip_count": {
+            "type": "integer"
+          },
+          "week_end": {
+            "type": "string"
+          },
+          "week_start": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "week_start",
+          "week_end",
+          "previous_week_start",
+          "next_week_start",
+          "is_current_week",
+          "trip_count",
+          "distance",
+          "days",
+          "expense_total",
+          "deduction",
+          "missing_trip_count"
+        ],
+        "type": "object"
+      },
+      "YearSeriesItem": {
+        "properties": {
+          "months": {
+            "items": {
+              "$ref": "#/components/schemas/MonthDistance"
+            },
+            "type": "array"
+          },
+          "year": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "year",
+          "months"
+        ],
+        "type": "object"
+      },
+      "YearTotals": {
+        "properties": {
+          "business_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "categories": {
+            "items": {
+              "$ref": "#/components/schemas/CategoryTotal"
+            },
+            "type": "array"
+          },
+          "distance_m": {
+            "type": "number"
+          },
+          "trip_count": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "trip_count",
+          "distance_m",
+          "business_share",
+          "categories"
         ],
         "type": "object"
       }
@@ -1155,6 +1925,496 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CapabilitiesResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dashboard/week": {
+      "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeekDashboardResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/expenses": {
+      "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "year",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 9998,
+                  "minimum": 1900,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExpensePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpenseCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Expense"
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Expense"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/expenses/comparison": {
+      "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "year",
+            "required": true,
+            "schema": {
+              "maximum": 9998,
+              "minimum": 1900,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExpenseComparison"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/expenses/{expense_id}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "expense_id",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "expense_id",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpensePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Expense"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
                 }
               }
             }
@@ -1349,6 +2609,76 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stats": {
+      "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "year",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 9998,
+                  "minimum": 1900,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsResponse"
                 }
               }
             }

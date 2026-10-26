@@ -207,6 +207,11 @@ def _stacked_bar_chart(
     )
 
 
+def category_amounts(category_rows: Iterable[tuple[str, int, float]]) -> dict[str, tuple[int, float]]:
+    """Trip count and meters per stats category, from the category totals query."""
+    return {category: (int(count), float(meters)) for category, count, meters in category_rows}
+
+
 def build_dashboard(
     year: int, period_start: date, period_end: date,
     category_rows: Iterable[tuple[str, int, float]],
@@ -215,7 +220,7 @@ def build_dashboard(
     routes: list[dict], places: list[dict], unnamed_trip_count: int,
     link_fn: Callable[[date, date, str], str | None] | None = None,
 ) -> Dashboard:
-    amounts = {category: (int(count), float(meters)) for category, count, meters in category_rows}
+    amounts = category_amounts(category_rows)
     week_end = period_end - timedelta(days=period_end.weekday())
     weekly_labels = []
     for offset in range(11, -1, -1):

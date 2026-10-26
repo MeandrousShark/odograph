@@ -48,7 +48,17 @@ def _quarterly_buckets(
     years: list[int],
     cutoff_month: int,
 ) -> tuple[list[ShareBucket], bool]:
-    """Aggregate raw (year, month, category, count, meters) rows into quarters.
+    quarters, clamped = quarterly_share(rows, years, cutoff_month)
+    return [bucket for _year, _quarter, bucket in quarters], clamped
+
+
+def quarterly_share(
+    rows: Iterable[tuple[int, int, str, int, float]],
+    years: list[int],
+    cutoff_month: int,
+) -> tuple[list[tuple[int, int, ShareBucket]], bool]:
+    """Aggregate raw (year, month, category, count, meters) rows into
+    `(year, quarter, bucket)` triples, and whether any quarter was excluded.
 
     A quarter's last calendar month reaching cutoff_month counts as complete,
     so the most recent year in `years` is clamped to the same elapsed period
@@ -74,7 +84,7 @@ def _quarterly_buckets(
 
     max_year = max(years)
     clamped = False
-    buckets: list[ShareBucket] = []
+    buckets: list[tuple[int, int, ShareBucket]] = []
     for year in sorted(years):
         for quarter in (1, 2, 3, 4):
             if year == max_year:
@@ -94,15 +104,13 @@ def _quarterly_buckets(
             personal_m = amounts["personal"]
             nondeductible_m = amounts["nondeductible"]
             classified = business_m + personal_m + nondeductible_m
-            buckets.append(
-                ShareBucket(
-                    label=f"Q{quarter} {year}",
-                    business_m=business_m,
-                    personal_m=personal_m,
-                    business_share=(business_m / classified) if classified else None,
-                    nondeductible_m=nondeductible_m,
-                )
-            )
+            buckets.append((year, quarter, ShareBucket(
+                label=f"Q{quarter} {year}",
+                business_m=business_m,
+                personal_m=personal_m,
+                business_share=(business_m / classified) if classified else None,
+                nondeductible_m=nondeductible_m,
+            )))
     return buckets, clamped
 
 
