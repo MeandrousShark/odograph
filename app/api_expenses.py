@@ -33,7 +33,7 @@ from app.expense_ledger import (
     update_expense, validate_expense,
 )
 from app.expenses import EXPENSE_CATEGORIES, ExpenseReport, expense_conflicts
-from app.report_data import fetch_expense_comparison
+from app.report_data import build_comparison, fetch_comparison_inputs
 
 DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 200
@@ -253,8 +253,9 @@ def make_router() -> APIRouter:
         api_user: ApiUser = Depends(require_api_user),
     ):
         tz = request.state.config.display_tz
-        async with request.state.account_pool.connection() as conn:
-            report = await fetch_expense_comparison(conn, year, tz)
+        async with request.state.account_pool.connection(consistent_snapshot=True) as conn:
+            inputs = await fetch_comparison_inputs(conn, year, tz)
+        report = await build_comparison(inputs, year, tz)
         return _comparison(year, report)
 
     @router.post("/api/v1/expenses", status_code=201, response_model=Expense,

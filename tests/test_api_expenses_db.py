@@ -9,6 +9,7 @@ import uuid
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import psycopg
@@ -19,8 +20,7 @@ from app.account_context import AccountPool, AccountPrincipal, account_id
 from app.api_errors import ERRORS
 from app.application_roles import application_role_pools
 from app.expense_ledger import Expense, create_expense, expense_digest
-from app.report_data import fetch_expense_report_inputs, fetch_range_trips
-from app.expenses import build_expense_report
+from app.ui.reports import _build_annual_report_data
 from api_expense_support import seed_ledger
 from test_api_trips_db import OTHER, TEST_DB, TZ_NAME, _bearer, _envelope, _get, _run, _sql
 from test_api_trip_writes_db import _api, _usage, _web
@@ -621,14 +621,15 @@ def test_list_items_carry_conflict_codes_and_trip_links():
     _run(check)
 
 
-async def _reference_comparison(state, year):
-    async with state.pools[state.owner].connection() as conn:
-        trips, rates = await fetch_range_trips(conn, TZ, date(year, 1, 1), date(year, 12, 31))
-        expenses, readings = await fetch_expense_report_inputs(conn, year)
-    return build_expense_report(year, trips, expenses, readings, rates, TZ)
+async def _web_report_comparison(state, year):
+    """The comparison the web's annual report data path builds, from its full
+    trip projection."""
+    request = SimpleNamespace(state=SimpleNamespace(
+        account_pool=state.pools[state.owner], config=SimpleNamespace(display_tz=TZ)))
+    return (await _build_annual_report_data(request, year)).expense_report
 
 
-def test_the_comparison_matches_the_annual_report():
+def test_the_comparison_matches_the_web_annual_report_data():
     async def check(state):
         await _seed(state)
         await _seed(state, OTHER)
@@ -637,7 +638,7 @@ def test_the_comparison_matches_the_annual_report():
             response = await _get(state, "/api/v1/expenses/comparison", year=year)
             assert response.status_code == 200, response.text
             body = response.json()
-            report = await _reference_comparison(state, year)
+            report = await _web_report_comparison(state, year)
             assert body == api_expenses._comparison(year, report).model_dump(mode="json")
             assert body["ledger_total"] == format(report.ledger_total, ".2f")
         body = (await _get(state, "/api/v1/expenses/comparison", year=2026)).json()
