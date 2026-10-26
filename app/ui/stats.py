@@ -1,34 +1,34 @@
 from __future__ import annotations
 
 import calendar
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, Query, Request
-from psycopg.rows import dict_row
 
 from app.account_context import account_id
 from app.auth import require_user
 from app.capacity import owned_thread
 from app.page import render_page
-from app.config import DEFAULT_MISSING_TRIP_GAP_M
-from app.dashboard import build_week_dashboard, parse_week_anchor, week_bounds
+from app.dashboard import parse_week_anchor
 from app.rates import load_rates
 from app.stats import build_dashboard
 from app.stats_multiyear import build_multiyear_chart
 from app.stats_trends import build_share_trend
 from app.stats_vehicle import build_vehicle_breakdown
+from app.stats_queries import (
+    fetch_category_rows, fetch_cross_year_rows, fetch_vehicle_rows, multiyear_window, stats_period,
+    vehicle_clause as stats_vehicle_clause,
+)
 from app.trip_queries import DISPLAY_DISTANCE_SQL
 from app.vehicles import list_vehicles
+from app.week_dashboard import build_week, fetch_week_inputs, missing_trip_threshold
 
 from app.ui._common import (
-    TRIP_COLUMNS,
-    VEHICLE_FILTER_UNASSIGNED,
     _fetch_recent_purposes,
     _parse_vehicle_id,
     _url_with_filters,
     parse_date_range,
 )
-from app.ui.reports import _multiyear_window
 
 
 async def _build_week_dashboard_context(
@@ -42,31 +42,12 @@ async def _build_week_dashboard_context(
     """
     config = request.state.config
     tz = config.display_tz
-    bounds = week_bounds(anchor, tz)
     async with request.state.account_pool.connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        await cur.execute(
-            f"SELECT {TRIP_COLUMNS} FROM trips WHERE started_at >= %s AND started_at < %s "
-            "AND account_id = %s ORDER BY started_at DESC, id DESC",
-            (bounds.start, bounds.end, account_id(conn)),
-        )
-        trips = await cur.fetchall()
-        expense_cur = await conn.execute(
-            "SELECT COALESCE(SUM(amount), 0) FROM expenses "
-            "WHERE incurred_on >= %s AND incurred_on < %s AND account_id = %s",
-            (bounds.monday, bounds.monday + timedelta(days=7), account_id(conn)),
-        )
-        expense_total = (await expense_cur.fetchone())[0]
-        rates = await load_rates(conn)
+        inputs = await fetch_week_inputs(conn, anchor, tz)
         vehicles = await list_vehicles(conn)
         recent_purposes = await _fetch_recent_purposes(conn)
 
-    threshold_m = getattr(
-        config, "missing_trip_gap_m", DEFAULT_MISSING_TRIP_GAP_M
-    )
-    dashboard = await owned_thread(build_week_dashboard,
-        trips, expense_total, rates, anchor, tz, now, threshold_m,
-    )
+    dashboard = await build_week(inputs, anchor, tz, now, missing_trip_threshold(config))
     return {
         "dashboard": dashboard,
         "vehicles": vehicles,
@@ -92,45 +73,15 @@ def register(router: APIRouter) -> None:
             tz = request.state.config.display_tz
             now = datetime.now(tz)
             selected_year = year or now.year
-            year_start = datetime(selected_year, 1, 1, tzinfo=tz)
-            next_year_start = datetime(selected_year + 1, 1, 1, tzinfo=tz)
-
             from_dt, to_dt = parse_date_range(from_, to, tz)
-            if from_dt is not None and from_dt > year_start:
-                year_start = from_dt
-            if to_dt is not None and to_dt < next_year_start:
-                next_year_start = to_dt
-
             vehicle_id = _parse_vehicle_id(vehicle)
-            vehicle_clause = ""
-            vehicle_params: list = []
-            if vehicle_id == VEHICLE_FILTER_UNASSIGNED:
-                vehicle_clause = " AND vehicle_id IS NULL"
-            elif vehicle_id is not None:
-                vehicle_clause = " AND vehicle_id = %s"
-                vehicle_params = [vehicle_id]
-
-            period_start_date = from_dt.date() if from_dt is not None else date(selected_year, 1, 1)
-            if to_dt is not None:
-                period_end_date = (to_dt - timedelta(days=1)).date()
-            elif selected_year < now.year:
-                period_end_date = date(selected_year, 12, 31)
-            else:
-                period_end_date = now.date()
-            # A from/to filter can spill outside the selected year (e.g. to=2027-01-15
-            # with year=2026); clamp so monthly bucket ranges stay within that year.
-            period_start_date = max(period_start_date, date(selected_year, 1, 1))
-            period_end_date = min(period_end_date, date(selected_year, 12, 31))
+            period = stats_period(selected_year, tz, now, from_dt, to_dt, vehicle_id)
+            year_start, next_year_start = period.start, period.end
+            period_start_date, period_end_date = period.start_date, period.end_date
+            vehicle_clause, vehicle_params = stats_vehicle_clause(vehicle_id)
 
             async with request.state.account_pool.connection() as conn:
-                category_cur = await conn.execute(
-                    "SELECT CASE WHEN exclusion = 'not_deductible' THEN 'nondeductible' "
-                    "ELSE category::text END, count(*), "
-                    f"COALESCE(SUM({DISPLAY_DISTANCE_SQL}), 0) "
-                    "FROM trips WHERE account_id = %s AND exclusion IS DISTINCT FROM 'not_my_vehicle' "
-                    f"AND started_at >= %s AND started_at < %s{vehicle_clause} GROUP BY 1",
-                    (account_id(conn), year_start, next_year_start, *vehicle_params),
-                )
+                category_rows = await fetch_category_rows(conn, period)
                 weekly_cur = await conn.execute(
                     "SELECT date_trunc('week', started_at AT TIME ZONE %s)::date, "
                     "CASE WHEN exclusion = 'not_deductible' THEN 'nondeductible' "
@@ -201,7 +152,7 @@ def register(router: APIRouter) -> None:
 
                 dashboard = await owned_thread(build_dashboard,
                     selected_year, period_start_date, period_end_date,
-                    await category_cur.fetchall(), await weekly_cur.fetchall(),
+                    category_rows, await weekly_cur.fetchall(),
                     await monthly_cur.fetchall(),
                     [
                         {"start_name": row[0], "end_name": row[1], "trip_count": row[2], "total_m": float(row[3])}
@@ -212,25 +163,9 @@ def register(router: APIRouter) -> None:
                     drill_url,
                 )
 
-                # The query itself stays unbounded on year so the five-year
-                # window can be chosen in Python (see _multiyear_window) instead
-                # of re-querying per candidate window. The from/to date filter
-                # still does not apply here: a year-over-year comparison is
-                # meaningless clamped to a sub-year range. It still respects the
-                # vehicle filter.
-                cross_year_cur = await conn.execute(
-                    "SELECT EXTRACT(year FROM started_at AT TIME ZONE %s)::int, "
-                    "EXTRACT(month FROM started_at AT TIME ZONE %s)::int, "
-                    "CASE WHEN exclusion = 'not_deductible' THEN 'nondeductible' "
-                    "ELSE category::text END, count(*), "
-                    f"COALESCE(SUM({DISPLAY_DISTANCE_SQL}), 0) "
-                    "FROM trips WHERE account_id = %s AND exclusion IS DISTINCT FROM 'not_my_vehicle'"
-                    f"{vehicle_clause} GROUP BY 1, 2, 3 ORDER BY 1, 2",
-                    (tz.key, tz.key, account_id(conn), *vehicle_params),
-                )
-                cross_year_rows = await cross_year_cur.fetchall()
+                cross_year_rows = await fetch_cross_year_rows(conn, tz, vehicle_id)
                 years_present = sorted({row[0] for row in cross_year_rows})
-                multiyear_years, cutoff_month, cutoff_day = _multiyear_window(
+                multiyear_years, cutoff_month, cutoff_day = multiyear_window(
                     years_present, selected_year, now
                 )
 
@@ -248,29 +183,11 @@ def register(router: APIRouter) -> None:
                 )
                 trend = await owned_thread(build_share_trend,cross_year_rows, multiyear_years, cutoff_month)
 
-                vehicle_mileage_cur = await conn.execute(
-                    "SELECT t.vehicle_id, COALESCE(v.name, ''), "
-                    "EXTRACT(month FROM t.started_at AT TIME ZONE %s)::int, "
-                    "CASE WHEN t.exclusion = 'not_deductible' THEN 'nondeductible' "
-                    "ELSE t.category::text END, count(*), "
-                    f"COALESCE(SUM({DISPLAY_DISTANCE_SQL}), 0) "
-                    "FROM trips t LEFT JOIN vehicles v ON v.id = t.vehicle_id AND v.account_id = t.account_id "
-                    "WHERE t.account_id = %s AND t.exclusion IS DISTINCT FROM 'not_my_vehicle' "
-                    f"AND t.started_at >= %s AND t.started_at < %s{vehicle_clause} "
-                    "GROUP BY 1, 2, 3, 4",
-                    (tz.key, account_id(conn), year_start, next_year_start, *vehicle_params),
-                )
-                vehicle_expenses_cur = await conn.execute(
-                    "SELECT expenses.vehicle_id, vehicles.name, COALESCE(SUM(expenses.amount), 0) "
-                    "FROM expenses JOIN vehicles ON vehicles.id = expenses.vehicle_id AND vehicles.account_id = expenses.account_id "
-                    f"WHERE expenses.account_id = %s AND expenses.incurred_on >= %s AND expenses.incurred_on <= %s{vehicle_clause} "
-                    "GROUP BY 1, 2",
-                    (account_id(conn), period_start_date, period_end_date, *vehicle_params),
-                )
+                mileage_rows, expense_rows = await fetch_vehicle_rows(conn, period, tz)
                 rates = await load_rates(conn)
                 vehicle_breakdown = await owned_thread(build_vehicle_breakdown,
-                    await vehicle_mileage_cur.fetchall(),
-                    await vehicle_expenses_cur.fetchall(),
+                    mileage_rows,
+                    expense_rows,
                     selected_year,
                     rates,
                 )

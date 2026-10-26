@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app.capacity import owned_thread
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
@@ -15,7 +15,9 @@ from app.page import render_page
 from app.export import to_range_report_xlsx, to_report_xlsx
 from app.expenses import ExpenseReport, build_expense_report
 from app.odometer import OdometerReading, VehicleCoverage, vehicle_coverage_for_report
-from app.rates import YearRate, load_rates
+from app.rates import YearRate
+from app.report_data import fetch_expense_report_inputs, fetch_range_trips
+from app.stats_queries import multiyear_window as _multiyear_window  # noqa: F401
 from app.report import (
     AnnualReport,
     RangeReport,
@@ -29,14 +31,12 @@ from app.report import (
 
 from app.ui._common import (
     EXPORT_MEDIA_TYPES,
-    REPORT_TRIP_COLUMNS,
     TRIP_COLUMNS,
     _parse_range_query_dates,
     _parse_vehicle_id,
     _trip_filter_sql,
     parse_date_range,
 )
-from app.ui.expenses import _EXPENSE_SELECT_JOIN
 
 @dataclass(frozen=True)
 class _RangeReportData:
@@ -68,57 +68,13 @@ def _parse_report_range(from_str: str, to_str: str) -> tuple[date, date]:
     return start, end
 
 
-def _multiyear_window(
-    years_present: list[int], selected_year: int, now: datetime
-) -> tuple[list[int], int, int]:
-    """Derive the year-over-year window and cutoff for the stats page's
-    cross-year charts from the selected year, not from today.
-
-    A selected year in the past is fully elapsed, so its cutoff is the end
-    of December and no month is clamped. `>=` rather than `==` against
-    `now.year` is deliberate: a hand-crafted future `?year=2030` should
-    degrade to the current-year, same-elapsed-period cutoff rather than
-    claim a year that hasn't happened yet is complete.
-
-    The window is the five most recent years present that are no later
-    than the selected year, so `?year=2024` ends at 2024 and never shows
-    2025 or 2026 even though they exist in the data.
-    """
-    if selected_year >= now.year:
-        cutoff_month, cutoff_day = now.month, now.day
-    else:
-        cutoff_month, cutoff_day = 12, 31
-    eligible_years = [y for y in years_present if y <= selected_year]
-    return eligible_years[-5:], cutoff_month, cutoff_day
-
-
 async def _fetch_range_trips_in(conn, tz: ZoneInfo, start: date, end: date) -> tuple[list[dict], dict]:
     """`conn`-accepting variant of `_fetch_range_trips`, for callers (the
     email digest worker) that already hold a connection and must not
     acquire a second one from the pool inside the same run -- with a
-    pool of size 1 that would deadlock.
-
-    Trips + rates for a `start`..`end` span (both inclusive, local to `tz`),
-    shared by the annual/range report pages and their exports so they can't
-    drift apart. The DB-side range is only a coarse UTC pre-filter;
-    `build_range_report` re-localizes and drops anything outside `[start, end]`,
-    so a trip near the boundary can only be excluded, never mis-attributed.
-    `end + 1 day` is computed on the plain `date` (not by adding a timedelta
-    to an aware datetime) so a DST transition can't shift the boundary's
-    local day, for the same reason `_month_bounds` builds its boundary directly.
+    pool of size 1 that would deadlock. See `fetch_range_trips`.
     """
-    range_start = datetime(start.year, start.month, start.day, tzinfo=tz)
-    next_day = end + timedelta(days=1)
-    range_end = datetime(next_day.year, next_day.month, next_day.day, tzinfo=tz)
-    cur = conn.cursor(row_factory=dict_row)
-    await cur.execute(
-        f"SELECT {REPORT_TRIP_COLUMNS} FROM trips WHERE started_at >= %s AND started_at < %s"
-        " AND account_id = %s ORDER BY started_at ASC, id ASC",
-        (range_start, range_end, account_id(conn)),
-    )
-    trips = await cur.fetchall()
-    rates = await load_rates(conn)
-    return trips, rates
+    return await fetch_range_trips(conn, tz, start, end)
 
 
 async def _fetch_range_trips(pool, tz: ZoneInfo, start: date, end: date) -> tuple[list[dict], dict]:
@@ -175,30 +131,9 @@ async def _fetch_year_odometer_coverage(pool, tz: ZoneInfo, year: int, trips: li
 
 async def _fetch_year_expense_report(pool, tz: ZoneInfo, year: int, trips: list[dict], rates: dict):
     """Fetch ledger rows plus the wider odometer boundary set the
-    expense comparison needs.
-
-    Unlike the within-year reconciliation, a tax-year denominator must span
-    the entire year. Fetching all readings lets the pure layer choose the
-    closest reading on each side without annualizing a partial interval.
-    """
+    expense comparison needs (see `fetch_expense_report_inputs`)."""
     async with pool.connection() as conn:
-        expense_cur = conn.cursor(row_factory=dict_row)
-        await expense_cur.execute(
-            _EXPENSE_SELECT_JOIN
-            + "WHERE expenses.incurred_on >= %s AND expenses.incurred_on < %s "
-            "AND expenses.account_id = %s ORDER BY expenses.incurred_on, expenses.id",
-            (date(year, 1, 1), date(year + 1, 1, 1), account_id(conn)),
-        )
-        expenses = await expense_cur.fetchall()
-        reading_cur = conn.cursor(row_factory=dict_row)
-        await reading_cur.execute(
-            "SELECT odometer_readings.vehicle_id, vehicles.name AS vehicle_name, "
-            "odometer_readings.recorded_at, odometer_readings.odometer_m "
-            "FROM odometer_readings JOIN vehicles ON vehicles.id = odometer_readings.vehicle_id AND vehicles.account_id = odometer_readings.account_id "
-            "WHERE odometer_readings.account_id = %s ORDER BY odometer_readings.recorded_at",
-            (account_id(conn),),
-        )
-        readings = await reading_cur.fetchall()
+        expenses, readings = await fetch_expense_report_inputs(conn, year)
     return expenses, await owned_thread(build_expense_report, year, trips, expenses, readings, rates, tz)
 
 
