@@ -6,8 +6,10 @@ they reference, and compared with the checked-in copy in
 `tests/fixtures/api_v1/openapi.json`. v1 changes are additive only: the check
 fails on a removed field, parameter or media type, a type change, a newly
 required request field, a response field that becomes nullable or optional,
-a changed `format` (or one newly required of a request field), and a request
-enum value removed or a request field newly limited to an enum. Added
+a changed `format` (or one newly required of a request field), a request
+enum value removed or a request field newly limited to an enum, and a
+request bound tightened (a higher minimum, a lower maximum, a new or changed
+pattern). Added
 request values and added response enum values are additive. After an additive change,
 regenerate the copy with
 
@@ -146,6 +148,34 @@ def _formats(document, schema) -> set[str]:
     return {leaf["format"] for leaf in _leaves(document, schema) if "format" in leaf}
 
 
+_LOWER_BOUNDS = ("minimum", "exclusiveMinimum", "minLength", "minItems")
+_UPPER_BOUNDS = ("maximum", "exclusiveMaximum", "maxLength", "maxItems")
+
+
+def _bound(document, schema, keyword):
+    """The loosest `keyword` across a field's alternatives, or None when
+    some alternative does not set it."""
+    values = [leaf.get(keyword) for leaf in _leaves(document, schema)]
+    if not values or None in values:
+        return None
+    return min(values) if keyword in _LOWER_BOUNDS else max(values)
+
+
+def _compare_bounds(old_doc, new_doc, old, new, where, problems):
+    """A request may never accept less than before: a raised lower bound, a
+    lowered upper bound or a new or changed pattern is breaking."""
+    for keyword in (*_LOWER_BOUNDS, *_UPPER_BOUNDS):
+        before, after = _bound(old_doc, old, keyword), _bound(new_doc, new, keyword)
+        if after is None or before == after:
+            continue
+        if before is None or (after > before if keyword in _LOWER_BOUNDS else after < before):
+            problems.append(f"{where}: request {keyword} tightened from {before} to {after}")
+    old_patterns = {leaf["pattern"] for leaf in _leaves(old_doc, old) if "pattern" in leaf}
+    new_patterns = {leaf["pattern"] for leaf in _leaves(new_doc, new) if "pattern" in leaf}
+    if new_patterns and new_patterns != old_patterns:
+        problems.append(f"{where}: request pattern changed from {sorted(old_patterns)} to {sorted(new_patterns)}")
+
+
 def _compare_values(old_doc, new_doc, old, new, where, request, problems):
     """The freeze's enum and format rules. A request may never lose an
     accepted value; a response may gain values clients must tolerate."""
@@ -155,6 +185,8 @@ def _compare_values(old_doc, new_doc, old, new, where, request, problems):
     elif request and old_enum is not None and new_enum is not None:
         for value in sorted(map(str, old_enum - new_enum)):
             problems.append(f"{where}: request enum value {value} removed")
+    if request:
+        _compare_bounds(old_doc, new_doc, old, new, where, problems)
     old_formats, new_formats = _formats(old_doc, old), _formats(new_doc, new)
     if old_formats and old_formats != new_formats:
         problems.append(f"{where}: format changed from {sorted(old_formats)} to {sorted(new_formats)}")
@@ -368,6 +400,66 @@ def test_comparator_applies_the_freeze_rules(mutate, expected):
     mutate(new)
     problems = breaking_changes(old, new)
     assert any(problem.startswith(expected) for problem in problems), problems
+
+
+def _year(document):
+    return _parameter(document, "/api/v1/reports/{year}", "year")["schema"]
+
+
+def _with_labels(document):
+    """The snapshot with an array request field, which v1 does not have yet."""
+    _schema(document, "TripPatch")["properties"]["labels"] = {"type": "array", "items": {"type": "string"}}
+    return document
+
+
+def _labels(document):
+    return _schema(document, "TripPatch")["properties"]["labels"]
+
+
+def _purpose(document):
+    return _schema(document, "TripPatch")["properties"]["purpose"]["anyOf"][0]
+
+
+@pytest.mark.parametrize("mutate,expected", [
+    (lambda d: _year(d).update(minimum=1950), "request minimum tightened from 1900 to 1950"),
+    (lambda d: _year(d).update(maximum=2100), "request maximum tightened from 9998 to 2100"),
+    (lambda d: _year(d).update(exclusiveMinimum=1900), "request exclusiveMinimum tightened from None to 1900"),
+    (lambda d: _year(d).update(exclusiveMaximum=9999), "request exclusiveMaximum tightened from None to 9999"),
+    (lambda d: _purpose(d).update(maxLength=10), "request maxLength tightened from None to 10"),
+    (lambda d: _purpose(d).update(minLength=1), "request minLength tightened from None to 1"),
+    (lambda d: _labels(d).update(minItems=1), "request minItems tightened from None to 1"),
+    (lambda d: _labels(d).update(maxItems=5), "request maxItems tightened from None to 5"),
+    (lambda d: _purpose(d).update(pattern="^[a-z]+$"), "request pattern changed from [] to ['^[a-z]+$']"),
+])
+def test_comparator_rejects_tightened_request_bounds(mutate, expected):
+    old = _with_labels(_document())
+    new = copy.deepcopy(old)
+    mutate(new)
+    problems = breaking_changes(old, new)
+    assert any(expected in problem for problem in problems), problems
+
+
+@pytest.mark.parametrize("tighten", [
+    lambda d: _year(d).update(minimum=1950),
+    lambda d: _year(d).update(maximum=2100),
+    lambda d: _purpose(d).update(maxLength=10, minLength=2, pattern="^[a-z]+$"),
+    lambda d: _labels(d).update(minItems=2, maxItems=5),
+])
+def test_comparator_accepts_loosened_request_bounds(tighten):
+    # The reverse of each tightening: the old document is the strict one.
+    strict = _with_labels(_document())
+    tighten(strict)
+    loose = _with_labels(_document())
+    assert breaking_changes(strict, loose) == []
+    assert breaking_changes(strict, copy.deepcopy(strict)) == []
+
+
+def test_comparator_accepts_a_pattern_dropped_or_a_bound_change_on_responses():
+    old = _document()
+    _schema(old, "MeResponse")["properties"]["display_time_zone"].update(maxLength=64, pattern="^.+$")
+    new = copy.deepcopy(old)
+    _schema(new, "MeResponse")["properties"]["display_time_zone"].update(maxLength=8, pattern="^x$")
+    assert breaking_changes(old, new) == []
 
 
 @pytest.mark.parametrize("mutate", [
