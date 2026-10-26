@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from app.api_common import storable_text, unstorable_fields
 from app.api_errors import ApiError, register_api_errors
 from app.api_expenses import _write_values as expense_values
-from app.api_trips import _search
+from app.api_trips import parse_search
 from app.api_trips import _write_values as trip_values
 
 INVALID = "This value is not valid."
@@ -48,7 +48,7 @@ def test_expense_writes_refuse_lone_surrogates(field):
 @pytest.mark.parametrize("term", ["\ud800", "trip \udfff"])
 def test_searches_refuse_lone_surrogates(term):
     with pytest.raises(ApiError) as refused:
-        _search(term)
+        parse_search(term)
     assert refused.value.fields == {"q": INVALID}
 
 
