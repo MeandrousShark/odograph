@@ -130,10 +130,8 @@ def parse_manual_trip_input(
         distance_m = None
     else:
         distance_m = distance_miles * METERS_PER_MILE
-        if distance_problem(distance_m):
-            raise ManualTripValidationError(
-                {"distance": "Distance must be a positive finite number."}
-            )
+        if problem := distance_problem(distance_m):
+            raise ManualTripValidationError({"distance": problem})
     return started_at, ended_at, distance_m
 
 
