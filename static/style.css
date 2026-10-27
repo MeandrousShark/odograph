@@ -2170,6 +2170,8 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 .stats-page .trip-page-disclosure > summary, .report-page .trip-page-disclosure > summary {
   position: static; width: fit-content; margin: 0; padding: var(--space-2) var(--space-3);
 }
+/* A summary listing active filters can outgrow a phone. */
+.stats-page .trip-page-disclosure > summary { white-space: normal; overflow-wrap: anywhere; }
 .stats-page .trip-page-disclosure > .filter-bar,
 .report-page .trip-page-disclosure > .filter-bar { margin: var(--space-3) 0 0; }
 .stats-page .filter-bar label { min-width: 0; }
