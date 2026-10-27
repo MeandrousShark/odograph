@@ -91,3 +91,51 @@ def test_pokesweep_poke_pulls_the_next_run_estimate_in_from_the_sweep():
     assert worker.calls >= 2  # the immediate start() run, plus the poked run
     seconds_out = (next_run_after_poke - datetime.now(timezone.utc)).total_seconds()
     assert seconds_out < 5  # nowhere near the 10s sweep the poke bypassed
+
+
+def test_pokesweep_steady_pokes_do_not_starve_the_debounced_run():
+    async def scenario():
+        worker = _PokeSweep(debounce_s=0.2, sweep_s=10.0)
+        await worker.start()
+        await asyncio.sleep(0.02)
+        for _ in range(10):  # a poke every 0.1s, half the debounce
+            worker.poke()
+            await asyncio.sleep(0.1)
+        await worker.stop()
+        return worker.calls - 1  # minus the immediate start() run
+
+    runs = asyncio.run(scenario())
+    assert 3 <= runs <= 6  # about one per 0.2s window; a trailing debounce gives 0
+
+
+def test_pokesweep_burst_within_the_window_runs_once():
+    async def scenario():
+        worker = _PokeSweep(debounce_s=0.2, sweep_s=10.0)
+        await worker.start()
+        await asyncio.sleep(0.02)
+        for _ in range(5):
+            worker.poke()
+            await asyncio.sleep(0.02)
+        await asyncio.sleep(0.4)
+        await worker.stop()
+        return worker.calls
+
+    assert asyncio.run(scenario()) == 2  # start() run plus exactly one poked run
+
+
+def test_pokesweep_poke_after_a_run_starts_a_new_window():
+    async def scenario():
+        worker = _PokeSweep(debounce_s=0.1, sweep_s=10.0)
+        await worker.start()
+        await asyncio.sleep(0.02)
+        worker.poke()
+        await asyncio.sleep(0.3)
+        after_first = worker.calls
+        assert worker._deadline is None
+        worker.poke()
+        assert worker._deadline is not None
+        await asyncio.sleep(0.3)
+        await worker.stop()
+        return after_first, worker.calls
+
+    assert asyncio.run(scenario()) == (2, 3)

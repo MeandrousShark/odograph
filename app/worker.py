@@ -202,7 +202,10 @@ class PokeSweepWorker(_LoopWorker):
         """Reset idle continuations when a poke or periodic sweep is due."""
 
     def poke(self) -> None:
-        self._deadline = asyncio.get_running_loop().time() + self.debounce_s
+        # Not trailing: a steady stream of pokes must not push the run out
+        # forever, so only the first poke since the last run sets the deadline.
+        if self._deadline is None:
+            self._deadline = asyncio.get_running_loop().time() + self.debounce_s
         self._wake.set()
         self._update_next_run_estimate()
 
