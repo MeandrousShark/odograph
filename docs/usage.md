@@ -35,6 +35,7 @@ For passwords, login email and signing out, see
 2. **Connect your phone.** Follow [Connecting OwnTracks](owntracks.md) to set
    up HTTP mode and the `/ingest` address. That guide also includes a
    synthetic test track if you want to check the pipeline without driving.
+   Traccar Client also works; see [Connecting Traccar Client](traccar.md).
 
 3. **Confirm that data arrived.** In **Settings**, scroll to **Device status**.
    It shows the latest received fix, latest

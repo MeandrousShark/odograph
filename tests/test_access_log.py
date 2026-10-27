@@ -47,3 +47,23 @@ def test_access_log_without_query_is_unchanged():
     assert QueryStringRedactionFilter().filter(record)
     assert record.args is args
     assert record.getMessage() == "192.0.2.10 GET /healthz 1.1 200"
+
+
+def test_access_log_drops_the_traccar_query_credential():
+    record = logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        __file__,
+        0,
+        '%s - "%s %s HTTP/%s" %d',
+        (
+            "192.0.2.10", "POST",
+            "/ingest/traccar?username=synthetic-user&key=synthetic-key", "1.1", 200,
+        ),
+        None,
+    )
+
+    assert QueryStringRedactionFilter().filter(record)
+    assert record.getMessage() == '192.0.2.10 - "POST /ingest/traccar HTTP/1.1" 200'
+    assert "synthetic-user" not in record.getMessage()
+    assert "synthetic-key" not in record.getMessage()

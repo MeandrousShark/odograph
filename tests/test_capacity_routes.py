@@ -67,6 +67,8 @@ def test_audited_inventory_uses_actual_registered_routes():
     assert policies[('POST', '/trips/{trip_id}/delete')] == 'form'
     assert policies[('GET', '/review')] is None
     assert policies[('GET', '/settings')] is None
+    assert policies[('POST', '/ingest')] == 'ingest'
+    assert policies[('POST', '/ingest/traccar')] == 'ingest'
 
 
 def test_busy_auth_refuses_before_any_body_receive():

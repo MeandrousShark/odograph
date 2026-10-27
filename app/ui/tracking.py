@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from starlette.responses import HTMLResponse, RedirectResponse
 from html import escape
+from urllib.parse import quote, urlencode
 from app.capacity import CapacityBusy
 from app.capacity_routes import release_authentication
 
@@ -15,13 +16,25 @@ from app.tracking import (
 )
 
 
-def _saved_credential_response(issued, ingest_url):
+def _traccar_urls(request: Request, issued: IssuedCredential) -> tuple[str, str]:
+    """Return the Traccar Server URL and the Traccar Client config link."""
+    cfg = request.app.state.config
+    base = cfg.app_url.rstrip("/") + "/ingest/traccar" if cfg.app_url else str(request.url_for("ingest_traccar"))
+    server_url = base + "?" + urlencode(
+        {"username": issued.username, "key": issued.secret}, quote_via=quote,
+    )
+    return server_url, "org.traccar.client://config?url=" + quote(server_url, safe="")
+
+
+def _saved_credential_response(issued, ingest_url, traccar_url, traccar_config_link):
     return HTMLResponse(
         '<h1>Tracking credential saved</h1><p>The settings page is busy. '
         'Save these values before leaving, the password is shown only once.</p>'
         f'<p>URL: <code>{escape(ingest_url)}</code></p>'
         f'<p>User: <code>{escape(issued.username)}</code></p>'
         f'<p>Password: <code>{escape(issued.secret)}</code></p>'
+        f'<p>Traccar Server URL: <code>{escape(traccar_url)}</code></p>'
+        f'<p>Traccar config link: <code>{escape(traccar_config_link)}</code></p>'
         '<p><a href="/settings/tracking">Open tracking settings</a></p>',
         headers={"Cache-Control": "no-store"},
     )
@@ -40,19 +53,21 @@ async def _render_tracking(
             raise
         cfg = request.app.state.config
         ingest_url = cfg.app_url.rstrip("/") + "/ingest" if cfg.app_url else str(request.url_for("ingest"))
-        return _saved_credential_response(issued, ingest_url)
+        return _saved_credential_response(issued, ingest_url, *_traccar_urls(request, issued))
     cfg = request.app.state.config
     ingest_url = cfg.app_url.rstrip("/") + "/ingest" if cfg.app_url else str(request.url_for("ingest"))
+    traccar_url, traccar_config_link = _traccar_urls(request, issued) if issued is not None else (None, None)
     try:
         response = await render_page(request, "tracking.html", {
             "user": user, "csrf": request.session.get("csrf", ""),
             "devices": devices, "credentials": credentials,
             "issued": issued, "ingest_url": ingest_url,
+            "traccar_url": traccar_url, "traccar_config_link": traccar_config_link,
         })
     except CapacityBusy:
         if issued is None:
             raise
-        return _saved_credential_response(issued, ingest_url)
+        return _saved_credential_response(issued, ingest_url, traccar_url, traccar_config_link)
     response.headers["Cache-Control"] = "no-store"
     return response
 

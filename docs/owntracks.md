@@ -15,6 +15,8 @@ the device name plus a short random suffix, for example `work-iphone-7k3q`.
 The password is shown only once; if you lose it, choose **Replace password**
 and update the phone. Create a separate credential for each device.
 
+To use Traccar Client instead, see [Connecting Traccar Client](traccar.md).
+
 In the OwnTracks app, open Settings and configure a connection:
 
 - **Mode:** HTTP

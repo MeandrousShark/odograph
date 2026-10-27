@@ -33,6 +33,7 @@ PUBLIC_MARKDOWN = (
     "docs/releasing.md",
     "docs/reverse-proxy.md",
     "docs/security.md",
+    "docs/traccar.md",
     "docs/upgrading.md",
     "docs/usage.md",
 )

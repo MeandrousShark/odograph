@@ -61,6 +61,8 @@ INTERACTIVE_ROUTES = frozenset({
     ('POST', '/settings/tracking/devices/{device_id}/convert'),
     ('POST', '/settings/tracking/credentials/{public_id}/rotate'),
 })
+# Each authenticates from its own credential source before any body read.
+INGEST_ROUTES = frozenset({'/ingest', '/ingest/traccar'})
 
 
 def capacity_setting(manager, name):
@@ -158,7 +160,7 @@ class AdmissionRoute(APIRoute):
             return 'foreground'
         if any((method, self.path) in INTERACTIVE_ROUTES for method in self.methods):
             return 'auth_interactive'
-        if self.path == '/ingest':
+        if self.path in INGEST_ROUTES:
             return 'ingest'
         if self.has_form:
             return 'form'
@@ -264,13 +266,16 @@ class AdmissionRoute(APIRoute):
 
         try:
             if lane == 'ingest':
-                from app.ingest import authenticate_request, preflight_authentication_request
-                preflight_response = preflight_authentication_request(request)
+                from app.ingest import (
+                    authenticate_request, ingest_credential_source, preflight_authentication_request,
+                )
+                source = ingest_credential_source(self.path)
+                preflight_response = preflight_authentication_request(request, source)
                 if preflight_response is not None:
                     await preflight_response(scope, receive, send)
                     return
                 async with manager.operation('auth_ingest'):
-                    credential = await authenticate_request(request, preflight=False)
+                    credential = await authenticate_request(request, preflight=False, source=source)
                 if isinstance(credential, Response):
                     return await credential(scope, receive, send)
                 scope.setdefault('state', {})['_capacity_ingest_credential'] = credential
