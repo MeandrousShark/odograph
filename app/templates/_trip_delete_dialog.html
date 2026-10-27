@@ -33,7 +33,7 @@
     {% if fragment %}<input type="hidden" name="fragment" value="true">{% endif %}
     {% if dashboard_week %}<input type="hidden" name="dashboard_week" value="{{ dashboard_week }}">{% endif %}
     <div class="app-dialog-actions trip-delete-dialog-actions">
-      <button type="button" data-trip-delete-cancel autofocus>Cancel</button>
+      <button type="button" class="control control-secondary" data-trip-delete-cancel autofocus>Cancel</button>
       <button type="button" class="control control-destructive trip-delete-confirm"
               hx-post="{{ action_url }}"
               {% if hx_target %}hx-target="{{ hx_target }}"{% endif %}

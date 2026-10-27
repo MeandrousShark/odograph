@@ -35,12 +35,11 @@ FOLLOWS_RULES = {
     "settings.html",
     "stats.html",
     "tracking.html",
+    "trip.html",
 }
 
 # Page -> the plan 0074 slice that converts its buttons, or "unassigned".
-NOT_YET_MIGRATED = {
-    "trip.html": "unassigned",
-}
+NOT_YET_MIGRATED: dict[str, str] = {}
 
 VARIANTS = {"control-primary", "control-secondary", "control-destructive"}
 
