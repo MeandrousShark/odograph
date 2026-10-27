@@ -1,6 +1,6 @@
-"""OwnTracks ingest endpoint.
+"""OwnTracks and Traccar Client ingest endpoints.
 
-Contract summary: bad auth -> 401,
+OwnTracks contract summary: bad auth -> 401,
 temporary authentication limits -> 503 with Retry-After before any body reads,
 garbage -> 200-and-drop so OwnTracks never retry-loops a poison payload,
 bodies over INGEST_MAX_BODY_BYTES -> 200-and-drop the same way (real
@@ -18,6 +18,11 @@ That last rule is why the admission boundary matters: a database privilege
 error raised while *checking* the credential is a rejected sender and gets
 401, but the same error raised while *storing* an already-admitted fix is a
 server fault, and answering 4xx there would make iOS drop a good payload.
+
+POST /ingest/traccar takes a device credential in the `username` and `key`
+query parameters, because Traccar Client cannot send Basic auth, and a form
+body. Traccar retries every non-2xx answer forever, head of line, so every
+poison message there is answered 200 with an empty body and dropped.
 """
 from __future__ import annotations
 
@@ -27,10 +32,14 @@ import binascii
 import json
 import logging
 import math
+import re
 import time
 from collections import OrderedDict, deque
+from collections.abc import Callable
+from dataclasses import dataclass
 from hashlib import sha256
 from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qsl
 
 from fastapi import APIRouter, Request, Response
 from psycopg.errors import InsufficientPrivilege, LockNotAvailable
@@ -39,8 +48,8 @@ from app.account_context import AccountPool
 from app.capacity import await_completion
 from app.storage import is_storage_capacity_error
 from app.tracking import (
-    TrackingNotFound, TrackingStream, TrackingUnavailable, admit_ingest,
-    authenticate_ingest, resolve_ingest_stream,
+    IngestPrincipal, TrackingNotFound, TrackingStream, TrackingUnavailable,
+    admit_ingest, authenticate_ingest, resolve_ingest_stream,
 )
 from starlette.responses import JSONResponse
 
@@ -207,6 +216,55 @@ def _basic_credentials(request: Request) -> tuple[str, str] | None:
     return (username, password) if separator else None
 
 
+# Device usernames and secrets are far shorter; the cap only bounds lookup work.
+QUERY_CREDENTIAL_MAX_CHARS = 256
+
+
+def _query_oversized(request: Request) -> bool:
+    from app.capacity_routes import capacity_setting
+    return len(request.scope.get("query_string", b"")) > capacity_setting(
+        request.app.state.capacity, "capacity_basic_header_max_bytes",
+    )
+
+
+def _query_credentials(request: Request) -> tuple[str, str] | None:
+    """Exactly one non-blank `username` and `key`; other parameters are ignored."""
+    if _query_oversized(request):
+        return None
+    try:
+        pairs = parse_qsl(
+            request.scope.get("query_string", b"").decode("ascii"),
+            keep_blank_values=True, encoding="utf-8", errors="strict",
+        )
+    except (UnicodeDecodeError, ValueError):
+        return None
+    username = [value for name, value in pairs if name == "username"]
+    key = [value for name, value in pairs if name == "key"]
+    if len(username) != 1 or len(key) != 1:
+        return None
+    if not all(0 < len(value) <= QUERY_CREDENTIAL_MAX_CHARS for value in (username[0], key[0])):
+        return None
+    return username[0], key[0]
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialSource:
+    """Where an ingest route reads its credential before the body."""
+    oversized: Callable[[Request], bool]
+    credentials: Callable[[Request], tuple[str, str] | None]
+    # A device-only route never lets a migrated legacy label select a stream.
+    device_only: bool = False
+
+
+BASIC_CREDENTIALS = CredentialSource(_basic_header_oversized, _basic_credentials)
+QUERY_CREDENTIALS = CredentialSource(_query_oversized, _query_credentials, device_only=True)
+INGEST_CREDENTIAL_SOURCES = {"/ingest": BASIC_CREDENTIALS, "/ingest/traccar": QUERY_CREDENTIALS}
+
+
+def ingest_credential_source(path: str) -> CredentialSource:
+    return INGEST_CREDENTIAL_SOURCES[path]
+
+
 def _ok() -> Response:
     # OwnTracks expects a JSON array of messages for the device; always empty.
     return JSONResponse(content=[])
@@ -229,13 +287,15 @@ def _storage_busy_response(retry_after: int = 60) -> Response:
     return Response(status_code=503, headers={"Retry-After": str(retry_after)})
 
 
-def preflight_authentication_request(request: Request) -> Response | None:
+def preflight_authentication_request(
+    request: Request, source: CredentialSource = BASIC_CREDENTIALS,
+) -> Response | None:
     """Reject blocked and oversized requests without taking a queue ticket."""
     limiter: FailedAuthLimiter = request.app.state.ingest_limiter
     ip = client_ip(request)
     if limiter.blocked(ip):
         return _blocked_auth_response(limiter)
-    if _basic_header_oversized(request):
+    if source.oversized(request):
         limiter.record_failure(ip)
         return _bad_auth_response()
     return None
@@ -268,35 +328,129 @@ async def _read_capped_body(request: Request, max_bytes: int) -> bytes | None:
     return bytes(body)
 
 
-async def authenticate_request(request: Request, *, preflight: bool = True):
+async def authenticate_request(
+    request: Request, *, preflight: bool = True,
+    source: CredentialSource = BASIC_CREDENTIALS,
+):
     limiter: FailedAuthLimiter = request.app.state.ingest_limiter
     ip = client_ip(request)
     if limiter.blocked(ip):
         # This check also runs after an auth ticket wait, because another
         # request from the same IP may have exhausted the failure window.
         return _blocked_auth_response(limiter)
-    if preflight and _basic_header_oversized(request):
+    if preflight and source.oversized(request):
         limiter.record_failure(ip)
         return _bad_auth_response()
     cfg = request.app.state.config
-    basic = _basic_credentials(request)
+    presented = source.credentials(request)
     credential = None
-    if basic is not None:
+    if presented is not None:
         try:
             credential = await limiter.authenticate(
-                ip, request.app.state.control_pool, *basic,
+                ip, request.app.state.control_pool, *presented,
                 legacy_username=cfg.ingest_username, legacy_password=cfg.ingest_password,
             )
         except _AuthSaturated:
             return Response(status_code=503, headers={"Retry-After": "1"})
         except TrackingUnavailable:
+            if source.device_only:
+                # The pre-setup environment login is a correct legacy secret.
+                return _bad_auth_response()
             return Response(status_code=503, headers={"Retry-After": "60"})
     if credential is None:
-        if basic is None:
+        if presented is None:
             limiter.record_failure(ip)
+        return _bad_auth_response()
+    if source.device_only and credential.kind != "device":
+        # The secret was correct, so this is not a failed attempt.
         return _bad_auth_response()
 
     return credential
+
+
+class _WriteState:
+    __slots__ = ("admitted", "should_poke")
+
+    def __init__(self):
+        self.admitted = False
+        self.should_poke = False
+
+
+async def _admitted_write(request: Request, credential: IngestPrincipal, write) -> Response:
+    """Run one ingest transaction and map its failures across admission."""
+    pool = AccountPool(request.app.state.runtime_pool, credential.account)
+    state = _WriteState()
+    try:
+        async with pool.connection() as conn:
+            response = await write(conn, state)
+    except (TrackingNotFound, InsufficientPrivilege):
+        # Rotation, revocation and legacy-alias conversion may commit while
+        # the body is in flight. Final admission must fail before storage.
+        if state.admitted:
+            raise
+        return _bad_auth_response()
+    except LockNotAvailable:
+        return _storage_busy_response(1)
+    except Exception as exc:
+        if state.admitted and is_storage_capacity_error(exc):
+            return _storage_busy_response()
+        raise
+
+    if state.should_poke:
+        request.app.state.detector_scheduler.poke()
+    return response
+
+
+async def _store_raw(
+    conn, credential: IngestPrincipal, stream: TrackingStream | None, serialized: str,
+) -> bool:
+    """Store a raw message with its replay receipt; False for an exact replay."""
+    canonical = (await (await conn.execute(
+        "SELECT %s::jsonb::text", (serialized,),
+    )).fetchone())[0]
+    namespace_kind = "device" if stream is not None else "credential"
+    namespace_key = (
+        str(stream.tracking_device_id) if stream is not None else credential.public_id
+    )
+    digest = sha256(canonical.encode("utf-8")).digest()
+    cur = await conn.execute(
+        "SELECT public.storage_find_replay(%s, %s, %s, %s, %s)",
+        (credential.account.account_id, namespace_kind, namespace_key, digest, canonical),
+    )
+    if (await cur.fetchone())[0] is not None:
+        return False
+    cur = await conn.execute(
+        "INSERT INTO raw_messages (account_id, tracking_device_id, payload) "
+        "VALUES (%s, %s, %s) RETURNING id",
+        (credential.account.account_id,
+         stream.tracking_device_id if stream is not None else None, serialized),
+    )
+    raw_id = (await cur.fetchone())[0]
+    await conn.execute(
+        "SELECT public.storage_record_replay(%s, %s, %s, %s)",
+        (credential.account.account_id, raw_id, namespace_kind, namespace_key),
+    )
+    return True
+
+
+async def _insert_point(
+    conn, credential: IngestPrincipal, stream: TrackingStream, device: str, fix: dict,
+) -> None:
+    """Insert a fix that passed _validate_location, in OwnTracks field names."""
+    recorded_at = datetime.fromtimestamp(fix["tst"], tz=timezone.utc)
+    await conn.execute(
+        "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, "
+        "geom, accuracy_m, velocity_kmh, altitude_m, battery_pct, trigger) "
+        "VALUES (%s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,"
+        " %s, %s, %s, %s, %s) "
+        "ON CONFLICT (tracking_device_id, recorded_at) DO NOTHING",
+        (
+            credential.account.account_id, stream.tracking_device_id, device,
+            recorded_at, fix["lon"], fix["lat"], _num(fix.get("acc")),
+            _num(fix.get("vel")), _num(fix.get("alt")),
+            _int(fix.get("batt")), fix.get("t"),
+        ),
+    )
 
 
 def make_router() -> APIRouter:
@@ -344,107 +498,170 @@ def make_router() -> APIRouter:
             log.warning("ingest: dropping payload before storage: %s", poison_reason)
             return _ok()
 
-        pool = AccountPool(request.app.state.runtime_pool, credential.account)
-        stream = None
         location = payload.get("_type") == "location"
         reason = _validate_location(payload) if location else None
         label = str(payload.get("tid") or "default")
-        admitted = False
-        should_poke = False
-        try:
-            async with pool.connection() as conn:
-                if location and reason is None:
-                    stream = await resolve_ingest_stream(conn, credential, label)
-                elif credential.tracking_device_id is not None:
-                    stream = TrackingStream(
-                        credential.tracking_device_id, label, credential.device_generation,
-                    )
-                await admit_ingest(
-                    conn, credential, stream,
-                    legacy_label=label if stream is not None and credential.kind == "legacy" else None,
-                )
-                # This sender is now admitted, so every later 42501 is a
-                # server-side grant/policy fault rather than a rejected
-                # credential -- and OwnTracks iOS deletes the payload it is
-                # holding on any 4xx. Past this line those errors must reach
-                # the 5xx handler so the phone keeps the fix and redelivers.
-                admitted = True
-                # OwnTracks' Publish Settings button (and a remote dump
-                # command) sends _type "dump" whose configuration object
-                # holds the tracker's plaintext username, password and URL.
-                # Nothing outside STORED_MESSAGE_TYPES reaches raw_messages,
-                # and only the type -- safely rendered and truncated, never
-                # the payload -- reaches the log.
-                msg_type = payload.get("_type")
-                if not (isinstance(msg_type, str) and msg_type in STORED_MESSAGE_TYPES):
-                    log.info(
-                        "ingest: discarding message type %s", _discarded_type_for_log(payload)
-                    )
-                    return _ok()
-                canonical = (await (await conn.execute(
-                    "SELECT %s::jsonb::text", (serialized,),
-                )).fetchone())[0]
-                namespace_kind = "device" if stream is not None else "credential"
-                namespace_key = (
-                    str(stream.tracking_device_id) if stream is not None else credential.public_id
-                )
-                digest = sha256(canonical.encode("utf-8")).digest()
-                cur = await conn.execute(
-                    "SELECT public.storage_find_replay(%s, %s, %s, %s, %s)",
-                    (credential.account.account_id, namespace_kind, namespace_key, digest, canonical),
-                )
-                if (await cur.fetchone())[0] is not None:
-                    # A lost response may leave detector work pending. Wake
-                    # it only after this admission transaction has closed.
-                    should_poke = True
-                else:
-                    cur = await conn.execute(
-                        "INSERT INTO raw_messages (account_id, tracking_device_id, payload) "
-                        "VALUES (%s, %s, %s) RETURNING id",
-                        (credential.account.account_id,
-                         stream.tracking_device_id if stream is not None else None, serialized),
-                    )
-                    raw_id = (await cur.fetchone())[0]
-                    await conn.execute(
-                        "SELECT public.storage_record_replay(%s, %s, %s, %s)",
-                        (credential.account.account_id, raw_id, namespace_kind, namespace_key),
-                    )
-                    if location and reason:
-                        log.info("ingest: dropping location payload: %s", reason)
-                    elif location:
-                        recorded_at = datetime.fromtimestamp(payload["tst"], tz=timezone.utc)
-                        await conn.execute(
-                            "INSERT INTO points (account_id, tracking_device_id, device, recorded_at, "
-                            "geom, accuracy_m, velocity_kmh, altitude_m, battery_pct, trigger) "
-                            "VALUES (%s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,"
-                            " %s, %s, %s, %s, %s) "
-                            "ON CONFLICT (tracking_device_id, recorded_at) DO NOTHING",
-                            (
-                                credential.account.account_id, stream.tracking_device_id, label,
-                                recorded_at, payload["lon"], payload["lat"], _num(payload.get("acc")),
-                                _num(payload.get("vel")), _num(payload.get("alt")),
-                                _int(payload.get("batt")), payload.get("t"),
-                            ),
-                        )
-                        should_poke = True
-        except (TrackingNotFound, InsufficientPrivilege):
-            # Rotation, revocation and legacy-alias conversion may commit while
-            # the body is in flight. Final admission must fail before storage.
-            if admitted:
-                raise
-            return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="ingest"'})
-        except LockNotAvailable:
-            return _storage_busy_response(1)
-        except Exception as exc:
-            if admitted and is_storage_capacity_error(exc):
-                return _storage_busy_response()
-            raise
 
-        if should_poke:
-            request.app.state.detector_scheduler.poke()
-        return _ok()
+        async def write(conn, state: _WriteState) -> Response:
+            stream = None
+            if location and reason is None:
+                stream = await resolve_ingest_stream(conn, credential, label)
+            elif credential.tracking_device_id is not None:
+                stream = TrackingStream(
+                    credential.tracking_device_id, label, credential.device_generation,
+                )
+            await admit_ingest(
+                conn, credential, stream,
+                legacy_label=label if stream is not None and credential.kind == "legacy" else None,
+            )
+            # This sender is now admitted, so every later 42501 is a
+            # server-side grant/policy fault rather than a rejected
+            # credential -- and OwnTracks iOS deletes the payload it is
+            # holding on any 4xx. Past this line those errors must reach
+            # the 5xx handler so the phone keeps the fix and redelivers.
+            state.admitted = True
+            # OwnTracks' Publish Settings button (and a remote dump
+            # command) sends _type "dump" whose configuration object
+            # holds the tracker's plaintext username, password and URL.
+            # Nothing outside STORED_MESSAGE_TYPES reaches raw_messages,
+            # and only the type -- safely rendered and truncated, never
+            # the payload -- reaches the log.
+            msg_type = payload.get("_type")
+            if not (isinstance(msg_type, str) and msg_type in STORED_MESSAGE_TYPES):
+                log.info(
+                    "ingest: discarding message type %s", _discarded_type_for_log(payload)
+                )
+                return _ok()
+            if not await _store_raw(conn, credential, stream, serialized):
+                # A lost response may leave detector work pending. Wake
+                # it only after this admission transaction has closed.
+                state.should_poke = True
+            elif location and reason:
+                log.info("ingest: dropping location payload: %s", reason)
+            elif location:
+                await _insert_point(conn, credential, stream, label, payload)
+                state.should_poke = True
+            return _ok()
+
+        return await _admitted_write(request, credential, write)
+
+    @router.post("/ingest/traccar")
+    async def ingest_traccar(request: Request):
+        credential = getattr(request.state, "_capacity_ingest_credential", None)
+        if credential is None:
+            credential = await authenticate_request(request, source=QUERY_CREDENTIALS)
+        if isinstance(credential, Response):
+            return credential
+        if credential.kind != "device":
+            return _bad_auth_response()
+        cfg = request.app.state.config
+
+        body = await _read_capped_body(request, cfg.ingest_max_body_bytes)
+        if body is None:
+            log.warning(
+                "ingest: dropping oversized Traccar body (> %d bytes)", cfg.ingest_max_body_bytes
+            )
+            return _traccar_ok()
+        fields, poison_reason = parse_traccar_form(body)
+        if poison_reason:
+            log.warning("ingest: dropping Traccar message: %s", poison_reason)
+            return _traccar_ok()
+        if "lat" not in fields and "lon" not in fields:
+            # A heartbeat with no location has nothing to rebuild a point from.
+            return _traccar_ok()
+        payload = {**fields, "_source": TRACCAR_SOURCE}
+        serialized, poison_reason = _jsonb_encode(payload)
+        if poison_reason:
+            log.warning("ingest: dropping Traccar message before storage: %s", poison_reason)
+            return _traccar_ok()
+
+        fix = traccar_fix(fields)
+        reason = _validate_location(fix)
+        device = traccar_device(fields)
+        stream = TrackingStream(
+            credential.tracking_device_id, device, credential.device_generation,
+        )
+
+        async def write(conn, state: _WriteState) -> Response:
+            await admit_ingest(conn, credential, stream)
+            state.admitted = True
+            if not await _store_raw(conn, credential, stream, serialized):
+                state.should_poke = True
+            elif reason:
+                log.info("ingest: dropping Traccar position: %s", reason)
+            else:
+                await _insert_point(conn, credential, stream, device, fix)
+                state.should_poke = True
+            return _traccar_ok()
+
+        return await _admitted_write(request, credential, write)
 
     return router
+
+
+TRACCAR_SOURCE = "traccar"
+# Traccar Client sends at most eleven fields.
+TRACCAR_MAX_FIELDS = 32
+# Matches the tracking device name limit.
+TRACCAR_DEVICE_MAX_CHARS = 100
+KNOTS_TO_KMH = 1.852
+# Plain or exponent notation, as Kotlin's Double.toString can produce;
+# float() alone would also accept nan, inf, underscores and whitespace.
+_DECIMAL = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+_DECIMAL_MAX_CHARS = 64
+
+
+def _traccar_ok() -> Response:
+    # Traccar reads only the status, and retries any non-2xx forever.
+    return Response(status_code=200)
+
+
+def parse_traccar_form(body: bytes) -> tuple[dict[str, str], str | None]:
+    """Returns (fields, None), or ({}, reason) when the message must be dropped."""
+    try:
+        pairs = parse_qsl(
+            body.decode("ascii"), keep_blank_values=True, strict_parsing=True,
+            encoding="utf-8", errors="strict", max_num_fields=TRACCAR_MAX_FIELDS,
+        )
+    except UnicodeDecodeError:
+        return {}, "body is not URL-encoded UTF-8"
+    except ValueError:
+        return {}, "unparseable or too many form fields"
+    fields: dict[str, str] = {}
+    for name, value in pairs:
+        if name in fields:
+            return {}, "repeated form field"
+        if name.startswith("_"):
+            # Reserved for stored metadata such as _source, and OwnTracks _type
+            # must never appear on a Traccar row.
+            return {}, "reserved form field name"
+        fields[name] = value
+    return fields, None
+
+
+def traccar_number(value: str | None) -> float | None:
+    if value is None or len(value) > _DECIMAL_MAX_CHARS or not _DECIMAL.fullmatch(value):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def traccar_fix(fields: dict[str, str]) -> dict:
+    """Normalize Traccar strings into the OwnTracks fix shape, absent when unusable."""
+    fix = {
+        key: number for key, name in (
+            ("lat", "lat"), ("lon", "lon"), ("tst", "timestamp"), ("acc", "accuracy"),
+            ("alt", "altitude"), ("batt", "batt"),
+        ) if (number := traccar_number(fields.get(name))) is not None
+    }
+    speed = traccar_number(fields.get("speed"))
+    if speed is not None:
+        fix["vel"] = speed * KNOTS_TO_KMH
+    return fix
+
+
+def traccar_device(fields: dict[str, str]) -> str:
+    return fields.get("id", "")[:TRACCAR_DEVICE_MAX_CHARS] or "default"
 
 
 # Optional fix readings outside these bounds are stored as NULL. The real
