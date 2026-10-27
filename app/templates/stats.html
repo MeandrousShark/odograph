@@ -24,8 +24,19 @@
 
 {% set filters_active = filter_from or filter_to or filter_vehicle %}
 <div class="trip-page-disclosures">
-<details class="trip-page-disclosure trip-tools" {{ 'open' if filters_active }}>
-  <summary>Filters</summary>
+{# Closed by default; the summary names the active filters. #}
+{% set filter_names = [] %}
+{% if filter_from or filter_to %}
+  {% set _ = filter_names.append((filter_from or 'start') ~ ' to ' ~ (filter_to or 'end')) %}
+{% endif %}
+{% if filter_vehicle == 'none' %}
+  {% set _ = filter_names.append('unassigned vehicle') %}
+{% elif filter_vehicle %}
+  {% for v in vehicles if v.id | string == filter_vehicle %}{% set _ = filter_names.append(v.name) %}{% endfor %}
+  {% if filter_names | length == (1 if filter_from or filter_to else 0) %}{% set _ = filter_names.append('vehicle') %}{% endif %}
+{% endif %}
+<details class="trip-page-disclosure trip-tools">
+  <summary>Filters: {{ filter_names | join(', ') if filters_active else 'full year' }}</summary>
   <div class="filter-bar trip-filter-bar">
     <form class="date-range trip-filter-form" method="get" action="/stats">
       <input type="hidden" name="year" value="{{ filter_year }}">
