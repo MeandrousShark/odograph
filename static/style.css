@@ -2579,6 +2579,11 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
   .trip-detail-label-editor { padding: var(--space-3); }
   .trip-detail-actions { flex-direction: column; align-items: stretch; }
   .trip-detail-delete { width: 100%; margin-left: 0; }
+  /* Stacked under the tools, Delete gets its own zone so a tap aimed at the
+     tools summary cannot land on it. */
+  .advanced-tools + .trip-detail-delete {
+    margin-top: var(--space-6); padding-top: var(--space-4); border-top: 1px solid var(--border);
+  }
   .trip-detail-delete .trip-delete-trigger { width: 100%; }
   .trip-detail-actions > .advanced-tools > summary { width: 100%; }
   /* Keep the persistent phone control to one compact row above the bottom
