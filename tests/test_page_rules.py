@@ -308,7 +308,7 @@ def test_tracking_buttons_use_shared_controls():
     for label in ("Copy", "Replace password", "Create replacement password",
                   "Give this device its own password"):
         assert labels[label] == {"control", "control-secondary"}, label
-    assert len(_buttons("tracking.html")) == 9
+    assert len(_buttons("tracking.html")) == 11
 
 
 def test_admin_accounts_buttons_use_shared_controls():

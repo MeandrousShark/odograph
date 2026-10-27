@@ -526,7 +526,8 @@ def test_tracking_setup_forms_use_normal_account_auth_and_show_secret_only_once(
                 # The tag closes immediately with no body, so this also
                 # confirms the copy logic is not an inline script.
                 assert '<script src="/static/tracking_copy.js"></script>' in created.text
-                assert created.text.count(secret) == 1
+                # Password field plus the Traccar Server URL and its config link.
+                assert created.text.count(secret) == 3
                 credential = await _authenticate(b, username, secret)
                 assert credential is not None and credential.account.account_id == 42
                 page = await client.get("/settings/tracking")

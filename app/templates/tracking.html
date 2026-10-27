@@ -24,6 +24,13 @@
       <button type="button" class="control control-secondary" data-copy-target="tracking-setup-username">Copy</button></p>
     <p><label>Password <input readonly value="{{ issued.secret }}" autocomplete="off" spellcheck="false" id="tracking-setup-password"></label>
       <button type="button" class="control control-secondary" data-copy-target="tracking-setup-password">Copy</button></p>
+    <h3>Traccar Client</h3>
+    <p>For Traccar Client, paste the Server URL into its Server URL setting, or open the configuration
+      link on the phone. Both contain the password, so treat them as secrets.</p>
+    <p><label>Traccar Server URL <input readonly value="{{ traccar_url }}" autocomplete="off" spellcheck="false" id="traccar-setup-url"></label>
+      <button type="button" class="control control-secondary" data-copy-target="traccar-setup-url">Copy</button></p>
+    <p><label>Traccar config link <input readonly value="{{ traccar_config_link }}" autocomplete="off" spellcheck="false" id="traccar-setup-config"></label>
+      <button type="button" class="control control-secondary" data-copy-target="traccar-setup-config">Copy</button></p>
     <p id="tracking-copy-status" class="muted" role="status" aria-live="polite"></p>
     <p class="muted">Your device keeps its trip history when its password changes.
       A tracker label can be reused by other devices without mixing their trips.</p>
