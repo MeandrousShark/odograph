@@ -494,7 +494,10 @@ def register(router: APIRouter) -> None:
                             status_code=400,
                             detail="Automatic routing was unavailable. Enter the distance.",
                         )
-                    # Legacy manual trip: no geometry, submitted distance as-is.
+                    # No geometry, submitted distance as-is. Selected places are
+                    # kept (None in the other route modes) so the trip shows them.
+                    start_place_id = endpoints.start_place_id
+                    end_place_id = endpoints.end_place_id
                     notice = MANUAL_ROUTE_UNAVAILABLE_NOTICE
                 else:
                     # `routed_distance` is the exact value the preview put into

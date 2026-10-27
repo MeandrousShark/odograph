@@ -410,6 +410,11 @@ def _insert_statement(trip: ManualTrip, keyed: bool) -> tuple[str, list]:
                    "ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography", "%s", "%s", "NULL"]
         params += [json.dumps(trip.path_geojson), *trip.start_point, *trip.end_point,
                    trip.start_place_id, trip.end_place_id]
+    elif trip.start_place_id is not None or trip.end_place_id is not None:
+        # Places selected but routing failed: keep the places, no geometry.
+        columns += ["start_place_id", "end_place_id"]
+        values += ["%s", "%s"]
+        params += [trip.start_place_id, trip.end_place_id]
     columns += ["start_label", "end_label"]
     values += ["%s", "%s"]
     params += [trip.start_label, trip.end_label]
