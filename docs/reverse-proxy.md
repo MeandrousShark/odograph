@@ -35,6 +35,10 @@ Caddy supplies the forwarded host, client, and scheme headers expected by the
 application and manages public TLS automatically under its normal HTTPS
 configuration.
 
+If phones use Traccar Client, its credential is in the request query string.
+See [Connecting Traccar Client](traccar.md#security) to keep it out of the
+proxy log.
+
 ## nginx
 
 This example assumes the certificate and key already exist. Replace the
