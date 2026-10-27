@@ -39,6 +39,21 @@ def test_to_is_inclusive_of_the_local_day():
     assert to_dt == datetime(2026, 7, 1, tzinfo=TZ)
 
 
+def test_last_representable_day_means_no_upper_bound():
+    # Local midnight of the next day does not exist, so this must not raise;
+    # it matches the API, which treats date.max as open-ended.
+    from datetime import date
+    from app.stats_queries import stats_period
+    for tz in (TZ, ZoneInfo("UTC"), ZoneInfo("Asia/Tokyo")):
+        from_dt, to_dt = parse_date_range("", "9999-12-31", tz)
+        assert from_dt is None and to_dt is None
+    from_dt, to_dt = parse_date_range("2026-01-01", "9999-12-31", TZ)
+    assert from_dt == datetime(2026, 1, 1, tzinfo=TZ) and to_dt is None
+    period = stats_period(2026, TZ, datetime(2026, 6, 1, tzinfo=TZ), from_dt, to_dt)
+    assert period.end_date == date(2026, 6, 1)
+    assert parse_date_range("", "9999-12-30", TZ)[1] == datetime(9999, 12, 31, tzinfo=TZ)
+
+
 def test_malformed_dates_are_ignored():
     from_dt, to_dt = parse_date_range("not-a-date", "2026-13-40", TZ)
     assert from_dt is None

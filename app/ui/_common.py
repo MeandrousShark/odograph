@@ -67,8 +67,10 @@ def parse_date_range(
 
     from_dt = _parse(from_str)
     to_dt = _parse(to_str)
+    # The last representable day has no next midnight; as in the API, it
+    # means no upper bound.
     if to_dt is not None:
-        to_dt += timedelta(days=1)
+        to_dt = None if to_dt.date() >= date.max else to_dt + timedelta(days=1)
     return from_dt, to_dt
 
 
