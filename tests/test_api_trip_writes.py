@@ -167,11 +167,35 @@ def test_the_web_form_refuses_distances_a_real_cannot_hold(distance):
     from app.ui.manual import parse_manual_trip_input
     with pytest.raises(ManualTripValidationError) as refused:
         parse_manual_trip_input("2026-07-14", "09:00", "10:00", distance, ZoneInfo("America/Los_Angeles"))
-    assert refused.value.errors == {"distance": "Distance must be a positive finite number."}
+    expected = ("Distance must be a positive finite number." if distance == "1e-50"
+                else "Distance must be no greater than 10,000 km (about 6,214 miles).")
+    assert refused.value.errors == {"distance": expected}
 
 
 def test_distance_bounds_follow_the_real_column():
-    from app.trip_writes import REAL_MAX, REAL_MIN_NORMAL, distance_problem
-    assert distance_problem(REAL_MAX) is None and distance_problem(REAL_MIN_NORMAL) is None
-    for value in (3.5e38, 1e300, 1e-50, REAL_MIN_NORMAL / 2, 0, -1, float("nan"), float("inf")):
+    from app.trip_writes import REAL_MIN_NORMAL, distance_problem
+    assert distance_problem(REAL_MIN_NORMAL) is None
+    for value in (1e-50, REAL_MIN_NORMAL / 2, 0, -1, float("nan"), float("inf")):
         assert distance_problem(value) == "Distance must be a positive finite number.", value
+
+
+def test_distance_has_a_product_maximum_of_10000_km():
+    from app.trip_writes import DISTANCE_TOO_LARGE, distance_problem
+    assert "10,000 km" in DISTANCE_TOO_LARGE
+    assert distance_problem(10_000_000) is None
+    assert distance_problem(10_000_000.001) == DISTANCE_TOO_LARGE
+    assert distance_problem(3.4028234663852886e38) == DISTANCE_TOO_LARGE
+    assert distance_problem(1e300) == DISTANCE_TOO_LARGE
+
+
+def test_web_manual_input_applies_the_distance_maximum():
+    from app.rates import METERS_PER_MILE
+    from app.trip_writes import DISTANCE_TOO_LARGE, ManualTripValidationError
+    from app.ui.manual import parse_manual_trip_input
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("America/Los_Angeles")
+    miles_at_max = 10_000_000 / METERS_PER_MILE
+    assert parse_manual_trip_input("2026-07-14", "09:00", "10:00", str(miles_at_max), tz)[2] == pytest.approx(10_000_000)
+    with pytest.raises(ManualTripValidationError) as refused:
+        parse_manual_trip_input("2026-07-14", "09:00", "10:00", str(miles_at_max + 0.01), tz)
+    assert refused.value.errors == {"distance": DISTANCE_TOO_LARGE}

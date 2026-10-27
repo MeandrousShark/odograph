@@ -51,6 +51,7 @@ VEHICLE_MISSING = "Choose a vehicle that still exists."
 LABEL_HAS_ROUTE = "Location names are only available for a trip with no route."
 MANUAL_ONLY = "This can only be changed on a manual trip."
 DISTANCE_INVALID = "Distance must be a positive finite number."
+DISTANCE_TOO_LARGE = "Distance must be no greater than 10,000 km (about 6,214 miles)."
 END_BEFORE_START = "The end must be after the start."
 TIME_INVALID = "Enter a time with its offset."
 
@@ -98,17 +99,20 @@ def _instant_problem(value) -> str | None:
     return None
 
 
-# trips.distance_m is a `real`: past these bounds a distance overflows, or
-# underflows to a different stored value.
+# trips.distance_m is a `real`: below this a distance underflows to a
+# different stored value.
 REAL_MIN_NORMAL = 1.1754943508222875e-38
-REAL_MAX = 3.4028234663852886e38
+# Product cap per trip: keeps real-typed sums on /trips and /stats finite.
+MAX_TRIP_DISTANCE_M = 10_000_000.0
 
 
 def distance_problem(value) -> str | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return DISTANCE_INVALID
-    if not math.isfinite(value) or not REAL_MIN_NORMAL <= value <= REAL_MAX:
+    if not math.isfinite(value) or not value >= REAL_MIN_NORMAL:
         return DISTANCE_INVALID
+    if value > MAX_TRIP_DISTANCE_M:
+        return DISTANCE_TOO_LARGE
     return None
 
 
@@ -341,8 +345,8 @@ async def validate_manual_trip(conn, values: Mapping[str, object]) -> ManualTrip
             problems[name] = TIME_INVALID
     if values.get("distance_m") is None:
         problems["distance_m"] = FIELD_REQUIRED
-    elif distance_problem(values["distance_m"]):
-        problems["distance_m"] = DISTANCE_INVALID
+    elif problem := distance_problem(values["distance_m"]):
+        problems["distance_m"] = problem
     if not problems.keys() & {"started_at", "ended_at"} and values["ended_at"] <= values["started_at"]:
         problems["ended_at"] = END_BEFORE_START
     category = values.get("category")
@@ -406,6 +410,11 @@ def _insert_statement(trip: ManualTrip, keyed: bool) -> tuple[str, list]:
                    "ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography", "%s", "%s", "NULL"]
         params += [json.dumps(trip.path_geojson), *trip.start_point, *trip.end_point,
                    trip.start_place_id, trip.end_place_id]
+    elif trip.start_place_id is not None or trip.end_place_id is not None:
+        # Places selected but routing failed: keep the places, no geometry.
+        columns += ["start_place_id", "end_place_id"]
+        values += ["%s", "%s"]
+        params += [trip.start_place_id, trip.end_place_id]
     columns += ["start_label", "end_label"]
     values += ["%s", "%s"]
     params += [trip.start_label, trip.end_label]

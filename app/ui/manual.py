@@ -130,10 +130,8 @@ def parse_manual_trip_input(
         distance_m = None
     else:
         distance_m = distance_miles * METERS_PER_MILE
-        if distance_problem(distance_m):
-            raise ManualTripValidationError(
-                {"distance": "Distance must be a positive finite number."}
-            )
+        if problem := distance_problem(distance_m):
+            raise ManualTripValidationError({"distance": problem})
     return started_at, ended_at, distance_m
 
 
@@ -496,7 +494,10 @@ def register(router: APIRouter) -> None:
                             status_code=400,
                             detail="Automatic routing was unavailable. Enter the distance.",
                         )
-                    # Legacy manual trip: no geometry, submitted distance as-is.
+                    # No geometry, submitted distance as-is. Selected places are
+                    # kept (None in the other route modes) so the trip shows them.
+                    start_place_id = endpoints.start_place_id
+                    end_place_id = endpoints.end_place_id
                     notice = MANUAL_ROUTE_UNAVAILABLE_NOTICE
                 else:
                     # `routed_distance` is the exact value the preview put into

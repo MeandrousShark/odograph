@@ -88,7 +88,9 @@ def test_filter_dates_and_vehicle_preserve_existing_forgiving_parsers(store,from
     assert result['category']=='' and not result['search']
 
 
-def test_date_overflow_preserves_original_failure(store):
+def test_date_overflow_preserves_original_failure(store,monkeypatch):
+    def overflow(*args): raise OverflowError('date out of range')
+    monkeypatch.setattr('app.export_filters.parse_date_range',overflow)
     for key,value in (('from',''),('to','9999-12-31'),('vehicle',''),('q',''),('category',''),('exclusion','')):
         text(store,key,value)
     with pytest.raises(OverflowError): prepare_filters(store,ZoneInfo('UTC'),'utf8')

@@ -90,14 +90,30 @@ def test_filter_bar_vehicle_select_marks_selected_vehicle():
     assert '<option value="1" >Truck</option>' in body
 
 
-def test_filter_bar_open_when_a_filter_is_active():
-    body = _render(_dashboard(), filter_vehicle="2")
-    assert '<details class="trip-page-disclosure trip-tools" open>' in body
+def test_filter_bar_is_closed_even_when_a_filter_is_active():
+    body = _render(_dashboard(), vehicles=[{"id": 2, "name": "Sedan"}], filter_vehicle="2")
+    assert '<details class="trip-page-disclosure trip-tools">' in body
+    assert "<details class=\"trip-page-disclosure trip-tools\" open" not in body
+    assert "<summary>Filters: Sedan</summary>" in body
+    assert 'class="control control-secondary filter-clear"' in body
 
 
-def test_filter_bar_closed_when_no_filter_is_active():
+def test_filter_bar_closed_summary_without_filters_names_the_full_year():
     body = _render(_dashboard())
-    assert '<details class="trip-page-disclosure trip-tools" >' in body
+    assert '<details class="trip-page-disclosure trip-tools">' in body
+    assert "<summary>Filters: full year</summary>" in body
+    assert "filter-clear" not in body
+
+
+def test_filter_summary_names_dates_and_vehicle():
+    vehicles = [{"id": 1, "name": "Truck"}]
+    body = _render(_dashboard(), vehicles=vehicles, filter_from="2026-06-01",
+                   filter_to="2026-08-31", filter_vehicle="1")
+    assert "<summary>Filters: 2026-06-01 to 2026-08-31, Truck</summary>" in body
+    body = _render(_dashboard(), filter_vehicle="none")
+    assert "<summary>Filters: unassigned vehicle</summary>" in body
+    body = _render(_dashboard(), filter_from="2026-06-01")
+    assert "<summary>Filters: 2026-06-01 to end</summary>" in body
 
 
 def test_heading_shows_date_range_when_date_filtered():

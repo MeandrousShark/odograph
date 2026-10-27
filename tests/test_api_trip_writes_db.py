@@ -285,6 +285,8 @@ def test_patch_refuses_what_the_trip_cannot_hold():
             (manual, {"started_at": "2026-04-14"}, {"started_at": "Enter a time with its offset."}),
             (manual, {"started_at": 1776193200}, {"started_at": "This value is not valid."}),
             (manual, {"distance_m": 0}, {"distance_m": "Distance must be a positive finite number."}),
+            (manual, {"distance_m": 10_000_000.5},
+             {"distance_m": "Distance must be no greater than 10,000 km (about 6,214 miles)."}),
             (manual, {"distance_m": "5"}, {"distance_m": "This value is not valid."}),
             (manual, {"start_label": "x" * 101}, {"start_label": "Keep it to 100 characters or fewer."}),
         ]
@@ -494,6 +496,8 @@ def test_create_without_a_valid_key_or_body_claims_nothing(monkeypatch):
         their_vehicle = (await _vehicles(state, OTHER))[0]
         for body, fields in (
             (_create_body(distance_m=0), {"distance_m": "Distance must be a positive finite number."}),
+            (_create_body(distance_m=10_000_000.5),
+             {"distance_m": "Distance must be no greater than 10,000 km (about 6,214 miles)."}),
             (_create_body(ended_at="2026-04-20T16:00:00Z"), {"ended_at": "The end must be after the start."}),
             (_create_body(vehicle_id=their_vehicle), {"vehicle_id": "Choose a vehicle that still exists."}),
             (_create_body(start_label="x" * 101), {"start_label": "Keep it to 100 characters or fewer."}),
@@ -758,8 +762,9 @@ def test_distances_a_real_cannot_hold_are_validation_errors(monkeypatch):
         commits = _Commits(monkeypatch)
         manual = await _insert(state, BASE)
         before = await _row(state, manual)
-        refused = {"distance_m": "Distance must be a positive finite number."}
-        for distance in (1e300, 3.5e38, 1e-50):
+        invalid = {"distance_m": "Distance must be a positive finite number."}
+        too_large = {"distance_m": "Distance must be no greater than 10,000 km (about 6,214 miles)."}
+        for distance, refused in ((1e300, too_large), (3.5e38, too_large), (1e-50, invalid)):
             response = await _create(state, _create_body(distance_m=distance))
             assert (response.status_code, response.json()["error"]["fields"]) == (422, refused), distance
             response = await _api(state, "PATCH", f"/api/v1/trips/{manual}", body={"distance_m": distance})
@@ -773,7 +778,8 @@ def test_distances_a_real_cannot_hold_are_validation_errors(monkeypatch):
                 **_web_edit_form(before), "date": "2026-04-14", "start_time": "08:00",
                 "end_time": "08:05", "distance": miles})
             assert response.status_code == 200
-            assert "Distance must be a positive finite number." in response.text
+            assert ("Distance must be no greater than 10,000 km" if miles == "3e35"
+                    else "Distance must be a positive finite number.") in response.text
         assert await _count(state) == 1
         assert await _row(state, manual) == before
         assert commits.take() == []

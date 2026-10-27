@@ -290,6 +290,34 @@ def test_routing_failure_with_filled_distance_saves_legacy_trip_with_notice(name
     _run(scenario)
 
 
+def test_places_mode_routing_failure_keeps_both_place_ids_without_geometry():
+    def down(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"code": "Error"})
+
+    async def scenario(pool):
+        async with pool.connection() as conn:
+            start_id = await _insert_place(conn, "Home", 47.60, -122.33)
+            end_id = await _insert_place(conn, "Work", 47.70, -122.20)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(down)) as client:
+            request = _request(pool, http_client=client)
+            response = await _add(
+                request, route_mode="places", distance="8.5",
+                start_place=str(start_id), end_place=str(end_id),
+            )
+
+        assert response.headers["HX-Redirect"] == f"/trips?notice={MANUAL_ROUTE_UNAVAILABLE_NOTICE}"
+        trip = await _fetch_only_trip(pool)
+        assert trip["start_place_id"] == start_id
+        assert trip["end_place_id"] == end_id
+        assert trip["distance_m"] == pytest.approx(8.5 * METERS_PER_MILE)
+        assert trip["has_path"] is False
+        assert trip["has_start_geom"] is False
+        assert trip["has_end_geom"] is False
+
+    _run(scenario)
+
+
 def test_routing_unavailable_with_blank_distance_returns_400_and_stores_nothing():
     async def scenario(pool):
         request = _request(pool, osrm_url="")
