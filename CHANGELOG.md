@@ -9,6 +9,75 @@ reproduced here.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-27
+
+### Security
+
+- Upgrade Authlib from 1.7.2 to 1.9.1 for CVE-2026-96760, CVE-2026-114614,
+  CVE-2026-114615, CVE-2026-114616, CVE-2026-114617, CVE-2026-114618 and
+  CVE-2026-114620, which include an ID token nonce check that a token could
+  switch off and a JWS signature verification bypass. Odograph uses Authlib
+  for single sign-on.
+
+### Added
+
+- Traccar Client ingest. `POST /ingest/traccar` accepts locations from the
+  Traccar Client app. With a new or replaced password, Settings > Tracking
+  shows a Traccar Server URL and an `org.traccar.client://` configuration
+  link beside the OwnTracks values. Traccar Client cannot send an HTTP
+  username and password, so the credential travels in the URL query string;
+  Odograph's own access log drops it, and it is never stored. Each post is
+  stored as received with a marker naming Traccar as its source, and the
+  route shares the ingest capacity lane. See
+  [Connecting Traccar Client](docs/traccar.md), including the heartbeat
+  setting and how to keep the key out of a reverse proxy's access log.
+
+### Changed
+
+- Stats: the filter disclosure stays closed until opened, and its summary
+  names the active filters, as Reports does.
+- Trip detail: the buttons use the shared control styles, and on phones
+  Delete sits apart from the trip tools.
+
+### Fixed
+
+- A typed trip distance (manual trip, manual trip edit, and API create and
+  edit) is capped at 10,000 km (about 6,214 miles), so very large values no
+  longer overflow the totals on Trips and Stats. Detected trips and existing
+  rows are unchanged.
+- `/trips` and `/stats` with a to-date of `9999-12-31` treat it as no upper
+  bound instead of failing with a server error.
+- A Places-mode manual trip that cannot be routed keeps its selected places
+  with the entered distance.
+- A phone that reports steadily no longer holds back trip detection until the
+  15-minute sweep: detection runs within the debounce after the first new
+  point since the last run. The detector and `DETECTOR_VERSION` are
+  unchanged.
+
+### Migrations
+
+- This release adds no migration; the schema stays at 51. The database image
+  is the same as 1.2.0's.
+- See [Upgrading from 1.2](docs/upgrading.md#upgrading-from-12).
+
+### Supported upgrade path
+
+- `v1.2.0` upgrades directly with the standard procedure. `v1.1.0` and
+  `v1.0.0` also upgrade directly; their database images have the same
+  versions as this release's, so they upgrade in place through
+  [Database image security rebuilds](docs/upgrading.md#database-image-security-rebuilds)
+  and also read the 1.2 and earlier notes. A 0.x installation first upgrades
+  to `v1.0.0`.
+- Prior-release artifact upgrade gate: release preflight ran the Docker
+  Compose upgrade drill from `v1.2.0` in standard mode and from `v1.1.0` and
+  `v1.0.0` in database image swap mode before this release was tagged.
+
+### Breaking changes
+
+- None. There is no migration and no Compose, configuration or environment
+  change. A reverse proxy that forwards only listed paths needs
+  `/ingest/traccar` before Traccar Client can post.
+
 ## [1.2.0] - 2026-10-26
 
 ### Security
