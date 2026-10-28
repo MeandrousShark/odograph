@@ -168,6 +168,13 @@ def test_mobile_disclosures_use_one_delegated_mutual_dismissal_script():
     assert 'if (summary) summary.focus();' in body
 
 
+def test_header_menu_panels_rely_on_native_details_hiding():
+    # iOS WebKit kept painting a panel switched to display: none inside a
+    # closed <details>, so the menus stayed on screen after closing.
+    for menu, panel in (("mobile-account-menu", "mobile-account-panel"), ("mobile-more", "mobile-more-panel")):
+        assert not re.search(rf"\.{menu}:not\(\[open\]\)\s*>\s*\.{panel}", CSS)
+
+
 def test_review_badge_uses_only_the_global_count():
     positive = _mobile_nav(_render("/review", review_count=4))
     assert 'class="mobile-nav-badge" aria-hidden="true">4</span>' in positive
