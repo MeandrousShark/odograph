@@ -200,6 +200,18 @@ For a Podman installation, replace each `docker compose` command with
 This procedure is also the model used by the release preflight database-image
 migration drill.
 
+## Upgrading from 1.2
+
+This release adds no migration, and the database image is the same as
+1.2.0's, so the standard [upgrade procedure](#upgrade-procedure) applies.
+
+No configuration change is required. The new `POST /ingest/traccar` route
+serves [Traccar Client](traccar.md). If your reverse proxy forwards only
+listed paths, add it beside `/ingest`. The route carries its credential in
+the query string, so if the proxy logs full request URIs, remove the `key`
+parameter from them as [Connecting Traccar Client](traccar.md#security)
+describes.
+
 ## Upgrading from 1.1
 
 Migrations 048 to 051 are class `additive`: they add the API grant, mobile
