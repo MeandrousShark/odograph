@@ -9,6 +9,40 @@ reproduced here.
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-10-28
+
+### Fixed
+
+- On iOS Safari, the account menu behind the header avatar and the bottom
+  bar's More menu stayed on screen after closing, so only choosing an item
+  dismissed them. They now close on a tap outside them or on their own
+  button, as they do in other browsers.
+
+### Migrations
+
+- This release adds no migration; the schema stays at 51. The database image
+  is the same as 1.3.0's.
+
+### Supported upgrade path
+
+- `v1.3.0` and `v1.2.0` upgrade directly with the standard procedure; a
+  `v1.2.0` installation also reads the 1.3.0 notes and
+  [Upgrading from 1.2](docs/upgrading.md#upgrading-from-12). `v1.1.0` and
+  `v1.0.0` also upgrade directly; their database images have the same
+  versions as this release's, so they upgrade in place through
+  [Database image security rebuilds](docs/upgrading.md#database-image-security-rebuilds)
+  and also read the earlier notes. A 0.x installation first upgrades to
+  `v1.0.0`.
+- Prior-release artifact upgrade gate: release preflight ran the Docker
+  Compose upgrade drill from `v1.3.0` and `v1.2.0` in standard mode and from
+  `v1.1.0` and `v1.0.0` in database image swap mode before this release was
+  tagged.
+
+### Breaking changes
+
+- None. There is no migration and no Compose, configuration or environment
+  change.
+
 ## [1.3.0] - 2026-10-27
 
 ### Security
