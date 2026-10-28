@@ -11,6 +11,14 @@ reproduced here.
 
 ## [1.3.0] - 2026-10-27
 
+### Security
+
+- Upgrade Authlib from 1.7.2 to 1.9.1 for CVE-2026-96760, CVE-2026-114614,
+  CVE-2026-114615, CVE-2026-114616, CVE-2026-114617, CVE-2026-114618 and
+  CVE-2026-114620, which include an ID token nonce check that a token could
+  switch off and a JWS signature verification bypass. Odograph uses Authlib
+  for single sign-on.
+
 ### Added
 
 - Traccar Client ingest. `POST /ingest/traccar` accepts locations from the
