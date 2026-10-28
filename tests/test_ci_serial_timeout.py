@@ -174,9 +174,9 @@ def guarded_workflows(timeout: str) -> dict[str, dict]:
     }
 
 
-def test_serial_budget_matches_the_v1_1_0_calibration():
-    assert estimate_minutes(1202, 3519) * 60 - OVERHEAD_MINUTES * 60 == pytest.approx(1026, abs=1)
-    assert required_timeout(1202, 3519) == 41
+def test_serial_budget_matches_the_v1_3_0_calibration():
+    assert estimate_minutes(1351, 4033) * 60 - OVERHEAD_MINUTES * 60 == pytest.approx(1281, abs=1)
+    assert required_timeout(1351, 4033) == 49
     assert required_timeout(0, 0) == 6
 
 
@@ -208,11 +208,11 @@ def test_stale_timeout_fails_naming_job_estimate_and_remedy():
     message = problems[0]
     assert "release-preflight.yml job 'quality'" in message or "release.yml job 'test'" in message
     assert "timeout-minutes 20" in message
-    assert "estimated at 19.7 minutes" in message
-    assert "at least 40" in message
+    assert "estimated at 21.4 minutes" in message
+    assert "at least 43" in message
     assert "Raise that job's timeout-minutes" in message and "shard the job" in message
-    assert check_workflows(guarded_workflows("40"), 1187, 3334) == []
-    assert len(check_workflows(guarded_workflows("39"), 1187, 3334)) == 2
+    assert check_workflows(guarded_workflows("43"), 1187, 3334) == []
+    assert len(check_workflows(guarded_workflows("42"), 1187, 3334)) == 2
 
 
 def test_injected_counts_fail_without_collecting():
