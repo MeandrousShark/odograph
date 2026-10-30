@@ -2312,8 +2312,9 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 }
 .dashboard-day:hover .dashboard-day-tooltip,
 .dashboard-day:focus .dashboard-day-tooltip { visibility: visible; }
-/* A clicked day keeps focus, so this stops two tooltips showing at once. */
-.dashboard-chart:hover .dashboard-day:focus:not(:hover) .dashboard-day-tooltip { visibility: hidden; }
+/* A clicked day keeps focus, so this stops two tooltips showing at once.
+   Keyboard focus stays shown wherever the pointer is resting. */
+.dashboard-chart:hover .dashboard-day:focus:not(:hover, :focus-visible) .dashboard-day-tooltip { visibility: hidden; }
 /* Two days from each end, since a centered tooltip outgrows a phone column. */
 .dashboard-day:nth-child(-n+2) .dashboard-day-tooltip { left: 0; transform: none; }
 .dashboard-day:nth-last-child(-n+2) .dashboard-day-tooltip { right: 0; left: auto; transform: none; }

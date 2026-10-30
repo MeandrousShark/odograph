@@ -369,7 +369,7 @@ def test_daily_chart_tooltip_survives_the_out_of_band_hero():
 def test_daily_chart_tooltip_css_shows_on_hover_and_focus_and_stays_in_the_chart():
     css = (ROOT / "static/style.css").read_text()
     assert ".dashboard-day:hover .dashboard-day-tooltip,\n.dashboard-day:focus .dashboard-day-tooltip { visibility: visible; }" in css
-    assert ".dashboard-chart:hover .dashboard-day:focus:not(:hover) .dashboard-day-tooltip { visibility: hidden; }" in css
+    assert ".dashboard-chart:hover .dashboard-day:focus:not(:hover, :focus-visible) .dashboard-day-tooltip { visibility: hidden; }" in css
     assert ".dashboard-day:nth-child(-n+2) .dashboard-day-tooltip { left: 0; transform: none; }" in css
     assert ".dashboard-day:nth-last-child(-n+2) .dashboard-day-tooltip { right: 0; left: auto; transform: none; }" in css
     assert ".dashboard-day:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; }" in css
