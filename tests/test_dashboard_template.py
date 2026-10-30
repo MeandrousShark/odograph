@@ -6,6 +6,7 @@ DB-free; `tests/test_dashboard_db.py` covers the route/query wiring.
 """
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -124,26 +125,59 @@ def test_metrics_render_trip_count_distance_and_expenses():
     assert "Business" in body and "6.0 mi" in body
     assert "Personal" in body and "3.0 mi" in body
     assert "Unclassified" in body and "1.0 mi" in body
-    assert "Non-deductible" in body and "0.0 mi" in body
     assert "$42.50" in body
     assert "$4.02" in body
 
 
-def test_dashboard_breakdown_labels_can_shrink_and_wrap_instead_of_overflow():
-    # Each label is a grid item in its own auto/1fr/auto row; without its own
-    # min-width: 0, a long label like "Unclassified" refused to shrink below
-    # its min-content width and painted over the value beside it once the
-    # outer four-up grid narrowed the column below that width.
-    body = _render(_dashboard())
-    for label in ("Business", "Personal", "Unclassified", "Non-deductible"):
-        assert f'class="dashboard-breakdown-label">{label}</span>' in body
+def _key_labels(body: str) -> list[str]:
+    return re.findall(r'class="dashboard-breakdown-label">([^<]+)</span>', body)
+
+
+def test_key_lists_every_category_with_miles():
+    body = _render(_dashboard(distance=DistanceBreakdown(
+        total_m=10 * MI, business_m=4 * MI, personal_m=3 * MI,
+        unclassified_m=2 * MI, nondeductible_m=1 * MI,
+    )))
+    assert _key_labels(body) == ["Business", "Personal", "Unclassified", "Non-deductible"]
+
+
+def test_key_hides_unclassified_and_nondeductible_at_zero():
+    body = _render(_dashboard(distance=DistanceBreakdown(
+        total_m=169.2 * MI, business_m=110.5 * MI, personal_m=58.7 * MI, unclassified_m=0.0,
+    )))
+    assert _key_labels(body) == ["Business", "Personal"]
+
+
+def test_key_always_shows_business_and_personal():
+    assert _key_labels(_render(_dashboard())) == ["Business", "Personal"]
+    body = _render(_dashboard(distance=DistanceBreakdown(
+        total_m=5 * MI, business_m=0.0, personal_m=5 * MI, unclassified_m=0.0,
+    )))
+    assert _key_labels(body) == ["Business", "Personal"]
+    assert ">0.0 mi</strong>" in body
+
+
+def test_key_treats_a_value_that_displays_as_zero_as_zero():
+    body = _render(_dashboard(distance=DistanceBreakdown(
+        total_m=1.03 * MI, business_m=1 * MI, personal_m=0.0, unclassified_m=0.03 * MI,
+    )))
+    assert _key_labels(body) == ["Business", "Personal"]
+
+
+def test_key_labels_stay_on_one_line_and_clear_of_their_values():
+    # Entries size to their content, so a row folds before a label can wrap
+    # at the hyphen in "Non-deductible" or paint over the value beside it.
     css = (ROOT / "static/style.css").read_text()
-    assert ".dashboard-breakdown-label { min-width: 0; }" in css
+    assert "display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); max-width: 100%;" in css
+    item = css.split(".dashboard-breakdown-item {", 1)[1].split("}", 1)[0]
+    assert "flex: none;" in item
+    assert "grid-template-columns: auto auto auto;" in item
+    assert "white-space: nowrap;" in item
+    assert "min-width" not in item
 
 
 def test_dashboard_breakdown_list_is_content_driven_not_a_hand_placed_breakpoint():
     css = (ROOT / "static/style.css").read_text()
-    assert "grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: var(--space-4);" in css
     narrow_css = css.split("@media (max-width: 420px)", 1)[1]
     assert "dashboard-breakdown-list" not in narrow_css
 
@@ -272,7 +306,74 @@ def test_daily_chart_has_seven_zero_filled_accessible_stubs():
     assert 'role="list"' in body
     assert 'aria-label="Daily mileage for Jul 13, 2026 - Jul 19, 2026"' in body
     assert body.count('role="listitem"') == 7
-    assert body.count("Business 0.0 miles; Personal 0.0 miles; Unclassified 0.0 miles; Non-deductible 0.0 miles.") == 7
+    assert body.count('0.0 miles total."') == 7
+    assert "Business 0.0 miles" not in body
+
+
+def test_daily_chart_accessible_text_lists_only_nonzero_categories():
+    body = _render(_dashboard(daily_series=_daily_series({
+        0: dict(business_m=1 * MI, personal_m=2 * MI),
+        1: dict(nondeductible_m=1 * MI, unclassified_m=0.03 * MI),
+    })))
+    assert 'aria-label="Monday, July 13: 3.0 miles total. Business 1.0 miles; Personal 2.0 miles."' in body
+    assert 'aria-label="Tuesday, July 14: 1.0 miles total. Non-deductible 1.0 miles."' in body
+    assert 'aria-label="Wednesday, July 15: 0.0 miles total."' in body
+
+
+def test_daily_chart_days_are_focusable_and_tooltips_are_hidden_from_assistive_tech():
+    body = _render(_dashboard())
+    assert body.count('class="dashboard-day" role="listitem" tabindex="0"') == 7
+    assert body.count('class="dashboard-day-tooltip" aria-hidden="true"') == 7
+
+
+def test_daily_chart_tooltip_shows_day_total_and_nonzero_categories():
+    body = _render(_dashboard(daily_series=_daily_series({
+        0: dict(business_m=1 * MI, personal_m=2 * MI),
+    })))
+    tooltips = body.split('class="dashboard-day-tooltip"')[1:]
+    monday = tooltips[0].split('class="dashboard-bar-track"', 1)[0]
+    assert "Mon, Jul 13: 3.0 mi" in monday
+    assert re.findall(r"dashboard-state-(\w+)", monday) == ["business", "personal"]
+    assert "<span>Business</span>" in monday and "<strong>1.0 mi</strong>" in monday
+    assert "<span>Personal</span>" in monday and "<strong>2.0 mi</strong>" in monday
+    assert "Unclassified" not in monday and "Non-deductible" not in monday
+
+
+def test_daily_chart_tooltip_on_an_empty_day_is_just_its_total():
+    body = _render(_dashboard())
+    tuesday = body.split('class="dashboard-day-tooltip"')[2].split('class="dashboard-bar-track"', 1)[0]
+    assert "Tue, Jul 14: 0.0 mi" in tuesday
+    assert "dashboard-day-tooltip-row" not in tuesday
+
+
+def test_daily_chart_tooltip_sits_on_its_own_bar():
+    body = _render(_dashboard(daily_series=_daily_series({
+        0: dict(business_m=4 * MI),
+        1: dict(business_m=1 * MI),
+    })))
+    assert 'class="dashboard-bar-slot" style="--bar-height: 100.0%;"' in body
+    assert 'class="dashboard-bar-slot" style="--bar-height: 25.0%;"' in body
+    assert body.count('class="dashboard-bar-slot" style="--bar-height: 0.0%;"') == 5
+    css = (ROOT / "static/style.css").read_text()
+    assert ".dashboard-bar-slot { position: relative; align-self: stretch; }" in css
+    assert "bottom: calc(var(--bar-height) + var(--space-2));" in css
+
+
+def test_daily_chart_tooltip_survives_the_out_of_band_hero():
+    trip = _trip(1, datetime(2026, 7, 13, 9, tzinfo=TZ), datetime(2026, 7, 13, 10, tzinfo=TZ))
+    body = _render_dashboard_tag_response(_dashboard(), trip)
+    assert 'hx-swap-oob="outerHTML"' in body
+    assert body.count('class="dashboard-day-tooltip" aria-hidden="true"') == 7
+
+
+def test_daily_chart_tooltip_css_shows_on_hover_and_focus_and_stays_in_the_chart():
+    css = (ROOT / "static/style.css").read_text()
+    assert ".dashboard-day:hover .dashboard-day-tooltip,\n.dashboard-day:focus .dashboard-day-tooltip { visibility: visible; }" in css
+    assert ".dashboard-chart:hover .dashboard-day:focus:not(:hover, :focus-visible) .dashboard-day-tooltip { visibility: hidden; }" in css
+    assert ".dashboard-day:nth-child(-n+2) .dashboard-day-tooltip { left: 0; transform: none; }" in css
+    assert ".dashboard-day:nth-last-child(-n+2) .dashboard-day-tooltip { right: 0; left: auto; transform: none; }" in css
+    assert ".dashboard-day:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; }" in css
+    assert "pointer-events: none; visibility: hidden;" in css
 
 
 def test_daily_chart_renders_total_magnitude_and_four_state_composition():

@@ -23,26 +23,20 @@
       </div>
 
       <ul class="dashboard-breakdown-list" aria-label="Mileage by category">
-        <li class="dashboard-breakdown-item dashboard-state-business">
+        {# Business and Personal stay so the key never disappears; the other
+           two are usually zero. Compared as displayed, so 0.03 mi hides too. #}
+        {% for label, state, meters, always_shown in [
+          ("Business", "business", dashboard.distance.business_m, true),
+          ("Personal", "personal", dashboard.distance.personal_m, true),
+          ("Unclassified", "unclassified", dashboard.distance.unclassified_m, false),
+          ("Non-deductible", "nondeductible", dashboard.distance.nondeductible_m, false),
+        ] if always_shown or meters | mi != "0.0" %}
+        <li class="dashboard-breakdown-item dashboard-state-{{ state }}">
           <span class="dashboard-breakdown-swatch" aria-hidden="true"></span>
-          <span class="dashboard-breakdown-label">Business</span>
-          <strong>{{ dashboard.distance.business_m | mi }} mi</strong>
+          <span class="dashboard-breakdown-label">{{ label }}</span>
+          <strong>{{ meters | mi }} mi</strong>
         </li>
-        <li class="dashboard-breakdown-item dashboard-state-personal">
-          <span class="dashboard-breakdown-swatch" aria-hidden="true"></span>
-          <span class="dashboard-breakdown-label">Personal</span>
-          <strong>{{ dashboard.distance.personal_m | mi }} mi</strong>
-        </li>
-        <li class="dashboard-breakdown-item dashboard-state-unclassified">
-          <span class="dashboard-breakdown-swatch" aria-hidden="true"></span>
-          <span class="dashboard-breakdown-label">Unclassified</span>
-          <strong>{{ dashboard.distance.unclassified_m | mi }} mi</strong>
-        </li>
-        <li class="dashboard-breakdown-item dashboard-state-nondeductible">
-          <span class="dashboard-breakdown-swatch" aria-hidden="true"></span>
-          <span class="dashboard-breakdown-label">Non-deductible</span>
-          <strong>{{ dashboard.distance.nondeductible_m | mi }} mi</strong>
-        </li>
+        {% endfor %}
       </ul>
     </div>
 
@@ -52,19 +46,38 @@
     <div class="dashboard-chart" role="list" aria-label="Daily mileage for {{ format_week_range(dashboard.nav.week_start, dashboard.nav.week_end) }}">
       {% for day in dashboard.daily_series %}
         {% set day_total_m = day.total_m %}
-        <div class="dashboard-day" role="listitem"
-             aria-label="{{ day.day.strftime('%A, %B %-d') }}: {{ day_total_m | mi }} miles total. Business {{ day.business_m | mi }} miles; Personal {{ day.personal_m | mi }} miles; Unclassified {{ day.unclassified_m | mi }} miles; Non-deductible {{ day.nondeductible_m | mi }} miles.">
-          <div class="dashboard-bar-track" aria-hidden="true">
-            {% if day_total_m %}
-            <div class="dashboard-bar-fill" style="height: {{ (day_total_m / chart_max_m * 100) | round(2) }}%;">
-              <span class="dashboard-bar-segment dashboard-bar-business" style="flex-basis: {{ (day.business_m / day_total_m * 100) | round(2) }}%;"></span>
-              <span class="dashboard-bar-segment dashboard-bar-personal" style="flex-basis: {{ (day.personal_m / day_total_m * 100) | round(2) }}%;"></span>
-              <span class="dashboard-bar-segment dashboard-bar-unclassified" style="flex-basis: {{ (day.unclassified_m / day_total_m * 100) | round(2) }}%;"></span>
-              <span class="dashboard-bar-segment dashboard-bar-nondeductible" style="flex-basis: {{ (day.nondeductible_m / day_total_m * 100) | round(2) }}%;"></span>
+        {% set bar_height = (day_total_m / chart_max_m * 100) | round(2) %}
+        {% set day_categories = [
+          ("Business", "business", day.business_m),
+          ("Personal", "personal", day.personal_m),
+          ("Unclassified", "unclassified", day.unclassified_m),
+          ("Non-deductible", "nondeductible", day.nondeductible_m),
+        ] %}
+        <div class="dashboard-day" role="listitem" tabindex="0"
+             aria-label="{{ day.day.strftime('%A, %B %-d') }}: {{ day_total_m | mi }} miles total.{% for label, state, meters in day_categories if meters | mi != '0.0' %}{{ ' ' if loop.first else '; ' }}{{ label }} {{ meters | mi }} miles{{ '.' if loop.last }}{% endfor %}">
+          <div class="dashboard-bar-slot" style="--bar-height: {{ bar_height }}%;">
+            <div class="dashboard-day-tooltip" aria-hidden="true">
+              <strong>{{ day.day.strftime('%a, %b %-d') }}: {{ day_total_m | mi }} mi</strong>
+              {% for label, state, meters in day_categories if meters | mi != "0.0" %}
+              <span class="dashboard-day-tooltip-row dashboard-state-{{ state }}">
+                <span class="dashboard-breakdown-swatch"></span>
+                <span>{{ label }}</span>
+                <strong>{{ meters | mi }} mi</strong>
+              </span>
+              {% endfor %}
             </div>
-            {% else %}
-            <span class="dashboard-bar-empty"></span>
-            {% endif %}
+            <div class="dashboard-bar-track" aria-hidden="true">
+              {% if day_total_m %}
+              <div class="dashboard-bar-fill" style="height: {{ bar_height }}%;">
+                <span class="dashboard-bar-segment dashboard-bar-business" style="flex-basis: {{ (day.business_m / day_total_m * 100) | round(2) }}%;"></span>
+                <span class="dashboard-bar-segment dashboard-bar-personal" style="flex-basis: {{ (day.personal_m / day_total_m * 100) | round(2) }}%;"></span>
+                <span class="dashboard-bar-segment dashboard-bar-unclassified" style="flex-basis: {{ (day.unclassified_m / day_total_m * 100) | round(2) }}%;"></span>
+                <span class="dashboard-bar-segment dashboard-bar-nondeductible" style="flex-basis: {{ (day.nondeductible_m / day_total_m * 100) | round(2) }}%;"></span>
+              </div>
+              {% else %}
+              <span class="dashboard-bar-empty"></span>
+              {% endif %}
+            </div>
           </div>
           <span class="dashboard-day-name">{{ day.day.strftime('%a') }}</span>
         </div>
