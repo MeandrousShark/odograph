@@ -9,6 +9,13 @@ reproduced here.
 
 ## [Unreleased]
 
+### Changed
+
+- The Dashboard week key hides Unclassified and Non-deductible when they have
+  no miles, and its labels stay on one line.
+- Hovering, focusing or tapping a day in the Dashboard week chart shows a
+  tooltip with its total and each category's miles.
+
 ## [1.3.1] - 2026-10-28
 
 ### Fixed

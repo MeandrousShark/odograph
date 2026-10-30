@@ -2264,26 +2264,17 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 .dashboard-breakdown-list, .dashboard-secondary {
   display: grid; margin: var(--space-3) 0 0; padding: 0; list-style: none;
 }
-/* auto-fit rather than a fixed 4-up plus a hand-placed narrow-width
-   override: with only four items, it naturally renders exactly four
-   columns wherever there's room for four at the minimum below, and folds
-   to three, two, or one as the container narrows -- content-driven instead
-   of guessing a breakpoint. */
+/* Flex rather than a grid of fixed-minimum columns: each entry is as wide as
+   its own one-line content, so a row folds before a label could wrap or run
+   into its value, whichever of the two to four entries the week shows. */
 .dashboard-breakdown-list {
-  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: var(--space-4);
-  max-width: 100%;
+  display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); max-width: 100%;
 }
 .dashboard-breakdown-item {
-  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--space-2);
-  min-width: 0; align-items: center; color: var(--fg-muted); font-size: .85rem;
+  display: grid; flex: none; grid-template-columns: auto auto auto; gap: var(--space-2);
+  align-items: center; color: var(--fg-muted); font-size: .85rem; white-space: nowrap;
 }
-/* The label is a grid item in its own auto/1fr/auto row, and a grid item's
-   min-width defaults to its content's min-content size regardless of the
-   track's own minmax(0, ...) -- without this, a long label like
-   "Unclassified" refused to shrink and painted across the value beside it
-   instead of wrapping. */
-.dashboard-breakdown-label { min-width: 0; }
-.dashboard-breakdown-item strong { color: var(--fg); white-space: nowrap; }
+.dashboard-breakdown-item strong { color: var(--fg); }
 .dashboard-breakdown-swatch {
   display: block; width: .65rem; height: .65rem; flex: none; border-radius: 50%;
 }
@@ -2300,8 +2291,32 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 }
 .dashboard-day {
   display: grid; grid-template-rows: 7.5rem auto; gap: var(--space-1);
-  min-width: 0; align-items: end; text-align: center;
+  min-width: 0; align-items: end; border-radius: var(--radius-sm); text-align: center;
 }
+.dashboard-day:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+.dashboard-bar-slot { position: relative; align-self: stretch; }
+/* CSS only so it survives the out-of-band hero swap with nothing to rebind.
+   Outside .dashboard-bar-track, whose overflow would clip it, and lifted by
+   --bar-height so it sits on the bar rather than over the whole chart. */
+.dashboard-day-tooltip {
+  position: absolute; bottom: calc(var(--bar-height) + var(--space-2)); left: 50%; z-index: 3;
+  display: grid; width: max-content; gap: var(--space-1); padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border); background: var(--surface-elevated);
+  border-radius: var(--radius-md); box-shadow: var(--shadow);
+  color: var(--fg-muted); font-size: .8rem; text-align: left; white-space: nowrap;
+  pointer-events: none; visibility: hidden; transform: translateX(-50%);
+}
+.dashboard-day-tooltip strong { color: var(--fg); }
+.dashboard-day-tooltip-row {
+  display: grid; grid-template-columns: auto 1fr auto; gap: var(--space-2); align-items: center;
+}
+.dashboard-day:hover .dashboard-day-tooltip,
+.dashboard-day:focus .dashboard-day-tooltip { visibility: visible; }
+/* A clicked day keeps focus, so this stops two tooltips showing at once. */
+.dashboard-chart:hover .dashboard-day:focus:not(:hover) .dashboard-day-tooltip { visibility: hidden; }
+/* Two days from each end, since a centered tooltip outgrows a phone column. */
+.dashboard-day:nth-child(-n+2) .dashboard-day-tooltip { left: 0; transform: none; }
+.dashboard-day:nth-last-child(-n+2) .dashboard-day-tooltip { right: 0; left: auto; transform: none; }
 .dashboard-day-name { color: var(--fg-muted); font-size: .75rem; font-weight: 700; }
 .dashboard-bar-track {
   display: flex; width: .8rem; height: 7.5rem; min-height: 0; align-items: end;
