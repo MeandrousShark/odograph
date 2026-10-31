@@ -4,9 +4,12 @@
 **For throwaway Postgres/PostGIS instances only.** This script wipes and
 reseeds every data table it touches (see `_WIPE_TABLES` below) -- never point
 it at production or any database whose contents matter. It refuses any
-`--database-url` whose host isn't a loopback address, as a cheap guard
-against an obvious mistake; that check is not a substitute for pointing this
-at a real disposable container.
+`--database-url` that libpq could route to a non-loopback host, including
+through `host` and `hostaddr` query parameters, and any database that already
+belongs to a real account or to another application, before it migrates
+anything. These are cheap guards
+against an obvious mistake, not a substitute for pointing this at a real
+disposable container.
 
 Detected trips
 here are not inserted as finished `trips` rows: this script builds plausible
@@ -60,13 +63,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import math
+import os
 import random
 import sys
 import secrets
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 # `python scripts/dev_seed.py` puts scripts/ (not the repo root) first on
@@ -74,6 +77,10 @@ from zoneinfo import ZoneInfo
 # import `app` without this bootstrap.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from psycopg import ProgrammingError
+from psycopg.conninfo import conninfo_to_dict
+
+from app.config import DEMO_MODE_NOTICE
 from app.dashboard import WeekBounds, week_bounds
 from app.db import make_pool, run_migrations
 from app.account_context import AccountPool, AccountPrincipal, account_id, control_connection
@@ -92,6 +99,8 @@ DEV_EMAIL = "development@localhost.invalid"
 SCENARIOS = ("week",)
 SCENARIO_DISPLAY_NAME = "Sam Rivera"
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_LOCAL_ADDRESSES = {"127.0.0.1", "::1"}
+TRIAL_URL = "http://127.0.0.1:8079"
 
 # Delete only this synthetic account's rows, in foreign-key dependency order.
 # Rates and tracker identity survive reseeding; their values/history ownership
@@ -472,8 +481,12 @@ async def _seed_mileage_rates(conn, years: set[int]) -> None:
 
 
 async def _detect_all(runner: DetectorRunner) -> None:
-    ran = await runner.run_once()
-    assert ran, "detector run_once() skipped (advisory lock busy) on a fresh DB"
+    # The trial's running app can hold the detector lock for a moment.
+    for _ in range(30):
+        if await runner.run_once():
+            return
+        await asyncio.sleep(1)
+    raise RuntimeError("detector run_once() skipped: advisory lock busy for 30 s")
 
 
 async def _discard_missing_trip_bridge(pool, runner: DetectorRunner, device_id: int) -> None:
@@ -684,7 +697,23 @@ async def _seed_expenses_and_odometer(conn, now_utc: datetime, v1: int) -> None:
 # --- CLI / orchestration ------------------------------------------------
 
 def _looks_local(database_url: str) -> bool:
-    return (urlsplit(database_url).hostname or "") in _LOCAL_HOSTS
+    """Judge what libpq will connect to, not the URL's authority: its query
+    parameters override the authority, and with no host it falls back to
+    PGHOST. PGHOSTADDR and a service file can supply an address the URL does
+    not name, so those are checked or refused too.
+    """
+    try:
+        params = conninfo_to_dict(database_url)
+    except ProgrammingError:
+        return False
+    if "service" in params or any(os.environ.get(name) for name in ("PGSERVICE", "PGSERVICEFILE")):
+        return False
+    hosts = params.get("host", "").lower().split(",")
+    hostaddr = params.get("hostaddr", os.environ.get("PGHOSTADDR", ""))
+    return (
+        all(host in _LOCAL_HOSTS for host in hosts)
+        and (not hostaddr or all(address in _LOCAL_ADDRESSES for address in hostaddr.split(",")))
+    )
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -695,7 +724,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "Wipes and reseeds every table it owns on every run -- never point "
             "this at production or any database whose contents matter."
         ),
-        epilog="Refuses any --database-url whose host is not a loopback address.",
+        epilog="Refuses any --database-url that could reach a non-loopback host.",
     )
     parser.add_argument(
         "--database-url", required=True,
@@ -714,10 +743,56 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+async def _refuse_a_real_database(conn) -> None:
+    """Runs before migrations and role setup, so a refused database is left as
+    it was. Only a database with no schema of its own has nothing to protect:
+    PostGIS relations belong to the extension, and a fresh one may have them.
+    """
+    cur = await conn.execute(
+        "SELECT to_regclass('public.accounts') IS NOT NULL, "
+        "to_regclass('public.schema_migrations') IS NOT NULL, "
+        "to_regclass('public.instance_state') IS NOT NULL"
+    )
+    has_accounts, has_migrations, has_instance_state = await cur.fetchone()
+    if has_migrations and not has_accounts:
+        raise RuntimeError("seeding refuses a migrated database with no accounts table")
+    if not (has_accounts and has_migrations):
+        cur = await conn.execute(
+            "SELECT c.relname FROM pg_class c "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            # Not indexes or composite types: those of an extension's objects
+            # carry no extension dependency of their own.
+            "WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S') "
+            "AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass "
+            "AND d.objid = c.oid AND d.deptype = 'e') ORDER BY 1"
+        )
+        relations = [row[0] for row in await cur.fetchall()]
+        if relations:
+            raise RuntimeError(f"seeding refuses a database holding other relations: {relations}")
+        return
+    cur = await conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM accounts WHERE email <> %s), "
+        "EXISTS (SELECT 1 FROM accounts WHERE email = %s)",
+        (DEV_EMAIL, DEV_EMAIL),
+    )
+    has_other_account, has_dev_account = await cur.fetchone()
+    if has_other_account:
+        raise RuntimeError("seeding requires the synthetic development account")
+    if has_dev_account or not has_instance_state:
+        return
+    cur = await conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM instance_state WHERE bootstrap_completed_at IS NOT NULL)"
+    )
+    if (await cur.fetchone())[0]:
+        raise RuntimeError("seeding requires the synthetic development account")
+
+
 async def main_async(database_url: str, scenario: str | None = None) -> None:
     bootstrap_pool = make_pool(database_url)
     await bootstrap_pool.open(wait=True)
     try:
+        async with bootstrap_pool.connection() as conn:
+            await _refuse_a_real_database(conn)
         await run_migrations(bootstrap_pool)
     finally:
         await bootstrap_pool.close()
@@ -796,6 +871,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
     asyncio.run(main_async(args.database_url, args.scenario))
+    # Only the trial sets DEMO_MODE: the devsite and upgrade checks seed other
+    # ports, and upgrade checks keep authentication on.
+    if os.environ.get("DEMO_MODE") == "1":
+        print(DEMO_MODE_NOTICE)
+        print(TRIAL_URL)
     return 0
 
 

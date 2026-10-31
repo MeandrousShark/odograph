@@ -51,8 +51,8 @@ trusted and controls the host and database.
   host and database and can already read or modify anything stored there;
   that's an inherent property of self-hosting, not a vulnerability.
 - Issues that only manifest with `DEV_NO_AUTH=1` set. That flag disables
-  authentication entirely and is documented as a development-only mode
-  that must never be enabled on a deployed instance.
+  authentication entirely. It is for development and the loopback-only local
+  trial, and must never be enabled on a deployed instance.
 
 If you're unsure whether something qualifies, report it anyway and it will
 be triaged.

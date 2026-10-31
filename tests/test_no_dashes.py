@@ -19,6 +19,7 @@ SHIPPING_TOP_LEVEL_FILES = {
     "SECURITY.md",
     "THIRD_PARTY_NOTICES.md",
     "compose.build.override.yml",
+    "compose.try.yaml",
     "compose.yaml",
     "pyproject.toml",
     "requirements-dev.lock",

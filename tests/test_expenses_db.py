@@ -440,3 +440,22 @@ def test_expense_input_rejects_invalid_fields_before_database_write():
         with pytest.raises(HTTPException) as exc:
             _parse_expense_input(*args)
         assert exc.value.status_code == 400
+
+
+def test_prepared_report_page_carries_the_demo_banner():
+    # The report is rendered by a helper process, so this crosses that boundary.
+    async def scenario():
+        raw_pool = make_pool(TEST_DB)
+        await raw_pool.open(wait=True)
+        try:
+            pool = await reset_account_db(raw_pool)
+            config = SimpleNamespace(
+                display_tz=TZ, app_version="test", detector_params=Params(), demo_mode=True,
+            )
+            response = await report_response(pool, "/report/2026", config)
+            assert response.status_code == 200
+            assert '<p class="demo-banner" role="note">' in response.body.decode()
+        finally:
+            await raw_pool.close()
+
+    asyncio.run(scenario())

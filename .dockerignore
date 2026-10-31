@@ -1,5 +1,6 @@
 # Keep the build context small and exclude local secrets. Only the runtime
-# account setup functions from scripts/ are needed in the image.
+# account setup functions from scripts/ and the trial's seed script are needed
+# in the image.
 .env*
 !.env.example
 
@@ -13,7 +14,9 @@ __pycache__/
 *.pyc
 .pytest_cache/
 compose.yaml
+compose.try.yaml
 scripts/*
+!scripts/dev_seed.py
 !scripts/sql/
 scripts/sql/*
 !scripts/sql/account_bootstrap.sql

@@ -403,6 +403,18 @@ jobs:
           cosign sign --yes "$IMAGE@$MANIFEST_DIGEST"
           cosign sign --yes "$IMAGE@$AMD64_DIGEST"
           cosign sign --yes "$IMAGE@$ARM64_DIGEST"
+      # The asset pins the manifest by digest, so pulling it never writes the
+      # local release tag that an installation's pull_policy: never relies on.
+      - name: Render the trial compose asset
+        env:
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          MANIFEST_DIGEST: ${{ steps.manifest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          python scripts/render_try_compose.py --image "$IMAGE" --digest "$MANIFEST_DIGEST" \
+            --source compose.try.yaml --output "$RUNNER_TEMP/compose.try.yaml"
+          python scripts/render_try_compose.py --image "$IMAGE" --digest "$MANIFEST_DIGEST" \
+            --source compose.try.yaml --verify "$RUNNER_TEMP/compose.try.yaml"
       - name: Create GitHub release from changelog
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -410,8 +422,20 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/release_notes.py --tag "$VERSION"
-          args=(release create "$VERSION" --verify-tag --title "$VERSION" --notes-file release-notes.md)
+          args=(release create "$VERSION" "$RUNNER_TEMP/compose.try.yaml"
+            --verify-tag --title "$VERSION" --notes-file release-notes.md)
           if [[ "$VERSION" == *-* ]]; then
             args+=(--prerelease)
           fi
           gh "${args[@]}"
+      - name: Verify the attached trial compose asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          MANIFEST_DIGEST: ${{ steps.manifest.outputs.digest }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release download "$VERSION" --pattern compose.try.yaml --dir "$RUNNER_TEMP/asset"
+          python scripts/render_try_compose.py --image "$IMAGE" --digest "$MANIFEST_DIGEST" \
+            --source compose.try.yaml --verify "$RUNNER_TEMP/asset/compose.try.yaml"

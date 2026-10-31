@@ -38,6 +38,7 @@
   {% block head %}{% endblock %}
 </head>
 <body hx-history="false" data-account-id="{{ user.id if user and user.id else '' }}" hx-headers='{"X-CSRF-Token": "{{ csrf }}"{% if user and user.id %}, "X-Odograph-Account": "{{ user.id }}"{% endif %}}'>
+  {% if demo_mode_notice %}<p class="demo-banner" role="note">{{ demo_mode_notice }}</p>{% endif %}
   <header>
     <h1><a href="/" class="brand-link"><span class="brand-mark" aria-hidden="true"></span><span>Odograph</span></a></h1>
     {% if user %}

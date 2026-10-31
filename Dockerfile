@@ -67,6 +67,9 @@ COPY scripts/sql/account_bootstrap.sql scripts/sql/account_admission.sql \
     scripts/sql/tracking_admission.sql scripts/sql/member_invitations.sql \
     scripts/sql/oidc_attempts.sql scripts/sql/oidc_methods.sql \
     scripts/sql/account_lifecycle.sql scripts/sql/
+# compose.try.yaml seeds its throwaway database from the image, so the local
+# trial needs no clone. The script refuses non-loopback database hosts.
+COPY scripts/dev_seed.py scripts/
 
 # Fixed numeric UID/GID, not a named user: rootless Podman and rootful Docker
 # both map a numeric identity the same way, while a name would need an

@@ -278,3 +278,31 @@ def test_external_actions_are_reputable_versioned_releases():
         if "uses" in step
     }
     assert pinned_names(used) == expected
+
+
+def test_release_attaches_the_rendered_trial_asset_after_signing():
+    publish = load_workflow()["jobs"]["publish"]
+    steps = steps_by_name(publish)
+    names = [step.get("name") for step in publish["steps"]]
+    render = steps["Render the trial compose asset"]
+
+    assert render["env"]["MANIFEST_DIGEST"] == "${{ steps.manifest.outputs.digest }}"
+    assert "--output" in render["run"] and "--verify" in render["run"]
+    assert render["run"].count('--digest "$MANIFEST_DIGEST"') == 2
+    assert render["run"].count("--source compose.try.yaml") == 2
+    assert '"$RUNNER_TEMP/compose.try.yaml"' in steps["Create GitHub release from changelog"]["run"]
+    assert names.index("Sign the manifest and each architecture digest") < names.index(
+        "Render the trial compose asset"
+    ) < names.index("Create GitHub release from changelog") < names.index(
+        "Verify the attached trial compose asset"
+    )
+    verify = steps["Verify the attached trial compose asset"]
+    assert "gh release download" in verify["run"]
+    assert "--verify" in verify["run"]
+    assert verify["env"]["MANIFEST_DIGEST"] == "${{ steps.manifest.outputs.digest }}"
+    assert '--digest "$MANIFEST_DIGEST"' in verify["run"]
+    assert "--source compose.try.yaml" in verify["run"]
+    assert "continue-on-error" not in verify
+    assert "continue-on-error" not in render
+    checkout = next(step for step in publish["steps"] if "actions/checkout" in step.get("uses", ""))
+    assert checkout["with"]["ref"] == "${{ needs.prepare.outputs.revision }}"

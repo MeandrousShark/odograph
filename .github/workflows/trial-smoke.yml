@@ -1,0 +1,42 @@
+name: Trial smoke
+
+# Its own workflow because the release preflight skips a pull request that
+# leaves the Compose app version unchanged, and this must run on every one.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  trial-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      ODOGRAPH_TRY_IMAGE: docker.io/library/odograph-try:ci
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Build the application image
+        run: docker build -t "$ODOGRAPH_TRY_IMAGE" .
+      - name: Run the trial with Docker Compose
+        run: scripts/try_smoke.sh compose.try.yaml
+      - name: Run the trial with podman-compose 1.3.0
+        env:
+          COMPOSE_CMD: podman-compose
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/podman-compose"
+          "$RUNNER_TEMP/podman-compose/bin/pip" install --require-hashes \
+            -r .github/podman-compose.lock
+          export PATH="$RUNNER_TEMP/podman-compose/bin:$PATH"
+          docker save "$ODOGRAPH_TRY_IMAGE" | podman load
+          scripts/try_smoke.sh compose.try.yaml
