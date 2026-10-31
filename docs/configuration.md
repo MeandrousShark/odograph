@@ -359,7 +359,7 @@ and returns a valid `auth_time`; otherwise these actions fail closed.
 | `ADMIN_TOKEN` | obsolete and ignored | Accepted in an old `.env` for upgrade compatibility. It enables no route and its value is never reported. Remove it when convenient. |
 | `MOBILE_SIGNIN` | `0` | `1` allows new mobile app sign-ins; they need Odograph served over HTTPS. Turning it off refuses new sign-ins only; apps already signed in keep working and can be revoked under **Signed-in apps** in Account Settings. See [Mobile app sign-in](accounts.md#mobile-app-sign-in-and-signed-in-apps). |
 | `DEV_NO_AUTH` | `0` | For development and the loopback-only trial in `compose.try.yaml`. `1` turns authentication off and binds a real synthetic account; it refuses an existing non-synthetic account. Never enable it on a deployed instance. |
-| `DEMO_MODE` | `0` | For the trial in `compose.try.yaml`. `1` shows a banner that cannot be dismissed on every page and logs the same sentence at startup: "Demo mode: synthetic data, not persistent, authentication disabled." Startup refuses `DEMO_MODE=1` without `DEV_NO_AUTH=1`, and `DEV_NO_AUTH=1` alone shows no banner. |
+| `DEMO_MODE` | `0` | For the trial in `compose.try.yaml`. `1` shows a banner that cannot be dismissed on pages built on the app shell, and logs the same sentence at startup: "Demo mode: synthetic data, not persistent, authentication disabled." Startup refuses `DEMO_MODE=1` without `DEV_NO_AUTH=1`, and `DEV_NO_AUTH=1` alone shows no banner. The busy page and JSON errors carry no banner. |
 
 ## Detector behavior
 

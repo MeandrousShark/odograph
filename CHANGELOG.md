@@ -15,8 +15,8 @@ reproduced here.
   kept, published on `127.0.0.1:8079` only. It has no authentication and must
   never be exposed beyond loopback. The image now carries `scripts/dev_seed.py`
   for it.
-- `DEMO_MODE=1` shows a banner on every page and logs the same sentence at
-  startup. It requires `DEV_NO_AUTH=1`, and `DEV_NO_AUTH=1` alone shows no
+- `DEMO_MODE=1` shows a banner on pages built on the app shell and logs the
+  same sentence at startup. It requires `DEV_NO_AUTH=1`, and `DEV_NO_AUTH=1` alone shows no
   banner.
 
 ### Changed

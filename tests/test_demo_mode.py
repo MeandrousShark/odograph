@@ -4,6 +4,7 @@ when it is not."""
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -115,3 +116,18 @@ def test_banner_styles_use_design_tokens_only():
     assert "var(--warn)" in rule
     assert "#" not in rule
     assert "position:" not in rule
+
+
+def test_exactly_one_banner_rule_and_it_cannot_hide_the_banner():
+    css = (ROOT / "static/style.css").read_text()
+    assert css.count("demo-banner") == 1
+
+    rule = css.split(".demo-banner {", 1)[1].split("}", 1)[0]
+    properties = re.findall(r"(?:^|;)\s*([a-z-]+)\s*:", rule)
+
+    assert properties
+    assert not [
+        name for name in properties
+        if name in {"display", "visibility", "opacity", "clip", "clip-path"}
+        or name.endswith("height") or name.startswith("transform")
+    ]

@@ -109,6 +109,13 @@ def test_missing_initial_signup_is_fail_closed(clean_env):
     assert cfg.initial_admin_signup is False
 
 
+@pytest.mark.parametrize("value", [1000.0, 0.0])
+def test_missing_trip_gap_setting_overrides_the_default(clean_env, monkeypatch, value):
+    monkeypatch.setenv("MISSING_TRIP_GAP_M", f"{value:.0f}")
+
+    assert Config.from_env().missing_trip_gap_m == value
+
+
 def test_obsolete_admin_token_is_ignored(clean_env):
     clean_env.setenv("ADMIN_TOKEN", "obsolete-value")
     cfg = Config.from_env()
