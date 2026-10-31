@@ -83,9 +83,10 @@ git switch -c release/$VERSION
 
 Stop if `git status --short` prints anything or the revision check fails.
 
-Update `compose.yaml` and `compose.try.yaml` so `services.app.image`, and
-`services.seed.image` in the try file, are exactly `$IMAGE:$VERSION`. A
-database image change updates `services.db.image` in both files. Move the release's entries out of `Unreleased` into one
+Update `compose.yaml` so `services.app.image`, and `compose.try.yaml` so
+`services.try-app.image` and `services.try-seed.image`, are exactly
+`$IMAGE:$VERSION`. A database image change updates `services.db.image` in
+`compose.yaml` and `services.try-db.image` in `compose.try.yaml`. Move the release's entries out of `Unreleased` into one
 exact, nonempty changelog section:
 
 ```text

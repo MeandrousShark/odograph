@@ -17,8 +17,8 @@ def _try_compose(
     seed: str = "ghcr.io/example/odograph:v1.2.3",
 ) -> str:
     return (
-        f"services:\n  db:\n    image: {db}\n  app:\n    image: {app}\n"
-        f"  seed:\n    image: {seed}\n"
+        f"services:\n  try-db:\n    image: {db}\n  try-app:\n    image: {app}\n"
+        f"  try-seed:\n    image: {seed}\n"
     )
 
 
@@ -141,9 +141,9 @@ def test_release_contract_requires_the_try_file(tmp_path):
 @pytest.mark.parametrize(
     ("override", "message"),
     [
-        ({"app": "ghcr.io/example/odograph:v1.2.2"}, "compose.try.yaml app image"),
-        ({"seed": "ghcr.io/example/odograph:v1.2.2"}, "compose.try.yaml seed image"),
-        ({"db": "registry.example.test/db@sha256:1"}, "compose.try.yaml db image"),
+        ({"app": "ghcr.io/example/odograph:v1.2.2"}, "compose.try.yaml try-app image"),
+        ({"seed": "ghcr.io/example/odograph:v1.2.2"}, "compose.try.yaml try-seed image"),
+        ({"db": "registry.example.test/db@sha256:1"}, "compose.try.yaml try-db image"),
     ],
 )
 def test_release_contract_rejects_a_stale_try_file(tmp_path, override, message):
@@ -159,13 +159,13 @@ def test_release_contract_rejects_a_stale_try_file(tmp_path, override, message):
 def test_release_contract_rejects_a_try_file_without_a_service(tmp_path):
     root = _stage_contract(tmp_path)
     (root / "compose.try.yaml").write_text(
-        "services:\n  app:\n    image: ghcr.io/example/odograph:v1.2.3\n"
+        "services:\n  try-app:\n    image: ghcr.io/example/odograph:v1.2.3\n"
     )
 
     result = _run(root)
 
     assert result.returncode != 0
-    assert "compose.try.yaml has no seed image" in result.stderr
+    assert "compose.try.yaml has no try-seed image" in result.stderr
 
 
 def test_release_contract_rejects_a_missing_changelog_version(tmp_path):

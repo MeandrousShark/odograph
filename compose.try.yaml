@@ -1,12 +1,13 @@
 # Odograph local trial: a look around with synthetic data. This is not an
 # install. It has no phone connection, keeps nothing and does not verify the
-# image signature. Run it from an empty directory:
+# image signature. Run it from an empty directory, not an installation's:
 #
 #   curl -fsSLO https://raw.githubusercontent.com/MeandrousShark/odograph/vX.Y.Z/compose.try.yaml
-#   docker compose -f compose.try.yaml up
+#   docker compose -p odograph-try -f compose.try.yaml up
 #
-# Open http://127.0.0.1:8079 once the seed service exits. Stop with Ctrl+C,
-# then `docker compose -f compose.try.yaml down` removes everything.
+# Open http://127.0.0.1:8079 once the seed service exits. Stop with Ctrl+C, then
+# `docker compose -p odograph-try -f compose.try.yaml down` removes the
+# containers, network and data. The pulled images stay until you remove them.
 #
 # This trial has NO AUTHENTICATION. Anyone who can reach the port is an
 # administrator, so never expose it beyond loopback: do not change the port
@@ -14,8 +15,11 @@
 # tunnel: ssh -L 8079:127.0.0.1:8079 you@host
 name: odograph-try
 
+# A COMPOSE_PROJECT_NAME in .env or the shell beats `name:` above. The service
+# names differ from compose.yaml's so that a colliding project still cannot
+# match, and so recreate, an installation's containers.
 services:
-  db:
+  try-db:
     image: ghcr.io/meandrousshark/odograph-postgis@sha256:4dc09eaaabbde791dee120e3fdb5f32cfd7d6c707a08cd38c1f9c7fe16b66982
     environment:
       POSTGRES_DB: mileage
@@ -28,19 +32,19 @@ services:
       - /var/lib/postgresql/data
     healthcheck:
       # Over TCP because the image's first-start server only listens on its
-      # Unix socket, which would report healthy before `app` can connect.
+      # Unix socket, which would report healthy before `try-app` can connect.
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U mileage -d mileage"]
       interval: 2s
       timeout: 5s
       retries: 30
 
-  app:
+  try-app:
     image: ghcr.io/meandrousshark/odograph:v1.3.1
     depends_on:
-      db:
+      try-db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://mileage:trial-only-not-a-secret@db:5432/mileage
+      DATABASE_URL: postgresql://mileage:trial-only-not-a-secret@try-db:5432/mileage
       # Fixed for the same reason as the database password: with authentication
       # off, a session signed by this value grants nothing it does not already.
       SESSION_SECRET: trial-only-not-a-secret-session-value
@@ -63,26 +67,26 @@ services:
 
   # Shares the database container's network namespace, where the database is
   # at 127.0.0.1, so the seed's refusal of non-loopback hosts stays as it is.
-  # It must run after `app` is healthy, once the schema and account exist. The
-  # wait below repeats depends_on because podman-compose can start this service
-  # before `app` is healthy, and a seed that starts early makes `app` fail its
-  # startup.
-  seed:
+  # It must run after `try-app` is healthy, once the schema and account exist.
+  # The wait below repeats depends_on because podman-compose can start this
+  # service before `try-app` is healthy, and a seed that starts early makes
+  # `try-app` fail its startup.
+  try-seed:
     image: ghcr.io/meandrousshark/odograph:v1.3.1
     command:
       - sh
       - -c
       - >-
-        timeout 120 sh -c 'until python3 -c "import urllib.request; urllib.request.urlopen(\"http://app:8000/healthz\", timeout=3)" 2>/dev/null; do sleep 1; done'
+        timeout 120 sh -c 'until python3 -c "import urllib.request; urllib.request.urlopen(\"http://try-app:8000/healthz\", timeout=3)" 2>/dev/null; do sleep 1; done'
         && exec python3 scripts/dev_seed.py
         --database-url postgresql://mileage:trial-only-not-a-secret@127.0.0.1:5432/mileage
         --wipe --scenario week
     depends_on:
-      app:
+      try-app:
         condition: service_healthy
     environment:
       DEMO_MODE: "1"
-    network_mode: service:db
+    network_mode: service:try-db
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -92,7 +96,12 @@ services:
       - /tmp
     restart: "no"
 
-# podman-compose 1.3.0 errors without this declaration even though it adds
-# no configuration beyond the implicit default network.
+# A fixed network name and no pod keep this file off anything named after the
+# project: under a colliding project name, `down` from podman-compose would
+# otherwise delete a stopped installation's containers, pod and network.
 networks:
   default:
+    name: odograph-try
+
+x-podman:
+  in_pod: false

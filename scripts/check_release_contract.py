@@ -86,17 +86,17 @@ def _validate_try_compose(root: Path, expected_image: str) -> None:
     if not path.is_file():
         raise ReleaseContractError(f"{TRY_COMPOSE} is missing")
     try_text = path.read_text()
-    for service in ("app", "seed"):
+    for service in ("try-app", "try-seed"):
         actual = _service_image(try_text, service, TRY_COMPOSE)
         if actual != expected_image:
             raise ReleaseContractError(
                 f"{TRY_COMPOSE} {service} image is {actual!r}, expected {expected_image!r}"
             )
     expected_db = _service_image((root / "compose.yaml").read_text(), "db")
-    actual_db = _service_image(try_text, "db", TRY_COMPOSE)
+    actual_db = _service_image(try_text, "try-db", TRY_COMPOSE)
     if actual_db != expected_db:
         raise ReleaseContractError(
-            f"{TRY_COMPOSE} db image is {actual_db!r}, expected {expected_db!r}"
+            f"{TRY_COMPOSE} try-db image is {actual_db!r}, expected {expected_db!r}"
         )
 
 
