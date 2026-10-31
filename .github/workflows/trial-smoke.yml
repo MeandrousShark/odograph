@@ -29,15 +29,14 @@ jobs:
         run: docker build -t "$ODOGRAPH_TRY_IMAGE" .
       - name: Run the trial with Docker Compose
         run: scripts/try_smoke.sh compose.try.yaml
-      # Reporting only until a run shows healthchecks work on this runner.
       - name: Run the trial with podman-compose 1.3.0
-        continue-on-error: true
         env:
           COMPOSE_CMD: podman-compose
         run: |
           set -euo pipefail
           python3 -m venv "$RUNNER_TEMP/podman-compose"
-          "$RUNNER_TEMP/podman-compose/bin/pip" install podman-compose==1.3.0
+          "$RUNNER_TEMP/podman-compose/bin/pip" install --require-hashes \
+            -r .github/podman-compose.lock
           export PATH="$RUNNER_TEMP/podman-compose/bin:$PATH"
           docker save "$ODOGRAPH_TRY_IMAGE" | podman load
           scripts/try_smoke.sh compose.try.yaml

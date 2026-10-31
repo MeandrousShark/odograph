@@ -26,6 +26,9 @@ case "${compose[0]}" in
     *) runtime=docker ;;
 esac
 timeout_s="${TRY_SMOKE_TIMEOUT:-600}"
+# podman-compose block-buffers into the log file, which would hide where a
+# failed run had got to.
+export PYTHONUNBUFFERED=1
 
 workdir="$(mktemp -d)"
 up_log="$workdir/up.log"
@@ -38,6 +41,8 @@ fail() {
     echo "error: $*" >&2
     echo "--- compose output" >&2
     tail -n 60 "$up_log" >&2 || true
+    echo "--- containers" >&2
+    "$runtime" ps -a --filter "label=$PROJECT_LABEL=$PROJECT" >&2 || true
     exit 1
 }
 
@@ -81,13 +86,17 @@ up_pid=$!
 deadline=$((SECONDS + timeout_s))
 seed_status=""
 while [ "$SECONDS" -lt "$deadline" ]; do
+    # Checked before the seed, so a Compose that exits just after it is not
+    # mistaken for one that left the seed unfinished.
+    compose_running=true
+    kill -0 "$up_pid" 2>/dev/null || compose_running=false
     seed_id="$("$runtime" ps -aq --filter "label=$PROJECT_LABEL=$PROJECT" \
         --filter "label=$SERVICE_LABEL=try-seed" | head -n 1)"
     if [ -n "$seed_id" ]; then
         seed_status="$("$runtime" inspect --format '{{.State.Status}}' "$seed_id")"
         [ "$seed_status" = exited ] && break
     fi
-    kill -0 "$up_pid" 2>/dev/null || [ -n "$seed_id" ] || fail "compose exited before the seed started"
+    [ "$compose_running" = true ] || fail "compose exited before try-seed finished"
     sleep 2
 done
 [ "$seed_status" = exited ] || fail "try-seed did not exit within ${timeout_s}s"
@@ -132,8 +141,9 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     echo "Seed's final lines in plain \`up\` output (${compose[*]}): $seed_lines" >> "$GITHUB_STEP_SUMMARY"
 fi
 
-run_compose down -v >/dev/null 2>&1 || fail "down failed"
-brought_down=true
+# Plain, as the header tells people to run it. The cleanup trap's -v is only
+# for a run that fails.
+run_compose down >/dev/null 2>&1 || fail "down failed"
 wait "$up_pid" 2>/dev/null || true
 up_pid=""
 
@@ -143,4 +153,5 @@ if "$runtime" network ls --format '{{.Name}}' | grep -qx "$PROJECT"; then
 fi
 [ "$("$runtime" volume ls -q | sort)" = "$volumes_before" ] || fail "volumes changed"
 [ -z "$(listeners)" ] || fail "port $PORT is still bound after down"
+brought_down=true
 echo "ok: down left no containers, network or volumes"

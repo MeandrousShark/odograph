@@ -1,7 +1,9 @@
 """compose.try.yaml has no authentication, so its isolation is pinned here."""
 from __future__ import annotations
 
-import re
+import os
+import stat
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -199,5 +201,127 @@ def test_every_pull_request_runs_the_trial_on_docker():
     assert "docker build" in steps["Build the application image"]["run"]
     docker = steps["Run the trial with Docker Compose"]
     assert docker["run"] == "scripts/try_smoke.sh compose.try.yaml"
-    assert "continue-on-error" not in docker
-    assert "podman-compose==1.3.0" in steps["Run the trial with podman-compose 1.3.0"]["run"]
+    assert not any("continue-on-error" in step for step in job["steps"])
+    assert "continue-on-error" not in job
+
+
+def test_podman_compose_is_installed_by_hash():
+    workflow = (ROOT / ".github/workflows/trial-smoke.yml").read_text()
+    lock = (ROOT / ".github/podman-compose.lock").read_text().splitlines()
+
+    assert "--require-hashes" in workflow and ".github/podman-compose.lock" in workflow
+    assert lock[0].startswith("podman-compose==1.3.0 --hash=sha256:")
+    assert all(" --hash=sha256:" in line for line in lock)
+
+
+FAKE_DOCKER = r"""#!/usr/bin/env bash
+state="$FAKE_STATE"
+containers_exist() { [ -e "$state/up" ] && [ ! -e "$state/gone" ]; }
+case "$1" in
+compose)
+    echo "$*" >> "$state/calls"
+    case "$*" in
+    *" up")
+        touch "$state/up"
+        echo "try-seed | Demo mode: synthetic data, not persistent, authentication disabled."
+        echo "try-seed | http://127.0.0.1:8079"
+        if [ "$FAKE_SCENARIO" = compose-dies ]; then
+            exit 1
+        fi
+        until [ -e "$state/stop" ]; do sleep 1; done
+        ;;
+    *" down -v") touch "$state/stop" "$state/gone" ;;
+    *" down")
+        touch "$state/stop"
+        [ "$FAKE_SCENARIO" = down-leaves-containers ] || touch "$state/gone"
+        ;;
+    esac
+    ;;
+ps) containers_exist && echo seed ;;
+inspect)
+    case "$*" in
+    *State.Status*)
+        if [ "$FAKE_SCENARIO" = compose-dies ]; then echo created; else echo exited; fi
+        ;;
+    *ExitCode*)
+        if [ "$FAKE_SCENARIO" = seed-fails ]; then echo 1; else echo 0; fi
+        ;;
+    *) echo '{"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "8079"}]}' ;;
+    esac
+    ;;
+esac
+exit 0
+"""
+
+FAKE_CURL = r"""#!/usr/bin/env bash
+while [ $# -gt 0 ]; do
+    case "$1" in
+    -o) output="$2"; shift ;;
+    -w) code=200 ;;
+    esac
+    shift
+done
+if [ "$FAKE_SCENARIO" = no-banner ]; then
+    echo trip-archive-row > "$output"
+else
+    echo "Demo mode: synthetic data, not persistent, authentication disabled. trip-archive-row" > "$output"
+fi
+[ -z "${code:-}" ] || printf %s "$code"
+"""
+
+FAKE_SS = r"""#!/usr/bin/env bash
+if [ -e "$FAKE_STATE/up" ] && [ ! -e "$FAKE_STATE/gone" ]; then
+    echo "LISTEN 0 4096 127.0.0.1:8079 0.0.0.0:*"
+fi
+"""
+
+
+def _run_smoke(tmp_path: Path, scenario: str) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    state = tmp_path / "state"
+    state.mkdir()
+    tools = {
+        "docker": FAKE_DOCKER, "curl": FAKE_CURL, "ss": FAKE_SS,
+        "sleep": "#!/bin/sh\nexec /bin/sleep 0.05\n",
+    }
+    for name, source in tools.items():
+        tool = fake_bin / name
+        tool.write_text(source)
+        tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
+    environment = {
+        key: value for key, value in os.environ.items()
+        if key not in {"COMPOSE_CMD", "GITHUB_STEP_SUMMARY"}
+    }
+    environment.update(
+        PATH=f"{fake_bin}{os.pathsep}{environment['PATH']}", FAKE_STATE=str(state),
+        FAKE_SCENARIO=scenario, TRY_SMOKE_TIMEOUT="30",
+    )
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts/try_smoke.sh"), str(ROOT / "compose.try.yaml")],
+        env=environment, capture_output=True, text=True, timeout=45,
+    )
+    return result, (state / "calls").read_text().splitlines()
+
+
+def test_smoke_passes_a_working_trial_with_a_plain_down(tmp_path):
+    result, calls = _run_smoke(tmp_path, "works")
+
+    assert result.returncode == 0, result.stderr
+    assert "ok: down left no containers, network or volumes" in result.stdout
+    assert calls[-1].endswith(" down")
+    assert not any(call.endswith(" down -v") for call in calls)
+
+
+@pytest.mark.parametrize(("scenario", "message"), [
+    ("seed-fails", "try-seed exited with 1"),
+    ("no-banner", "dashboard has no banner"),
+    ("compose-dies", "compose exited before try-seed finished"),
+    ("down-leaves-containers", "containers remain after down"),
+])
+def test_smoke_fails_a_broken_trial_and_cleans_up(tmp_path, scenario, message):
+    result, calls = _run_smoke(tmp_path, scenario)
+
+    assert result.returncode == 1
+    assert message in result.stderr
+    assert calls[-1].endswith(" down -v")
