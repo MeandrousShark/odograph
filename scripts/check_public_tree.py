@@ -21,7 +21,7 @@ PUBLIC_TOP_LEVEL = frozenset({
     "requirements-dev.lock", "requirements.lock", "pyproject.toml",
 })
 PUBLIC_DOCS = frozenset({
-    "docs/accounts.md", "docs/backups.md", "docs/configuration.md", "docs/install-compose.md",
+    "docs/accounts.md", "docs/backups.md", "docs/configuration.md", "docs/detection.md", "docs/install-compose.md",
     "docs/known-issues.md", "docs/oidc.md", "docs/osrm.md", "docs/owntracks.md", "docs/privacy.md", "docs/releasing.md",
     "docs/reverse-proxy.md", "docs/security.md", "docs/traccar.md", "docs/upgrading.md", "docs/usage.md",
     "docs/images/usage-dashboard.png", "docs/images/usage-review.png",

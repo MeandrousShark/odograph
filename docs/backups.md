@@ -76,6 +76,11 @@ complete and still be unusable when you actually need it. The logical dump
 these scripts produce is transactionally consistent, portable across hosts
 and container runtimes, and inspectable before you ever touch a database.
 
+Your data lives in the Compose `dbdata` volume. Restarts, container recreates,
+and ordinary `down` then `up` cycles all keep it. What destroys it is
+`docker compose down -v` or the Podman equivalent. Only run that when you
+actually mean to erase the database.
+
 ## One-off backup
 
 The scripts autodetect `docker compose` or `podman-compose` on `PATH`, the
@@ -95,9 +100,10 @@ scripts/backup_database.sh
 ```
 
 This runs `pg_dump` against the live `db` service without stopping the app,
-writes `backups/mileage-<UTC timestamp>.dump` plus a `.sha256` checksum
-sidecar and a non-secret `.manifest` file (creation time, schema version,
-Postgres/PostGIS versions, source ref), and sets the `backups/` directory to
+validates the archive's table of contents, writes
+`backups/mileage-<UTC timestamp>.dump` plus a `.sha256` checksum sidecar and a
+non-secret `.manifest` file (creation time, schema version, Postgres/PostGIS
+versions, source ref), and sets the `backups/` directory to
 mode `700`. It refuses to overwrite an existing archive, sidecar, or
 manifest, and it never puts a password on the command line or prints anything
 from `.env`. Concurrent backups targeting the same output are refused, even

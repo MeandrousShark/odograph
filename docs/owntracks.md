@@ -152,9 +152,9 @@ OwnTracks iOS to discard that queued location. Keep the username and URL unchang
 come from [OwnTracks iOS connection settings](https://github.com/owntracks/ios/blob/26.2.3/OwnTracks/OwnTracks/SettingsTVC.swift#L1002-L1027)
 and its [HTTP response handling](https://github.com/owntracks/ios/blob/26.2.3/OwnTracks/OwnTracks/Connection.m#L535-L568).
 
-Verify new uploads after updating the phone. Delayed/offline queue behavior
-still needs a real-device acceptance check; source inspection and the synthetic
-helper below do not replace it.
+Verify new uploads after updating the phone. On the maintainer's iPhone,
+OwnTracks has reliably uploaded trips after driving through areas with no
+service. Traccar Client's offline behavior is untested.
 
 ## Verify your setup
 
