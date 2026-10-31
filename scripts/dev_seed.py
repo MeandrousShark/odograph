@@ -6,7 +6,8 @@ reseeds every data table it touches (see `_WIPE_TABLES` below) -- never point
 it at production or any database whose contents matter. It refuses any
 `--database-url` that libpq could route to a non-loopback host, including
 through `host` and `hostaddr` query parameters, and any database that already
-belongs to a real account, before it migrates anything. These are cheap guards
+belongs to a real account or to another application, before it migrates
+anything. These are cheap guards
 against an obvious mistake, not a substitute for pointing this at a real
 disposable container.
 
@@ -744,7 +745,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 async def _refuse_a_real_database(conn) -> None:
     """Runs before migrations and role setup, so a refused database is left as
-    it was. A database with no schema at all has nothing to protect.
+    it was. Only a database with no schema of its own has nothing to protect:
+    PostGIS relations belong to the extension, and a fresh one may have them.
     """
     cur = await conn.execute(
         "SELECT to_regclass('public.accounts') IS NOT NULL, "
@@ -752,18 +754,34 @@ async def _refuse_a_real_database(conn) -> None:
         "to_regclass('public.instance_state') IS NOT NULL"
     )
     has_accounts, has_migrations, has_instance_state = await cur.fetchone()
-    if not has_accounts:
-        if has_migrations:
-            raise RuntimeError("seeding refuses a migrated database with no accounts table")
-        return
-    cur = await conn.execute("SELECT EXISTS (SELECT 1 FROM accounts WHERE email = %s)", (DEV_EMAIL,))
-    if (await cur.fetchone())[0]:
+    if has_migrations and not has_accounts:
+        raise RuntimeError("seeding refuses a migrated database with no accounts table")
+    if not (has_accounts and has_migrations):
+        cur = await conn.execute(
+            "SELECT c.relname FROM pg_class c "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            # Not indexes or composite types: those of an extension's objects
+            # carry no extension dependency of their own.
+            "WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S') "
+            "AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass "
+            "AND d.objid = c.oid AND d.deptype = 'e') ORDER BY 1"
+        )
+        relations = [row[0] for row in await cur.fetchall()]
+        if relations:
+            raise RuntimeError(f"seeding refuses a database holding other relations: {relations}")
         return
     cur = await conn.execute(
-        "SELECT EXISTS (SELECT 1 FROM accounts)" + (
-            " OR EXISTS (SELECT 1 FROM instance_state WHERE bootstrap_completed_at IS NOT NULL)"
-            if has_instance_state else ""
-        )
+        "SELECT EXISTS (SELECT 1 FROM accounts WHERE email <> %s), "
+        "EXISTS (SELECT 1 FROM accounts WHERE email = %s)",
+        (DEV_EMAIL, DEV_EMAIL),
+    )
+    has_other_account, has_dev_account = await cur.fetchone()
+    if has_other_account:
+        raise RuntimeError("seeding requires the synthetic development account")
+    if has_dev_account or not has_instance_state:
+        return
+    cur = await conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM instance_state WHERE bootstrap_completed_at IS NOT NULL)"
     )
     if (await cur.fetchone())[0]:
         raise RuntimeError("seeding requires the synthetic development account")
