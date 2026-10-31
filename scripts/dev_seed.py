@@ -475,8 +475,12 @@ async def _seed_mileage_rates(conn, years: set[int]) -> None:
 
 
 async def _detect_all(runner: DetectorRunner) -> None:
-    ran = await runner.run_once()
-    assert ran, "detector run_once() skipped (advisory lock busy) on a fresh DB"
+    # The trial's running app can hold the detector lock for a moment.
+    for _ in range(30):
+        if await runner.run_once():
+            return
+        await asyncio.sleep(1)
+    raise RuntimeError("detector run_once() skipped: advisory lock busy for 30 s")
 
 
 async def _discard_missing_trip_bridge(pool, runner: DetectorRunner, device_id: int) -> None:
