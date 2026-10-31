@@ -394,3 +394,14 @@ def test_published_mode_verifies_exact_signing_identity_and_native_children():
         step.get("uses", "").startswith("docker/setup-qemu")
         for step in published["steps"]
     )
+
+
+def test_published_verification_runs_the_trial_from_the_release_asset():
+    workflow = yaml.load(WORKFLOW.read_text(), Loader=yaml.BaseLoader)
+    steps = workflow["jobs"]["published-native-smoke"]["steps"]
+    [step] = [s for s in steps if s.get("name") == "Run the trial from the published asset"]
+
+    assert step["env"]["INDEX_DIGEST"] == "${{ needs.resolve-published.outputs.index-digest }}"
+    run = step["run"]
+    assert run.index("gh release download") < run.index("--verify") < run.index("scripts/try_smoke.sh")
+    assert 'test -z "$(docker images -q "$IMAGE:$VERSION")"' in run

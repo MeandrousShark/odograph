@@ -527,6 +527,20 @@ jobs:
           scripts/release_preflight_smoke.sh \
             "$published_image" "$VERSION" "$REVISION" \
             "evidence/published-smoke-${ARCHITECTURE}.txt" "linux/${ARCHITECTURE}"
+      - name: Run the trial from the published asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          INDEX_DIGEST: ${{ needs.resolve-published.outputs.index-digest }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release download "$VERSION" --pattern compose.try.yaml --dir "$RUNNER_TEMP/asset"
+          python3 scripts/render_try_compose.py --image "$IMAGE" \
+            --digest "$INDEX_DIGEST" --verify "$RUNNER_TEMP/asset/compose.try.yaml"
+          scripts/try_smoke.sh "$RUNNER_TEMP/asset/compose.try.yaml"
+          # An installation's pull_policy: never trusts this tag to be verified.
+          test -z "$(docker images -q "$IMAGE:$VERSION")"
       - name: Upload published native evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
