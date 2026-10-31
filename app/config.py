@@ -16,7 +16,9 @@ DEFAULT_MAP_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 DEFAULT_MAP_TILE_ATTRIBUTION = (
     '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
 )
-DEFAULT_MISSING_TRIP_GAP_M = 1000.0
+DEFAULT_MISSING_TRIP_GAP_M = 500.0
+# Shown on every page, logged at startup and printed by the trial's seed.
+DEMO_MODE_NOTICE = "Demo mode: synthetic data, not persistent, authentication disabled."
 MIN_SESSION_SECRET_LENGTH = 32
 # Single source of truth for the avatar upload cap: also read back by
 # app/auth.py as the getattr fallback for test doubles whose config double
@@ -170,6 +172,7 @@ class Config:
     forwarded_allow_ips: str = ""
     # New mobile sign-ins only; existing grants keep working when off.
     mobile_signin: bool = False
+    demo_mode: bool = False
 
     capacity_ingest_slots: int = 2
     capacity_routine_slots: int = 1
@@ -290,6 +293,10 @@ class Config:
                 if workers != 1:
                     raise RuntimeError(f"{name} must be one application process")
         dev_no_auth = os.environ.get("DEV_NO_AUTH", "") == "1"
+        demo_mode = os.environ.get("DEMO_MODE", "") == "1"
+        if demo_mode and not dev_no_auth:
+            # The banner states that authentication is off, so it must be.
+            raise RuntimeError("DEMO_MODE=1 requires DEV_NO_AUTH=1; demo mode is for the local trial only")
         required = ["DATABASE_URL", "SESSION_SECRET"]
         missing = [k for k in required if not os.environ.get(k)]
         if missing:
@@ -321,6 +328,8 @@ class Config:
         initial_admin_signup = os.environ.get("INITIAL_ADMIN_SIGNUP", "0") == "1"
         if dev_no_auth:
             log.info("UI auth: DEV_NO_AUTH=1 -- authentication is disabled")
+            if demo_mode:
+                log.warning(DEMO_MODE_NOTICE)
         else:
             paths = []
             if all(oidc_fields):
@@ -440,6 +449,7 @@ class Config:
             login_auth_window_s=_f("LOGIN_AUTH_WINDOW_S", 900.0),
             display_tz=ZoneInfo(os.environ.get("DISPLAY_TZ", "UTC")),
             dev_no_auth=dev_no_auth,
+            demo_mode=demo_mode,
             mobile_signin=os.environ.get("MOBILE_SIGNIN", "") == "1",
             detector_params=Params(
                 max_accuracy_m=_f("MAX_ACCURACY_M", 100.0),

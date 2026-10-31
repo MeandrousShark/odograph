@@ -398,6 +398,13 @@ input[type="file"]::file-selector-button:hover {
 input[type="file"]::file-selector-button:active {
   border-color: var(--accent-pressed); background: var(--accent-soft);
 }
+.demo-banner {
+  overflow-wrap: anywhere; margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3); border: 1px solid var(--warn);
+  border-left-width: .3rem; border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warn) 8%, var(--surface-elevated));
+  color: var(--fg); font-weight: 600;
+}
 header {
   position: relative; display: grid; grid-template-columns: auto 1fr auto; gap: var(--space-4);
   min-height: 58px; align-items: center;

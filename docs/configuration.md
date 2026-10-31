@@ -358,7 +358,8 @@ and returns a valid `auth_time`; otherwise these actions fail closed.
 | `ALLOWED_EMAIL` | unset | Compatibility gate for the one-time claim of an upgraded OIDC-only installation. It does not authorize or link normal OIDC login. |
 | `ADMIN_TOKEN` | obsolete and ignored | Accepted in an old `.env` for upgrade compatibility. It enables no route and its value is never reported. Remove it when convenient. |
 | `MOBILE_SIGNIN` | `0` | `1` allows new mobile app sign-ins; they need Odograph served over HTTPS. Turning it off refuses new sign-ins only; apps already signed in keep working and can be revoked under **Signed-in apps** in Account Settings. See [Mobile app sign-in](accounts.md#mobile-app-sign-in-and-signed-in-apps). |
-| `DEV_NO_AUTH` | `0` | Development only. `1` binds a real synthetic account; it refuses an existing non-synthetic account. Never enable it on a deployed instance. |
+| `DEV_NO_AUTH` | `0` | For development and the loopback-only trial in `compose.try.yaml`. `1` turns authentication off and binds a real synthetic account; it refuses an existing non-synthetic account. Never enable it on a deployed instance. |
+| `DEMO_MODE` | `0` | For the trial in `compose.try.yaml`. `1` shows a banner that cannot be dismissed on pages built on the app shell, and logs the same sentence at startup: "Demo mode: synthetic data, not persistent, authentication disabled." Startup refuses `DEMO_MODE=1` without `DEV_NO_AUTH=1`, and `DEV_NO_AUTH=1` alone shows no banner. The busy page and JSON errors carry no banner. |
 
 ## Detector behavior
 
@@ -423,7 +424,7 @@ command finishes; retry afterwards.
 | Variable | Default | Purpose |
 |---|---:|---|
 | `TRIPS_PAGE_SIZE` | `25` | Trip rows loaded per month before the Load more control appears. Values below 1 become 1. |
-| `MISSING_TRIP_GAP_M` | `1000` | Spatial gap that flags a possible missing trip between detected trips. `0` disables the feature. |
+| `MISSING_TRIP_GAP_M` | `500` | Spatial gap that flags a possible missing trip between detected trips. It applies when pages are shown, so changing it needs no reprocess. Set `1000` to keep the previous distance. `0` disables the feature. |
 | `MAP_TILE_URL` | OpenStreetMap tile URL | Tile template used by live trip maps. Its origin also feeds the image Content Security Policy. |
 | `MAP_TILE_ATTRIBUTION` | OpenStreetMap attribution | HTML attribution rendered with live map tiles. Keep the selected provider's required attribution. |
 | `HSTS_MAX_AGE` | `0` | Adds an HSTS header on requests already seen as HTTPS. `0` disables it. Prefer setting HSTS at the reverse proxy. |

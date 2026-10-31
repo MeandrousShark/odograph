@@ -151,6 +151,18 @@ def test_complete_html_literal_token_names_and_avatar(tmp_path, kind, monkeypatc
     finally: renderer.close(); reservation.release()
 
 
+@pytest.mark.parametrize(('demo_mode','shown'),[(True,True),(False,False)])
+def test_report_page_carries_the_demo_banner_only_in_demo_mode(tmp_path, demo_mode, shown):
+    # The helper process has an empty environment and its own templates.
+    renderer,reservation = populated(tmp_path,[trip(1,2)],[],[],'annual_html')
+    text(renderer,'csp_nonce','nonce')
+    renderer.metadata = {**renderer.metadata,'demo_mode':demo_mode}
+    try:
+        body = renderer.budget.path(renderer.render()['path']).read_text()
+        assert ('class="demo-banner"' in body) is shown
+    finally: renderer.close(); reservation.release()
+
+
 def test_range_workbook_and_existing_prefix_illegal_character_order(tmp_path, monkeypatch):
     name = '車' * 32767 + '\x01remaining'
     monkeypatch.setitem(NAMES, 2, name)

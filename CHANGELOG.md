@@ -9,8 +9,24 @@ reproduced here.
 
 ## [Unreleased]
 
+### Added
+
+- `compose.try.yaml`, attached to each GitHub release with its image digest,
+  runs a local trial: synthetic trips, no sign-in, nothing kept, published on
+  `127.0.0.1:8079` only. It has no authentication and must
+  never be exposed beyond loopback. The image now carries `scripts/dev_seed.py`
+  for it.
+- `DEMO_MODE=1` shows a banner on pages built on the app shell and logs the
+  same sentence at startup. It requires `DEV_NO_AUTH=1`, and `DEV_NO_AUTH=1` alone shows no
+  banner.
+
 ### Changed
 
+- Operators: `MISSING_TRIP_GAP_M` now defaults to 500 instead of 1000, so
+  installations that do not set it get the Possible missing trip warning at
+  500 m on upgrade. Set `MISSING_TRIP_GAP_M=1000` to keep the old distance, or
+  `0` to turn the warning off. The change applies when pages are shown, with no
+  reprocess.
 - The Dashboard week key hides Unclassified and Non-deductible when they have
   no miles, and its labels stay on one line.
 - Hovering, focusing or tapping a day in the Dashboard week chart shows a

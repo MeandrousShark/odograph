@@ -29,6 +29,7 @@ from app.config import (
     DEFAULT_MAP_TILE_ATTRIBUTION,
     DEFAULT_MAP_TILE_URL,
     DEFAULT_MISSING_TRIP_GAP_M,
+    DEMO_MODE_NOTICE,
     Config,
 )
 from app.capacity import AdmissionManager, CapacityBusy
@@ -240,6 +241,10 @@ def make_templates(config: Config) -> Jinja2Templates:
     # version in production would be a real misconfiguration worth an
     # AttributeError, not a silently blank footer.
     templates.env.globals["app_version"] = config.app_version
+    # Empty unless demo mode is on; base.html renders the banner from this.
+    templates.env.globals["demo_mode_notice"] = (
+        DEMO_MODE_NOTICE if getattr(config, "demo_mode", False) else ""
+    )
     templates.env.globals["describe_endpoint"] = describe_endpoint
     templates.env.globals["describe_compact_endpoint"] = describe_compact_endpoint
     templates.env.globals["format_rate_periods"] = format_rate_periods

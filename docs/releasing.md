@@ -83,8 +83,10 @@ git switch -c release/$VERSION
 
 Stop if `git status --short` prints anything or the revision check fails.
 
-Update `compose.yaml` so `services.app.image` is exactly
-`$IMAGE:$VERSION`. Move the release's entries out of `Unreleased` into one
+Update `compose.yaml` so `services.app.image` is exactly `$IMAGE:$VERSION`.
+`compose.try.yaml` carries no release tag, so it does not change here. A database
+image change updates `services.db.image` in `compose.yaml` and
+`services.try-db.image` in `compose.try.yaml`. Move the release's entries out of `Unreleased` into one
 exact, nonempty changelog section:
 
 ```text
@@ -140,7 +142,7 @@ line wrapping do not matter):
 changelog section and its `compose.yaml` from that release tag, so it needs
 the tags; it fails when the image changed without either phrase.
 
-Validate that the Compose image, changelog section, documented exact-tag
+Validate that the Compose images, changelog section, documented exact-tag
 install path, and runtime-reported version contract all agree. Then confirm
 the release-note extractor selects the intended section and review and commit
 the Compose pin and changelog together:
@@ -293,6 +295,16 @@ The published upgrade and rollback drill runs the same base matrix with Docker
 Compose, the exact checked-out revision as `--candidate`, the exact OCI index
 digest as `--candidate-image`, and the same per-base migration mode selection.
 
+Published verification also downloads the release's `compose.try.yaml`, compares
+it byte for byte with a fresh render of the repository file at the tagged revision
+and the OCI index digest, runs `scripts/try_smoke.sh` against it on both
+architectures, and checks that no local `$IMAGE:$VERSION` tag resulted. The
+repository's `compose.try.yaml` has no application image and refuses to start.
+A release whose asset step fails is a failed release: the version is consumed,
+as for any other failure after the manifest is published. That includes a
+transient download failure in the release workflow's verify step, which has no
+retry and cannot be re-run past the published release.
+
 The automated preflight and published verification use Docker Compose. Run the
 equivalent Podman Compose drill in the artifact upgrade section below before
 completing the release; it remains a required release check.
@@ -435,8 +447,13 @@ it runs. Confirm, in order, that CI:
 4. verifies both child manifests, creates the versioned manifest list, and
    reports the manifest, amd64, and arm64 digests;
 5. generates and attests an SBOM for each architecture digest, then signs the
-   manifest list and each architecture digest with keyless cosign; and
-6. creates the GitHub release from the exact changelog section.
+   manifest list and each architecture digest with keyless cosign;
+6. renders `compose.try.yaml` with the manifest digest and fails if the rendered
+   file keeps its image variable or names another digest;
+7. creates the GitHub release from the exact changelog section, with that file
+   attached; and
+8. downloads the attached file and fails unless it matches a fresh render byte
+   for byte. A transient download failure here also consumes the version.
 
 Record all three reported digests in the release record. If any job fails,
 leave any published object untouched, investigate the failure, and prepare a

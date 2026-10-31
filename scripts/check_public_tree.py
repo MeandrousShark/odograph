@@ -16,7 +16,7 @@ PUBLIC_DIRECTORIES = frozenset({".github", "app", "tests", "static", "migrations
 PUBLIC_TOP_LEVEL = frozenset({
     "AGENTS.md", "CLAUDE.md", "ai-contribution.md", "README.md", "LICENSE", "SECURITY.md",
     "CONTRIBUTING.md", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md", "compose.yaml",
-    "compose.build.override.yml", "Dockerfile", ".dockerignore", ".env.example",
+    "compose.try.yaml", "compose.build.override.yml", "Dockerfile", ".dockerignore", ".env.example",
     ".gitignore", "requirements.txt", "requirements-dev.txt",
     "requirements-dev.lock", "requirements.lock", "pyproject.toml",
 })

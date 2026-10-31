@@ -50,6 +50,7 @@ PUBLIC_TOP_LEVEL_FILES = (
     ".env.example",
     ".gitignore",
     "compose.build.override.yml",
+    "compose.try.yaml",
     "compose.yaml",
     "Dockerfile",
     "pyproject.toml",

@@ -16,22 +16,28 @@ from release_notes import HEADING_RE, ReleaseNotesError, extract_release_notes
 DB_IMAGE_REBUILD_PHRASE = "rebuilt with unchanged versions"
 DB_IMAGE_MIGRATION_PHRASE = "database-image migration"
 
+TRY_COMPOSE = "compose.try.yaml"
+TRY_IMAGE_VARIABLE = (
+    "${ODOGRAPH_TRY_IMAGE:?download compose.try.yaml from a GitHub release, see the header}"
+)
+TRY_IMAGE_SERVICES = ("try-app", "try-seed")
+
 
 class ReleaseContractError(ValueError):
     pass
 
 
-def _service_image(compose_text: str, service: str) -> str:
+def _service_image(compose_text: str, service: str, filename: str = "compose.yaml") -> str:
     in_service = False
     for line in compose_text.splitlines():
         if re.fullmatch(r"  [A-Za-z0-9_-]+:", line):
             in_service = line == f"  {service}:"
             continue
         if in_service:
-            match = re.fullmatch(r"    image:\s*(\S+)\s*", line)
+            match = re.fullmatch(r"    image:\s*(.+?)\s*", line)
             if match:
-                return match.group(1)
-    raise ReleaseContractError(f"compose.yaml has no {service} image")
+                return match.group(1).strip('"')
+    raise ReleaseContractError(f"{filename} has no {service} image")
 
 
 def _app_image(compose_text: str) -> str:
@@ -78,6 +84,26 @@ def _validate_db_image_change(root: Path, changelog: str, tag: str, body: str) -
         )
 
 
+def _validate_try_compose(root: Path) -> None:
+    """The repository file names no image: only the release asset may, by digest."""
+    path = root / TRY_COMPOSE
+    if not path.is_file():
+        raise ReleaseContractError(f"{TRY_COMPOSE} is missing")
+    try_text = path.read_text()
+    for service in TRY_IMAGE_SERVICES:
+        actual = _service_image(try_text, service, TRY_COMPOSE)
+        if actual != TRY_IMAGE_VARIABLE:
+            raise ReleaseContractError(
+                f"{TRY_COMPOSE} {service} image is {actual!r}, expected {TRY_IMAGE_VARIABLE!r}"
+            )
+    expected_db = _service_image((root / "compose.yaml").read_text(), "db")
+    actual_db = _service_image(try_text, "try-db", TRY_COMPOSE)
+    if actual_db != expected_db:
+        raise ReleaseContractError(
+            f"{TRY_COMPOSE} try-db image is {actual_db!r}, expected {expected_db!r}"
+        )
+
+
 def validate_release_contract(root: Path, tag: str, image: str) -> None:
     changelog = (root / "CHANGELOG.md").read_text()
     notes = extract_release_notes(changelog, tag)
@@ -89,6 +115,7 @@ def validate_release_contract(root: Path, tag: str, image: str) -> None:
         raise ReleaseContractError(
             f"compose app image is {actual_image!r}, expected {expected_image!r}"
         )
+    _validate_try_compose(root)
 
     readme = (root / "README.md").read_text()
     install_contracts = (
