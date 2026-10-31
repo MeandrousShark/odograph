@@ -9,7 +9,7 @@ import pytest
 
 from app.dashboard import week_bounds
 from scripts import dev_seed
-from scripts.dev_seed import PACIFIC, build_all_points, parse_args, target_week
+from scripts.dev_seed import PACIFIC, _looks_local, build_all_points, parse_args, target_week
 
 # Two weeks of "now" around the fall-back change and the year boundary, so
 # every weekday and both unusual week shapes are covered.
@@ -87,3 +87,47 @@ def test_demo_mode_does_not_relax_the_loopback_guard(monkeypatch, capsys):
 
     assert dev_seed.main(["--database-url", "postgresql://u:p@db:5432/x", "--wipe"]) == 1
     assert "refusing --database-url" in capsys.readouterr().err
+
+
+@pytest.fixture
+def no_libpq_env(monkeypatch):
+    for name in ("PGHOST", "PGHOSTADDR", "PGSERVICE", "PGSERVICEFILE"):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.mark.parametrize("url", [
+    "postgresql://u:p@127.0.0.1:5432/mileage",
+    "postgresql://u:p@localhost/mileage",
+    "postgresql://u:p@[::1]:5432/mileage",
+    "postgresql://u:p@127.0.0.1/mileage?hostaddr=127.0.0.1",
+    "postgresql://u:p@localhost,127.0.0.1/mileage",
+])
+def test_loopback_urls_are_accepted(no_libpq_env, url):
+    assert _looks_local(url)
+
+
+@pytest.mark.parametrize("url", [
+    "postgresql://u:p@127.0.0.1:5432/mileage?host=db",
+    "postgresql://u:p@localhost/mileage?hostaddr=10.0.0.5",
+    "postgresql://u:p@[::1]/mileage?host=prod.example.com",
+    "postgresql://u:p@db:5432/mileage",
+    "postgresql://u:p@127.0.0.1,prod.example.com/mileage",
+    "postgresql://u:p@localhost/mileage?host=127.0.0.1,prod.example.com",
+    "postgresql://u:p@localhost/mileage?hostaddr=127.0.0.1,10.0.0.5",
+    "postgresql://u:p@localhost/mileage?host=/var/run/postgresql",
+    "postgresql://u:p@localhost/mileage?service=prod",
+    "postgresql:///mileage",
+    "host=prod.example.com dbname=mileage",
+    "not a connection string",
+])
+def test_urls_libpq_could_route_elsewhere_are_refused(no_libpq_env, url):
+    assert not _looks_local(url)
+
+
+@pytest.mark.parametrize(("name", "value"), [
+    ("PGHOSTADDR", "10.0.0.5"), ("PGSERVICE", "prod"), ("PGSERVICEFILE", "/tmp/services"),
+])
+def test_libpq_environment_cannot_redirect_a_loopback_url(no_libpq_env, monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+
+    assert not _looks_local("postgresql://u:p@127.0.0.1:5432/mileage")

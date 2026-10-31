@@ -4,9 +4,11 @@
 **For throwaway Postgres/PostGIS instances only.** This script wipes and
 reseeds every data table it touches (see `_WIPE_TABLES` below) -- never point
 it at production or any database whose contents matter. It refuses any
-`--database-url` whose host isn't a loopback address, as a cheap guard
-against an obvious mistake; that check is not a substitute for pointing this
-at a real disposable container.
+`--database-url` that libpq could route to a non-loopback host, including
+through `host` and `hostaddr` query parameters, and any database that already
+belongs to a real account, before it migrates anything. These are cheap guards
+against an obvious mistake, not a substitute for pointing this at a real
+disposable container.
 
 Detected trips
 here are not inserted as finished `trips` rows: this script builds plausible
@@ -67,13 +69,15 @@ import secrets
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 # `python scripts/dev_seed.py` puts scripts/ (not the repo root) first on
 # sys.path, so the documented invocation from the module docstring could not
 # import `app` without this bootstrap.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from psycopg import ProgrammingError
+from psycopg.conninfo import conninfo_to_dict
 
 from app.config import DEMO_MODE_NOTICE
 from app.dashboard import WeekBounds, week_bounds
@@ -94,6 +98,7 @@ DEV_EMAIL = "development@localhost.invalid"
 SCENARIOS = ("week",)
 SCENARIO_DISPLAY_NAME = "Sam Rivera"
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_LOCAL_ADDRESSES = {"127.0.0.1", "::1"}
 TRIAL_URL = "http://127.0.0.1:8079"
 
 # Delete only this synthetic account's rows, in foreign-key dependency order.
@@ -691,7 +696,23 @@ async def _seed_expenses_and_odometer(conn, now_utc: datetime, v1: int) -> None:
 # --- CLI / orchestration ------------------------------------------------
 
 def _looks_local(database_url: str) -> bool:
-    return (urlsplit(database_url).hostname or "") in _LOCAL_HOSTS
+    """Judge what libpq will connect to, not the URL's authority: its query
+    parameters override the authority, and with no host it falls back to
+    PGHOST. PGHOSTADDR and a service file can supply an address the URL does
+    not name, so those are checked or refused too.
+    """
+    try:
+        params = conninfo_to_dict(database_url)
+    except ProgrammingError:
+        return False
+    if "service" in params or any(os.environ.get(name) for name in ("PGSERVICE", "PGSERVICEFILE")):
+        return False
+    hosts = params.get("host", "").lower().split(",")
+    hostaddr = params.get("hostaddr", os.environ.get("PGHOSTADDR", ""))
+    return (
+        all(host in _LOCAL_HOSTS for host in hosts)
+        and (not hostaddr or all(address in _LOCAL_ADDRESSES for address in hostaddr.split(",")))
+    )
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -702,7 +723,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "Wipes and reseeds every table it owns on every run -- never point "
             "this at production or any database whose contents matter."
         ),
-        epilog="Refuses any --database-url whose host is not a loopback address.",
+        epilog="Refuses any --database-url that could reach a non-loopback host.",
     )
     parser.add_argument(
         "--database-url", required=True,
@@ -721,10 +742,39 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+async def _refuse_a_real_database(conn) -> None:
+    """Runs before migrations and role setup, so a refused database is left as
+    it was. A database with no schema at all has nothing to protect.
+    """
+    cur = await conn.execute(
+        "SELECT to_regclass('public.accounts') IS NOT NULL, "
+        "to_regclass('public.schema_migrations') IS NOT NULL, "
+        "to_regclass('public.instance_state') IS NOT NULL"
+    )
+    has_accounts, has_migrations, has_instance_state = await cur.fetchone()
+    if not has_accounts:
+        if has_migrations:
+            raise RuntimeError("seeding refuses a migrated database with no accounts table")
+        return
+    cur = await conn.execute("SELECT EXISTS (SELECT 1 FROM accounts WHERE email = %s)", (DEV_EMAIL,))
+    if (await cur.fetchone())[0]:
+        return
+    cur = await conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM accounts)" + (
+            " OR EXISTS (SELECT 1 FROM instance_state WHERE bootstrap_completed_at IS NOT NULL)"
+            if has_instance_state else ""
+        )
+    )
+    if (await cur.fetchone())[0]:
+        raise RuntimeError("seeding requires the synthetic development account")
+
+
 async def main_async(database_url: str, scenario: str | None = None) -> None:
     bootstrap_pool = make_pool(database_url)
     await bootstrap_pool.open(wait=True)
     try:
+        async with bootstrap_pool.connection() as conn:
+            await _refuse_a_real_database(conn)
         await run_migrations(bootstrap_pool)
     finally:
         await bootstrap_pool.close()

@@ -7,11 +7,14 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import psycopg
+from psycopg.conninfo import make_conninfo
 import pytest
 
 from app.accounts import create_admin
 from app.db import make_pool
 from conftest import reset_db
+from scripts import dev_seed
 from scripts.dev_seed import PACIFIC, main_async, target_week
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
@@ -206,5 +209,50 @@ def test_week_scenario_keeps_the_default_dataset_and_reseeds_identically():
             assert sum(n for src, _cat, n in trips if src == "manual") == 3
         finally:
             await owner.close()
+
+    asyncio.run(scenario())
+
+
+def test_refusal_comes_before_migrations_and_role_setup(monkeypatch):
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("ran against a refused database")
+
+    async def scenario():
+        owner = make_pool(TEST_DB)
+        await owner.open(wait=True)
+        try:
+            await reset_db(owner)
+            async with owner.connection() as conn:
+                await create_admin(conn, "real@example.com", "unused-hash")
+            monkeypatch.setattr(dev_seed, "run_migrations", must_not_run)
+            monkeypatch.setattr(dev_seed, "application_role_pools", must_not_run)
+            with pytest.raises(RuntimeError, match="requires the synthetic development account"):
+                await main_async(TEST_DB)
+        finally:
+            await owner.close()
+
+    asyncio.run(scenario())
+
+
+def _fresh_database_url(name: str) -> str:
+    return make_conninfo(TEST_DB, dbname=name)
+
+
+def test_gate_handles_a_database_with_no_schema_or_an_old_one():
+    name = "odograph_seed_gate"
+
+    async def scenario():
+        admin = await psycopg.AsyncConnection.connect(TEST_DB, autocommit=True)
+        await admin.execute(f"DROP DATABASE IF EXISTS {name}")
+        await admin.execute(f"CREATE DATABASE {name}")
+        try:
+            async with await psycopg.AsyncConnection.connect(_fresh_database_url(name), autocommit=True) as conn:
+                await dev_seed._refuse_a_real_database(conn)
+                await conn.execute("CREATE TABLE schema_migrations (version int PRIMARY KEY)")
+                with pytest.raises(RuntimeError, match="no accounts table"):
+                    await dev_seed._refuse_a_real_database(conn)
+        finally:
+            await admin.execute(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)")
+            await admin.close()
 
     asyncio.run(scenario())
