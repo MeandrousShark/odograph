@@ -11,6 +11,11 @@ reproduced here.
 
 ### Changed
 
+- Operators: `MISSING_TRIP_GAP_M` now defaults to 500 instead of 1000, so
+  installations that do not set it get the Possible missing trip warning at
+  500 m on upgrade. Set `MISSING_TRIP_GAP_M=1000` to keep the old distance, or
+  `0` to turn the warning off. The change applies when pages are shown, with no
+  reprocess.
 - The Dashboard week key hides Unclassified and Non-deductible when they have
   no miles, and its labels stay on one line.
 - Hovering, focusing or tapping a day in the Dashboard week chart shows a

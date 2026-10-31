@@ -16,7 +16,7 @@ DEFAULT_MAP_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 DEFAULT_MAP_TILE_ATTRIBUTION = (
     '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
 )
-DEFAULT_MISSING_TRIP_GAP_M = 1000.0
+DEFAULT_MISSING_TRIP_GAP_M = 500.0
 MIN_SESSION_SECRET_LENGTH = 32
 # Single source of truth for the avatar upload cap: also read back by
 # app/auth.py as the getattr fallback for test doubles whose config double

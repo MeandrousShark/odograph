@@ -14,8 +14,8 @@ from app.detector.core import Params
 ROOT = Path(__file__).resolve().parents[1]
 
 # When the default moves, change these two lines and docs/detection.md together.
-MISSING_TRIP_GAP_M = 1000.0
-MISSING_TRIP_GAP_TEXT = "1 km"
+MISSING_TRIP_GAP_M = 500.0
+MISSING_TRIP_GAP_TEXT = "500 m"
 
 STAY_RADIUS_M = 150.0
 STAY_MIN_DURATION_S = 300.0

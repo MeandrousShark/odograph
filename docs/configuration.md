@@ -423,7 +423,7 @@ command finishes; retry afterwards.
 | Variable | Default | Purpose |
 |---|---:|---|
 | `TRIPS_PAGE_SIZE` | `25` | Trip rows loaded per month before the Load more control appears. Values below 1 become 1. |
-| `MISSING_TRIP_GAP_M` | `1000` | Spatial gap that flags a possible missing trip between detected trips. `0` disables the feature. |
+| `MISSING_TRIP_GAP_M` | `500` | Spatial gap that flags a possible missing trip between detected trips. It applies when pages are shown, so changing it needs no reprocess. Set `1000` to keep the previous distance. `0` disables the feature. |
 | `MAP_TILE_URL` | OpenStreetMap tile URL | Tile template used by live trip maps. Its origin also feeds the image Content Security Policy. |
 | `MAP_TILE_ATTRIBUTION` | OpenStreetMap attribution | HTML attribution rendered with live map tiles. Keep the selected provider's required attribution. |
 | `HSTS_MAX_AGE` | `0` | Adds an HSTS header on requests already seen as HTTPS. `0` disables it. Prefer setting HSTS at the reverse proxy. |

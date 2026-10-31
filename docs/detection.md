@@ -23,15 +23,15 @@ phone's next report.
   exactly like a stop. The trip splits in two, those miles are not counted,
   and there is no Recording gap badge. In a synthetic test, a 5 km drive with
   a 15-minute, 1 km gap came out as two trips totaling 3.7 km. If the two
-  trips end up more than 1 km apart, you get the Possible missing trip warning
-  below.
+  trips end up more than 500 m apart, as they did there, you get the Possible
+  missing trip warning below.
 - **Phone off or tracking stopped for a whole drive.** Odograph has no points
   from that drive, only the last one before it and the first one after. If
   tracking resumes soon enough that the jump averages over about 4.5 mph, you
   get a two-point trip measured in a straight line, with a Recording gap badge
   if the silence lasted over 10 minutes. If it resumes later, the silence looks
   like a stop and no trip is recorded. Then, if your next trip starts more than
-  1 km from where the last one ended, a **Possible missing trip** warning
+  500 m from where the last one ended, a **Possible missing trip** warning
   offers a prefilled manual trip.
 - **GPS fine, but no data connection.** Odograph accepts late points, sorts
   them by their recorded time and re-detects that stretch, keeping tags on
