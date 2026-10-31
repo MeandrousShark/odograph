@@ -11,8 +11,9 @@ reproduced here.
 
 ### Added
 
-- `compose.try.yaml` runs a local trial: synthetic trips, no sign-in, nothing
-  kept, published on `127.0.0.1:8079` only. It has no authentication and must
+- `compose.try.yaml`, attached to each GitHub release with its image digest,
+  runs a local trial: synthetic trips, no sign-in, nothing kept, published on
+  `127.0.0.1:8079` only. It has no authentication and must
   never be exposed beyond loopback. The image now carries `scripts/dev_seed.py`
   for it.
 - `DEMO_MODE=1` shows a banner on pages built on the app shell and logs the

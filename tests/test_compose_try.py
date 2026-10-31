@@ -10,6 +10,9 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 MIN_SESSION_SECRET_LENGTH = 32
+TRY_IMAGE_VARIABLE = (
+    "${ODOGRAPH_TRY_IMAGE:?download compose.try.yaml from a GitHub release, see the header}"
+)
 
 
 @pytest.fixture(scope="module")
@@ -58,7 +61,8 @@ def test_network_and_pod_do_not_follow_the_project_name(trial):
 
 def test_no_env_file_or_interpolation_is_needed(trial):
     assert not any("env_file" in service for service in trial["services"].values())
-    assert "$" not in (ROOT / "compose.try.yaml").read_text()
+    text = (ROOT / "compose.try.yaml").read_text()
+    assert text.count("$") == text.count(TRY_IMAGE_VARIABLE) == 2
 
 
 def test_app_is_published_on_loopback_only(trial):
@@ -113,7 +117,6 @@ def test_seed_is_one_shot_and_reaches_the_database_over_loopback(trial):
 
     assert seed["restart"] == "no"
     assert seed["network_mode"] == "service:try-db"
-    assert seed["image"] == trial["services"]["try-app"]["image"]
     assert seed["environment"] == {"DEMO_MODE": "1"}
     assert "@127.0.0.1:5432/mileage" in script
     assert "http://try-app:8000/healthz" in script
@@ -131,10 +134,10 @@ def test_application_containers_keep_the_hardening(trial, name):
     assert service["tmpfs"] == ["/tmp"]
 
 
-def test_images_match_the_installation_file(trial, install):
-    assert trial["services"]["try-app"]["image"] == install["services"]["app"]["image"]
+def test_images_match_the_installation_or_refuse_to_start(trial, install):
     assert trial["services"]["try-db"]["image"] == install["services"]["db"]["image"]
-    assert re.search(r":v\d+\.\d+\.\d+$", trial["services"]["try-app"]["image"])
+    assert trial["services"]["try-app"]["image"] == TRY_IMAGE_VARIABLE
+    assert trial["services"]["try-seed"]["image"] == TRY_IMAGE_VARIABLE
 
 
 def test_header_states_the_risk_and_the_commands():
@@ -143,7 +146,7 @@ def test_header_states_the_risk_and_the_commands():
     assert "docker compose -p odograph-try -f compose.try.yaml up" in header
     assert "docker compose -p odograph-try -f compose.try.yaml down" in header
     assert "pulled images stay" in header
-    assert "compose.try.yaml" in header and "curl" in header
+    assert "github.com/MeandrousShark/odograph/releases/download/vX.Y.Z/compose.try.yaml" in header
     assert "NO AUTHENTICATION" in header
     assert "never expose it beyond loopback" in header
     assert "SSH tunnel" in header
@@ -156,3 +159,31 @@ def test_image_carries_the_seed_script():
     assert "COPY scripts/dev_seed.py scripts/\n" in dockerfile
     assert "!scripts/dev_seed.py" in ignored
     assert ignored.index("!scripts/dev_seed.py") > ignored.index("scripts/*")
+
+
+def test_smoke_script_checks_what_a_stranger_gets():
+    source = (ROOT / "scripts/try_smoke.sh").read_text()
+
+    assert "Demo mode: synthetic data, not persistent, authentication disabled." in source
+    assert 'run_compose() {\n    "${compose[@]}" -p "$PROJECT"' in source
+    assert "PROJECT=odograph-try" in source
+    assert "seed-final-lines-in-up-output" in source
+
+
+def test_every_pull_request_runs_the_trial_on_docker():
+    workflow = yaml.load(
+        (ROOT / ".github/workflows/trial-smoke.yml").read_text(), Loader=yaml.BaseLoader
+    )
+    job = workflow["jobs"]["trial-smoke"]
+    steps = {step.get("name"): step for step in job["steps"]}
+
+    assert "pull_request" in workflow["on"]
+    assert "paths" not in workflow["on"]["pull_request"]
+    assert "if" not in job
+    assert workflow["permissions"] == {"contents": "read"}
+    assert job["env"]["ODOGRAPH_TRY_IMAGE"]
+    assert "docker build" in steps["Build the application image"]["run"]
+    docker = steps["Run the trial with Docker Compose"]
+    assert docker["run"] == "scripts/try_smoke.sh compose.try.yaml"
+    assert "continue-on-error" not in docker
+    assert "podman-compose==1.3.0" in steps["Run the trial with podman-compose 1.3.0"]["run"]

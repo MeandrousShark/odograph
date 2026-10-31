@@ -83,10 +83,10 @@ git switch -c release/$VERSION
 
 Stop if `git status --short` prints anything or the revision check fails.
 
-Update `compose.yaml` so `services.app.image`, and `compose.try.yaml` so
-`services.try-app.image` and `services.try-seed.image`, are exactly
-`$IMAGE:$VERSION`. A database image change updates `services.db.image` in
-`compose.yaml` and `services.try-db.image` in `compose.try.yaml`. Move the release's entries out of `Unreleased` into one
+Update `compose.yaml` so `services.app.image` is exactly `$IMAGE:$VERSION`.
+`compose.try.yaml` carries no release tag, so it does not change here. A database
+image change updates `services.db.image` in `compose.yaml` and
+`services.try-db.image` in `compose.try.yaml`. Move the release's entries out of `Unreleased` into one
 exact, nonempty changelog section:
 
 ```text
@@ -142,7 +142,7 @@ line wrapping do not matter):
 changelog section and its `compose.yaml` from that release tag, so it needs
 the tags; it fails when the image changed without either phrase.
 
-Validate that both Compose files' images, changelog section, documented exact-tag
+Validate that the Compose images, changelog section, documented exact-tag
 install path, and runtime-reported version contract all agree. Then confirm
 the release-note extractor selects the intended section and review and commit
 the Compose pin and changelog together:
@@ -157,8 +157,8 @@ python3 scripts/release_notes.py --tag "$VERSION" \
   --trivy-arm64-output "$RELEASE_TMP/trivy-arm64.ignore"
 sed -n '1,240p' "$RELEASE_TMP/release-notes.md"
 git diff --check
-git diff -- compose.yaml compose.try.yaml CHANGELOG.md
-git add compose.yaml compose.try.yaml CHANGELOG.md
+git diff -- compose.yaml CHANGELOG.md
+git add compose.yaml CHANGELOG.md
 git diff --cached --check
 git diff --cached
 git commit -m "Prepare $VERSION release"
@@ -294,6 +294,13 @@ digest, check its platform and release identity, and run the same HTTPS smoke.
 The published upgrade and rollback drill runs the same base matrix with Docker
 Compose, the exact checked-out revision as `--candidate`, the exact OCI index
 digest as `--candidate-image`, and the same per-base migration mode selection.
+
+Published verification also downloads the release's `compose.try.yaml`, checks
+that it names the OCI index digest, runs `scripts/try_smoke.sh` against it on both
+architectures, and checks that no local `$IMAGE:$VERSION` tag resulted. The
+repository's `compose.try.yaml` has no application image and refuses to start.
+A release whose asset step fails is a failed release: the version is consumed,
+as for any other failure after the manifest is published.
 
 The automated preflight and published verification use Docker Compose. Run the
 equivalent Podman Compose drill in the artifact upgrade section below before
@@ -438,7 +445,11 @@ it runs. Confirm, in order, that CI:
    reports the manifest, amd64, and arm64 digests;
 5. generates and attests an SBOM for each architecture digest, then signs the
    manifest list and each architecture digest with keyless cosign; and
-6. creates the GitHub release from the exact changelog section.
+6. renders `compose.try.yaml` with the manifest digest, fails if the rendered
+   file keeps its image variable or names another digest, and verifies the file
+   again after attaching it; and
+7. creates the GitHub release from the exact changelog section, with that file
+   attached.
 
 Record all three reported digests in the release record. If any job fails,
 leave any published object untouched, investigate the failure, and prepare a

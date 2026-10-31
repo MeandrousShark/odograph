@@ -11,10 +11,15 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "check_release_contract.py"
 
 
+TRY_IMAGE_VARIABLE = (
+    "${ODOGRAPH_TRY_IMAGE:?download compose.try.yaml from a GitHub release, see the header}"
+)
+
+
 def _try_compose(
     db: str = "registry.example.test/db@sha256:0",
-    app: str = "ghcr.io/example/odograph:v1.2.3",
-    seed: str = "ghcr.io/example/odograph:v1.2.3",
+    app: str = f'"{TRY_IMAGE_VARIABLE}"',
+    seed: str = f'"{TRY_IMAGE_VARIABLE}"',
 ) -> str:
     return (
         f"services:\n  try-db:\n    image: {db}\n  try-app:\n    image: {app}\n"
@@ -141,8 +146,9 @@ def test_release_contract_requires_the_try_file(tmp_path):
 @pytest.mark.parametrize(
     ("override", "message"),
     [
-        ({"app": "ghcr.io/example/odograph:v1.2.2"}, "compose.try.yaml try-app image"),
-        ({"seed": "ghcr.io/example/odograph:v1.2.2"}, "compose.try.yaml try-seed image"),
+        ({"app": "ghcr.io/example/odograph:v1.2.3"}, "compose.try.yaml try-app image"),
+        ({"app": "ghcr.io/example/odograph@sha256:" + "1" * 64}, "compose.try.yaml try-app image"),
+        ({"seed": "ghcr.io/example/odograph:v1.2.3"}, "compose.try.yaml try-seed image"),
         ({"db": "registry.example.test/db@sha256:1"}, "compose.try.yaml try-db image"),
     ],
 )
@@ -159,7 +165,7 @@ def test_release_contract_rejects_a_stale_try_file(tmp_path, override, message):
 def test_release_contract_rejects_a_try_file_without_a_service(tmp_path):
     root = _stage_contract(tmp_path)
     (root / "compose.try.yaml").write_text(
-        "services:\n  try-app:\n    image: ghcr.io/example/odograph:v1.2.3\n"
+        f'services:\n  try-app:\n    image: "{TRY_IMAGE_VARIABLE}"\n'
     )
 
     result = _run(root)

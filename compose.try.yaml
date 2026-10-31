@@ -1,8 +1,9 @@
 # Odograph local trial: a look around with synthetic data. This is not an
 # install. It has no phone connection, keeps nothing and does not verify the
-# image signature. Run it from an empty directory, not an installation's:
+# image signature. Run it from an empty directory, not an installation's. Use
+# the file attached to a GitHub release, which pins the release's image digest:
 #
-#   curl -fsSLO https://raw.githubusercontent.com/MeandrousShark/odograph/vX.Y.Z/compose.try.yaml
+#   curl -fsSLO https://github.com/MeandrousShark/odograph/releases/download/vX.Y.Z/compose.try.yaml
 #   docker compose -p odograph-try -f compose.try.yaml up
 #
 # Open http://127.0.0.1:8079 once the seed service exits. Stop with Ctrl+C, then
@@ -38,8 +39,11 @@ services:
       timeout: 5s
       retries: 30
 
+  # A digest, never a tag: pulling a tag would write the local release tag that
+  # an installation's `pull_policy: never` relies on being verified. The
+  # release workflow fills this in, so a copy from the repository cannot start.
   try-app:
-    image: ghcr.io/meandrousshark/odograph:v1.3.1
+    image: "${ODOGRAPH_TRY_IMAGE:?download compose.try.yaml from a GitHub release, see the header}"
     depends_on:
       try-db:
         condition: service_healthy
@@ -72,7 +76,7 @@ services:
   # service before `try-app` is healthy, and a seed that starts early makes
   # `try-app` fail its startup.
   try-seed:
-    image: ghcr.io/meandrousshark/odograph:v1.3.1
+    image: "${ODOGRAPH_TRY_IMAGE:?download compose.try.yaml from a GitHub release, see the header}"
     command:
       - sh
       - -c
