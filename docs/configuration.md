@@ -13,6 +13,8 @@ docker compose up -d app
 # or: podman-compose up -d app
 ```
 
+`scripts/generate_env.sh` produces a working local-login setup: all three
+required secrets are filled in and every optional integration is switched off.
 The generator refuses to replace an existing `.env`, writes it with mode 600,
 and never prints generated values. Boolean switches use `1` for enabled and `0`
 for disabled.

@@ -394,6 +394,30 @@ is excluded from their mileage totals. **My vehicle, someone else drove**
 remains in vehicle mileage but is outside business mileage and deduction
 estimates.
 
+### Report workbooks
+
+The annual report shows business and personal miles (and any non-deductible
+miles), your business share, the estimated deduction at your saved IRS
+standard mileage rates, and month and vehicle breakdowns. Quarter and custom
+date-range reports show the same totals for the dates you pick.
+
+**Export XLSX** downloads the report as a workbook:
+
+- **Summary:** business, personal, non-deductible and total miles, business
+  share, the rates applied, the total deduction and trip count, then a
+  month-by-month table (trips, business miles, rate, deduction), a per-vehicle
+  table, and any caveats to review before filing. The annual workbook adds
+  odometer reconciliation and a standard versus actual expense comparison
+  when you have entered the data for them.
+- **Trips:** one row per trip with date, start and end time, duration, start
+  and end location, distance in miles and kilometers, category, exclusion,
+  vehicle, purpose, notes, gap, source and deduction, ending in a total row.
+- **Expenses** (annual report only): date, vehicle, category, amount, tax
+  treatment and notes, ending in a total row.
+
+The Trips archive's **Export** menu downloads the trips you have filtered
+with the same columns, as CSV or XLSX.
+
 ### US deduction limits
 
 Odograph's deduction figures use the IRS standard mileage rates entered under
@@ -462,26 +486,26 @@ archive, `.env`, verification, restore, and off-host protection.
 
 ## Common questions
 
+[How well does detection work?](detection.md) answers questions about lost GPS
+signal, walking versus driving, correcting trips and battery use.
+
 ### A point arrived, but no trip appeared
 
 Check **Settings**, **Device status**. A recent fix means
 ingestion is working and the detector may still be waiting for the trip to
-finish. A trip ends within a few minutes when the phone keeps reporting for
-about a minute after arriving and one of those reports is an OwnTracks region
-or iOS visit fix; otherwise the detector waits for five minutes of points at
-the destination, which can mean the phone's next report. Sparse
-reporting or queued offline data can delay completion. Check
+finish; [what ends a trip](detection.md#what-happens-when-gps-reception-disappears)
+explains what it waits for. Sparse reporting or queued offline data can delay
+completion. Check
 **Trips** for the date and the Dashboard **Needs attention** area for a
 possible missing-trip warning. A **Recording gap** badge means distance may
 under-read.
 
 ### Trips are delayed or distances look rough
 
-OwnTracks **Move** mode provides more detail while driving. **Significant
-changes** uses less battery but produces sparser boundaries and can reduce
-distance precision. Review the platform-specific guidance in
-[Connecting OwnTracks](owntracks.md). Odograph cannot reconstruct location
-detail the phone did not publish.
+The phone app's mode trades detail for
+[battery](detection.md#how-much-battery-does-the-tracking-consume). Review the
+platform-specific guidance in [Connecting OwnTracks](owntracks.md). Odograph
+cannot reconstruct location detail the phone did not publish.
 
 ### A total does not match what I expected
 

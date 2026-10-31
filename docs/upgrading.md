@@ -9,7 +9,9 @@ app service has `pull_policy: never`, so `docker compose up` starts only an
 image that is already present locally; run the verification script before it.
 Do not edit the Compose pin to a moving alias such as `latest`. See
 [Floating image aliases](#floating-image-aliases) for the aliases that do
-exist.
+exist. Watch the
+[GitHub Releases page](https://github.com/MeandrousShark/odograph/releases) to
+hear about new versions.
 
 Read [Backups and disaster recovery](backups.md) first. Every upgrade here
 depends on having a verified backup and a protected `.env` copy before you
@@ -834,7 +836,9 @@ The registry also carries
 floating aliases for operators who choose them deliberately: `vX.Y` follows the
 newest patch of a minor release, and from 1.0 `v1` follows the newest verified
 stable 1.x release. `v1` never points at a prerelease or a 2.x release. The
-canonical Compose file pins an exact tag and does not use either.
+canonical Compose file pins an exact tag and does not use either. There is no
+`latest` tag. Use a floating alias only when you have chosen that update policy
+deliberately and have read the release notes.
 
 Pulling a floating alias again selects the current release, not the one you
 ran before. Record the installed image digest before upgrading so you can

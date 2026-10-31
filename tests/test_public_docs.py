@@ -24,6 +24,7 @@ PUBLIC_MARKDOWN = (
     "docs/accounts.md",
     "docs/backups.md",
     "docs/configuration.md",
+    "docs/detection.md",
     "docs/install-compose.md",
     "docs/known-issues.md",
     "docs/oidc.md",
