@@ -467,7 +467,8 @@ class Renderer:
     def _html(self, report, coverage, expenses):
         from app.main import make_templates
         from markupsafe import escape
-        templates = make_templates(SimpleNamespace(display_tz=self.tz, app_version=self.token(self.refs['app_version'])))
+        templates = make_templates(SimpleNamespace(display_tz=self.tz, app_version=self.token(self.refs['app_version']),
+                                                   demo_mode=self.metadata.get('demo_mode', False)))
         user = dict(self.metadata['user'])
         email_ref = self.refs['email']
         # Account shell uses the localpart as its name. This descriptor avoids

@@ -9,6 +9,12 @@ reproduced here.
 
 ## [Unreleased]
 
+### Added
+
+- `DEMO_MODE=1` shows a banner on every page and logs the same sentence at
+  startup. It requires `DEV_NO_AUTH=1`, and `DEV_NO_AUTH=1` alone shows no
+  banner.
+
 ### Changed
 
 - Operators: `MISSING_TRIP_GAP_M` now defaults to 500 instead of 1000, so

@@ -60,6 +60,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import math
+import os
 import random
 import sys
 import secrets
@@ -74,6 +75,7 @@ from zoneinfo import ZoneInfo
 # import `app` without this bootstrap.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app.config import DEMO_MODE_NOTICE
 from app.dashboard import WeekBounds, week_bounds
 from app.db import make_pool, run_migrations
 from app.account_context import AccountPool, AccountPrincipal, account_id, control_connection
@@ -92,6 +94,7 @@ DEV_EMAIL = "development@localhost.invalid"
 SCENARIOS = ("week",)
 SCENARIO_DISPLAY_NAME = "Sam Rivera"
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+TRIAL_URL = "http://127.0.0.1:8079"
 
 # Delete only this synthetic account's rows, in foreign-key dependency order.
 # Rates and tracker identity survive reseeding; their values/history ownership
@@ -796,6 +799,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
     asyncio.run(main_async(args.database_url, args.scenario))
+    # Only the trial sets DEMO_MODE: the devsite and upgrade checks seed other
+    # ports, and upgrade checks keep authentication on.
+    if os.environ.get("DEMO_MODE") == "1":
+        print(DEMO_MODE_NOTICE)
+        print(TRIAL_URL)
     return 0
 
 

@@ -385,7 +385,7 @@ async def prepare_report(request, user, kind, year=None, start=None, end=None):
             review_count = await _fetch_review_count(conn)
             await projection.timeout(conn)
             storage = await storage_status(conn)
-            bounds = await session.request({'type':'initialize','metadata':dict(kind=kind,start=start.isoformat(),end=end.isoformat(),user=user,
+            bounds = await session.request({'type':'initialize','metadata':dict(kind=kind,start=start.isoformat(),end=end.isoformat(),user=user,demo_mode=getattr(request.app.state.config,'demo_mode',False),
                 review_count=review_count,storage=storage,request_path=request.url.path)})
             bounds = {k:datetime.fromisoformat(v) for k,v in bounds.items()}
             await projection.rates(conn,owner,year)
