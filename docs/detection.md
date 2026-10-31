@@ -1,7 +1,7 @@
 # How well does detection work?
 
 Plain answers about what trip detection does and does not do. Odograph works
-from position and time alone. The distances and times below are the default
+from position, time and the phone app's report type. The distances and times below are the default
 settings, and an operator can change them under
 [Detector behavior](configuration.md#detector-behavior).
 
@@ -37,23 +37,23 @@ phone's next report.
   them by their recorded time and re-detects that stretch, keeping tags on
   trips that still match. Whether your phone stores points while offline is
   up to the app. On the maintainer's iPhone, OwnTracks has reliably uploaded
-  trips after driving through areas with no service. It drops a queued location
-  if the server rejects it, for example after a password change. Offline
-  behavior with Traccar Client is untested.
+  trips after driving through areas with no service. On iOS it drops a queued
+  location if the server answers 401, for example after a password change.
+  Offline behavior with Traccar Client is untested.
 
 ## Does it distinguish driving from walking?
 
-Mostly by speed, and not by travel mode. Odograph uses position and time. It
-does not know whether you are in a car.
+Mostly by speed, and not by travel mode. Odograph does not know whether you
+are in a car.
 
-- A normal walk is not a trip. Sustained movement under about 4.5 mph counts
-  as not driving, and anything under about 300 m (0.2 mi) is dropped.
+- A steady walk usually is not a trip. Sustained movement under about 4.5 mph
+  counts as not driving, and anything under about 300 m (0.2 mi) is dropped.
+  GPS noise on a brisk walk can still make one.
 - A bike ride, a run, a bus or a train will show up as a trip. Delete it or
-  mark it **Not one of my vehicles**, and it stays out of your mileage. A very
-  fast walk near the threshold can too.
-- Sitting still for five minutes or more mid-drive, at a drive-through or a
-  long rail crossing, ends the trip and starts another. Merge fixes that.
-  Shorter stops do not split a trip.
+  mark it **Not one of my vehicles**, and it stays out of your mileage.
+- Sitting still for about five minutes or more mid-drive, at a drive-through or
+  a long rail crossing, ends the trip and starts another. Merge fixes that.
+  Brief stops do not split a trip.
 - Stop-and-go traffic normally stays one trip. A long crawl under about 4.5
   mph can split it and lose those miles, depending on GPS noise.
 
@@ -82,7 +82,7 @@ battery use, on days with about 75 miles of driving, using the region setup
 below. Over two days on the same phone, Traccar Client did not appear in the
 battery list after 10 miles and showed 1% after 60 miles. These are shares of
 what the phone used, not of a full charge, and they are one phone rather than
-a benchmark. We have not measured Android.
+a benchmark. Android has not been measured.
 
 - **Move mode** gives the best trip detail. OwnTracks warns its battery use can
   be as high as a navigation app, so use it only while driving.

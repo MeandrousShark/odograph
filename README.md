@@ -34,10 +34,10 @@ straight line across the gap, with a **Recording gap** badge if it lasted over
 like a stop, so the trip splits and those miles are lost.
 
 **Does it distinguish driving from walking?** Mostly by speed, and not by
-travel mode. A normal walk is not a trip, but a bike ride, a run, a bus or a
-train will show up as one, and you can delete it or mark it **Not one of my
-vehicles**. Sitting still for five minutes or more ends a trip, and Merge
-fixes that.
+travel mode. A steady walk usually is not a trip, though GPS noise on a brisk
+walk can make one. A bike ride, a run, a bus or a train will show up as one, and
+you can delete it or mark it **Not one of my vehicles**. Sitting still for about
+five minutes or more ends a trip, and Merge fixes that.
 
 **Can I correct an incorrectly detected trip?** Yes. You can set its details,
 merge or split trips, delete and restore them, and add manual trips. You
@@ -47,8 +47,8 @@ it and add a manual trip.
 **How much battery does the tracking consume?** It depends on the phone app
 and its mode. On the maintainer's iPhone, OwnTracks regularly accounts for 2
 to 4% of total battery use on days with about 75 miles of driving, using
-regions to switch modes. That is one phone rather than a benchmark, and we
-have not measured Android.
+regions to switch modes. That is one phone rather than a benchmark, and
+Android has not been measured.
 
 The [full answers](docs/detection.md) cover each case, including phones that
 lose data service.
@@ -142,13 +142,15 @@ INITIAL_ADMIN_SIGNUP=0
 ### Start Odograph
 
 Pull the release image and verify its signature. This stops with an error if
-the check fails:
+the check fails. It uses `docker` when installed, so set
+`CONTAINER_RUNTIME=podman` to use Podman instead:
 
 ```sh
 scripts/verify_image.sh
 ```
 
-Then start the services:
+It verifies only the app image in `./compose.yaml`, not one replaced by an
+override file. Then start the services:
 
 ```sh
 docker compose up -d
@@ -197,11 +199,13 @@ network or tunnel can work if it ends in an HTTPS proxy that forwards to
 `127.0.0.1:8077`, though Odograph does not test or document a specific VPN or
 tunnel product. If something sits in front of your reverse proxy, read
 [Trusting forwarded headers](docs/reverse-proxy.md#trusting-forwarded-headers).
+Set `APP_URL` to the same HTTPS address so reminder and email links point at it.
 
 ## After you install
 
 - **Backups:** run `scripts/backup_database.sh --output backups/first-install.dump`,
-  then keep the archive and an encrypted copy of `.env` off this host. See
+  then keep the archive and an encrypted copy of `.env` off this host. Your data
+  lives in the `dbdata` volume, and `docker compose down -v` erases it. See
   [Backups and disaster recovery](docs/backups.md).
 - **Security:** there is one administrator and invited members, with no open
   signup. Do not run Odograph as a public multi-tenant service. Work through the

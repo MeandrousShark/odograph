@@ -101,8 +101,9 @@ scripts/backup_database.sh
 
 This runs `pg_dump` against the live `db` service without stopping the app,
 validates the archive's table of contents, writes
-`backups/mileage-<UTC timestamp>.dump` plus a `.sha256` checksum sidecar and a non-secret `.manifest` file (creation time, schema version,
-Postgres/PostGIS versions, source ref), and sets the `backups/` directory to
+`backups/mileage-<UTC timestamp>.dump` plus a `.sha256` checksum sidecar and a
+non-secret `.manifest` file (creation time, schema version, Postgres/PostGIS
+versions, source ref), and sets the `backups/` directory to
 mode `700`. It refuses to overwrite an existing archive, sidecar, or
 manifest, and it never puts a password on the command line or prints anything
 from `.env`. Concurrent backups targeting the same output are refused, even
