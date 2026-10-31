@@ -1,0 +1,47 @@
+name: Setup help
+description: Ask for help installing or connecting Odograph
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not paste `.env` contents, passwords or tokens, coordinates,
+        addresses, or location logs. Redact logs before posting. Thanks for
+        helping keep everyone private.
+  - type: dropdown
+    id: step
+    attributes:
+      label: Which step did you reach?
+      options:
+        - Install
+        - HTTPS or reverse proxy
+        - First account
+        - Connecting a phone
+        - Trips not appearing
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What did you try?
+    validations:
+      required: true
+  - type: textarea
+    id: error_text
+    attributes:
+      label: Error text
+      description: Redact secrets and location details first.
+      render: text
+  - type: input
+    id: release_tag
+    attributes:
+      label: Odograph release tag
+      placeholder: v1.3.1
+  - type: dropdown
+    id: container_runtime
+    attributes:
+      label: Docker or Podman
+      options:
+        - Docker
+        - Podman

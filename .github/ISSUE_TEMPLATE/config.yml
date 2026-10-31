@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a vulnerability
+    url: https://github.com/MeandrousShark/odograph/security/advisories/new
+    about: Report security problems privately, not in a public issue.
+  - name: Known issues
+    url: https://github.com/MeandrousShark/odograph/blob/main/docs/known-issues.md
+    about: Check confirmed problems and workarounds first.
+  - name: Documentation
+    url: https://github.com/MeandrousShark/odograph#readme
+    about: Install, configuration, and usage guides.

@@ -1,0 +1,34 @@
+name: Feature request
+description: Suggest an improvement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not paste `.env` contents, passwords or tokens, coordinates,
+        addresses, or location logs. Redact logs before posting. Thanks for
+        helping keep everyone private.
+  - type: checkboxes
+    id: scope_check
+    attributes:
+      label: Scope
+      options:
+        - label: This is not in the [Out of scope list](https://github.com/MeandrousShark/odograph/blob/main/CONTRIBUTING.md#out-of-scope) in CONTRIBUTING.md.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that is hard or impossible today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: The proposal
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

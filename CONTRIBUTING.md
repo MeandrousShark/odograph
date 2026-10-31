@@ -69,6 +69,18 @@ See [the release procedure](docs/releasing.md) for release-specific checks.
 AI-assisted contributions are held to the same standard as any other; see
 [AI and contributions](ai-contribution.md).
 
+## Out of scope
+
+Odograph is a self-hosted tool for one operator and the people they invite.
+It will not take on:
+
+- a hosted multi-tenant service
+- first-class mileage for non-driving modes such as cycling
+- a bundled reverse proxy or automatic DNS and TLS
+- a single-page app or frontend build tooling
+
+Ideas outside this list are welcome.
+
 ## Load-bearing behavior
 
 - Keep `detect()` pure and do not casually bump `DETECTOR_VERSION`.
