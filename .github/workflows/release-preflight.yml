@@ -536,8 +536,9 @@ jobs:
         run: |
           set -euo pipefail
           gh release download "$VERSION" --pattern compose.try.yaml --dir "$RUNNER_TEMP/asset"
-          python3 scripts/render_try_compose.py --image "$IMAGE" \
-            --digest "$INDEX_DIGEST" --verify "$RUNNER_TEMP/asset/compose.try.yaml"
+          # The job checks out the tag's revision, which the prepare job proved.
+          python3 scripts/render_try_compose.py --image "$IMAGE" --digest "$INDEX_DIGEST" \
+            --source compose.try.yaml --verify "$RUNNER_TEMP/asset/compose.try.yaml"
           scripts/try_smoke.sh "$RUNNER_TEMP/asset/compose.try.yaml"
           # An installation's pull_policy: never trusts this tag to be verified.
           test -z "$(docker images -q "$IMAGE:$VERSION")"

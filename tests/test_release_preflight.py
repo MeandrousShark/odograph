@@ -404,4 +404,9 @@ def test_published_verification_runs_the_trial_from_the_release_asset():
     assert step["env"]["INDEX_DIGEST"] == "${{ needs.resolve-published.outputs.index-digest }}"
     run = step["run"]
     assert run.index("gh release download") < run.index("--verify") < run.index("scripts/try_smoke.sh")
+    assert '--digest "$INDEX_DIGEST"' in run
+    assert "--source compose.try.yaml" in run
+    assert "continue-on-error" not in step
+    checkout = next(s for s in steps if "actions/checkout" in s.get("uses", ""))
+    assert checkout["with"]["ref"] == "${{ needs.prepare.outputs.revision }}"
     assert 'test -z "$(docker images -q "$IMAGE:$VERSION")"' in run

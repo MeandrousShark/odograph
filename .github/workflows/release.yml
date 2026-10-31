@@ -411,10 +411,10 @@ jobs:
           MANIFEST_DIGEST: ${{ steps.manifest.outputs.digest }}
         run: |
           set -euo pipefail
-          python scripts/render_try_compose.py --image "$IMAGE" \
-            --digest "$MANIFEST_DIGEST" --output "$RUNNER_TEMP/compose.try.yaml"
-          python scripts/render_try_compose.py --image "$IMAGE" \
-            --digest "$MANIFEST_DIGEST" --verify "$RUNNER_TEMP/compose.try.yaml"
+          python scripts/render_try_compose.py --image "$IMAGE" --digest "$MANIFEST_DIGEST" \
+            --source compose.try.yaml --output "$RUNNER_TEMP/compose.try.yaml"
+          python scripts/render_try_compose.py --image "$IMAGE" --digest "$MANIFEST_DIGEST" \
+            --source compose.try.yaml --verify "$RUNNER_TEMP/compose.try.yaml"
       - name: Create GitHub release from changelog
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -437,5 +437,5 @@ jobs:
         run: |
           set -euo pipefail
           gh release download "$VERSION" --pattern compose.try.yaml --dir "$RUNNER_TEMP/asset"
-          python scripts/render_try_compose.py --image "$IMAGE" \
-            --digest "$MANIFEST_DIGEST" --verify "$RUNNER_TEMP/asset/compose.try.yaml"
+          python scripts/render_try_compose.py --image "$IMAGE" --digest "$MANIFEST_DIGEST" \
+            --source compose.try.yaml --verify "$RUNNER_TEMP/asset/compose.try.yaml"
