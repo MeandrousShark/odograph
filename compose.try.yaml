@@ -1,10 +1,15 @@
 # Odograph local trial: a look around with synthetic data. This is not an
 # install. It has no phone connection, keeps nothing and does not verify the
-# image signature. Run it from an empty directory, not an installation's. Use
-# the file attached to a GitHub release, which pins the release's image digest:
+# image signature. Use the file attached to a GitHub release, which pins the
+# release's image digest, from a new empty directory so that no .env is in scope:
 #
+#   mkdir odograph-try && cd odograph-try
 #   curl -fsSLO https://github.com/MeandrousShark/odograph/releases/download/vX.Y.Z/compose.try.yaml
 #   docker compose -p odograph-try -f compose.try.yaml up
+#
+# Never omit -p. Never run this file from an install directory. Never add -v or
+# --remove-orphans without -p: under an installation's project name they can
+# delete its containers and its data.
 #
 # Open http://127.0.0.1:8079 once the seed service exits. Stop with Ctrl+C, then
 # `docker compose -p odograph-try -f compose.try.yaml down` removes the
@@ -16,9 +21,9 @@
 # tunnel: ssh -L 8079:127.0.0.1:8079 you@host
 name: odograph-try
 
-# A COMPOSE_PROJECT_NAME in .env or the shell beats `name:` above. The service
-# names differ from compose.yaml's so that a colliding project still cannot
-# match, and so recreate, an installation's containers.
+# A COMPOSE_PROJECT_NAME in .env or the shell beats `name:` above, and only -p
+# beats it. The service names differ from compose.yaml's so that a colliding
+# project still cannot match, and so recreate, an installation's containers.
 services:
   try-db:
     image: ghcr.io/meandrousshark/odograph-postgis@sha256:4dc09eaaabbde791dee120e3fdb5f32cfd7d6c707a08cd38c1f9c7fe16b66982
@@ -64,7 +69,9 @@ services:
     tmpfs:
       - /tmp
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status==200 else 1)"]
+      # CMD-SHELL because podman-compose 1.3.0 turns the CMD form into a broken
+      # shell line, and this service would then never report healthy.
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)\""]
       interval: 3s
       timeout: 5s
       retries: 30
@@ -100,9 +107,11 @@ services:
       - /tmp
     restart: "no"
 
-# A fixed network name and no pod keep this file off anything named after the
-# project: under a colliding project name, `down` from podman-compose would
-# otherwise delete a stopped installation's containers, pod and network.
+# The fixed network name and no pod keep `up` off anything named after the
+# project. They do not protect an installation from `down`: podman-compose picks
+# networks and volumes by project label, so under an installation's project name
+# `down -v` can delete its network and its database volume. Only -p odograph-try
+# from a new empty directory, as in the header, protects it.
 networks:
   default:
     name: odograph-try

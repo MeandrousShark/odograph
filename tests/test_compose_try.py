@@ -54,7 +54,9 @@ def test_top_level_has_exactly_the_reviewed_keys(trial):
 
 
 def test_network_and_pod_do_not_follow_the_project_name(trial):
-    # podman-compose's `down` removes both by project-derived name.
+    # This only keeps `up` apart. podman-compose's `down` selects networks and
+    # volumes by project label, so -p and a new empty directory protect an
+    # installation, as the header says.
     assert trial["networks"] == {"default": {"name": "odograph-try"}}
     assert trial["x-podman"] == {"in_pod": False}
 
@@ -67,6 +69,13 @@ def test_no_env_file_or_interpolation_is_needed(trial):
 
 def test_app_is_published_on_loopback_only(trial):
     assert trial["services"]["try-app"]["ports"] == ["127.0.0.1:8079:8000"]
+
+
+def test_app_healthcheck_survives_podman_compose_1_3_0(trial):
+    # It joins a CMD list into a broken shell line, so `podman wait` for a
+    # healthy try-app would never return and try-seed would never start.
+    assert trial["services"]["try-app"]["healthcheck"]["test"][0] == "CMD-SHELL"
+    assert trial["services"]["try-db"]["healthcheck"]["test"][0] == "CMD-SHELL"
 
 
 def test_nothing_else_publishes_a_port(trial):
@@ -143,7 +152,12 @@ def test_images_match_the_installation_or_refuse_to_start(trial, install):
 def test_header_states_the_risk_and_the_commands():
     header = " ".join((ROOT / "compose.try.yaml").read_text().split("name: odograph-try")[0].replace("#", " ").split())
 
-    assert "docker compose -p odograph-try -f compose.try.yaml up" in header
+    assert "mkdir odograph-try && cd odograph-try curl -fsSLO" in header
+    assert "compose.try.yaml docker compose -p odograph-try -f compose.try.yaml up" in header
+    assert "no .env is in scope" in header
+    assert "Never omit -p." in header
+    assert "Never run this file from an install directory." in header
+    assert "Never add -v or --remove-orphans without -p" in header
     assert "docker compose -p odograph-try -f compose.try.yaml down" in header
     assert "pulled images stay" in header
     assert "github.com/MeandrousShark/odograph/releases/download/vX.Y.Z/compose.try.yaml" in header
