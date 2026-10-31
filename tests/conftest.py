@@ -637,6 +637,7 @@ _OPS_MODULE_STEMS = {
     "test_ci_serial_timeout",
     "test_ci_workflow",
     "test_compose_config",
+    "test_compose_try",
     "test_db_image_identity_script",
     "test_dependency_locks",
     "test_deployment_contract",

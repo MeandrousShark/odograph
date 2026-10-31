@@ -11,6 +11,17 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "check_release_contract.py"
 
 
+def _try_compose(
+    db: str = "registry.example.test/db@sha256:0",
+    app: str = "ghcr.io/example/odograph:v1.2.3",
+    seed: str = "ghcr.io/example/odograph:v1.2.3",
+) -> str:
+    return (
+        f"services:\n  db:\n    image: {db}\n  app:\n    image: {app}\n"
+        f"  seed:\n    image: {seed}\n"
+    )
+
+
 def _stage_contract(tmp_path: Path, readme: str | None = None) -> Path:
     (tmp_path / "scripts").mkdir()
     for name in ("check_release_contract.py", "release_notes.py"):
@@ -19,8 +30,10 @@ def _stage_contract(tmp_path: Path, readme: str | None = None) -> Path:
         "# Changelog\n\n## [1.2.3] - 2026-08-11\n\nA release.\n"
     )
     (tmp_path / "compose.yaml").write_text(
-        "services:\n  app:\n    image: ghcr.io/example/odograph:v1.2.3\n    pull_policy: never\n"
+        "services:\n  db:\n    image: registry.example.test/db@sha256:0\n"
+        "  app:\n    image: ghcr.io/example/odograph:v1.2.3\n    pull_policy: never\n"
     )
+    (tmp_path / "compose.try.yaml").write_text(_try_compose())
     (tmp_path / "README.md").write_text(readme or (
         "Run `git checkout vX.Y.Z`; Compose uses the exact release tag "
         "pinned by the checked-out release.\n"
@@ -115,6 +128,46 @@ def test_release_contract_rejects_a_mismatched_compose_image(tmp_path):
     assert "expected 'ghcr.io/example/odograph:v1.2.3'" in result.stderr
 
 
+def test_release_contract_requires_the_try_file(tmp_path):
+    root = _stage_contract(tmp_path)
+    (root / "compose.try.yaml").unlink()
+
+    result = _run(root)
+
+    assert result.returncode != 0
+    assert "compose.try.yaml is missing" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"app": "ghcr.io/example/odograph:v1.2.2"}, "compose.try.yaml app image"),
+        ({"seed": "ghcr.io/example/odograph:v1.2.2"}, "compose.try.yaml seed image"),
+        ({"db": "registry.example.test/db@sha256:1"}, "compose.try.yaml db image"),
+    ],
+)
+def test_release_contract_rejects_a_stale_try_file(tmp_path, override, message):
+    root = _stage_contract(tmp_path)
+    (root / "compose.try.yaml").write_text(_try_compose(**override))
+
+    result = _run(root)
+
+    assert result.returncode != 0
+    assert message in result.stderr
+
+
+def test_release_contract_rejects_a_try_file_without_a_service(tmp_path):
+    root = _stage_contract(tmp_path)
+    (root / "compose.try.yaml").write_text(
+        "services:\n  app:\n    image: ghcr.io/example/odograph:v1.2.3\n"
+    )
+
+    result = _run(root)
+
+    assert result.returncode != 0
+    assert "compose.try.yaml has no seed image" in result.stderr
+
+
 def test_release_contract_rejects_a_missing_changelog_version(tmp_path):
     root = _stage_contract(tmp_path)
 
@@ -144,6 +197,7 @@ def _stage_db_image_release(
     if tag_previous:
         subprocess.run([*git, "tag", "v1.2.2"], check=True)
     (root / "compose.yaml").write_text(_compose(current_db))
+    (root / "compose.try.yaml").write_text(_try_compose(db=current_db))
     (root / "CHANGELOG.md").write_text(
         "# Changelog\n\n## [Unreleased]\n\n## [1.2.3] - 2026-08-11\n\n"
         f"{notes}\n\n## [1.2.2-rc.1] - 2026-08-01\n\nA candidate.\n\n"

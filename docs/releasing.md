@@ -83,8 +83,9 @@ git switch -c release/$VERSION
 
 Stop if `git status --short` prints anything or the revision check fails.
 
-Update `compose.yaml` so `services.app.image` is exactly
-`$IMAGE:$VERSION`. Move the release's entries out of `Unreleased` into one
+Update `compose.yaml` and `compose.try.yaml` so `services.app.image`, and
+`services.seed.image` in the try file, are exactly `$IMAGE:$VERSION`. A
+database image change updates `services.db.image` in both files. Move the release's entries out of `Unreleased` into one
 exact, nonempty changelog section:
 
 ```text
@@ -140,7 +141,7 @@ line wrapping do not matter):
 changelog section and its `compose.yaml` from that release tag, so it needs
 the tags; it fails when the image changed without either phrase.
 
-Validate that the Compose image, changelog section, documented exact-tag
+Validate that both Compose files' images, changelog section, documented exact-tag
 install path, and runtime-reported version contract all agree. Then confirm
 the release-note extractor selects the intended section and review and commit
 the Compose pin and changelog together:
@@ -155,8 +156,8 @@ python3 scripts/release_notes.py --tag "$VERSION" \
   --trivy-arm64-output "$RELEASE_TMP/trivy-arm64.ignore"
 sed -n '1,240p' "$RELEASE_TMP/release-notes.md"
 git diff --check
-git diff -- compose.yaml CHANGELOG.md
-git add compose.yaml CHANGELOG.md
+git diff -- compose.yaml compose.try.yaml CHANGELOG.md
+git add compose.yaml compose.try.yaml CHANGELOG.md
 git diff --cached --check
 git diff --cached
 git commit -m "Prepare $VERSION release"

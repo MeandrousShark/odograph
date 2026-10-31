@@ -16,12 +16,14 @@ from release_notes import HEADING_RE, ReleaseNotesError, extract_release_notes
 DB_IMAGE_REBUILD_PHRASE = "rebuilt with unchanged versions"
 DB_IMAGE_MIGRATION_PHRASE = "database-image migration"
 
+TRY_COMPOSE = "compose.try.yaml"
+
 
 class ReleaseContractError(ValueError):
     pass
 
 
-def _service_image(compose_text: str, service: str) -> str:
+def _service_image(compose_text: str, service: str, filename: str = "compose.yaml") -> str:
     in_service = False
     for line in compose_text.splitlines():
         if re.fullmatch(r"  [A-Za-z0-9_-]+:", line):
@@ -31,7 +33,7 @@ def _service_image(compose_text: str, service: str) -> str:
             match = re.fullmatch(r"    image:\s*(\S+)\s*", line)
             if match:
                 return match.group(1)
-    raise ReleaseContractError(f"compose.yaml has no {service} image")
+    raise ReleaseContractError(f"{filename} has no {service} image")
 
 
 def _app_image(compose_text: str) -> str:
@@ -78,6 +80,26 @@ def _validate_db_image_change(root: Path, changelog: str, tag: str, body: str) -
         )
 
 
+def _validate_try_compose(root: Path, expected_image: str) -> None:
+    """The trial pulls by tag, so a stale tag would run a different release."""
+    path = root / TRY_COMPOSE
+    if not path.is_file():
+        raise ReleaseContractError(f"{TRY_COMPOSE} is missing")
+    try_text = path.read_text()
+    for service in ("app", "seed"):
+        actual = _service_image(try_text, service, TRY_COMPOSE)
+        if actual != expected_image:
+            raise ReleaseContractError(
+                f"{TRY_COMPOSE} {service} image is {actual!r}, expected {expected_image!r}"
+            )
+    expected_db = _service_image((root / "compose.yaml").read_text(), "db")
+    actual_db = _service_image(try_text, "db", TRY_COMPOSE)
+    if actual_db != expected_db:
+        raise ReleaseContractError(
+            f"{TRY_COMPOSE} db image is {actual_db!r}, expected {expected_db!r}"
+        )
+
+
 def validate_release_contract(root: Path, tag: str, image: str) -> None:
     changelog = (root / "CHANGELOG.md").read_text()
     notes = extract_release_notes(changelog, tag)
@@ -89,6 +111,7 @@ def validate_release_contract(root: Path, tag: str, image: str) -> None:
         raise ReleaseContractError(
             f"compose app image is {actual_image!r}, expected {expected_image!r}"
         )
+    _validate_try_compose(root, expected_image)
 
     readme = (root / "README.md").read_text()
     install_contracts = (
