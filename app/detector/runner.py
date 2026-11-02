@@ -32,7 +32,7 @@ from app.detector.reconcile import ExistingTrip, plan_reconcile
 
 log = logging.getLogger(__name__)
 
-DETECTOR_VERSION = 2  # v2: on-foot (low-speed) stay detection
+DETECTOR_VERSION = 3  # v3: on-foot speed window and transit legs
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 # last_run_at is set to now() minus this margin, so a point whose inserting
