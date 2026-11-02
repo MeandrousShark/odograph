@@ -252,7 +252,7 @@ def test_authenticated_settings_context_uses_config_and_live_schema(monkeypatch)
         "app_version": "v0.6.0-rc.1",
         "git_revision": "0123456789abcdef",
         "schema_version": 17,
-        "detector_version": 2,
+        "detector_version": 3,
     }
 
 
