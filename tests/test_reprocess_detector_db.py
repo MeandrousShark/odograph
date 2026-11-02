@@ -28,6 +28,7 @@ pytestmark = pytest.mark.skipif(not TEST_DB, reason="set TEST_DATABASE_URL for d
 
 DETECTOR_ENV = ("MAX_ACCURACY_M", "MAX_SPEED_MS", "STAY_RADIUS_M", "STAY_MIN_DURATION_S",
                 "MIN_TRIP_DISTANCE_M", "GAP_FLAG_THRESHOLD_S", "WALK_MAX_SPEED_MS",
+                "WALK_LEG_MAX_SPEED_MS", "TRANSIT_LEG_MIN_M", "TRANSIT_LEG_MAX_S",
                 "DETECTOR_TURN_MAX_POINTS")
 
 
