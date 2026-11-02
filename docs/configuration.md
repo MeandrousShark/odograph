@@ -372,8 +372,11 @@ points.
 | `MAX_ACCURACY_M` | `100` | Drops fixes whose reported accuracy is worse than this many meters. |
 | `MAX_SPEED_MS` | `60` | Drops points that imply an implausible speed from the last kept point. |
 | `STAY_RADIUS_M` | `150` | Maximum radius for a stationary stay cluster. |
-| `STAY_MIN_DURATION_S` | `300` | Minimum duration for stationary and on-foot stays. |
+| `STAY_MIN_DURATION_S` | `300` | Minimum duration for stationary and on-foot stays. Also the trailing window that averages walking speed, and the shortest transit leg. |
 | `WALK_MAX_SPEED_MS` | `2.0` | Maximum sustained speed treated as an on-foot stay. |
+| `WALK_LEG_MAX_SPEED_MS` | `3.0` | Fastest single leg an on-foot stay can absorb, while the trailing window still averages at most `WALK_MAX_SPEED_MS`. A faster leg always ends the stay. A value at or below `WALK_MAX_SPEED_MS` turns this off. |
+| `TRANSIT_LEG_MIN_M` | `800` | A slow leg longer than this, lasting from `STAY_MIN_DURATION_S` to `TRANSIT_LEG_MAX_S`, is lost signal instead of a stop, and counts toward a trip. |
+| `TRANSIT_LEG_MAX_S` | `1800` | Longest transit leg. Past this, silence is a stay and its leg is not counted. |
 | `MIN_TRIP_DISTANCE_M` | `300` | Rejects shorter movement between stays as jitter rather than a trip. |
 | `GAP_FLAG_THRESHOLD_S` | `600` | Marks a trip when consecutive kept points are farther apart than this many seconds. |
 | `FULL_REPROCESS_WARN_POINTS` | `500000` | A full-device reprocess logs at WARNING when the device has at least this many points, otherwise at INFO. `0` makes every full reprocess a warning. |

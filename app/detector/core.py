@@ -45,6 +45,16 @@ class Params:
     # 2.0 m/s = 7.2 km/h sits above hiking/brisk-walking pace but well below
     # any driving, including slow city traffic.
     walk_max_speed_ms: float = 2.0
+    # Reports sent by distance arrive unevenly, so one leg of a steady walk can
+    # read fast. A leg up to this speed is forgiven while the trailing
+    # stay_min_duration_s still averages walk_max_speed_ms. The cap keeps a
+    # stop-and-go jam, which averages out to a walk, from becoming a stay.
+    walk_leg_max_speed_ms: float = 3.0
+    # One slow leg this long, lasting from stay_min_duration_s to this limit, is
+    # lost signal rather than a stop, so it belongs to a trip. Shorter legs are
+    # phones waking a little way from a real stop; longer ones are silent stays.
+    transit_leg_min_m: float = 800.0
+    transit_leg_max_s: float = 1800.0
     # A trailing cluster holding one of these report triggers (OwnTracks "c"
     # region and "v" iOS visit fixes) that spans at least
     # arrival_min_duration_s is a provisional stay: the phone often goes quiet
@@ -147,9 +157,9 @@ def find_stays(pts: list[Point], params: Params) -> list[Stay]:
 
     A stay is a period of not-driving, which happens in two forms:
     - *stationary*: points staying within stay_radius_m of an anchor (parked);
-    - *on-foot*: a sustained span below walk_max_speed_ms, which may wander
-      far from any anchor (walking/hiking) and so is invisible to the radius
-      test. This is what stops a drive-park-hike-drive sequence from
+    - *on-foot*: a sustained span near or below walk_max_speed_ms, which may
+      wander far from any anchor (walking/hiking) and so is invisible to the
+      radius test. This is what stops a drive-park-hike-drive sequence from
       collapsing into one bundled trip.
 
     The two passes overlap (a parked stay is also low-speed); their index
@@ -192,22 +202,82 @@ def _stationary_ranges(pts: list[Point], params: Params) -> list[tuple[int, int]
     return ranges
 
 
+def _is_transit_leg(a: Point, b: Point, params: Params) -> bool:
+    dt = (b.t - a.t).total_seconds()
+    return (
+        params.stay_min_duration_s <= dt <= params.transit_leg_max_s
+        and _dist(a, b) > params.transit_leg_min_m
+    )
+
+
 def _on_foot_ranges(pts: list[Point], params: Params) -> list[tuple[int, int]]:
-    """Maximal spans where every leg speed stays below walk_max_speed_ms and
-    the span lasts at least stay_min_duration_s."""
+    """Maximal spans that hold walking pace for at least stay_min_duration_s,
+    split at transit legs.
+
+    A leg over walk_max_speed_ms ends a span unless it is at most
+    walk_leg_max_speed_ms and the trailing window averages at most
+    walk_max_speed_ms. The window is whole legs back to the newest point at
+    least stay_min_duration_s older, and never crosses the span's start or a
+    transit leg.
+    """
     ranges: list[tuple[int, int]] = []
     i, n = 0, len(pts)
     while i < n - 1:
         j = i + 1
+        oldest = i  # the window runs from here to j, holding `path` meters
+        path = 0.0
+        transit_legs: list[int] = []
         while j < n:
             dt = (pts[j].t - pts[j - 1].t).total_seconds()
-            if dt <= 0 or _dist(pts[j - 1], pts[j]) / dt > params.walk_max_speed_ms:
+            if dt <= 0:
                 break
+            leg = _dist(pts[j - 1], pts[j])
+            path += leg
+            while (oldest + 1 < j
+                   and (pts[j].t - pts[oldest + 1].t).total_seconds() >= params.stay_min_duration_s):
+                path -= _dist(pts[oldest], pts[oldest + 1])
+                oldest += 1
+            if leg / dt > params.walk_max_speed_ms and (
+                leg / dt > params.walk_leg_max_speed_ms
+                or path / (pts[j].t - pts[oldest].t).total_seconds() > params.walk_max_speed_ms
+            ):
+                break
+            if _is_transit_leg(pts[j - 1], pts[j], params):
+                transit_legs.append(j)
+                oldest, path = j, 0.0
             j += 1
-        if (pts[j - 1].t - pts[i].t).total_seconds() >= params.stay_min_duration_s:
-            ranges.append((i, j - 1))
+        end = _last_walking_point(pts, i, j - 1, params)
+        if (pts[end].t - pts[i].t).total_seconds() >= params.stay_min_duration_s:
+            ranges += _split_at_transit_legs(pts, i, end, transit_legs, params)
         i = max(j, i + 1)
     return ranges
+
+
+def _last_walking_point(pts: list[Point], first: int, last: int, params: Params) -> int:
+    """Move a span's end back over forgiven legs, so a departure stays in the trip."""
+    while last > first:
+        dt = (pts[last].t - pts[last - 1].t).total_seconds()
+        if _dist(pts[last - 1], pts[last]) / dt <= params.walk_max_speed_ms:
+            break
+        last -= 1
+    return last
+
+
+def _split_at_transit_legs(
+    pts: list[Point], first: int, last: int, transit_legs: list[int], params: Params
+) -> list[tuple[int, int]]:
+    """The piece before a transit leg is a stay even at one point. Its evidence
+    is that leg, which lies after the stay's start, so a window rewound to that
+    start still loads it. The piece after the last one must qualify alone.
+    """
+    pieces: list[tuple[int, int]] = []
+    start = first
+    for leg in transit_legs:
+        pieces.append((start, leg - 1))
+        start = leg
+    if start == first or (pts[last].t - pts[start].t).total_seconds() >= params.stay_min_duration_s:
+        pieces.append((start, last))
+    return pieces
 
 
 def _union_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
