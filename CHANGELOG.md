@@ -32,6 +32,14 @@ reproduced here.
 - Hovering, focusing or tapping a day in the Dashboard week chart shows a
   tooltip with its total and each category's miles.
 
+### Security
+
+- Upgrade joserfc from 1.7.3 to 1.7.7 for CVE-2026-119283 and CVE-2026-119284,
+  two denial-of-service issues in JWE recipient handling and compact JWS size
+  checks. Authlib uses joserfc to verify ID tokens during single sign-on.
+  Odograph does not decrypt JWE, and those tokens come from the configured
+  provider rather than from the browser.
+
 ## [1.3.1] - 2026-10-28
 
 ### Fixed
