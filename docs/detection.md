@@ -10,7 +10,8 @@ settings, and an operator can change them under
 A gap does not end a trip by itself. A trip ends when Odograph sees a stop:
 five minutes within about 150 m, five minutes averaging under about 4.5 mph
 (7.2 km/h) with no stretch between reports over about 6.7 mph, or about a
-minute of reports at the destination that include an OwnTracks region or iOS visit report. Without one of those reports, the
+minute of reports at the destination that include an OwnTracks region or iOS
+visit report. Without one of those reports, the
 trip waits for five minutes of points at the destination, which can mean the
 phone's next report.
 
@@ -65,7 +66,8 @@ are in a car.
   Brief stops do not split a trip.
 - Stop-and-go traffic normally stays one trip. A long crawl under about 4.5
   mph looks like a walk, so it can split the trip and lose those miles,
-  depending on GPS noise. The Possible missing trip warning compares where the two trips end and start, so
+  depending on GPS noise. The Possible missing trip warning compares where the
+  two trips end and start, so
   it can miss a crawl that doubles back.
 
 ## Can I correct an incorrectly detected trip?
