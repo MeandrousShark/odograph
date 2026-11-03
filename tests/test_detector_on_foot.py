@@ -79,6 +79,15 @@ def test_point_exactly_a_window_old_opens_the_window(line):
     assert _ranges((100, 10), (240, 470), (60, 180), SLOW) == [(0, 2), (3, 4)]
 
 
+def test_legs_leave_the_window_as_it_moves(line):
+    # A window that kept its oldest legs would pile up path and end this span.
+    assert _ranges(*[(60, 108)] * 10, (30, 75), *[(60, 60)] * 5) == [(0, 16)]
+
+
+def test_leg_as_long_as_the_window_stands_alone(line):
+    assert _ranges(SLOW, (300, 700), SLOW) == [(0, 1), (2, 3)]
+
+
 def test_broken_span_restarts_with_no_history(line):
     assert _ranges(SLOW, (10, 100), (10, 30), SLOW) == [(0, 1), (3, 4)]
 
@@ -173,6 +182,33 @@ def test_jams_detect_as_before(stopped_s, creep_m, trips, km):
     detected = detect(pts, P)[1]
 
     assert (len(detected), _km(detected)) == (trips, km)
+
+
+def _short_move(seconds: float, meters: float, park_every_s: float) -> list[Point]:
+    """One move between two parks, each 10 minutes on the clock."""
+    lat, lon = _travel(*START, meters, 90.0)
+    parked = [T0 + timedelta(seconds=s) for s in range(0, 601, int(park_every_s))]
+    arrived = parked[-1] + timedelta(seconds=seconds)
+    return (
+        [Point(t=t, lat=START[0], lon=START[1], accuracy_m=10.0) for t in parked]
+        + [Point(t=arrived + timedelta(seconds=15 * i), lat=lat, lon=lon, accuracy_m=10.0)
+           for i in range(41)]
+    )
+
+
+@pytest.mark.parametrize(
+    ("seconds", "meters", "park_every_s", "trips"),
+    [
+        (120, 340, 15, 0),
+        (290, 610, 15, 0),
+        (280, 800, 15, 1),
+        (280, 800, 300, 0),
+        (60, 400, 15, 1),
+    ],
+    ids=["short", "about-600-m", "too-far", "too-far-unless-parked-quietly", "over-the-cap"],
+)
+def test_short_slow_move_after_a_stop_is_absorbed(seconds, meters, park_every_s, trips):
+    assert len(detect(_short_move(seconds, meters, park_every_s), P)[1]) == trips
 
 
 @pytest.mark.parametrize(

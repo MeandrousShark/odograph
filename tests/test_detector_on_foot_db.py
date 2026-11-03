@@ -123,6 +123,8 @@ async def _run_batches(size):
         batched, replayed = await _batched_and_replayed(pool, runner, device)
 
         assert batched == replayed
+        # The middle trip is 0.93 km when a fast leg ends the brisk walk's span.
+        assert [round(t[3] / 1000, 2) for t in batched["trips"]] == [1.88, 0.51, 1.86]
         assert [t[6:] for t in batched["trips"]].count(("business", "human")) == 1
         assert batched["expenses"][0][1] == batched["trips"][0][0]
     finally:
