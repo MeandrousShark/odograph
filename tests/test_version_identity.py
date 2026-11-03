@@ -171,7 +171,7 @@ def test_authenticated_page_footer_shows_the_configured_app_version():
     assert "<a " not in footer
 
 
-def test_schema_version_is_queried_live_and_detector_version_stays_three():
+def test_schema_version_is_queried_live_and_detector_version_is_three():
     connection = _Connection((17,))
 
     assert asyncio.run(_fetch_schema_version(connection)) == 17
