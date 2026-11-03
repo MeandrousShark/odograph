@@ -9,8 +9,8 @@ settings, and an operator can change them under
 
 A gap does not end a trip by itself. A trip ends when Odograph sees a stop:
 five minutes within about 150 m, five minutes averaging under about 4.5 mph
-(7.2 km/h), or about a minute of reports at the destination that include
-an OwnTracks region or iOS visit report. Without one of those reports, the
+(7.2 km/h) with no stretch between reports over about 6.7 mph, or about a
+minute of reports at the destination that include an OwnTracks region or iOS visit report. Without one of those reports, the
 trip waits for five minutes of points at the destination, which can mean the
 phone's next report.
 
@@ -28,9 +28,12 @@ phone's next report.
 - **Phone off or tracking stopped for a whole drive.** Odograph has no points
   from that drive, only the last one before it and the first one after. If
   tracking resumes soon enough that the jump averages over about 4.5 mph, you
-  get a two-point trip measured in a straight line, with a Recording gap badge
-  if the silence lasted over 10 minutes. If it resumes later, the silence looks
-  like a stop and no trip is recorded. Then, if your next trip starts more than
+  usually get a two-point trip measured in a straight line, with a Recording
+  gap badge if the silence lasted over 10 minutes. A short jump under about 6.7
+  mph can instead be
+  [absorbed into the stop](#does-it-distinguish-driving-from-walking). If
+  tracking resumes later, the silence looks like a stop and no trip is
+  recorded. Then, if your next trip starts more than
   500 m from where the last one ended, a **Possible missing trip** warning
   offers a prefilled manual trip.
 - **GPS fine, but no data connection.** Odograph accepts late points, sorts
@@ -50,14 +53,19 @@ are in a car.
   mph counts as not driving, even when uneven reporting makes a stretch read
   up to about 6.7 mph (10.8 km/h), and anything under about 300 m (0.2 mi) is
   dropped. A walk close to 4.5 mph can still make one.
+- A short slow move right after a stop can make no trip. The minutes parked
+  count toward the average, so a move of up to about 600 m with no stretch over
+  about 6.7 mph can be absorbed into the stop. If the phone reported rarely
+  during the stop, that can reach close to 900 m. Add a manual trip if you need
+  one. Upgrading to detector version 3 deletes a trip like that.
 - A bike ride, a run, a bus or a train will show up as a trip. Delete it or
   mark it **Not one of my vehicles**, and it stays out of your mileage.
 - Sitting still for about five minutes or more mid-drive, at a drive-through or
   a long rail crossing, ends the trip and starts another. Merge fixes that.
   Brief stops do not split a trip.
-- Stop-and-go traffic normally stays one trip. A long steady crawl under about
-  4.5 mph looks like a walk, so it splits the trip and loses those miles. The
-  Possible missing trip warning compares where the two trips end and start, so
+- Stop-and-go traffic normally stays one trip. A long crawl under about 4.5
+  mph looks like a walk, so it can split the trip and lose those miles,
+  depending on GPS noise. The Possible missing trip warning compares where the two trips end and start, so
   it can miss a crawl that doubles back.
 
 ## Can I correct an incorrectly detected trip?

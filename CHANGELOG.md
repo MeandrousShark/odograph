@@ -31,8 +31,13 @@ reproduced here.
   uneven reporting makes one leg read fast: a leg up to 3.0 m/s
   (`WALK_LEG_MAX_SPEED_MS`) stays on foot while the trailing five minutes
   average at most `WALK_MAX_SPEED_MS`. A walk close to about 4.5 mph can still
-  make a trip. A noisy crawl under about 4.5 mph now splits a trip
-  consistently, where GPS noise sometimes kept it whole.
+  make a trip. A crawl under about 4.5 mph can still split a trip and lose
+  those miles, depending on GPS noise.
+- A slow move of up to about 600 m right after a stop, with every leg at or
+  under 3.0 m/s (about 6.7 mph), can now be absorbed into the stop and make no
+  trip, because the minutes parked count toward the average. If the phone
+  reported rarely during the stop, that can reach close to 900 m. On upgrade, a
+  trip like that is deleted.
 - Operators: `DETECTOR_VERSION` is now 3, so upgrading re-detects each enabled,
   unrevoked device's full history in the background. Trips that still match
   keep their tags. A trip that is no longer detected is deleted and its

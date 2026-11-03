@@ -644,7 +644,7 @@ against the migrated database is unsupported for 0.x to 1.0.
 
 When a release changes `DETECTOR_VERSION`, the background detector reprocesses
 every enabled, unrevoked device from its first point after the upgrade. A
-disabled or revoked device keeps its old trips until it is enabled again.
+disabled or revoked device keeps its old trips while it stays disabled or revoked.
 Trips that still match keep their tags, and a trip that is no longer detected
 is deleted and its expenses are detached. With
 `DETECTOR_TURN_MAX_POINTS` set, a device with more points than the limit is
