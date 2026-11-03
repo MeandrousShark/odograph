@@ -22,6 +22,7 @@ STAY_MIN_DURATION_S = 300.0
 MIN_TRIP_DISTANCE_M = 300.0
 GAP_FLAG_THRESHOLD_S = 600.0
 WALK_MAX_SPEED_MS = 2.0
+WALK_LEG_MAX_SPEED_MS = 3.0
 ARRIVAL_MIN_DURATION_S = 60.0
 
 _METERS_PER_MILE = 1609.344
@@ -41,6 +42,7 @@ def test_detector_defaults_match_the_documented_values():
     assert params.min_trip_distance_m == MIN_TRIP_DISTANCE_M
     assert params.gap_flag_threshold_s == GAP_FLAG_THRESHOLD_S
     assert params.walk_max_speed_ms == WALK_MAX_SPEED_MS
+    assert params.walk_leg_max_speed_ms == WALK_LEG_MAX_SPEED_MS
     assert params.arrival_min_duration_s == ARRIVAL_MIN_DURATION_S
     assert params.arrival_triggers == {"c", "v"}
 
@@ -53,6 +55,7 @@ def test_detector_defaults_match_the_documented_values():
         ("MIN_TRIP_DISTANCE_M", MIN_TRIP_DISTANCE_M),
         ("GAP_FLAG_THRESHOLD_S", GAP_FLAG_THRESHOLD_S),
         ("WALK_MAX_SPEED_MS", WALK_MAX_SPEED_MS),
+        ("WALK_LEG_MAX_SPEED_MS", WALK_LEG_MAX_SPEED_MS),
     ],
 )
 def test_runtime_config_uses_the_documented_detector_values(variable, documented):
@@ -71,6 +74,10 @@ def test_detection_guide_states_the_pinned_thresholds():
     walk_kmh = WALK_MAX_SPEED_MS * 3.6
     walk_mph = WALK_MAX_SPEED_MS * 3600 / _METERS_PER_MILE
     min_trip_mi = MIN_TRIP_DISTANCE_M / _METERS_PER_MILE
+    leg_kmh = WALK_LEG_MAX_SPEED_MS * 3.6
+    leg_mph = WALK_LEG_MAX_SPEED_MS * 3600 / _METERS_PER_MILE
+    short_move_m = WALK_MAX_SPEED_MS * STAY_MIN_DURATION_S
+    quiet_move_m = WALK_LEG_MAX_SPEED_MS * STAY_MIN_DURATION_S
 
     assert STAY_MIN_DURATION_S == 5 * 60
     assert ARRIVAL_MIN_DURATION_S == 60
@@ -81,10 +88,28 @@ def test_detection_guide_states_the_pinned_thresholds():
         "about a minute",
         f"Gaps over {GAP_FLAG_THRESHOLD_S / 60:.0f} minutes",
         f"about {MIN_TRIP_DISTANCE_M:.0f} m ({min_trip_mi:.1f} mi)",
+        f"about {leg_mph:.1f} mph ({leg_kmh:.1f} km/h)",
+        f"no stretch between reports over about {leg_mph:.1f} mph",
+        f"a move of up to about {short_move_m:.0f} m with no stretch over about {leg_mph:.1f} mph",
+        f"reach close to {quiet_move_m:.0f} m",
+        "depending on GPS noise",
         f"more than {MISSING_TRIP_GAP_TEXT} from where the last one ended",
         f"end up more than {MISSING_TRIP_GAP_TEXT} apart",
     ):
         assert phrase in text
+
+
+def test_changelog_states_the_short_move_limit():
+    changelog = re.sub(r"\s+", " ", (ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+    unreleased = changelog.split("## [Unreleased]", 1)[1].split("## [", 1)[0]
+    leg_mph = WALK_LEG_MAX_SPEED_MS * 3600 / _METERS_PER_MILE
+
+    assert (
+        f"up to about {WALK_MAX_SPEED_MS * STAY_MIN_DURATION_S:.0f} m right after a stop, "
+        f"with every leg at or under {WALK_LEG_MAX_SPEED_MS} m/s (about {leg_mph:.1f} mph)"
+    ) in unreleased
+    assert "a trip like that is deleted" in unreleased
+    assert "depending on GPS noise" in unreleased
 
 
 def test_readme_short_answers_state_the_pinned_thresholds():

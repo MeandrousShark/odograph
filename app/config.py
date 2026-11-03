@@ -459,6 +459,7 @@ class Config:
                 min_trip_distance_m=_f("MIN_TRIP_DISTANCE_M", 300.0),
                 gap_flag_threshold_s=_f("GAP_FLAG_THRESHOLD_S", 600.0),
                 walk_max_speed_ms=_f("WALK_MAX_SPEED_MS", 2.0),
+                walk_leg_max_speed_ms=_f("WALK_LEG_MAX_SPEED_MS", 3.0),
             ),
             detect_debounce_s=_f("DETECT_DEBOUNCE_S", 60.0),
             detect_sweep_s=_f("DETECT_SWEEP_S", 900.0),

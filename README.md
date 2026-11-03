@@ -34,10 +34,11 @@ straight line across the gap, with a **Recording gap** badge if it lasted over
 like a stop, so the trip splits and those miles are lost.
 
 **Does it distinguish driving from walking?** Mostly by speed, and not by
-travel mode. A steady walk usually is not a trip, though GPS noise on a brisk
-walk can make one. A bike ride, a run, a bus or a train will show up as one, and
-you can delete it or mark it **Not one of my vehicles**. Sitting still for about
-five minutes or more ends a trip, and Merge fixes that.
+travel mode. A steady walk usually is not a trip, even with uneven reports,
+though a walk close to about 4.5 mph can make one. A bike ride, a run, a bus
+or a train will show up as one, and you can delete it or mark it **Not one of
+my vehicles**. Sitting still for about five minutes or more ends a trip, and
+Merge fixes that.
 
 **Can I correct an incorrectly detected trip?** Yes. You can set its details,
 merge or split trips, delete and restore them, and add manual trips. You

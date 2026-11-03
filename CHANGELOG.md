@@ -27,6 +27,23 @@ reproduced here.
   500 m on upgrade. Set `MISSING_TRIP_GAP_M=1000` to keep the old distance, or
   `0` to turn the warning off. The change applies when pages are shown, with no
   reprocess.
+- Trip detection is much less likely to turn a brisk walk into trips when
+  uneven reporting makes one leg read fast: a leg up to 3.0 m/s
+  (`WALK_LEG_MAX_SPEED_MS`) stays on foot while the trailing five minutes
+  average at most `WALK_MAX_SPEED_MS`. A walk close to about 4.5 mph can still
+  make a trip. A crawl under about 4.5 mph can still split a trip and lose
+  those miles, depending on GPS noise.
+- A slow move of up to about 600 m right after a stop, with every leg at or
+  under 3.0 m/s (about 6.7 mph), can now be absorbed into the stop and make no
+  trip, because the minutes parked count toward the average. If the phone
+  reported rarely during the stop, that can reach close to 900 m. On upgrade, a
+  trip like that is deleted.
+- Operators: `DETECTOR_VERSION` is now 3, so upgrading re-detects each enabled,
+  unrevoked device's full history in the background. Trips that still match
+  keep their tags. A trip that is no longer detected is deleted and its
+  expenses are detached, which rolling back does not restore, so take a backup
+  first. With `DETECTOR_TURN_MAX_POINTS` set, see
+  [Detector version changes](docs/upgrading.md#detector-version-changes).
 - The Dashboard week key hides Unclassified and Non-deductible when they have
   no miles, and its labels stay on one line.
 - Hovering, focusing or tapping a day in the Dashboard week chart shows a

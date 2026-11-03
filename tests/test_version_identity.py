@@ -171,14 +171,14 @@ def test_authenticated_page_footer_shows_the_configured_app_version():
     assert "<a " not in footer
 
 
-def test_schema_version_is_queried_live_and_detector_version_stays_two():
+def test_schema_version_is_queried_live_and_detector_version_is_three():
     connection = _Connection((17,))
 
     assert asyncio.run(_fetch_schema_version(connection)) == 17
     assert connection.queries == [
         "SELECT COALESCE(max(version), 0) FROM schema_migrations"
     ]
-    assert DETECTOR_VERSION == 2
+    assert DETECTOR_VERSION == 3
 
 
 def test_authenticated_settings_context_uses_config_and_live_schema(monkeypatch):
@@ -252,7 +252,7 @@ def test_authenticated_settings_context_uses_config_and_live_schema(monkeypatch)
         "app_version": "v0.6.0-rc.1",
         "git_revision": "0123456789abcdef",
         "schema_version": 17,
-        "detector_version": 2,
+        "detector_version": 3,
     }
 
 
