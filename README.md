@@ -30,15 +30,15 @@ Start with [Install](#install), then see [Use Odograph](docs/usage.md).
 **What happens when GPS reception disappears?** A gap alone does not end a
 trip. When points resume farther along, it stays one trip, measured in a
 straight line across the gap, with a **Recording gap** badge if it lasted over
-10 minutes. A gap of five minutes or more averaging under about 4.5 mph splits
-the trip. Its miles still count if it spans more than 800 m within 30 minutes.
-Otherwise it looks like a stop and those miles are lost.
+10 minutes. A gap of five minutes or more averaging under about 4.5 mph looks
+like a stop, so the trip splits and those miles are lost.
 
 **Does it distinguish driving from walking?** Mostly by speed, and not by
 travel mode. A steady walk usually is not a trip, even with uneven reports,
-though a walk close to about 4.5 mph can make one. A bike ride, a run, a bus or a train will show up as one, and
-you can delete it or mark it **Not one of my vehicles**. Sitting still for about
-five minutes or more ends a trip, and Merge fixes that.
+though a walk close to about 4.5 mph can make one. A bike ride, a run, a bus
+or a train will show up as one, and you can delete it or mark it **Not one of
+my vehicles**. Sitting still for about five minutes or more ends a trip, and
+Merge fixes that.
 
 **Can I correct an incorrectly detected trip?** Yes. You can set its details,
 merge or split trips, delete and restore them, and add manual trips. You

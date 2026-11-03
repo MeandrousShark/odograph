@@ -23,8 +23,6 @@ MIN_TRIP_DISTANCE_M = 300.0
 GAP_FLAG_THRESHOLD_S = 600.0
 WALK_MAX_SPEED_MS = 2.0
 WALK_LEG_MAX_SPEED_MS = 3.0
-TRANSIT_LEG_MIN_M = 800.0
-TRANSIT_LEG_MAX_S = 1800.0
 ARRIVAL_MIN_DURATION_S = 60.0
 
 _METERS_PER_MILE = 1609.344
@@ -45,8 +43,6 @@ def test_detector_defaults_match_the_documented_values():
     assert params.gap_flag_threshold_s == GAP_FLAG_THRESHOLD_S
     assert params.walk_max_speed_ms == WALK_MAX_SPEED_MS
     assert params.walk_leg_max_speed_ms == WALK_LEG_MAX_SPEED_MS
-    assert params.transit_leg_min_m == TRANSIT_LEG_MIN_M
-    assert params.transit_leg_max_s == TRANSIT_LEG_MAX_S
     assert params.arrival_min_duration_s == ARRIVAL_MIN_DURATION_S
     assert params.arrival_triggers == {"c", "v"}
 
@@ -60,8 +56,6 @@ def test_detector_defaults_match_the_documented_values():
         ("GAP_FLAG_THRESHOLD_S", GAP_FLAG_THRESHOLD_S),
         ("WALK_MAX_SPEED_MS", WALK_MAX_SPEED_MS),
         ("WALK_LEG_MAX_SPEED_MS", WALK_LEG_MAX_SPEED_MS),
-        ("TRANSIT_LEG_MIN_M", TRANSIT_LEG_MIN_M),
-        ("TRANSIT_LEG_MAX_S", TRANSIT_LEG_MAX_S),
     ],
 )
 def test_runtime_config_uses_the_documented_detector_values(variable, documented):
@@ -93,8 +87,6 @@ def test_detection_guide_states_the_pinned_thresholds():
         f"Gaps over {GAP_FLAG_THRESHOLD_S / 60:.0f} minutes",
         f"about {MIN_TRIP_DISTANCE_M:.0f} m ({min_trip_mi:.1f} mi)",
         f"about {leg_mph:.1f} mph ({leg_kmh:.1f} km/h)",
-        f"A gap of 5 to {TRANSIT_LEG_MAX_S / 60:.0f} minutes",
-        f"spans more than {TRANSIT_LEG_MIN_M:.0f} m",
         f"more than {MISSING_TRIP_GAP_TEXT} from where the last one ended",
         f"end up more than {MISSING_TRIP_GAP_TEXT} apart",
     ):
@@ -107,8 +99,4 @@ def test_readme_short_answers_state_the_pinned_thresholds():
 
     assert f"about {walk_mph:.1f} mph" in readme
     assert f"over {GAP_FLAG_THRESHOLD_S / 60:.0f} minutes" in readme
-    assert (
-        f"spans more than {TRANSIT_LEG_MIN_M:.0f} m within "
-        f"{TRANSIT_LEG_MAX_S / 60:.0f} minutes" in readme
-    )
     assert "docs/detection.md" in readme

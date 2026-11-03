@@ -1,4 +1,4 @@
-"""The on-foot rule: the capped speed window, the departure trim and transit legs.
+"""The on-foot rule: the capped speed window and the departure trim.
 
 The first half fixes distances exactly by treating a point's latitude as meters
 along a line, so a boundary sits on its boundary. The second half runs the real
@@ -74,12 +74,13 @@ def test_window_follows_the_stay_duration(line):
     assert _ranges(*legs, params=Params(stay_min_duration_s=30.0)) == [(0, 2), (3, 4)]
 
 
+def test_point_exactly_a_window_old_opens_the_window(line):
+    # Counting from the older point would average 660 m over 400 s and forgive.
+    assert _ranges((100, 10), (240, 470), (60, 180), SLOW) == [(0, 2), (3, 4)]
+
+
 def test_broken_span_restarts_with_no_history(line):
     assert _ranges(SLOW, (10, 100), (10, 30), SLOW) == [(0, 1), (3, 4)]
-
-
-def test_history_stops_at_a_transit_leg(line):
-    assert _ranges(SLOW, (600, 900), (10, 30), SLOW) == [(0, 1), (3, 4)]
 
 
 def test_a_cap_below_the_walk_limit_forgives_nothing(line):
@@ -119,37 +120,8 @@ def test_trim_can_leave_too_little_to_be_a_stay(line):
     assert _ranges((200, 200), (60, 170), (60, 170), (10, 100)) == []
 
 
-def test_transit_leg_splits_a_span(line):
-    assert _ranges(SLOW, (900, 1000), SLOW) == [(0, 1), (2, 3)]
-
-
-def test_piece_before_a_transit_leg_is_a_stay_at_one_point(line):
-    assert _ranges((900, 1000), SLOW) == [(0, 0), (1, 2)]
-
-
-def test_piece_after_the_last_transit_leg_must_qualify_alone(line):
-    assert _ranges(SLOW, (900, 1000), (299, 299)) == [(0, 1)]
-
-
-def test_every_piece_before_a_transit_leg_is_a_stay(line):
-    assert _ranges((900, 1000), (10, 10), (900, 1000)) == [(0, 0), (1, 2)]
-
-
-@pytest.mark.parametrize(
-    ("seconds", "meters", "params", "transit"),
-    [
-        (900, 801, P, True),
-        (900, 800, P, False),
-        (1800, 801, P, True),
-        (1801, 801, P, False),
-        (300, 401, Params(transit_leg_min_m=400.0), True),
-        (299, 401, Params(transit_leg_min_m=400.0), False),
-        (900, 401, Params(transit_leg_min_m=400.0, transit_leg_max_s=899.0), False),
-    ],
-)
-def test_transit_leg_limits(line, seconds, meters, params, transit):
-    expected = [(0, 1), (2, 3)] if transit else [(0, 3)]
-    assert _ranges(SLOW, (seconds, meters), SLOW, params=params) == expected
+def test_long_slow_leg_stays_inside_a_span(line):
+    assert _ranges(SLOW, (900, 1000), SLOW) == [(0, 3)]
 
 
 def _km(trips) -> float:
@@ -204,43 +176,24 @@ def test_jams_detect_as_before(stopped_s, creep_m, trips, km):
 
 
 @pytest.mark.parametrize(
-    ("around_gap", "trips", "km"),
+    ("around_gap", "km"),
     [
-        ([Gap(900, 1)], 2, 4.87),
-        ([Drive(.01, 1.5), Gap(900, 1)], 2, 4.88),
-        ([Gap(900, 1), Drive(.01, 1.5)], 2, 4.89),
-        ([Stationary(600), Gap(900, 1)], 2, 4.76),
-        ([Gap(900, 1), Stationary(600)], 3, 4.88),
+        ([Gap(900, 1)], 3.67),
+        ([Gap(360, .5)], 3.67),
+        ([Drive(.01, 1.5), Gap(900, 1)], 3.67),
+        ([Gap(900, 1), Drive(.01, 1.5)], 3.88),
+        ([Stationary(600), Gap(900, 1)], 3.55),
+        ([Gap(900, 1), Stationary(600)], 3.89),
+        ([Gap(28800, .5)], 3.67),
     ],
-    ids=["gap", "slow-then-gap", "gap-then-slow", "stop-then-gap", "gap-then-stop"],
+    ids=["gap", "short-gap", "slow-then-gap", "gap-then-slow", "stop-then-gap",
+         "gap-then-stop", "silent-8-hours"],
 )
-def test_transit_leg_keeps_its_miles_and_its_flag(around_gap, trips, km):
-    pts = build_track([PARK, Drive(2), *around_gap, Drive(2), PARK])
+def test_slow_gap_is_a_stop_and_loses_its_miles(around_gap, km):
+    detected = detect(build_track([PARK, Drive(2), *around_gap, Drive(2), PARK]), P)[1]
 
-    detected = detect(pts, P)[1]
-
-    assert (len(detected), _km(detected)) == (trips, km)
-    assert sum(t.has_gap for t in detected) == 1
-
-
-@pytest.mark.parametrize(
-    "gap",
-    [Gap(28800, .5), Gap(1801, 1), Gap(360, .5)],
-    ids=["silent-8-hours", "over-30-minutes", "under-the-floor"],
-)
-def test_other_slow_legs_stay_inside_a_stay(gap):
-    detected = detect(build_track([PARK, Drive(2), gap, Drive(2), PARK]), P)[1]
-
-    assert len(detected) == 2
+    assert (len(detected), _km(detected)) == (2, km)
     assert not any(t.has_gap for t in detected)
-    assert _km(detected) < 4
-
-
-def test_silent_stay_gives_no_trip_an_overnight_leg():
-    detected = detect(build_track([PARK, Drive(2), Gap(28800, 5), Drive(2), PARK]), P)[1]
-
-    assert len(detected) == 2
-    assert max(t.distance_m for t in detected) < 2500
 
 
 def test_departure_after_a_forgiven_leg_stays_in_the_trip():
@@ -263,11 +216,9 @@ def test_departure_after_a_forgiven_leg_stays_in_the_trip():
     "track",
     [
         [PARK, Drive(2), Gap(900, 1), Drive(2), PARK],
-        [PARK, Drive(2), Drive(.01, 1.5), Gap(900, 1), Drive(2), PARK],
-        [PARK, Drive(2), Gap(900, 1), Stationary(600), Drive(2), PARK],
         [PARK, Drive(1, 7, jitter_m=8), Drive(2), PARK],
     ],
-    ids=["gap", "slow-then-gap", "gap-then-stop", "brisk-then-drive"],
+    ids=["gap", "brisk-then-drive"],
 )
 def test_every_stay_start_rebuilds_the_rest_of_the_track(track):
     """The runner rewinds to a settled stay's start. A window opened there must
