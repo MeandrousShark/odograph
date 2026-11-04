@@ -5,19 +5,19 @@
 [![Test](https://github.com/MeandrousShark/odograph/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/MeandrousShark/odograph/actions/workflows/test.yml)
 
 Odograph is a self-hosted mileage tracker. Your phone sends its location to
-your own server through the free [OwnTracks](https://owntracks.org/) app,
-Odograph turns that into trips with routes on a map, and you mark each one
-business or personal. You can also add or edit trips by hand, track vehicle
-expenses, compare tracked mileage against your odometer, get reminders about
-trips that still need a category, and calculate estimated IRS mileage
-deductions.
+your own server through the free [OwnTracks](https://owntracks.org/) or
+[Traccar Client](https://www.traccar.org/client/) app, Odograph turns that into
+trips with routes on a map, and you mark each one business or personal. You
+can also add or edit trips by hand, track vehicle expenses, compare tracked
+mileage against your odometer, get reminders about trips that still need a
+category, and calculate estimated IRS mileage deductions.
 
 ![Odograph dashboard with synthetic data](docs/images/usage-dashboard.png)
 
 *Example dashboard using synthetic locations and account data.*
 
 1. Self-host Odograph.
-2. Connect your phone through OwnTracks.
+2. Connect your phone through OwnTracks or Traccar Client.
 3. Drive normally, then review and categorize trips.
 
 Start with [Install](#install), then see [Use Odograph](docs/usage.md).
@@ -186,19 +186,25 @@ sign-in requires HTTPS, because session cookies are marked Secure. Check
 `https://mileage.example.com/healthz`, then sign in at
 `https://mileage.example.com/login`.
 
-## Connect OwnTracks
+## Connect your phone
 
 Create a device in **Settings > Tracking**, copy its username and one-time
 password into OwnTracks, and follow the [OwnTracks guide](docs/owntracks.md) to
 send a test track. Odograph then detects trips on its own, and
 [Use Odograph](docs/usage.md) covers the rest.
 
-The phone posts straight to `https://your-domain/ingest` with no third-party
-relay, so it must reach the same HTTPS address as your browser and trust its
-certificate. The server does not need to be on the public internet: a private
-network or tunnel can work if it ends in an HTTPS proxy that forwards to
-`127.0.0.1:8077`, though Odograph does not test or document a specific VPN or
-tunnel product. If something sits in front of your reverse proxy, read
+[Traccar Client](docs/traccar.md) works too: paste the device's
+**Traccar Server URL** into the app and set a heartbeat shorter than five
+minutes. OwnTracks generally gives better trip boundaries, so prefer it if you
+can choose.
+
+The phone posts straight to `https://your-domain/ingest` (or `/ingest/traccar`
+for Traccar Client) with no third-party relay, so it must reach the same HTTPS
+address as your browser and trust its certificate. The server does not need to
+be on the public internet: a private network or tunnel can work if it ends in
+an HTTPS proxy that forwards to `127.0.0.1:8077`, though Odograph does not test
+or document a specific VPN or tunnel product. If something sits in front of
+your reverse proxy, read
 [Trusting forwarded headers](docs/reverse-proxy.md#trusting-forwarded-headers).
 Set `APP_URL` to the same HTTPS address so reminder and email links point at it.
 

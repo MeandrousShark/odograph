@@ -73,7 +73,7 @@ def test_quickstart_separates_critical_path_from_post_install_operations():
     # their own sections so an operator can reach a signed-in instance without
     # making backup or release-policy decisions first.
     readme = (ROOT / "README.md").read_text()
-    critical = readme.split("## Quick start", 1)[1].split("## Connect OwnTracks", 1)[0]
+    critical = readme.split("## Quick start", 1)[1].split("## Connect your phone", 1)[0]
     clone = critical.index("git clone --branch vX.Y.Z --depth 1")
     generate_env = critical.index("scripts/generate_env.sh")
     signup_disabled = critical.index("INITIAL_ADMIN_SIGNUP=0")
@@ -95,11 +95,12 @@ def test_quickstart_separates_critical_path_from_post_install_operations():
     assert "latest tag" not in critical.lower()
     assert create_admin < https
 
-    post_install = readme.split("## Connect OwnTracks", 1)[1].split(
+    post_install = readme.split("## Connect your phone", 1)[1].split(
         "## Password recovery", 1
     )[0]
     assert "Account Settings" in post_install
     assert "docs/owntracks.md" in post_install
+    assert "docs/traccar.md" in post_install
     assert "backup_database.sh" in post_install
     assert "docs/security.md#hardening-checklist" in post_install
     assert "docs/configuration.md#external-services" in post_install
