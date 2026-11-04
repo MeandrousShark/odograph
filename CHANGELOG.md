@@ -9,6 +9,8 @@ reproduced here.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-04
+
 ### Added
 
 - `compose.try.yaml`, attached to each GitHub release with its image digest,
@@ -68,6 +70,37 @@ reproduced here.
   checks. Authlib uses joserfc to verify ID tokens during single sign-on.
   Odograph does not decrypt JWE, and those tokens come from the configured
   provider rather than from the browser.
+
+### Migrations
+
+- This release adds no migration; the schema stays at 51. The database image
+  is the same as 1.3.1's.
+- See [Upgrading from 1.3](docs/upgrading.md#upgrading-from-13).
+
+### Supported upgrade path
+
+- `v1.3.1` and `v1.3.0` upgrade directly with the standard procedure; also
+  read [Upgrading from 1.3](docs/upgrading.md#upgrading-from-13). `v1.2.0`
+  also upgrades directly and reads the 1.3 notes and
+  [Upgrading from 1.2](docs/upgrading.md#upgrading-from-12). `v1.1.0` and
+  `v1.0.0` also upgrade directly; their database images have the same
+  versions as this release's, so they upgrade in place through
+  [Database image security rebuilds](docs/upgrading.md#database-image-security-rebuilds)
+  and also read the earlier notes. A 0.x installation first upgrades to
+  `v1.0.0`.
+- Prior-release artifact upgrade gate: release preflight ran the Docker
+  Compose upgrade drill from `v1.3.1`, `v1.3.0` and `v1.2.0` in standard mode
+  and from `v1.1.0` and `v1.0.0` in database image swap mode before this
+  release was tagged.
+
+### Breaking changes
+
+- None. No configuration change is required. Two upgrade effects need
+  attention first: the `DETECTOR_VERSION` 3 reprocess can delete trips that
+  are no longer detected, which rolling back does not restore, so take a
+  backup; and the Possible missing trip warning now starts at 500 m unless
+  `MISSING_TRIP_GAP_M` is set. Take the release's `compose.yaml` for the
+  healthcheck fix.
 
 ## [1.3.1] - 2026-10-28
 

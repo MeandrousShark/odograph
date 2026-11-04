@@ -453,6 +453,51 @@ wait_for_detector_settled() {
     done
 }
 
+# A run that starts within the margin of the newest point leaves that point
+# past its own watermark, so step 2 restarts the app only after the margin
+# (RUN_OVERLAP_MARGIN in app/detector/runner.py) plus a little slack.
+DETECTOR_OVERLAP_MARGIN_S=60
+wait_for_overlap_margin() {
+    local dir="$1" timeout_s="$2" deadline sql
+    sql="SELECT coalesce(max(received_at), '-infinity') < now() - interval '$((DETECTOR_OVERLAP_MARGIN_S + 5)) seconds' AS overlap_margin_passed FROM points"
+    deadline=$(( $(date +%s) + timeout_s ))
+    while :; do
+        [ "$(db_query "$dir" "$sql")" = t ] && return 0
+        [ "$(date +%s)" -lt "$deadline" ] || return 1
+        sleep 2
+    done
+}
+
+# Prints the DETECTOR_VERSION a checked-out tree ships.
+detector_version_of() {
+    local file="$1/app/detector/runner.py" version
+    version="$(sed -nE 's/^DETECTOR_VERSION = ([0-9]+)([[:space:]].*)?$/\1/p' "$file" 2>/dev/null)" || return 1
+    [ -n "$version" ] && [ "$(printf '%s\n' "$version" | wc -l | tr -d '[:space:]')" -eq 1 ] || return 1
+    printf '%s\n' "$version"
+}
+
+# The runner stores detector_version only when a device's full reprocess
+# commits, so no eligible device left on another version proves the startup
+# reprocess finished. Eligibility mirrors the candidate's runner: workers run
+# enabled accounts only (enabled_principals in app/account_workers.py), and
+# _PENDING_DEVICES_SQL in app/detector/runner.py picks the devices. Its
+# watermark clause is left out: a point ingested just before the upgrade may
+# still sit inside the overlap margin.
+wait_for_detector_reprocessed() {
+    local dir="$1" version="$2" schema="$3" timeout_s="$4" deadline sql
+    if [ "$schema" -ge 26 ]; then
+        sql="SELECT NOT EXISTS (SELECT 1 FROM accounts a JOIN tracking_devices d ON d.account_id = a.id JOIN detector_state s ON s.account_id = d.account_id AND s.tracking_device_id = d.id WHERE a.is_enabled AND d.enabled AND d.revoked_at IS NULL AND s.detector_version <> ${version} AND (s.last_run_at IS NOT NULL OR s.detector_version <> 0 OR EXISTS (SELECT 1 FROM points p WHERE p.account_id = d.account_id AND p.tracking_device_id = d.id) OR EXISTS (SELECT 1 FROM trips t WHERE t.account_id = d.account_id AND t.tracking_device_id = d.id AND t.source = 'detected' AND NOT t.imported) OR EXISTS (SELECT 1 FROM trip_boundary_overrides o WHERE o.account_id = d.account_id AND o.tracking_device_id = d.id))) AS detector_reprocessed"
+    else
+        sql="SELECT s.detector_version = ${version} AS detector_reprocessed FROM detector_state s WHERE s.id = 1"
+    fi
+    deadline=$(( $(date +%s) + timeout_s ))
+    while :; do
+        [ "$(db_query "$dir" "$sql")" = t ] && return 0
+        [ "$(date +%s)" -lt "$deadline" ] || return 1
+        sleep 2
+    done
+}
+
 print_detector_watermark() {
     local dir="$1" step="$2" line
     while IFS= read -r line; do
@@ -701,6 +746,76 @@ assert_data_manifests_equal() {
     b_data="$(mktemp "$SCRATCH/manifest-data.XXXXXX")"
     strip_schema_version_section "$a" > "$a_data"
     strip_schema_version_section "$b" > "$b_data"
+    assert_manifests_equal "$a_data" "$b_data" "$desc"
+}
+
+# A DETECTOR_VERSION change makes the candidate reprocess every device. That
+# stamps each detected trip with the new detector_version and updated_at, and
+# recreates every stay with a new id. Only those fields are removed, from both
+# sides alike, and stays are sorted by content; every other value still has to
+# match.
+strip_reprocess_fields() {
+    python3 - "$1" <<'PYEOF'
+import json
+import sys
+
+class Number(str):
+    """A JSON number kept as its exact source text."""
+
+def row_text(value):
+    # Keeps JSON types and exact number text, so 1200.50, 1200.5 and
+    # "1200.50" all stay distinct; only key order is normalised.
+    if isinstance(value, Number):
+        return str(value)
+    if isinstance(value, dict):
+        return "{" + ", ".join(
+            json.dumps(key, ensure_ascii=False) + ": " + row_text(value[key])
+            for key in sorted(value)) + "}"
+    if isinstance(value, list):
+        return "[" + ", ".join(row_text(item) for item in value) + "]"
+    return json.dumps(value, ensure_ascii=False)
+
+section = None
+stays = []
+out = []
+with open(sys.argv[1]) as manifest:
+    lines = manifest.read().splitlines()
+for line in lines + [None]:
+    if line is None or (line.startswith("== ") and line.endswith(" ==")):
+        if section == "exact_stays":
+            out.extend(sorted(stays))
+            stays = []
+        if line is None:
+            break
+        section = line[3:-3]
+        out.append(line)
+        continue
+    if section in ("exact_trips", "exact_stays") and line.strip():
+        row = json.loads(line, parse_float=Number, parse_int=Number)
+        if section == "exact_stays":
+            row.pop("id", None)
+            stays.append(row_text(row))
+            continue
+        if row.get("source") == "detected":
+            row.pop("detector_version", None)
+            row.pop("updated_at", None)
+        line = row_text(row)
+    out.append(line)
+for line in out:
+    print(line)
+PYEOF
+}
+
+assert_reprocessed_data_manifests_equal() {
+    local a="$1" b="$2" desc="$3" a_data b_data
+    a_data="$(mktemp "$SCRATCH/manifest-data.XXXXXX")"
+    b_data="$(mktemp "$SCRATCH/manifest-data.XXXXXX")"
+    strip_schema_version_section "$a" > "$SCRATCH/manifest-strip.txt"
+    strip_reprocess_fields "$SCRATCH/manifest-strip.txt" > "$a_data" \
+        || step_fail "$desc: could not normalise $a"
+    strip_schema_version_section "$b" > "$SCRATCH/manifest-strip.txt"
+    strip_reprocess_fields "$SCRATCH/manifest-strip.txt" > "$b_data" \
+        || step_fail "$desc: could not normalise $b"
     assert_manifests_equal "$a_data" "$b_data" "$desc"
 }
 
@@ -1034,6 +1149,11 @@ assert_db_image_identity_equal() {
 step_materialize() {
     git -C "$REPO_ROOT" archive "$BASE_REF" | tar -x -C "$BASE_DIR"
     git -C "$REPO_ROOT" archive "$CANDIDATE_REF" | tar -x -C "$CAND_DIR"
+    # With --candidate-image the candidate tree is the image's own revision.
+    BASE_DETECTOR_VERSION="$(detector_version_of "$BASE_DIR")" \
+        || step_fail "materialize: could not read DETECTOR_VERSION from the base app/detector/runner.py"
+    CANDIDATE_DETECTOR_VERSION="$(detector_version_of "$CAND_DIR")" \
+        || step_fail "materialize: could not read DETECTOR_VERSION from the candidate app/detector/runner.py"
     step_pass "materialized base ($BASE_REF -> $BASE_DIR) and candidate ($CANDIDATE_REF -> $CAND_DIR)"
 }
 
@@ -1171,8 +1291,11 @@ step2_seed() {
         || step_fail "step 2: no detected trip appeared for device 'test' within the debounce window"
     step_pass "step 2c: a real detected trip (with points/geometry) captured via send_test_track.sh"
 
-    # The detector runs once on startup, now a full margin after the newest
-    # point, so the archive in step 4 cannot make a restored app rewrite rows.
+    # The detector runs once on startup. Restarting only once the newest point
+    # is a full overlap margin old lets that run's watermark cover it, so the
+    # archive in step 4 cannot make a restored app rewrite rows.
+    wait_for_overlap_margin "$BASE_DIR" 90 \
+        || step_fail "step 2d: newest received point did not age past the ${DETECTOR_OVERLAP_MARGIN_S} s detector overlap margin within 90 s"
     compose_base stop app >/dev/null
     compose_base up -d app >/dev/null
     wait_for_healthz 120 || step_fail "step 2: app did not come back healthy after the detector restart"
@@ -1359,6 +1482,19 @@ step8_database_image_swap_back() {
         "step 8: base db image back on the existing volume serves the candidate's data unchanged"
 }
 
+# A DETECTOR_VERSION change makes the candidate reprocess every device on
+# startup; the manifest is captured only once that has finished.
+verify_detector_reprocess() {
+    local v="$1" stale from="$BASE_DETECTOR_VERSION" to="$CANDIDATE_DETECTOR_VERSION"
+    wait_for_detector_reprocessed "$CAND_DIR" "$to" "$v" 240 \
+        || step_fail "step 7a: DETECTOR_VERSION $from -> $to reprocess did not finish on every eligible device within 240 s"
+    stale="$(db_query "$CAND_DIR" \
+        "SELECT count(*) FROM trips WHERE source = 'detected' AND detector_version <> ${to}")"
+    [ "$stale" = "0" ] \
+        || step_fail "step 7a: $stale detected trip(s) do not carry DETECTOR_VERSION $to after the reprocess"
+    step_pass "step 7a: DETECTOR_VERSION $from -> $to reprocess finished on every eligible device and every detected trip carries version $to"
+}
+
 step7_upgrade() {
     local v mig account_count identity_count
     case "$DATABASE_IMAGE_MODE" in
@@ -1377,9 +1513,16 @@ step7_upgrade() {
     mig="$(migration_count "$CAND_DIR")"
     [ "$v" = "$mig" ] || step_fail "step 7: schema_version ($v) does not equal the candidate's migration count ($mig)"
 
-    capture_manifest "$CAND_DIR" "$SCRATCH/manifest-after-upgrade.txt"
-    assert_data_manifests_equal "$SCRATCH/manifest-after-ingest.txt" "$SCRATCH/manifest-after-upgrade.txt" \
-        "step 7a: candidate healthy, schema_version=$v matches migration count, data unchanged"
+    if [ "$BASE_DETECTOR_VERSION" = "$CANDIDATE_DETECTOR_VERSION" ]; then
+        capture_manifest "$CAND_DIR" "$SCRATCH/manifest-after-upgrade.txt"
+        assert_data_manifests_equal "$SCRATCH/manifest-after-ingest.txt" "$SCRATCH/manifest-after-upgrade.txt" \
+            "step 7a: candidate healthy, schema_version=$v matches migration count, data unchanged"
+    else
+        verify_detector_reprocess "$v"
+        capture_manifest "$CAND_DIR" "$SCRATCH/manifest-after-upgrade.txt"
+        assert_reprocessed_data_manifests_equal "$SCRATCH/manifest-after-ingest.txt" "$SCRATCH/manifest-after-upgrade.txt" \
+            "step 7a: candidate healthy, schema_version=$v matches migration count, data unchanged apart from the reprocess-owned fields (detected trip detector_version and updated_at, stay ids)"
+    fi
     verify_defaulted_additions "$CAND_DIR" "$v"
     verify_ownership_upgrade "$CAND_DIR" "$v"
 

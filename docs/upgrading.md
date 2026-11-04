@@ -202,6 +202,26 @@ For a Podman installation, replace each `docker compose` command with
 This procedure is also the model used by the release preflight database-image
 migration drill.
 
+## Upgrading from 1.3
+
+This release adds no migration, and the database image is the same as
+1.3.1's, so the standard [upgrade procedure](#upgrade-procedure) applies. Take
+its backup step seriously: `DETECTOR_VERSION` is now 3, so after the upgrade
+the background detector reprocesses every enabled, unrevoked device's full
+history. A trip that is no longer detected, such as a brisk walk or a short
+slow move right after a stop, is deleted and its expenses are detached, and
+rolling back does not restore it. Only that backup does. See
+[Detector version changes](#detector-version-changes).
+
+No configuration change is required. Two defaults and files change:
+
+- `MISSING_TRIP_GAP_M` now defaults to 500 instead of 1000. Set
+  `MISSING_TRIP_GAP_M=1000` in `.env` to keep the old distance, or `0` to turn
+  the Possible missing trip warning off.
+- The release's `compose.yaml` uses the `CMD-SHELL` form for the `app`
+  healthcheck, so `app` reports `healthy` under podman-compose 1.3.0.
+  Checking out the release tag, as the upgrade procedure does, picks it up.
+
 ## Upgrading from 1.2
 
 This release adds no migration, and the database image is the same as
