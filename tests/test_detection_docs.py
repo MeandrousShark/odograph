@@ -104,8 +104,8 @@ def test_changelog_states_the_short_move_limit():
     changelog = re.sub(r"\s+", " ", (ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
     # The entry moves from Unreleased into its release section at release prep,
     # so find the section that announces the current detector version.
-    announcement = f"`DETECTOR_VERSION` is now {DETECTOR_VERSION}"
-    sections = [s for s in changelog.split("## [")[1:] if announcement in s]
+    announcement = re.compile(re.escape(f"`DETECTOR_VERSION` is now {DETECTOR_VERSION}") + r"(?!\d)")
+    sections = [s for s in changelog.split("## [")[1:] if announcement.search(s)]
     assert len(sections) == 1
     section = sections[0]
     leg_mph = WALK_LEG_MAX_SPEED_MS * 3600 / _METERS_PER_MILE

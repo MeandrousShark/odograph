@@ -477,13 +477,16 @@ detector_version_of() {
 }
 
 # The runner stores detector_version only when a device's full reprocess
-# commits, so a matching version on every device with points proves the
-# startup reprocess finished. The watermark is not checked: a point ingested
-# just before the upgrade may still sit inside the overlap margin.
+# commits, so no eligible device left on another version proves the startup
+# reprocess finished. Eligibility mirrors the candidate's runner: workers run
+# enabled accounts only (enabled_principals in app/account_workers.py), and
+# _PENDING_DEVICES_SQL in app/detector/runner.py picks the devices. Its
+# watermark clause is left out: a point ingested just before the upgrade may
+# still sit inside the overlap margin.
 wait_for_detector_reprocessed() {
     local dir="$1" version="$2" schema="$3" timeout_s="$4" deadline sql
     if [ "$schema" -ge 26 ]; then
-        sql="SELECT NOT EXISTS (SELECT 1 FROM tracking_devices d WHERE d.enabled AND d.revoked_at IS NULL AND EXISTS (SELECT 1 FROM points p WHERE p.account_id = d.account_id AND p.tracking_device_id = d.id) AND NOT EXISTS (SELECT 1 FROM detector_state s WHERE s.account_id = d.account_id AND s.tracking_device_id = d.id AND s.detector_version = ${version})) AS detector_reprocessed"
+        sql="SELECT NOT EXISTS (SELECT 1 FROM accounts a JOIN tracking_devices d ON d.account_id = a.id JOIN detector_state s ON s.account_id = d.account_id AND s.tracking_device_id = d.id WHERE a.is_enabled AND d.enabled AND d.revoked_at IS NULL AND s.detector_version <> ${version} AND (s.last_run_at IS NOT NULL OR s.detector_version <> 0 OR EXISTS (SELECT 1 FROM points p WHERE p.account_id = d.account_id AND p.tracking_device_id = d.id) OR EXISTS (SELECT 1 FROM trips t WHERE t.account_id = d.account_id AND t.tracking_device_id = d.id AND t.source = 'detected' AND NOT t.imported) OR EXISTS (SELECT 1 FROM trip_boundary_overrides o WHERE o.account_id = d.account_id AND o.tracking_device_id = d.id))) AS detector_reprocessed"
     else
         sql="SELECT s.detector_version = ${version} AS detector_reprocessed FROM detector_state s WHERE s.id = 1"
     fi
@@ -753,12 +756,24 @@ assert_data_manifests_equal() {
 # match.
 strip_reprocess_fields() {
     python3 - "$1" <<'PYEOF'
-import decimal
 import json
 import sys
 
-def row_text(row):
-    return json.dumps(row, sort_keys=True, ensure_ascii=False, default=str)
+class Number(str):
+    """A JSON number kept as its exact source text."""
+
+def row_text(value):
+    # Keeps JSON types and exact number text, so 1200.50, 1200.5 and
+    # "1200.50" all stay distinct; only key order is normalised.
+    if isinstance(value, Number):
+        return str(value)
+    if isinstance(value, dict):
+        return "{" + ", ".join(
+            json.dumps(key, ensure_ascii=False) + ": " + row_text(value[key])
+            for key in sorted(value)) + "}"
+    if isinstance(value, list):
+        return "[" + ", ".join(row_text(item) for item in value) + "]"
+    return json.dumps(value, ensure_ascii=False)
 
 section = None
 stays = []
@@ -776,7 +791,7 @@ for line in lines + [None]:
         out.append(line)
         continue
     if section in ("exact_trips", "exact_stays") and line.strip():
-        row = json.loads(line, parse_float=decimal.Decimal)
+        row = json.loads(line, parse_float=Number, parse_int=Number)
         if section == "exact_stays":
             row.pop("id", None)
             stays.append(row_text(row))

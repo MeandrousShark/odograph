@@ -70,6 +70,9 @@ def _install_repo(
     reprocess_call = 'wait_for_detector_reprocessed "$CAND_DIR" "$to" "$v" 240'
     assert reprocess_call in source
     source = source.replace(reprocess_call, 'wait_for_detector_reprocessed "$CAND_DIR" "$to" "$v" 0')
+    margin_call = 'wait_for_overlap_margin "$BASE_DIR" 90'
+    assert margin_call in source
+    source = source.replace(margin_call, 'wait_for_overlap_margin "$BASE_DIR" 0')
     _write_executable(scripts_dir / "upgrade_check.sh", source)
     if no_bootstrap:
         bootstrap_env = "'POSTGRES_PASSWORD=fake' 'INGEST_PASSWORD=fake'"
@@ -253,7 +256,10 @@ case "${1-}" in
                 if [ "${FAKE_DETECTOR_UNSETTLED:-}" = 1 ]; then printf '%s\n' f; else printf '%s\n' t; fi
                 exit 0
                 ;;
-            *"AS overlap_margin_passed"*) printf '%s\n' t; exit 0 ;;
+            *"AS overlap_margin_passed"*)
+                if [ "${FAKE_OVERLAP_PENDING:-}" = 1 ]; then printf '%s\n' f; else printf '%s\n' t; fi
+                exit 0
+                ;;
             *"AS detector_reprocessed"*)
                 if [ "${FAKE_REPROCESS_PENDING:-}" = 1 ]; then printf '%s\n' f; else printf '%s\n' t; fi
                 exit 0
@@ -2014,6 +2020,24 @@ def test_step2_restart_waits_for_the_detector_overlap_margin(tmp_path, owned_sch
     assert detected < margin[0] < stop < settled
 
 
+def test_step2_overlap_margin_timeout_fails_before_the_restart(tmp_path):
+    repo, base_ref, candidate_ref = _install_repo(tmp_path)
+    result, log, _, _ = _run(
+        repo, ["--base", base_ref, "--candidate", candidate_ref], tmp_path,
+        fail_up=False, extra_env={"FAKE_OVERLAP_PENDING": "1"},
+    )
+    assert result.returncode != 0
+    assert (
+        "[FAIL] step 2d: newest received point did not age past the 60 s detector overlap"
+        " margin within 90 s"
+    ) in result.stderr
+    assert "[PASS] step 2c" in result.stdout
+    lines = log.read_text().splitlines()
+    margin = next(i for i, line in enumerate(lines) if "AS overlap_margin_passed" in line)
+    assert not any(line.endswith(" stop app") for line in lines[margin:])
+    assert "AS detector_settled" not in log.read_text()
+
+
 _DETECTED_TRIP_V2 = (
     '{"id": 1, "path": "0102", "source": "detected", "category": "business",'
     ' "distance_m": 1200.50, "updated_at": "2026-01-01T00:00:00+00:00", "detector_version": 2}'
@@ -2095,8 +2119,8 @@ def test_detector_version_change_waits_for_the_reprocess_and_ignores_its_fields(
     assert len(waits) == 1
     assert "/cand/" in lines[waits[0]]
     if owned_schema:
-        assert "s.tracking_device_id = d.id AND s.detector_version = 3" in lines[waits[0]]
-        assert "d.enabled AND d.revoked_at IS NULL" in lines[waits[0]]
+        assert "a.is_enabled AND d.enabled AND d.revoked_at IS NULL" in lines[waits[0]]
+        assert "s.detector_version <> 3" in lines[waits[0]]
         assert "received_at" not in lines[waits[0]]
     else:
         assert "s.detector_version = 3" in lines[waits[0]]
@@ -2119,10 +2143,15 @@ def test_detector_version_change_waits_for_the_reprocess_and_ignores_its_fields(
         ({"cand_trips": ("\n" + _MANUAL_TRIP, "")}, '"manual"'),
         ({"cand_stays": ('"point_count": 7', '"point_count": 8')}, '"point_count"'),
         ({"cand_stays": ('"ended_at": "2026-01-01T01', '"ended_at": "2026-01-01T04')}, '"ended_at"'),
+        ({"cand_trips": ('"distance_m": 5000', '"distance_m": "5000"')}, '"5000"'),
+        ({"cand_trips": ('"distance_m": 1200.50', '"distance_m": "1200.50"')}, '"1200.50"'),
+        ({"cand_trips": ('"distance_m": 1200.50', '"distance_m": 1200.5')}, "1200.5,"),
+        ({"cand_stays": ('"point_count": 7', '"point_count": 7.0')}, "7.0"),
     ],
     ids=[
         "detected-distance", "detected-path", "manual-updated-at", "manual-detector-version",
-        "deleted-trip", "stay-point-count", "stay-ended-at",
+        "deleted-trip", "stay-point-count", "stay-ended-at", "manual-number-to-string",
+        "detected-number-to-string", "detected-number-scale", "stay-integer-to-decimal",
     ],
 )
 def test_detector_version_change_still_fails_on_real_data_changes(tmp_path, changes, shown):
