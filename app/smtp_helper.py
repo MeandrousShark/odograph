@@ -50,6 +50,34 @@ _RESOURCE_RESULTS = {phase: b'FAIL resource ' + phase.encode('ascii') + b'\n'
                      for phase in ('input', 'tls', 'connect', 'starttls', 'auth', 'data', 'quit')}
 
 
+def _address_literal(address):
+    """The RFC 5321 address literal for a socket's local address."""
+    if ':' in address:
+        return '[IPv6:' + address.split('%', 1)[0] + ']'
+    return '[' + address + ']'
+
+
+def _open_session(security, host, port, context):
+    """Connect, then name this client in EHLO by its local address.
+
+    An explicit local_hostname stops smtplib from looking up this host's name,
+    which can take seconds where reverse lookups are slow.
+    """
+    if security == 'ssl':
+        session = smtplib.SMTP_SSL(host, port, local_hostname='', context=context,
+                                  timeout=SMTP_TIMEOUT_S)
+    elif security in ('starttls', 'none'):
+        session = smtplib.SMTP(host, port, local_hostname='', timeout=SMTP_TIMEOUT_S)
+    else:
+        raise ValueError(f'unknown SMTP security mode {security!r}')
+    try:
+        session.local_hostname = _address_literal(session.sock.getsockname()[0])
+    except BaseException:
+        session.close()
+        raise
+    return session
+
+
 def smtp_transport(mailer, message, state=None):
     """Complete a verified SMTP session, including QUIT, or raise."""
     if state is None:
@@ -58,13 +86,7 @@ def smtp_transport(mailer, message, state=None):
     context = (ssl._create_unverified_context() if mailer.tls_insecure
                else ssl.create_default_context())
     state["phase"] = "connect"
-    if mailer.security == "ssl":
-        session = smtplib.SMTP_SSL(mailer.host, mailer.port, context=context,
-                                  timeout=SMTP_TIMEOUT_S)
-    elif mailer.security in ("starttls", "none"):
-        session = smtplib.SMTP(mailer.host, mailer.port, timeout=SMTP_TIMEOUT_S)
-    else:
-        raise ValueError(f"unknown SMTP_SECURITY {mailer.security!r}")
+    session = _open_session(mailer.security, mailer.host, mailer.port, context)
     with session as smtp:
         if mailer.security == "starttls":
             state["phase"] = "starttls"
@@ -148,13 +170,7 @@ def prepared_transport(config, envelope, mime_fd, mime_utf8_fd, state):
     context = (ssl._create_unverified_context() if config.tls_insecure
                else ssl.create_default_context())
     state['phase'] = 'connect'
-    if config.security == 'ssl':
-        session = smtplib.SMTP_SSL(config.host, config.port, context=context,
-                                  timeout=SMTP_TIMEOUT_S)
-    elif config.security in ('starttls', 'none'):
-        session = smtplib.SMTP(config.host, config.port, timeout=SMTP_TIMEOUT_S)
-    else:
-        raise ValueError('unknown SMTP security mode')
+    session = _open_session(config.security, config.host, config.port, context)
     with session as smtp:
         if config.security == 'starttls':
             state['phase'] = 'starttls'

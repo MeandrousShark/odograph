@@ -119,6 +119,7 @@ def test_ambiguous_digest_turn_rotates_accounts_and_kinds_without_immediate_retr
             await _reaped(relay, children)
             for _ in range(3):
                 assert (await worker.run_turn()).batch.retriable_failures == 0
+            assert set(relay.ehlo_names) == {b"[127.0.0.1]"}
             assert [str(message["To"]) for message in relay.messages] == [
                 "admin@example.invalid", "member@example.invalid", "member@example.invalid", "admin@example.invalid",
             ]

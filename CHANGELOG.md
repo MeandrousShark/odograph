@@ -55,6 +55,11 @@ reproduced here.
   reported `unhealthy` while it worked, because its healthcheck used the
   `CMD` form. It now uses `CMD-SHELL`. Take the release's `compose.yaml` to
   pick this up; nothing else changes.
+- Email sends no longer wait on a lookup of the app's own hostname, which
+  could cost seconds per send where reverse lookups are slow. The EHLO name is
+  now the address literal of the connection, such as `[192.0.2.10]`. Operators:
+  if you set a `hostname:` with a dot on `app`, the relay now sees the literal
+  instead of that name.
 
 ### Security
 
