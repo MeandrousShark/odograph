@@ -1,7 +1,11 @@
+import http.server
 import os
 import re
+import shlex
 import shutil
 import subprocess
+import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -94,6 +98,48 @@ def test_app_service_runs_read_only_with_a_tmp_tmpfs():
 
     assert app["read_only"] is True
     assert app["tmpfs"] == ["/tmp"]
+
+
+def test_no_healthcheck_uses_the_cmd_form():
+    # podman-compose 1.3.0 joins a CMD list into a broken shell line, so the
+    # check always fails and the service never reports healthy.
+    services = load_compose(CANONICAL_COMPOSE)["services"]
+    checks = {name: service["healthcheck"]["test"]
+              for name, service in services.items() if "healthcheck" in service}
+
+    assert checks
+    assert {name: test[0] for name, test in checks.items()} == {
+        name: "CMD-SHELL" for name in checks}
+
+
+@pytest.mark.parametrize("status,healthy", [(200, True), (204, False), (503, False), (None, False)])
+def test_app_healthcheck_passes_only_on_200(status, healthy):
+    probe = load_compose(CANONICAL_COMPOSE)["services"]["app"]["healthcheck"]["test"][1]
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(status)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    if status is None:
+        server.server_close()
+    else:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        command = probe.replace("127.0.0.1:8000", f"127.0.0.1:{port}").replace(
+            "python3", shlex.quote(sys.executable), 1)
+        result = subprocess.run(["sh", "-c", command], capture_output=True, timeout=10)
+    finally:
+        if status is not None:
+            server.shutdown()
+            server.server_close()
+
+    assert (result.returncode == 0) is healthy
 
 
 def test_env_example_does_not_enable_an_osrm_dataset():

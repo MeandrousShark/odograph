@@ -49,6 +49,13 @@ reproduced here.
 - Hovering, focusing or tapping a day in the Dashboard week chart shows a
   tooltip with its total and each category's miles.
 
+### Fixed
+
+- Operators: under podman-compose 1.3.0, the version in Debian 13, `app`
+  reported `unhealthy` while it worked, because its healthcheck used the
+  `CMD` form. It now uses `CMD-SHELL`. Take the release's `compose.yaml` to
+  pick this up; nothing else changes.
+
 ### Security
 
 - Upgrade joserfc from 1.7.3 to 1.7.7 for CVE-2026-119283 and CVE-2026-119284,
