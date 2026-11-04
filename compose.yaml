@@ -39,8 +39,10 @@ services:
       - /tmp
     # The slim base image has no curl; a Python one-liner against the
     # already-running interpreter avoids adding a package just for this.
+    # CMD-SHELL because podman-compose 1.3.0 turns the CMD form into a broken
+    # shell line, and this service would then never report healthy.
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status==200 else 1)"]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status==200 else 1)\""]
       interval: 10s
       timeout: 5s
       retries: 5

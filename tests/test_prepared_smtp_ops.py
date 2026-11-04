@@ -62,6 +62,7 @@ def test_descriptor_complete_wire_matches_legacy(monkeypatch, tmp_path, tls_cont
             oracle.send_message(baseline)
             # Relay stores DATA without its terminator.
             assert relay.messages == [bytes(oracle.wire[:-3])]
+            assert relay.ehlo_names == [b'[127.0.0.1]'] * (2 if security == 'starttls' else 1)
             assert_reaped(processes)
             args, kwargs = calls[0]
             assert 'fd2' in args

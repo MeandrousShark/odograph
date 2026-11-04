@@ -69,7 +69,7 @@ def test_starttls_security_uses_smtp_and_calls_starttls_with_verified_context():
     with patch("app.mailer.smtplib.SMTP", return_value=smtp) as smtp_cls, \
          patch("app.mailer.smtplib.SMTP_SSL") as smtp_ssl_cls:
         smtp_transport(mailer, message)
-    smtp_cls.assert_called_once_with("smtp.example.com", 587, timeout=15.0)
+    smtp_cls.assert_called_once_with("smtp.example.com", 587, local_hostname="", timeout=15.0)
     smtp_ssl_cls.assert_not_called()
     assert smtp.starttls.call_count == 1
     context = smtp.starttls.call_args.kwargs["context"]
@@ -101,7 +101,7 @@ def test_none_security_uses_bare_smtp_with_no_starttls():
     smtp = _fake_smtp_cm()
     with patch("app.mailer.smtplib.SMTP", return_value=smtp) as smtp_cls:
         smtp_transport(mailer, message)
-    smtp_cls.assert_called_once_with("smtp.example.com", 587, timeout=15.0)
+    smtp_cls.assert_called_once_with("smtp.example.com", 587, local_hostname="", timeout=15.0)
     smtp.starttls.assert_not_called()
     smtp.send_message.assert_called_once_with(message)
 
@@ -162,6 +162,17 @@ def test_cancelled_serialization_drains_actual_thread_before_return(monkeypatch)
         finally:
             release.set()
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("address,literal", [
+    ("192.0.2.7", "[192.0.2.7]"),
+    ("2001:db8::7", "[IPv6:2001:db8::7]"),
+    ("fe80::7%eth0", "[IPv6:fe80::7]"),
+])
+def test_ehlo_name_is_the_local_address_literal(address, literal):
+    from app import smtp_helper
+
+    assert smtp_helper._address_literal(address) == literal
 
 
 @pytest.mark.parametrize("parents", [(41, 42), (42,)])

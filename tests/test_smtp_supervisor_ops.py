@@ -38,6 +38,7 @@ class Relay:
         self.eof = asyncio.Event()
         self.messages = []
         self.recipients = []
+        self.ehlo_names = []
         self.tasks = set()
 
     async def handle(self, reader, writer):
@@ -65,6 +66,7 @@ class Relay:
                     await reader.read()
                     return
                 if command in (b"EHLO", b"HELO"):
+                    self.ehlo_names.append((line.split() + [b""])[1])
                     writer.write(b"250-fixture\r\n250-STARTTLS\r\n250 AUTH PLAIN LOGIN\r\n")
                 elif command == b"STARTTLS":
                     writer.write(b"220 TLS\r\n")
@@ -195,6 +197,35 @@ def test_plain_success_preserves_complete_message_and_session_exit(monkeypatch):
             assert received.get_content().replace("\r\n", "\n") == body
             assert {line.split(b"<", 1)[1].split(b">", 1)[0] for line in relay.recipients} == {
                 b"recipient@example.test", b"second@example.test", b"hidden@example.test"}
+            assert relay.ehlo_names == [b"[127.0.0.1]"]
+        finally:
+            await relay.close()
+    asyncio.run(scenario())
+
+
+def test_send_completes_without_any_hostname_lookup(monkeypatch, tmp_path):
+    # smtplib otherwise looks up this host's name before EHLO, which took 5 s
+    # per send on a host with slow reverse lookups.
+    processes, _ = observe_spawn(monkeypatch)
+    target = str(supervisor.HELPER_PATH)
+    path = wrapper(tmp_path, f'''import runpy, socket
+def refuse(*args, **kwargs):
+    raise RuntimeError("hostname lookup")
+socket.getfqdn = socket.gethostbyname = socket.gethostbyaddr = refuse
+ns = runpy.run_path({target!r})
+raise SystemExit(ns['main']())
+''')
+    monkeypatch.setattr(supervisor, "HELPER_PATH", path)
+
+    async def scenario():
+        relay = Relay()
+        port = await relay.start()
+        send = mailer(port)
+        try:
+            await send.send(send.compose("subject", "body"))
+            assert_reaped(processes)
+            assert relay.data_accepted.is_set()
+            assert relay.ehlo_names == [b"[127.0.0.1]"]
         finally:
             await relay.close()
     asyncio.run(scenario())
@@ -596,6 +627,8 @@ raise SystemExit(ns['main']())
             await send.send(send.compose("subject", "body"))
             assert_reaped(processes)
             assert relay.data_accepted.is_set()
+            # STARTTLS repeats EHLO with the same name.
+            assert relay.ehlo_names == [b"[127.0.0.1]"] * (2 if security == "starttls" else 1)
         finally:
             await relay.close()
     asyncio.run(scenario())

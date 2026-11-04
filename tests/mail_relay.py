@@ -14,6 +14,7 @@ class LocalRelay:
         self.entered = asyncio.Event()
         self.disconnected = asyncio.Event()
         self.messages = []
+        self.ehlo_names = []
         self.sessions = 0
         self._tasks = set()
 
@@ -45,6 +46,7 @@ class LocalRelay:
             while command := await reader.readline():
                 verb = command.split(None, 1)[0].upper()
                 if verb in (b"EHLO", b"HELO"):
+                    self.ehlo_names.append((command.split() + [b""])[1])
                     response = b"250 loopback\r\n"
                 elif verb in (b"MAIL", b"RCPT", b"RSET", b"NOOP"):
                     response = b"250 OK\r\n"
