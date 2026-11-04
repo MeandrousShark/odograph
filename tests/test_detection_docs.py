@@ -9,6 +9,7 @@ import pytest
 
 from app.config import DEFAULT_MISSING_TRIP_GAP_M
 from app.detector.core import Params
+from app.detector.runner import DETECTOR_VERSION
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -101,15 +102,20 @@ def test_detection_guide_states_the_pinned_thresholds():
 
 def test_changelog_states_the_short_move_limit():
     changelog = re.sub(r"\s+", " ", (ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
-    unreleased = changelog.split("## [Unreleased]", 1)[1].split("## [", 1)[0]
+    # The entry moves from Unreleased into its release section at release prep,
+    # so find the section that announces the current detector version.
+    announcement = f"`DETECTOR_VERSION` is now {DETECTOR_VERSION}"
+    sections = [s for s in changelog.split("## [")[1:] if announcement in s]
+    assert len(sections) == 1
+    section = sections[0]
     leg_mph = WALK_LEG_MAX_SPEED_MS * 3600 / _METERS_PER_MILE
 
     assert (
         f"up to about {WALK_MAX_SPEED_MS * STAY_MIN_DURATION_S:.0f} m right after a stop, "
         f"with every leg at or under {WALK_LEG_MAX_SPEED_MS} m/s (about {leg_mph:.1f} mph)"
-    ) in unreleased
-    assert "a trip like that is deleted" in unreleased
-    assert "depending on GPS noise" in unreleased
+    ) in section
+    assert "a trip like that is deleted" in section
+    assert "depending on GPS noise" in section
 
 
 def test_readme_short_answers_state_the_pinned_thresholds():
