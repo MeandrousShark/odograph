@@ -52,6 +52,7 @@ def _install_repo(
     no_bootstrap: bool = False,
     owned_schema: bool = False,
     example_signup: str = "1",
+    candidate_detector_version: int = 2,
 ) -> tuple[Path, str, str]:
     repo = tmp_path / "repo"
     scripts_dir = repo / "scripts"
@@ -66,6 +67,9 @@ def _install_repo(
     settle_call = 'wait_for_detector_settled "$BASE_DIR" 60'
     assert settle_call in source
     source = source.replace(settle_call, 'wait_for_detector_settled "$BASE_DIR" 0')
+    reprocess_call = 'wait_for_detector_reprocessed "$CAND_DIR" "$to" "$v" 240'
+    assert reprocess_call in source
+    source = source.replace(reprocess_call, 'wait_for_detector_reprocessed "$CAND_DIR" "$to" "$v" 0')
     _write_executable(scripts_dir / "upgrade_check.sh", source)
     if no_bootstrap:
         bootstrap_env = "'POSTGRES_PASSWORD=fake' 'INGEST_PASSWORD=fake'"
@@ -97,6 +101,9 @@ def _install_repo(
     (scripts_dir / "dev_seed.py").write_text("raise SystemExit(0)\n")
     (repo / "compose.yaml").write_text(_compose_yaml("db:stable", "base"))
     (migrations_dir / "001_base.sql").write_text("SELECT 1;\n")
+    runner = repo / "app" / "detector" / "runner.py"
+    runner.parent.mkdir(parents=True)
+    runner.write_text("DETECTOR_VERSION = 2  # v2: fixture\n")
     if owned_schema:
         for version in range(2, 27):
             (migrations_dir / f"{version:03d}_fixture.sql").write_text("SELECT 1;\n")
@@ -113,6 +120,7 @@ def _install_repo(
     base_ref = _git(repo, "rev-parse", "HEAD")
 
     (repo / "compose.yaml").write_text(_compose_yaml(candidate_db_image, "candidate"))
+    runner.write_text(f"DETECTOR_VERSION = {candidate_detector_version}  # fixture\n")
     _write_executable(
         scripts_dir / "backup_database.sh",
         "#!/usr/bin/env bash\nset -u\n"
@@ -243,6 +251,20 @@ case "${1-}" in
             *"python -m app.application_roles verify"*) exit 0 ;;
             *"AS detector_settled"*)
                 if [ "${FAKE_DETECTOR_UNSETTLED:-}" = 1 ]; then printf '%s\n' f; else printf '%s\n' t; fi
+                exit 0
+                ;;
+            *"AS overlap_margin_passed"*) printf '%s\n' t; exit 0 ;;
+            *"AS detector_reprocessed"*)
+                if [ "${FAKE_REPROCESS_PENDING:-}" = 1 ]; then printf '%s\n' f; else printf '%s\n' t; fi
+                exit 0
+                ;;
+            *"source = 'detected' AND detector_version <> "*)
+                printf '%s\n' "${FAKE_STALE_DETECTED_TRIPS:-0}"; exit 0 ;;
+            *"FROM trips t ORDER BY id"*|*"FROM stays t ORDER BY id"*)
+                case "$original" in *"FROM trips t"*) table=trips;; *) table=stays;; esac
+                case "$PWD" in */cand/*) side=cand;; *) side=base;; esac
+                rows="${FAKE_EXACT_ROWS_DIR:-/nonexistent}/$side-$table"
+                if [ -f "$rows" ]; then cat "$rows"; else printf '%s\n' row; fi
                 exit 0
                 ;;
             *"python -m app.manage_account list-accounts"*)
@@ -1967,6 +1989,237 @@ def test_detector_watermark_behind_a_point_fails_step_2d_before_backup(tmp_path,
     assert "[PASS] step 2d" not in result.stdout
     assert "step 3" not in result.stdout
     assert not any(line.startswith("child|") for line in log.read_text().splitlines())
+
+
+@pytest.mark.parametrize("owned_schema", [False, True])
+def test_step2_restart_waits_for_the_detector_overlap_margin(tmp_path, owned_schema):
+    repo, base_ref, candidate_ref = _install_repo(
+        tmp_path, modern_auth=owned_schema, owned_schema=owned_schema
+    )
+    result, log, _, _ = _run(
+        repo, ["--base", base_ref, "--candidate", candidate_ref], tmp_path,
+        fail_up=False, modern_auth=owned_schema, owned_schema=owned_schema,
+    )
+    assert result.returncode == 0, result.stderr
+    lines = log.read_text().splitlines()
+    detected = next(i for i, line in enumerate(lines) if "source = 'detected'" in line)
+    margin = [i for i, line in enumerate(lines) if "AS overlap_margin_passed" in line]
+    assert len(margin) == 1
+    assert "now() - interval '65 seconds'" in lines[margin[0]]
+    assert "/base/" in lines[margin[0]]
+    settled = next(i for i, line in enumerate(lines) if "AS detector_settled" in line)
+    stop = next(i for i, line in enumerate(lines)
+                if i > detected and line.startswith("compose|") and "/base/" in line
+                and line.endswith(" stop app"))
+    assert detected < margin[0] < stop < settled
+
+
+_DETECTED_TRIP_V2 = (
+    '{"id": 1, "path": "0102", "source": "detected", "category": "business",'
+    ' "distance_m": 1200.50, "updated_at": "2026-01-01T00:00:00+00:00", "detector_version": 2}'
+)
+_DETECTED_TRIP_V3 = (
+    _DETECTED_TRIP_V2.replace('"detector_version": 2', '"detector_version": 3')
+    .replace("2026-01-01T00:00:00", "2026-03-01T00:00:00")
+)
+_MANUAL_TRIP = (
+    '{"id": 2, "source": "manual", "category": "personal", "distance_m": 5000,'
+    ' "updated_at": "2026-01-02T00:00:00+00:00", "detector_version": 0}'
+)
+_STAYS = [
+    '{"id": 10, "device": "test", "ended_at": "2026-01-01T01:00:00+00:00", "point_count": 5,'
+    ' "started_at": "2026-01-01T00:30:00+00:00"}',
+    '{"id": 11, "device": "test", "ended_at": "2026-01-01T03:00:00+00:00", "point_count": 7,'
+    ' "started_at": "2026-01-01T02:00:00+00:00"}',
+]
+
+
+def _reprocessed_rows(**changes: tuple[str, str]) -> dict[str, str]:
+    # Recreated stays get new ids, not necessarily in the original order.
+    stays = [_STAYS[1].replace('"id": 11', '"id": 21'), _STAYS[0].replace('"id": 10', '"id": 20')]
+    rows = {
+        "base-trips": "\n".join([_DETECTED_TRIP_V2, _MANUAL_TRIP]),
+        "cand-trips": "\n".join([_DETECTED_TRIP_V3, _MANUAL_TRIP]),
+        "base-stays": "\n".join(_STAYS),
+        "cand-stays": "\n".join(stays),
+    }
+    for key, (old, new) in changes.items():
+        side = key.replace("_", "-")
+        assert old in rows[side]
+        rows[side] = rows[side].replace(old, new)
+    return rows
+
+
+def _run_detector_change(
+    tmp_path: Path, rows: dict[str, str], *, candidate_version: int = 3,
+    owned_schema: bool = False, extra_env: dict[str, str] | None = None,
+):
+    repo, base_ref, candidate_ref = _install_repo(
+        tmp_path, modern_auth=owned_schema, owned_schema=owned_schema,
+        candidate_detector_version=candidate_version,
+    )
+    rows_dir = tmp_path / "exact-rows"
+    rows_dir.mkdir()
+    for name, text in rows.items():
+        (rows_dir / name).write_text(text + "\n")
+    return _run(
+        repo, ["--base", base_ref, "--candidate", candidate_ref], tmp_path,
+        fail_up=False, modern_auth=owned_schema, owned_schema=owned_schema,
+        extra_env={"FAKE_EXACT_ROWS_DIR": str(rows_dir), **(extra_env or {})},
+    )
+
+
+_REPROCESS_PASS = (
+    "[PASS] step 7a: DETECTOR_VERSION 2 -> 3 reprocess finished on every eligible device"
+    " and every detected trip carries version 3"
+)
+_REPROCESSED_DATA_DESC = (
+    "data unchanged apart from the reprocess-owned fields"
+    " (detected trip detector_version and updated_at, stay ids)"
+)
+
+
+@pytest.mark.parametrize("owned_schema", [False, True])
+def test_detector_version_change_waits_for_the_reprocess_and_ignores_its_fields(
+    tmp_path, owned_schema
+):
+    result, log, _, _ = _run_detector_change(
+        tmp_path, _reprocessed_rows(), owned_schema=owned_schema
+    )
+    assert result.returncode == 0, result.stderr
+    assert _REPROCESS_PASS in result.stdout
+    assert _REPROCESSED_DATA_DESC in result.stdout
+    assert "all drill steps passed" in result.stdout
+    lines = log.read_text().splitlines()
+    waits = [i for i, line in enumerate(lines) if "AS detector_reprocessed" in line]
+    assert len(waits) == 1
+    assert "/cand/" in lines[waits[0]]
+    if owned_schema:
+        assert "s.tracking_device_id = d.id AND s.detector_version = 3" in lines[waits[0]]
+        assert "d.enabled AND d.revoked_at IS NULL" in lines[waits[0]]
+        assert "received_at" not in lines[waits[0]]
+    else:
+        assert "s.detector_version = 3" in lines[waits[0]]
+        assert "WHERE s.id = 1" in lines[waits[0]]
+    stale = next(i for i, line in enumerate(lines)
+                 if "source = 'detected' AND detector_version <> 3" in line)
+    candidate_rows = next(i for i, line in enumerate(lines)
+                          if "/cand/" in line and "FROM trips t ORDER BY id" in line)
+    assert waits[0] < stale < candidate_rows
+    assert result.stdout.index(_REPROCESS_PASS) < result.stdout.index(_REPROCESSED_DATA_DESC)
+
+
+@pytest.mark.parametrize(
+    "changes,shown",
+    [
+        ({"cand_trips": ('"distance_m": 1200.50', '"distance_m": 1200.51')}, '"distance_m"'),
+        ({"cand_trips": ('"path": "0102"', '"path": "0103"')}, '"path"'),
+        ({"cand_trips": ('"updated_at": "2026-01-02', '"updated_at": "2026-03-02')}, '"manual"'),
+        ({"cand_trips": ('"detector_version": 0', '"detector_version": 3')}, '"manual"'),
+        ({"cand_trips": ("\n" + _MANUAL_TRIP, "")}, '"manual"'),
+        ({"cand_stays": ('"point_count": 7', '"point_count": 8')}, '"point_count"'),
+        ({"cand_stays": ('"ended_at": "2026-01-01T01', '"ended_at": "2026-01-01T04')}, '"ended_at"'),
+    ],
+    ids=[
+        "detected-distance", "detected-path", "manual-updated-at", "manual-detector-version",
+        "deleted-trip", "stay-point-count", "stay-ended-at",
+    ],
+)
+def test_detector_version_change_still_fails_on_real_data_changes(tmp_path, changes, shown):
+    result, _, _, _ = _run_detector_change(tmp_path, _reprocessed_rows(**changes))
+    assert result.returncode != 0
+    assert _REPROCESS_PASS in result.stdout
+    assert (
+        "[FAIL] step 7a: candidate healthy, schema_version=1 matches migration count, "
+        + _REPROCESSED_DATA_DESC
+    ) in result.stderr
+    assert shown in result.stderr
+    assert "step 7b" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "cand_trips,cand_stays",
+    [
+        ([_DETECTED_TRIP_V3, _MANUAL_TRIP], _STAYS),
+        ([_DETECTED_TRIP_V2, _MANUAL_TRIP], [_STAYS[0].replace('"id": 10', '"id": 20'), _STAYS[1]]),
+    ],
+    ids=["detected-trip-version", "stay-id"],
+)
+def test_unchanged_detector_version_compares_reprocess_fields_exactly(
+    tmp_path, cand_trips, cand_stays
+):
+    rows = {
+        "base-trips": "\n".join([_DETECTED_TRIP_V2, _MANUAL_TRIP]),
+        "cand-trips": "\n".join(cand_trips),
+        "base-stays": "\n".join(_STAYS),
+        "cand-stays": "\n".join(cand_stays),
+    }
+    result, log, _, _ = _run_detector_change(tmp_path, rows, candidate_version=2)
+    assert result.returncode != 0
+    assert (
+        "[FAIL] step 7a: candidate healthy, schema_version=1 matches migration count, data unchanged\n"
+    ) in result.stderr
+    assert "reprocess" not in result.stdout + result.stderr
+    assert "AS detector_reprocessed" not in log.read_text()
+    assert "detector_version <>" not in log.read_text()
+
+
+def test_unchanged_detector_version_passes_identical_rows_without_a_reprocess_wait(tmp_path):
+    rows = _reprocessed_rows()
+    rows["cand-trips"], rows["cand-stays"] = rows["base-trips"], rows["base-stays"]
+    result, log, _, _ = _run_detector_change(tmp_path, rows, candidate_version=2)
+    assert result.returncode == 0, result.stderr
+    assert (
+        "[PASS] step 7a: candidate healthy, schema_version=1 matches migration count, data unchanged\n"
+    ) in result.stdout
+    assert "DETECTOR_VERSION" not in result.stdout
+    assert "AS detector_reprocessed" not in log.read_text()
+
+
+def test_detector_reprocess_timeout_fails_step_7a_before_the_manifest(tmp_path):
+    result, log, _, _ = _run_detector_change(
+        tmp_path, _reprocessed_rows(), extra_env={"FAKE_REPROCESS_PENDING": "1"}
+    )
+    assert result.returncode != 0
+    assert (
+        "[FAIL] step 7a: DETECTOR_VERSION 2 -> 3 reprocess did not finish on every"
+        " eligible device within 240 s"
+    ) in result.stderr
+    assert not any("/cand/" in line and "FROM trips t ORDER BY id" in line
+                   for line in log.read_text().splitlines())
+
+
+def test_stale_detected_trips_fail_step_7a_after_the_reprocess(tmp_path):
+    result, _, _, _ = _run_detector_change(
+        tmp_path, _reprocessed_rows(), extra_env={"FAKE_STALE_DETECTED_TRIPS": "2"}
+    )
+    assert result.returncode != 0
+    assert (
+        "[FAIL] step 7a: 2 detected trip(s) do not carry DETECTOR_VERSION 3 after the reprocess"
+    ) in result.stderr
+    assert _REPROCESS_PASS not in result.stdout
+
+
+@pytest.mark.parametrize("side", ["base", "candidate"])
+def test_unreadable_detector_version_fails_before_anything_starts(tmp_path, side):
+    repo, base_ref, candidate_ref = _install_repo(tmp_path)
+    if side == "base":
+        _git(repo, "checkout", "-q", base_ref)
+    (repo / "app" / "detector" / "runner.py").write_text("DETECTOR_VERSION = BASE + 1\n")
+    _git(repo, "commit", "-qam", "unreadable detector version")
+    ref = _git(repo, "rev-parse", "HEAD")
+    if side == "base":
+        args = ["--base", ref, "--candidate", candidate_ref]
+    else:
+        args = ["--base", base_ref, "--candidate", ref]
+    result, log, _, _ = _run(repo, args, tmp_path, fail_up=False)
+    assert result.returncode != 0
+    assert (
+        f"[FAIL] materialize: could not read DETECTOR_VERSION from the {side}"
+        " app/detector/runner.py"
+    ) in result.stderr
+    assert not any(line.startswith("compose|") and " up " in line
+                   for line in log.read_text().splitlines())
 
 
 @pytest.mark.parametrize("count,enabled", [(1, True), (2, True), (1, False), (0, True)])
