@@ -221,9 +221,13 @@ case "${1-}" in
         case " $original " in
             *" app "|*" app")
                 case "$PWD" in
-                    */cand/*) printf '%s\n' candidate > "$FAKE_ACTIVE_APP" ;;
-                    *) printf '%s\n' base > "$FAKE_ACTIVE_APP" ;;
+                    */cand/*) side=candidate ;;
+                    *) side=base ;;
                 esac
+                printf '%s\n' "$side" > "$FAKE_ACTIVE_APP"
+                if [ -n "${FAKE_INSTALL_CAPTURE:-}" ]; then
+                    cat compose.yaml .env > "$FAKE_INSTALL_CAPTURE-$side"
+                fi
                 ;;
         esac
         case "$PWD" in
@@ -1482,6 +1486,105 @@ def test_database_image_modes_are_mutually_exclusive(tmp_path, first):
     assert not log_path.exists()
 
 
+@pytest.mark.parametrize("db_flag", ["--database-image-swap", "--database-image-migration"])
+@pytest.mark.parametrize("image_only_first", [True, False])
+def test_image_only_excludes_the_database_image_modes(tmp_path, db_flag, image_only_first):
+    repo, base_ref, candidate_ref = _install_repo(tmp_path, candidate_db_image="db:native")
+    flags = ["--image-only", db_flag] if image_only_first else [db_flag, "--image-only"]
+
+    result, log_path, _, _ = _run(
+        repo, ["--base", base_ref, "--candidate", candidate_ref, *flags], tmp_path,
+        fail_up=False,
+    )
+
+    assert result.returncode != 0
+    assert f"--image-only and {db_flag} are mutually exclusive" in result.stderr
+    assert not log_path.exists()
+
+
+def test_help_documents_image_only_mode(tmp_path):
+    script = _write_executable(tmp_path / "upgrade_check.sh", UPGRADE_SCRIPT.read_text())
+
+    result = subprocess.run(
+        ["bash", str(script), "--help"], capture_output=True, text=True, timeout=10
+    )
+
+    assert result.returncode == 0
+    assert "--database-image-swap | --image-only]" in result.stderr
+    assert "keep the base compose.yaml and .env" in result.stderr
+    assert "change only the app image" in result.stderr
+
+
+# A candidate whose own compose.yaml changes the db service still upgrades in
+# image-only mode: the install keeps the base compose.yaml, so no db mode applies.
+@pytest.mark.parametrize("candidate_image", ["", "registry.example.test/odograph@sha256:" + "a" * 64])
+def test_image_only_keeps_the_base_install_and_changes_only_the_app_image(
+    tmp_path, candidate_image
+):
+    repo, base_ref, candidate_ref = _install_repo(tmp_path, candidate_db_image="db:native")
+    args = ["--base", base_ref, "--candidate", candidate_ref, "--image-only"]
+    if candidate_image:
+        args += ["--candidate-image", candidate_image]
+    capture = tmp_path / "install"
+
+    result, log_path, override_capture, scratch_root = _run(
+        repo, args, tmp_path, fail_up=False,
+        extra_env={"FAKE_INSTALL_CAPTURE": str(capture)},
+    )
+
+    assert result.returncode == 0, result.stderr
+    base_install = (tmp_path / "install-base").read_text()
+    assert (tmp_path / "install-candidate").read_text() == base_install
+    assert "image: db:stable" in base_install
+    assert "APP_MARKER: base" in base_install
+    assert "OIDC_CLIENT_ID=upgrade-drill-client" in base_install
+    assert "image-only: candidate stage uses the base" in result.stdout
+    assert "step 1: base/candidate rendered db service definitions match" in result.stdout
+    assert "keeps the base compose.yaml and .env byte-for-byte" in result.stdout
+    assert "step 8a: rollback restored" in result.stdout
+    assert "mode:      image-only" in result.stdout
+    assert _identity_probes(log_path) == []
+
+    lines = log_path.read_text().splitlines()
+    candidate_up = [
+        line for line in lines if "/cand/" in line and " up " in f" {line} "
+    ]
+    assert len(candidate_up) == 1
+    if candidate_image:
+        assert "compose.candidate-image.override.yml" in candidate_up[0]
+        assert candidate_up[0].endswith(" up -d --no-build app")
+        assert f"image: '{candidate_image}'" in override_capture.read_text()
+    else:
+        assert "compose.build.override.yml" in candidate_up[0]
+        assert candidate_up[0].endswith(" up -d --build app")
+    assert list(scratch_root.glob("upgrade_check.*")) == []
+
+
+@pytest.mark.parametrize("drifted", ["compose.yaml", ".env"])
+def test_image_only_install_check_fails_on_any_install_drift(tmp_path, drifted):
+    base_dir = tmp_path / "base"
+    cand_dir = tmp_path / "cand"
+    for directory in (base_dir, cand_dir):
+        directory.mkdir()
+        (directory / "compose.yaml").write_text("services: {}\n")
+        (directory / ".env").write_text("POSTGRES_PASSWORD=fake\n")
+    script = _bash_with_functions(
+        tmp_path, "image-only-install.sh",
+        ("step_pass", "step_fail", "assert_image_only_install"),
+        f"BASE_DIR={str(base_dir)!r}\nCAND_DIR={str(cand_dir)!r}\nassert_image_only_install",
+    )
+
+    result = subprocess.run([str(script)], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert "byte-for-byte" in result.stdout
+
+    with (cand_dir / drifted).open("a") as handle:
+        handle.write("# drift\n")
+    result = subprocess.run([str(script)], capture_output=True, text=True, timeout=10)
+    assert result.returncode != 0
+    assert f"image-only candidate {drifted} differs" in result.stderr
+
+
 def test_database_image_swap_rejects_a_different_identity_before_startup(tmp_path):
     repo, base_ref, candidate_ref = _install_repo(tmp_path, candidate_db_image="db:native")
 
@@ -1842,7 +1945,8 @@ def _drill_workflow_refs(tmp_path: Path, base_db: str, candidate_db: str):
 
 
 def _run_drill_workflow_step(
-    repo: Path, base: str, revision: str, tmp_path: Path, candidate_image="", identities=None
+    repo: Path, base: str, revision: str, tmp_path: Path, candidate_image="", identities=None,
+    mode="standard",
 ):
     script = _write_executable(tmp_path / "drill-step.sh", "#!/usr/bin/env bash\n" + _drill_workflow_run_script())
     args_file = tmp_path / "drill-args"
@@ -1852,7 +1956,7 @@ def _run_drill_workflow_step(
     }
     result = subprocess.run(
         ["bash", str(script)], cwd=repo, capture_output=True, text=True, timeout=30,
-        env={**os.environ, **identity_env, "BASE": base, "REVISION": revision,
+        env={**os.environ, **identity_env, "BASE": base, "MODE": mode, "REVISION": revision,
              "CANDIDATE_IMAGE": candidate_image, "ARGS_FILE": str(args_file),
              "PROBE_LOG": str(tmp_path / "probe-log"),
              # The workflow's setup-python provides `python` with PyYAML; here
@@ -1917,6 +2021,25 @@ def test_drill_workflow_fails_closed_when_a_ref_has_no_db_image(tmp_path, side, 
     assert result.returncode != 0
     assert "could not read the db image" in result.stderr
     assert not args_file.exists()
+
+
+@pytest.mark.parametrize("candidate_image", ["", "registry.example.test/odograph@sha256:" + "a" * 64])
+def test_drill_workflow_image_only_entry_skips_db_mode_selection(tmp_path, candidate_image):
+    # A candidate without a readable db image proves no db probe runs.
+    repo, base, revision = _drill_workflow_refs(tmp_path, "db:one", "!no-image")
+    result, args_file = _run_drill_workflow_step(
+        repo, base, revision, tmp_path, candidate_image, mode="image-only"
+    )
+    assert result.returncode == 0, result.stderr
+    args, compose_cmd = args_file.read_text().splitlines()
+    assert compose_cmd == "compose_cmd=docker compose"
+    expected = f"--base {base} --candidate {revision}"
+    if candidate_image:
+        expected += f" --candidate-image {candidate_image}"
+    assert args == expected + " --image-only"
+    assert not (tmp_path / "probe-log").exists()
+    evidence = tmp_path / "workflow-repo" / "evidence"
+    assert [path.name for path in evidence.iterdir()] == [f"upgrade-drill-{base}-image-only.txt"]
 
 
 @pytest.mark.parametrize("issuance_fails", [False, True])
