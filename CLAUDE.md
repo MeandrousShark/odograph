@@ -48,6 +48,20 @@ exhaustive input matrix once, at the cheapest layer that catches the
 regression. Review applies these rules to new tests; existing tests move only
 when a change touches them.
 
+## Operator docs
+
+The guides in `docs/` are for people running an instance. Keep them short:
+
+1. Say what Odograph does, then what the operator can do. Leave out general
+   advice a reader can find anywhere.
+2. Give one way to do each thing; link alternatives.
+3. Link, don't repeat: each fact lives in one guide.
+4. No history in guides. A release's upgrade notes go at the top of its
+   `CHANGELOG.md` section.
+5. Implementation detail belongs in code, tests and comments.
+6. Keep safety statements, short and plain: what is exposed, what is
+   refused, what is lost.
+
 ## Load-bearing behavior
 
 - Keep `detect()` pure and do not casually bump `DETECTOR_VERSION`.
