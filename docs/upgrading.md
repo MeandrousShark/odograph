@@ -202,6 +202,26 @@ For a Podman installation, replace each `docker compose` command with
 This procedure is also the model used by the release preflight database-image
 migration drill.
 
+## Upgrading from 1.4
+
+This release adds no migration, and the database image is the same as
+1.4.0's, so the standard [upgrade procedure](#upgrade-procedure) applies. No
+configuration change is required.
+
+Road snapping no longer splits a trip at every stop of a minute or more, which
+had dropped miles on trips from trackers that report by distance, such as
+Traccar Client. Trips snapped before the upgrade keep their split route until
+they are queued again. Once the upgraded app is running, run this once for
+each account:
+
+```sh
+docker compose exec app python -m app.resnap --account ACCOUNT_ID
+```
+
+It prints how many trips it queued, and the app snaps them again within
+`SNAP_SWEEP_S`. See [Snapping split trips again](osrm.md#snapping-split-trips-again).
+Without OSRM configured there is nothing to queue.
+
 ## Upgrading from 1.3
 
 This release adds no migration, and the database image is the same as

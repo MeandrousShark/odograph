@@ -9,6 +9,8 @@ reproduced here.
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-11-06
+
 ### Fixed
 
 - Road snapping no longer splits a trip at every stop of a minute or more.
@@ -24,6 +26,37 @@ reproduced here.
   between OwnTracks and Traccar Client. The warning still compares each trip
   with its own device's previous trip, and is now cleared when another
   device's trip ended within `MISSING_TRIP_GAP_M` of where this one starts.
+
+### Migrations
+
+- This release adds no migration; the schema stays at 51. The database image
+  is the same as 1.4.0's.
+- See [Upgrading from 1.4](docs/upgrading.md#upgrading-from-14).
+
+### Supported upgrade path
+
+- `v1.4.0` upgrades directly with the standard procedure; also read
+  [Upgrading from 1.4](docs/upgrading.md#upgrading-from-14). `v1.3.1` and
+  `v1.3.0` also upgrade directly and read the 1.4.0 notes and
+  [Upgrading from 1.3](docs/upgrading.md#upgrading-from-13), since the
+  `DETECTOR_VERSION` 3 reprocess still applies to them. `v1.2.0` also upgrades
+  directly and reads the 1.3 notes and
+  [Upgrading from 1.2](docs/upgrading.md#upgrading-from-12). `v1.1.0` and
+  `v1.0.0` also upgrade directly; their database images have the same
+  versions as this release's, so they upgrade in place through
+  [Database image security rebuilds](docs/upgrading.md#database-image-security-rebuilds)
+  and also read the earlier notes. A 0.x installation first upgrades to
+  `v1.0.0`.
+- Prior-release artifact upgrade gate: release preflight ran the Docker
+  Compose upgrade drill from `v1.4.0`, `v1.3.1`, `v1.3.0` and `v1.2.0` in
+  standard mode and from `v1.1.0` and `v1.0.0` in database image swap mode
+  before this release was tagged.
+
+### Breaking changes
+
+- None. There is no migration and no Compose, configuration or environment
+  change. Run `python -m app.resnap --account ACCOUNT_ID` once for each
+  account after upgrading so trips snapped in pieces are snapped again.
 
 ## [1.4.0] - 2026-11-04
 
