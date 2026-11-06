@@ -52,7 +52,9 @@ when a change touches them.
 
 - Keep `detect()` pure and do not casually bump `DETECTOR_VERSION`.
 - Human tags and manual trips remain protected from detector-owned changes.
-- Keep OSRM match requests at `tidy=false` so dense valid fixes survive.
+- Keep OSRM match requests at `tidy=false` so dense valid fixes survive,
+  and at `gaps=ignore` so a distance-based tracker's stops do not split
+  the trace and drop miles.
 - Applied migrations are immutable. Add a new migration for a correction.
 - Upgrades only validate the database role contract. A migration after 026
   that adds or replaces a public table, sequence or security-definer function
