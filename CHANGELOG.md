@@ -21,7 +21,7 @@ reproduced here.
   about a quarter of its former length. Upgrade notes for each release now
   live at the top of its changelog section; earlier per-version sections
   remain in the
-  [v1.4.0 guide](https://github.com/MeandrousShark/odograph/blob/v1.4.0/docs/upgrading.md).
+  [v1.4.1 guide](https://github.com/MeandrousShark/odograph/blob/v1.4.1/docs/upgrading.md).
 
 ## [1.4.1] - 2026-11-06
 

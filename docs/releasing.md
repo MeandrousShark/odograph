@@ -102,7 +102,11 @@ Every release section must state:
 - each new migration in the release with its `-- migration-class:` header
   value, or an explicit statement that the release adds none;
 - when `services.db.image` differs from the previous release's, which kind of
-  change it is (see [Database image changes](#database-image-changes)); and
+  change it is (see [Database image changes](#database-image-changes));
+- at the top of the section, anything the release does on its own (a
+  reprocess, a changed default, a migration that rewrites data) and any step
+  an operator should take, with the backup advice; these are the release's
+  upgrade notes, and `docs/upgrading.md` gets no per-release section; and
 - no security scan acceptances (see
   [Blocking dependency and image scans](#blocking-dependency-and-image-scans)).
 
@@ -255,6 +259,10 @@ and at the revision and selects one of three modes:
 - the lines differ and `scripts/db_image_identity.sh` reports the same
   identity for both images: `--database-image-swap`;
 - the lines differ and the identities differ: `--database-image-migration`.
+
+One more job, fixed at `v1.0.0`, runs `--image-only`: it keeps that
+release's own `compose.yaml` and `.env` and changes only the app image,
+which tests the [`v1` promise](#move-the-floating-major-tag).
 
 A probe that fails stops the drill. The comparison reads the literal image
 line, so keep the `db` image a literal reference. Besides both
@@ -734,8 +742,8 @@ cosign verify \
 Both digests must be identical and the signature must verify through `v1`.
 
 Pulling `v1` again selects the current release, not the one an operator ran
-before, so the operator documentation tells them to record the installed
-digest before upgrading.
+before, so [Track `v1`](upgrading.md#track-v1) tells operators to record
+the installed digest before upgrading.
 
 ## Complete the release
 
