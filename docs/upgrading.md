@@ -39,11 +39,14 @@ To upgrade, back up, record the digest you are running (for
 
 ```sh
 docker image inspect --format '{{index .RepoDigests 0}}' ghcr.io/meandrousshark/odograph:v1
-docker compose pull app
-docker compose up -d --force-recreate app
+docker pull ghcr.io/meandrousshark/odograph:v1
+docker compose up -d --force-recreate --no-deps app
 ```
 
-With Podman, use `podman-compose` and `podman image inspect`.
+`pull_policy: missing` keeps a plain `up` from upgrading, which is also why
+the pull is a direct `docker pull` (`docker compose pull` would skip an image
+that is already present). With Podman, use `podman image inspect`,
+`podman pull` and `podman-compose`.
 `--force-recreate` matters there: podman-compose otherwise restarts the old
 container, because the image name has not changed.
 
