@@ -27,6 +27,12 @@ reproduced here.
   with its own device's previous trip, and is now cleared when another
   device's trip ended within `MISSING_TRIP_GAP_M` of where this one starts.
 
+### Security
+
+- Upgrade Debian's `apt` and `libapt-pkg7.0` from 3.0.3 to 3.0.4 in the
+  application image for CVE-2026-109518. The running app does not use apt;
+  the base image and Python version are unchanged.
+
 ### Migrations
 
 - This release adds no migration; the schema stays at 51. The database image
