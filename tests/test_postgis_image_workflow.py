@@ -70,6 +70,12 @@ def test_dockerfile_pins_base_toolchain_and_verifies_gosu_source():
     assert "gosu nobody true" in source
     assert "apt-get update" in source
     assert "apt-get upgrade -y --no-install-recommends" in source
+    # The upgrade takes Debian fixes only: the PostgreSQL repository's newer
+    # PostGIS scripts and PROJ broke the image or changed its identity.
+    aside = source.index("mv /etc/apt/sources.list.d/pgdg.list /tmp/pgdg.list")
+    restore = source.index("mv /tmp/pgdg.list /etc/apt/sources.list.d/pgdg.list")
+    update = source.index("apt-get update", aside)
+    assert aside < update < source.index("apt-get upgrade", update) < restore
     assert "rm -rf /var/lib/apt/lists/*" in source
     assert "ARG GIT_REVISION=unknown" in source
     assert "org.opencontainers.image.source" in source
