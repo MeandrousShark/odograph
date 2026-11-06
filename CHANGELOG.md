@@ -9,13 +9,6 @@ reproduced here.
 
 ## [Unreleased]
 
-### Added
-
-- Operators: `python -m app.resnap --account ACCOUNT_ID [--device DEVICE_ID]`
-  queues an account's trips whose road-snapped route came back in pieces, so
-  they are snapped again. Run it once after upgrading
-  ([osrm.md](docs/osrm.md#snapping-split-trips-again)).
-
 ### Fixed
 
 - Road snapping no longer splits a trip at every stop of a minute or more.
@@ -23,7 +16,9 @@ reproduced here.
   its fixes at each wait at a light, and the distance between the pieces was
   lost: one 7.2 mi drive showed 6.2 mi and was marked low confidence. OSRM
   match requests now use `gaps=ignore`, so the route is matched across those
-  gaps on roads.
+  gaps on roads. Operators: trips snapped earlier keep their split route
+  until you run `python -m app.resnap --account ACCOUNT_ID` once for each
+  account after upgrading ([osrm.md](docs/osrm.md#snapping-split-trips-again)).
 - A trip is no longer marked **Possible missing trip** when another of the
   account's tracking devices recorded the drive in between, as when switching
   between OwnTracks and Traccar Client. The warning still compares each trip
