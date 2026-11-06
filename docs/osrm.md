@@ -179,3 +179,22 @@ If the new extract's filename differs from the old one (a different region,
 or Geofabrik renaming a region), update `OSRM_DATASET` in `.env` to match
 before recreating the service: the printed value at the end of provisioning
 is always the exact one to use.
+
+## Snapping split trips again
+
+Before 1.4.1, snapping split a trace wherever two fixes were more than a minute
+apart and dropped the distance between the pieces. A tracker that reports by
+distance, such as Traccar Client, leaves such a gap at every wait at a light,
+so those trips show too few miles and often **low confidence**. After
+upgrading, queue the affected trips once for each account:
+
+```sh
+docker compose exec app python -m app.resnap --account ACCOUNT_ID
+# podman-compose:
+podman-compose exec app python -m app.resnap --account ACCOUNT_ID
+```
+
+`--device DEVICE_ID` limits it to one tracking device. It prints how many trips
+it queued, and running it again is harmless. Each queued trip shows its raw GPS
+route until the running app snaps it again, starting within `SNAP_SWEEP_S`
+(5 minutes by default).
