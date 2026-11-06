@@ -363,6 +363,35 @@ async def _switch_scenario():
             # 5. One device only: the gap still flags.
             t = day(7)
             _, single_a2 = await device_a_pair(conn, "SINGLE-A", t)
+            # 6. A manual trip on another device is not a detected drive.
+            t = day(8)
+            _, manual_a2 = await device_a_pair(conn, "MANUAL-A", t)
+            await _insert_manual_trip(conn, "MANUAL-B", minutes(t, 60), minutes(t, 170))
+            # 7. A detected other-device trip with no end_geom is ignored.
+            t = day(9)
+            _, nogeom_a2 = await device_a_pair(conn, "NOGEOM-A", t)
+            await _insert_detected_trip(
+                conn, "NOGEOM-B", minutes(t, 60), minutes(t, 70),
+                47.0100, -122.0,
+            )
+            # 8. Overlap: B started before A's predecessor started, so it
+            # cannot be the drive between the two, though it ends in the window.
+            t = day(10)
+            _, overlap_a2 = await device_a_pair(conn, "OVERLAP-A", t, a1_end_min=30)
+            await _insert_detected_trip(
+                conn, "OVERLAP-B", minutes(t, -20), minutes(t, 100),
+                47.0100, -122.0, X_LAT, -122.0,
+            )
+            # 9. No same-device predecessor: no gap, so no other-device gap.
+            t = day(11)
+            first_a = await _insert_detected_trip(
+                conn, "FIRST-A", minutes(t, 180), minutes(t, 190),
+                X_LAT, -122.0, X_LAT, -122.0,
+            )
+            await _insert_detected_trip(
+                conn, "FIRST-B", minutes(t, 60), minutes(t, 70),
+                47.0100, -122.0, X_LAT, -122.0,
+            )
 
         async with pool.connection() as conn:
             rows = {
@@ -370,15 +399,19 @@ async def _switch_scenario():
                     "switch": switch_a2, "far": far_a2, "before": before_a2,
                     "after": after_a2, "edge_prev": edge_prev_a2,
                     "edge_start": edge_start_a2, "excl": excl_a2, "single": single_a2,
+                    "manual": manual_a2, "nogeom": nogeom_a2, "overlap": overlap_a2,
+                    "first": first_a,
                 }.items()
             }
 
         def badge(name):
             return missing_trip_badge(rows[name], threshold_m=THRESHOLD_M, tz=UTC)
 
-        # Every A resume is ~3.3 km from P1 on its own device.
-        for row in rows.values():
-            assert row["prev_end_gap_m"] > 3000
+        # Every A resume is ~3.3 km from P1 on its own device, except a
+        # device's first trip, which has no predecessor.
+        for name, row in rows.items():
+            if name != "first":
+                assert row["prev_end_gap_m"] > 3000
 
         assert 100 < rows["switch"]["other_device_end_gap_m"] < 200
         assert badge("switch") is None, "a tracker switch must not flag"
@@ -402,6 +435,16 @@ async def _switch_scenario():
 
         assert rows["single"]["other_device_end_gap_m"] is None
         assert badge("single") is not None
+
+        assert rows["manual"]["other_device_end_gap_m"] is None
+        assert rows["nogeom"]["other_device_end_gap_m"] is None
+        assert badge("nogeom") is not None
+        assert rows["overlap"]["other_device_end_gap_m"] is None
+        assert badge("overlap") is not None
+
+        assert rows["first"]["prev_end_gap_m"] is None
+        assert rows["first"]["other_device_end_gap_m"] is None
+        assert badge("first") is None
     finally:
         await raw_pool.close()
 
