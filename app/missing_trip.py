@@ -1,5 +1,6 @@
 """Missing-trip detection: purely read-time, computed from `TRIP_COLUMNS`'
-`prev_*`/`missing_trip_covered` correlated subselects (app/ui/_common.py) --
+`prev_*`/`missing_trip_covered`/`other_device_end_gap_m` correlated subselects
+(app/trip_queries.py) --
 no migration, no persistence, no detector change.
 
 Kept as a pure function (same "pure core, thin I/O wrapper" split as
@@ -39,6 +40,12 @@ def missing_trip_badge(
     NULL input is NULL, not a false "far away"). `missing_trip_covered` means
     an included manual trip already bridges the gap -- checked last so a
     covered flag never even needs the distance compared.
+    `other_device_end_gap_m` covers a tracker switch: the nearest start
+    distance from an included detected trip on another tracking device that
+    ended inside the gap window. Within the threshold it means the user kept
+    driving under a different app, so no trip is missing; the comparison
+    lives here so the threshold never has to reach the SQL. Absent or `None`
+    means no such trip. Per-device continuity (`prev_*`) is unchanged.
     """
     if threshold_m <= 0:
         return None
@@ -49,6 +56,9 @@ def missing_trip_badge(
     if gap_m <= threshold_m:
         return None
     if trip.get("missing_trip_covered"):
+        return None
+    other_gap_m = trip.get("other_device_end_gap_m")
+    if other_gap_m is not None and other_gap_m <= threshold_m:
         return None
 
     local_end = prev_ended_at.astimezone(tz)
