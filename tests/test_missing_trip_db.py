@@ -281,3 +281,130 @@ async def _scenario():
 
 def test_missing_trip_detection_acceptance_criteria():
     asyncio.run(_scenario())
+
+
+THRESHOLD_M = 500.0
+# 0.001 degrees of latitude is about 111 m.
+P1_LAT, X_LAT = 47.0, 47.03
+
+
+async def _switch_scenario():
+    """Device A leaves a gap from P1 to X; device B may have a trip between."""
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
+    try:
+        pool = await reset_account_db(raw_pool)
+        day = lambda n: T0 + timedelta(days=n)  # noqa: E731
+        minutes = lambda t, m: t + timedelta(minutes=m)  # noqa: E731
+
+        async def device_a_pair(conn, name, t, a1_end_min=10):
+            a1 = await _insert_detected_trip(
+                conn, name, t, minutes(t, a1_end_min),
+                P1_LAT, -122.0, P1_LAT, -122.0,
+            )
+            a2 = await _insert_detected_trip(
+                conn, name, minutes(t, 180), minutes(t, 190),
+                X_LAT, -122.0, X_LAT, -122.0,
+            )
+            return a1, a2
+
+        async with pool.connection() as conn:
+            # 1. Tracker switch: B ends ~156 m from where A resumes.
+            t = day(0)
+            _, switch_a2 = await device_a_pair(conn, "SW-A", t)
+            await _insert_detected_trip(
+                conn, "SW-B", minutes(t, 60), minutes(t, 70),
+                47.0100, -122.0, 47.0314, -122.0,
+            )
+            # 2. B ends too far from A's resumed start.
+            t = day(1)
+            _, far_a2 = await device_a_pair(conn, "FAR-A", t)
+            await _insert_detected_trip(
+                conn, "FAR-B", minutes(t, 60), minutes(t, 70),
+                47.0100, -122.0, 47.0500, -122.0,
+            )
+            # 3. B ends before A's predecessor ended, or after A's start.
+            t = day(2)
+            _, before_a2 = await device_a_pair(conn, "BEFORE-A", t, a1_end_min=30)
+            await _insert_detected_trip(
+                conn, "BEFORE-B", minutes(t, 5), minutes(t, 20),
+                47.0100, -122.0, X_LAT, -122.0,
+            )
+            t = day(3)
+            _, after_a2 = await device_a_pair(conn, "AFTER-A", t)
+            await _insert_detected_trip(
+                conn, "AFTER-B", minutes(t, 170), minutes(t, 185),
+                47.0100, -122.0, X_LAT, -122.0,
+            )
+            # Window edges: ended_at == predecessor end does not count,
+            # ended_at == this trip's start does.
+            t = day(4)
+            _, edge_prev_a2 = await device_a_pair(conn, "EDGEP-A", t)
+            await _insert_detected_trip(
+                conn, "EDGEP-B", minutes(t, 1), minutes(t, 10),
+                47.0100, -122.0, X_LAT, -122.0,
+            )
+            t = day(5)
+            _, edge_start_a2 = await device_a_pair(conn, "EDGES-A", t)
+            await _insert_detected_trip(
+                conn, "EDGES-B", minutes(t, 100), minutes(t, 180),
+                47.0100, -122.0, X_LAT, -122.0,
+            )
+            # 4. A not_my_vehicle trip on B does not suppress.
+            t = day(6)
+            _, excl_a2 = await device_a_pair(conn, "EXCL-A", t)
+            excl_b = await _insert_detected_trip(
+                conn, "EXCL-B", minutes(t, 60), minutes(t, 70),
+                47.0100, -122.0, X_LAT, -122.0,
+            )
+            await conn.execute(
+                "UPDATE trips SET exclusion = 'not_my_vehicle' WHERE id = %s", (excl_b,),
+            )
+            # 5. One device only: the gap still flags.
+            t = day(7)
+            _, single_a2 = await device_a_pair(conn, "SINGLE-A", t)
+
+        async with pool.connection() as conn:
+            rows = {
+                name: await _fetch_row(conn, trip_id) for name, trip_id in {
+                    "switch": switch_a2, "far": far_a2, "before": before_a2,
+                    "after": after_a2, "edge_prev": edge_prev_a2,
+                    "edge_start": edge_start_a2, "excl": excl_a2, "single": single_a2,
+                }.items()
+            }
+
+        def badge(name):
+            return missing_trip_badge(rows[name], threshold_m=THRESHOLD_M, tz=UTC)
+
+        # Every A resume is ~3.3 km from P1 on its own device.
+        for row in rows.values():
+            assert row["prev_end_gap_m"] > 3000
+
+        assert 100 < rows["switch"]["other_device_end_gap_m"] < 200
+        assert badge("switch") is None, "a tracker switch must not flag"
+        assert rows["switch"]["prev_end_gap_m"] > THRESHOLD_M, "per-device gap is unchanged"
+
+        assert 2000 < rows["far"]["other_device_end_gap_m"] < 2500
+        assert badge("far") is not None
+        assert badge("far").gap_m == rows["far"]["prev_end_gap_m"]
+
+        assert rows["before"]["other_device_end_gap_m"] is None
+        assert badge("before") is not None
+        assert rows["after"]["other_device_end_gap_m"] is None
+        assert badge("after") is not None
+        assert rows["edge_prev"]["other_device_end_gap_m"] is None
+        assert badge("edge_prev") is not None
+        assert rows["edge_start"]["other_device_end_gap_m"] < 1
+        assert badge("edge_start") is None
+
+        assert rows["excl"]["other_device_end_gap_m"] is None
+        assert badge("excl") is not None
+
+        assert rows["single"]["other_device_end_gap_m"] is None
+        assert badge("single") is not None
+    finally:
+        await raw_pool.close()
+
+
+def test_missing_trip_tracker_switch_suppression():
+    asyncio.run(_switch_scenario())
