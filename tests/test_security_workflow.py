@@ -128,7 +128,7 @@ def test_scheduled_postgis_scans_use_the_pinned_remote_children_without_emulatio
     assert is_pinned(scan["uses"], "aquasecurity/trivy-action")
     assert scan["env"] == {"TRIVY_PLATFORM": "${{ matrix.platform }}"}
     assert scan["with"] == {
-        "image-ref": "ghcr.io/meandrousshark/odograph-postgis@sha256:4dc09eaaabbde791dee120e3fdb5f32cfd7d6c707a08cd38c1f9c7fe16b66982",
+        "image-ref": "ghcr.io/meandrousshark/odograph-postgis@sha256:590ce320e242b1fa3d6bc652bf5a17cfc499be2025e18f1d570460d7204ec577",
         "format": "table",
         "exit-code": "1",
         "ignore-unfixed": "true",
