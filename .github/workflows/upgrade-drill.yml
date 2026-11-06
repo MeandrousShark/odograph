@@ -66,13 +66,19 @@ jobs:
 
   drill:
     needs: bases
-    name: Drill from ${{ matrix.base }}
+    name: Drill from ${{ matrix.base }}${{ matrix.mode == 'image-only' && ' (image only)' || '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
         base: ${{ fromJSON(needs.bases.outputs.bases) }}
+        mode: [standard]
+        # The v1 promise: a newer v1 app image runs on the oldest 1.x
+        # install's own compose.yaml and .env, with no other change.
+        include:
+          - base: v1.0.0
+            mode: image-only
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -91,11 +97,24 @@ jobs:
       - name: Run upgrade and rollback drill
         env:
           BASE: ${{ matrix.base }}
+          MODE: ${{ matrix.mode }}
           CANDIDATE_IMAGE: ${{ inputs.candidate-image }}
           REVISION: ${{ inputs.revision || github.sha }}
         run: |
           set -euo pipefail
           mkdir -p evidence
+          args=(--base "$BASE" --candidate "$REVISION")
+          if [ -n "$CANDIDATE_IMAGE" ]; then
+            args+=(--candidate-image "$CANDIDATE_IMAGE")
+          fi
+          if [ "$MODE" = image-only ]; then
+            # The base compose.yaml pins the db image, so it never changes.
+            echo "image-only mode: base compose.yaml and .env, candidate app image"
+            COMPOSE_CMD="docker compose" scripts/upgrade_check.sh \
+              "${args[@]}" --image-only | \
+              tee "evidence/upgrade-drill-${BASE}-image-only.txt"
+            exit 0
+          fi
           # The literal db image of a ref's compose.yaml, empty when absent.
           db_image() {
             git show "$1:compose.yaml" | python -c '
@@ -112,10 +131,6 @@ jobs:
           if [ -z "$base_db" ] || [ -z "$candidate_db" ]; then
             echo "error: could not read the db image from compose.yaml at $BASE and $REVISION" >&2
             exit 1
-          fi
-          args=(--base "$BASE" --candidate "$REVISION")
-          if [ -n "$CANDIDATE_IMAGE" ]; then
-            args+=(--candidate-image "$CANDIDATE_IMAGE")
           fi
           # A changed db image swaps on the existing volume only when both
           # images report the same database identity; any other change takes
@@ -141,7 +156,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ${{ inputs.evidence-name || 'upgrade-drill' }}-${{ matrix.base }}
+          name: ${{ inputs.evidence-name || 'upgrade-drill' }}-${{ matrix.base }}${{ matrix.mode == 'image-only' && '-image-only' || '' }}
           path: evidence/
           if-no-files-found: warn
           retention-days: ${{ inputs.retention-days || 14 }}
