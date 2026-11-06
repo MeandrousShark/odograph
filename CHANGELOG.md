@@ -9,6 +9,8 @@ reproduced here.
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-11-06
+
 ### Fixed
 
 - Road snapping no longer splits a trip at every stop of a minute or more.
@@ -24,6 +26,47 @@ reproduced here.
   between OwnTracks and Traccar Client. The warning still compares each trip
   with its own device's previous trip, and is now cleared when another
   device's trip ended within `MISSING_TRIP_GAP_M` of where this one starts.
+
+### Security
+
+- Upgrade Debian's `apt` and `libapt-pkg7.0` from 3.0.3 to 3.0.4 in the
+  application image for CVE-2026-109518. The running app does not use apt;
+  the base image and Python version are unchanged.
+- The PostGIS database image is rebuilt for the same CVE (`apt` and
+  `libapt-pkg6.0` 2.6.1 to 2.6.2), taking Debian's package fixes only.
+  PostgreSQL 16.15, PostGIS 3.6.4, GEOS 3.11.1, PROJ 9.8.1, glibc 2.36 and
+  ICU 72.1 are unchanged, so the image was rebuilt with unchanged versions
+  and upgrades in place on the existing volume.
+
+### Migrations
+
+- This release adds no migration; the schema stays at 51. The database image
+  is a rebuild of 1.4.0's with unchanged versions.
+- See [Upgrading from 1.4](docs/upgrading.md#upgrading-from-14).
+
+### Supported upgrade path
+
+- Every 1.x release upgrades directly. Each one's database image has the
+  same versions as this release's, so each upgrades in place through
+  [Database image security rebuilds](docs/upgrading.md#database-image-security-rebuilds)
+  and also reads [Upgrading from 1.4](docs/upgrading.md#upgrading-from-14).
+  `v1.3.1` and `v1.3.0` also read the 1.4.0 notes and
+  [Upgrading from 1.3](docs/upgrading.md#upgrading-from-13), since the
+  `DETECTOR_VERSION` 3 reprocess still applies to them; `v1.2.0` also reads
+  the 1.3 notes and [Upgrading from 1.2](docs/upgrading.md#upgrading-from-12);
+  `v1.1.0` and `v1.0.0` also read the earlier notes. A 0.x installation first
+  upgrades to `v1.0.0`.
+- Prior-release artifact upgrade gate: release preflight ran the Docker
+  Compose upgrade drill from `v1.4.0`, `v1.3.1`, `v1.3.0`, `v1.2.0`, `v1.1.0`
+  and `v1.0.0` in database image swap mode before this release was tagged.
+
+### Breaking changes
+
+- None. There is no migration and no configuration or environment change.
+  The database image was rebuilt with unchanged versions; stop the database
+  and swap it in place as the upgrading guide describes rather than running a
+  plain `up -d`. Run `python -m app.resnap --account ACCOUNT_ID` once for each
+  account after upgrading so trips snapped in pieces are snapped again.
 
 ## [1.4.0] - 2026-11-04
 

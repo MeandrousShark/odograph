@@ -1,6 +1,6 @@
 services:
   db:
-    image: ghcr.io/meandrousshark/odograph-postgis@sha256:4dc09eaaabbde791dee120e3fdb5f32cfd7d6c707a08cd38c1f9c7fe16b66982
+    image: ghcr.io/meandrousshark/odograph-postgis@sha256:590ce320e242b1fa3d6bc652bf5a17cfc499be2025e18f1d570460d7204ec577
     environment:
       POSTGRES_DB: mileage
       POSTGRES_USER: mileage
@@ -19,7 +19,7 @@ services:
     # pulls the exact release tag below and verifies its signature, and `up`
     # then uses only that local image. Contributors who want a source build
     # add compose.build.override.yml.
-    image: ghcr.io/meandrousshark/odograph:v1.4.0
+    image: ghcr.io/meandrousshark/odograph:v1.4.1
     pull_policy: never
     depends_on:
       db:

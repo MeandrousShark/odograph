@@ -116,7 +116,7 @@ instead.
 
 When a target release's `compose.yaml` uses the signed native PostgreSQL
 16.15/PostGIS 3.6.4 index
-`ghcr.io/meandrousshark/odograph-postgis@sha256:4dc09eaaabbde791dee120e3fdb5f32cfd7d6c707a08cd38c1f9c7fe16b66982`,
+`ghcr.io/meandrousshark/odograph-postgis@sha256:590ce320e242b1fa3d6bc652bf5a17cfc499be2025e18f1d570460d7204ec577`,
 an installation on any other database image, such as the older
 `postgis/postgis:16-3.4` image or the native index Odograph 1.0 pinned, must
 be treated as a database-image migration. A normal `docker compose up -d`
@@ -201,6 +201,27 @@ For a Podman installation, replace each `docker compose` command with
 `podman-compose` and run `CONTAINER_RUNTIME=podman scripts/verify_image.sh`.
 This procedure is also the model used by the release preflight database-image
 migration drill.
+
+## Upgrading from 1.4
+
+This release adds no migration. Its database image is a rebuild of 1.4.0's
+with unchanged versions, for an `apt` security fix, so follow
+[Database image security rebuilds](#database-image-security-rebuilds) to swap
+it in place on the existing volume. No configuration change is required.
+
+Road snapping no longer splits a trip at every stop of a minute or more, which
+had dropped miles on trips from trackers that report by distance, such as
+Traccar Client. Trips snapped before the upgrade keep their split route until
+they are queued again. Once the upgraded app is running, run this once for
+each account:
+
+```sh
+docker compose exec app python -m app.resnap --account ACCOUNT_ID
+```
+
+It prints how many trips it queued, and the app snaps them again within
+`SNAP_SWEEP_S`. See [Snapping split trips again](osrm.md#snapping-split-trips-again).
+Without OSRM configured there is nothing to queue.
 
 ## Upgrading from 1.3
 
