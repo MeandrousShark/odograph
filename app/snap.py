@@ -265,11 +265,12 @@ def parse_match_response(
     raw_distance_m: Optional[float],
     min_coverage: float = 0.85,
 ) -> SnapResult:
-    """Parse an OSRM `/match/v1/car/...` response. `gaps=split` can return
-    multiple disjoint matchings for a trip with a real recording gap; each
-    becomes a separate line in a MultiLineString rather than being joined
-    into one LineString, which would draw a false straight line across
-    the gap.
+    """Parse an OSRM `/match/v1/car/...` response. OSRM can return
+    multiple disjoint matchings when it finds no route between candidates;
+    each becomes a separate line in a MultiLineString rather than being
+    joined into one LineString, which would draw a false straight line
+    across the break. Their distances are summed, so the span between them
+    is not counted.
 
     `raw_distance_m` is the trip's own pre-snap distance and `min_coverage`
     the fraction of it a match must reproduce for its distance to be trusted.
@@ -571,10 +572,19 @@ class SnapWorker:
         # with dense pings showed tidy=true nulled 55-58% of tracepoints on
         # excellent matches; tidy=false nulled zero, with no regression on
         # old sparse-ping trips, which matched identically either way).
+        #
+        # gaps=ignore deliberately: gaps=split breaks the trace wherever two
+        # fixes are more than a minute apart, and a tracker that reports by
+        # distance (Traccar Client, about every 80 m) leaves such a gap at
+        # every wait at a light. Each break dropped the distance between the
+        # pieces, and a short leftover piece's low confidence marked the
+        # whole trip. Ignoring time gaps lets OSRM route across them on
+        # roads; a real recording gap is better bridged that way than
+        # dropped, and OSRM still splits where no route connects the fixes.
         url = (
             f"{self.osrm_url}/match/v1/car/{coords}"
             f"?geometries=geojson&overview=full&steps=false&annotations=false"
-            f"&gaps=split&tidy=false&timestamps={timestamps}&radiuses={radii}"
+            f"&gaps=ignore&tidy=false&timestamps={timestamps}&radiuses={radii}"
         )
         async with self.pool.connection() as conn:
             if not await lock_device_generation(conn, device_id, device_generation):

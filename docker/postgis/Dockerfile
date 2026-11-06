@@ -40,9 +40,15 @@ ARG GIT_REVISION=unknown
 
 COPY --from=gosu-build /out/gosu /usr/local/bin/gosu
 
+# Take Debian's security fixes only. The base also lists the PostgreSQL apt
+# repository (pgdg.list), whose newer PostGIS scripts, PROJ and GDAL would
+# break the pinned PostGIS library or change the image identity, so set it
+# aside for the upgrade and restore it afterwards.
 RUN set -eux; \
+    mv /etc/apt/sources.list.d/pgdg.list /tmp/pgdg.list; \
     apt-get update; \
     apt-get upgrade -y --no-install-recommends; \
+    mv /tmp/pgdg.list /etc/apt/sources.list.d/pgdg.list; \
     rm -rf /var/lib/apt/lists/*; \
     gosu --version; \
     gosu nobody true

@@ -147,7 +147,7 @@ def test_snapworker_marks_unsnappable_trip_failed():
     asyncio.run(_unsnappable_scenario())
 
 
-async def _tidy_disabled_scenario():
+async def _match_request_scenario():
     raw_pool = make_pool(TEST_DB)
     await raw_pool.open(wait=True)
     try:
@@ -176,12 +176,16 @@ async def _tidy_disabled_scenario():
             "every trip on a dense (~2-4s) OwnTracks ping interval as "
             "low_confidence despite ~0.98 real matching confidence"
         )
+        assert "gaps=ignore" in captured["url"] and "gaps=split" not in captured["url"], (
+            "gaps=split breaks a distance-based tracker's trace at every stop "
+            "longer than a minute and drops the distance between the pieces"
+        )
     finally:
         await raw_pool.close()
 
 
-def test_snapworker_requests_osrm_match_with_tidy_disabled():
-    asyncio.run(_tidy_disabled_scenario())
+def test_snapworker_match_request_keeps_dense_fixes_and_ignores_time_gaps():
+    asyncio.run(_match_request_scenario())
 
 
 def test_snap_capacity_pause_keeps_pending_route_and_resumes_after_grant_rises():

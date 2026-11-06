@@ -16,6 +16,7 @@ def _trip(**overrides) -> dict:
         "prev_trip_end_lon": -122.0,
         "prev_trip_end_place_name": None,
         "missing_trip_covered": False,
+        "other_device_end_gap_m": None,
         "start_place_name": None,
         "start_lat": 47.02,
         "start_lon": -122.0,
@@ -50,6 +51,25 @@ def test_covering_manual_trip_suppresses_badge():
     assert missing_trip_badge(
         _trip(missing_trip_covered=True), threshold_m=1000.0, tz=TZ,
     ) is None
+
+
+def test_other_device_end_within_threshold_suppresses_badge():
+    for gap in (0.0, 158.0, 1000.0):
+        assert missing_trip_badge(
+            _trip(other_device_end_gap_m=gap), threshold_m=1000.0, tz=TZ,
+        ) is None
+
+
+def test_other_device_end_beyond_threshold_or_absent_keeps_badge():
+    assert missing_trip_badge(
+        _trip(other_device_end_gap_m=1000.5), threshold_m=1000.0, tz=TZ,
+    ) is not None
+    assert missing_trip_badge(
+        _trip(other_device_end_gap_m=None), threshold_m=1000.0, tz=TZ,
+    ) is not None
+    legacy = _trip()
+    del legacy["other_device_end_gap_m"]
+    assert missing_trip_badge(legacy, threshold_m=1000.0, tz=TZ) is not None
 
 
 def test_prefill_url_carries_date_start_time_notes_hint_and_bridge_trip():

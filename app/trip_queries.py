@@ -74,7 +74,7 @@ REPORT_TRIP_COLUMNS = f"""
 # retain the complete projection.
 TRIP_COLUMNS = f"""{REPORT_TRIP_COLUMNS},
     snap_capacity_needed_bytes,
-    -- Missing-trip detection: four near-identical subselects for the
+    -- Missing-trip detection: near-identical subselects for the
     -- previous included trip, because one SELECT item can't reference
     -- another's alias (and a LATERAL join would mean touching every FROM
     -- clause that embeds TRIP_COLUMNS; deferred until this scales past
@@ -125,6 +125,28 @@ TRIP_COLUMNS = f"""{REPORT_TRIP_COLUMNS},
           ORDER BY p.started_at DESC LIMIT 1
         )
     ) AS missing_trip_covered,
+    -- Tracker switch: the closest start-to-end distance from this trip's
+    -- start to an included detected trip on a *different* tracking device
+    -- that ended after the same-device predecessor and no later than this
+    -- trip's start. The threshold stays out of SQL: missing_trip_badge
+    -- (app/missing_trip.py) clears the badge when this is within it.
+    -- Per-device continuity (prev_*) is unchanged. NULL means no such trip,
+    -- or none with an end_geom. The started_at bounds are redundant with the
+    -- ended_at window (an other-device trip that started before the
+    -- predecessor started overlaps it, so it is not the drive between the
+    -- two) but make the scan an index range on trips_account_started_at_idx
+    -- instead of a pass over every earlier trip.
+    (SELECT MIN(ST_Distance(o.end_geom, trips.start_geom))
+     FROM (SELECT p.started_at, p.ended_at FROM trips p
+           WHERE p.account_id = trips.account_id AND p.tracking_device_id = trips.tracking_device_id AND p.source = 'detected'
+             AND p.exclusion IS DISTINCT FROM 'not_my_vehicle'
+             AND p.started_at < trips.started_at
+           ORDER BY p.started_at DESC LIMIT 1) pred
+     JOIN trips o ON o.account_id = trips.account_id AND o.tracking_device_id <> trips.tracking_device_id
+       AND o.source = 'detected' AND o.exclusion IS DISTINCT FROM 'not_my_vehicle'
+       AND o.started_at >= pred.started_at AND o.started_at <= trips.started_at
+       AND o.ended_at > pred.ended_at AND o.ended_at <= trips.started_at
+    ) AS other_device_end_gap_m,
     -- The predecessor's ID and the stored acknowledgement fingerprints let
     -- app/trip_warnings.py decide which list warnings stay acknowledged.
     (SELECT p.id FROM trips p

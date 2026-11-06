@@ -197,7 +197,7 @@ def test_preflight_runs_full_policy_and_native_local_image_matrix():
     quality_steps = steps_by_name(quality)
 
     assert quality["services"]["postgres"]["image"] == (
-        "ghcr.io/meandrousshark/odograph-postgis@sha256:4dc09eaaabbde791dee120e3fdb5f32cfd7d6c707a08cd38c1f9c7fe16b66982"
+        "ghcr.io/meandrousshark/odograph-postgis@sha256:590ce320e242b1fa3d6bc652bf5a17cfc499be2025e18f1d570460d7204ec577"
     )
     assert quality_steps["Install pinned Gitleaks"]["env"]["GITLEAKS_VERSION"] == "8.30.1"
     assert "python -m pytest -q" in quality_steps["Run full locked test suite"]["run"]
@@ -232,7 +232,7 @@ def test_preflight_runs_full_policy_and_native_local_image_matrix():
     assert is_pinned(postgis_scan["uses"], "aquasecurity/trivy-action")
     assert postgis_scan["env"]["TRIVY_PLATFORM"] == "${{ matrix.platform }}"
     assert postgis_scan["with"] == {
-        "image-ref": "ghcr.io/meandrousshark/odograph-postgis@sha256:4dc09eaaabbde791dee120e3fdb5f32cfd7d6c707a08cd38c1f9c7fe16b66982",
+        "image-ref": "ghcr.io/meandrousshark/odograph-postgis@sha256:590ce320e242b1fa3d6bc652bf5a17cfc499be2025e18f1d570460d7204ec577",
         "format": "table",
         "output": "evidence/trivy-${{ matrix.architecture }}-postgis.txt",
         "exit-code": "1",
@@ -245,7 +245,7 @@ def test_preflight_runs_full_policy_and_native_local_image_matrix():
     smoke = steps["Smoke-test native application image"]
     assert smoke["env"]["ARCHITECTURE"] == "${{ matrix.architecture }}"
     assert smoke["env"]["POSTGIS_IMAGE"] == (
-        "ghcr.io/meandrousshark/odograph-postgis@sha256:4dc09eaaabbde791dee120e3fdb5f32cfd7d6c707a08cd38c1f9c7fe16b66982"
+        "ghcr.io/meandrousshark/odograph-postgis@sha256:590ce320e242b1fa3d6bc652bf5a17cfc499be2025e18f1d570460d7204ec577"
     )
     assert '"linux/${ARCHITECTURE}"' in smoke["run"]
 
@@ -256,7 +256,7 @@ def load_drill_workflow(uses: str) -> dict:
 
 
 def test_drill_bases_are_the_supported_releases():
-    assert json.loads(DRILL_BASES.read_text()) == ["v1.0.0", "v1.1.0", "v1.2.0", "v1.3.0", "v1.3.1"]
+    assert json.loads(DRILL_BASES.read_text()) == ["v1.0.0", "v1.1.0", "v1.2.0", "v1.3.0", "v1.3.1", "v1.4.0"]
 
 
 def test_preflight_and_published_drills_call_the_base_matrix_with_exact_candidate():
