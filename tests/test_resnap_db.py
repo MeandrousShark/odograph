@@ -125,6 +125,46 @@ def test_device_narrows_the_requeue_and_singular_count(command_env, capsys):
     assert "2 trips queued" in capsys.readouterr().out
 
 
+async def _stop_device(raw, device, *, revoke):
+    async with raw.connection() as conn:
+        if revoke:
+            await conn.execute("UPDATE tracking_devices SET revoked_at=now() WHERE id=%s", (device,))
+        else:
+            await conn.execute("UPDATE tracking_devices SET enabled=false WHERE id=%s", (device,))
+
+
+@pytest.mark.parametrize("revoke", [False, True])
+def test_trips_on_a_disabled_or_revoked_device_are_not_queued(command_env, capsys, revoke):
+    async def setup(raw):
+        _pool, ids, a, b = await _fixture(raw)
+        await _stop_device(raw, b, revoke=revoke)
+        return ids
+
+    ids = _run(setup)
+    before = _run(_state)
+    assert resnap.main(["--account", str(OWNER)]) == 0
+    assert capsys.readouterr().out.strip() == f"account {OWNER}: 2 trips queued for snapping"
+    after = _run(_state)
+    assert _requeued(after[ids["split_a"]]) and _requeued(after[ids["split_a2"]])
+    assert after[ids["split_b"]] == before[ids["split_b"]]
+
+
+@pytest.mark.parametrize("revoke,word", [(False, "disabled"), (True, "revoked")])
+def test_naming_a_disabled_or_revoked_device_is_refused(command_env, capsys, revoke, word):
+    async def setup(raw):
+        _pool, ids, a, b = await _fixture(raw)
+        await _stop_device(raw, b, revoke=revoke)
+        return b
+
+    b = _run(setup)
+    before = _run(_state)
+    assert resnap.main(["--account", str(OWNER), "--device", str(b)]) == 1
+    captured = capsys.readouterr()
+    assert f"That tracking device is {word}; its trips were not queued." in captured.err
+    assert "queued for snapping" not in captured.out
+    assert _run(_state) == before
+
+
 def test_refuses_unknown_disabled_account_and_unknown_device(command_env, capsys):
     async def setup(raw):
         await _fixture(raw)

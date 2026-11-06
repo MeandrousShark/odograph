@@ -15,8 +15,10 @@ are cleared and the trip is marked pending. The running server's snap worker
 then snaps each one again on its next sweep (SNAP_SWEEP_S, 300 seconds by
 default), one trip per turn. Until a trip is snapped again it is shown with its
 raw path. Manual and imported trips, and trips with a single-part path, are not
-touched. The command uses the restricted runtime role and row-level security
-like the application, runs as one transaction, and is safe to repeat.
+touched, nor are trips on a disabled or revoked tracking device, which the snap
+worker does not pick up. The command uses the restricted runtime role and
+row-level security like the application, runs as one transaction, and is safe
+to repeat.
 """
 from __future__ import annotations
 
@@ -65,7 +67,9 @@ _REQUEUE = (
     "snap_attempted_at = NULL, path_snapped = NULL, distance_snapped_m = NULL, "
     "snapped_at = NULL, updated_at = now() "
     "WHERE account_id = %s AND source = 'detected' AND NOT imported "
-    "AND path_snapped IS NOT NULL AND ST_NumGeometries(path_snapped) > 1"
+    "AND path_snapped IS NOT NULL AND ST_NumGeometries(path_snapped) > 1 "
+    "AND EXISTS (SELECT 1 FROM tracking_devices d WHERE d.account_id = trips.account_id "
+    "AND d.id = trips.tracking_device_id AND d.enabled AND d.revoked_at IS NULL)"
 )
 
 
@@ -81,8 +85,9 @@ async def _resnap(cfg: Config, owner: int, device: int | None) -> bool:
         if not row[1]:
             raise ValueError("That account is disabled; its trips were not queued.")
         principal = AccountPrincipal(*row)
-        # Holding the account's work lock keeps a snap turn for this account
-        # from running between the check and the update.
+        # The shared account work lock blocks account purge while the update
+        # runs. A snap result already in flight is discarded by the worker's
+        # updated_at generation check, because the requeue sets updated_at = now().
         async with external_account_work(pools.control, owner):
             pool = AccountPool(pools.runtime, principal)
             try:
@@ -92,10 +97,15 @@ async def _resnap(cfg: Config, owner: int, device: int | None) -> bool:
                     sql, args = _REQUEUE, [owner]
                     if device is not None:
                         cur = await conn.execute(
-                            "SELECT 1 FROM tracking_devices WHERE account_id = %s AND id = %s",
-                            (owner, device))
-                        if await cur.fetchone() is None:
+                            "SELECT enabled, revoked_at IS NOT NULL FROM tracking_devices "
+                            "WHERE account_id = %s AND id = %s", (owner, device))
+                        found = await cur.fetchone()
+                        if found is None:
                             raise ValueError("No tracking device has that ID for this account.")
+                        if found[1]:
+                            raise ValueError("That tracking device is revoked; its trips were not queued.")
+                        if not found[0]:
+                            raise ValueError("That tracking device is disabled; its trips were not queued.")
                         sql += " AND tracking_device_id = %s"
                         args.append(device)
                     cur = await conn.execute(sql, args)
