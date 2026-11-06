@@ -204,9 +204,10 @@ migration drill.
 
 ## Upgrading from 1.4
 
-This release adds no migration, and the database image is the same as
-1.4.0's, so the standard [upgrade procedure](#upgrade-procedure) applies. No
-configuration change is required.
+This release adds no migration. Its database image is a rebuild of 1.4.0's
+with unchanged versions, for an `apt` security fix, so follow
+[Database image security rebuilds](#database-image-security-rebuilds) to swap
+it in place on the existing volume. No configuration change is required.
 
 Road snapping no longer splits a trip at every stop of a minute or more, which
 had dropped miles on trips from trackers that report by distance, such as
