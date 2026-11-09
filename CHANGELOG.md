@@ -23,6 +23,13 @@ reproduced here.
   remain in the
   [v1.4.1 guide](https://github.com/MeandrousShark/odograph/blob/v1.4.1/docs/upgrading.md).
 
+### Security
+
+- Upgrade Debian's `zlib1g` to `1:1.3.dfsg+really1.3.1-1+deb13u1` in the
+  application image for CVE-2026-85091 and CVE-2026-76844. Both are in
+  zlib's `gz*` file write functions, which Python's `zlib` and `gzip`
+  modules do not use; the base image and Python version are unchanged.
+
 ## [1.4.1] - 2026-11-06
 
 ### Fixed

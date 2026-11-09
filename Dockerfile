@@ -18,12 +18,13 @@
 FROM docker.io/library/python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f
 
 # The pinned base predates available Debian security fixes in these packages
-# (apt and libapt-pkg7.0 for CVE-2026-109518). Upgrade only the affected
-# packages; remove this layer when the base includes their fixes. The
-# refreshed base already includes the OpenSSL fix.
+# (apt and libapt-pkg7.0 for CVE-2026-109518; zlib1g for CVE-2026-85091 and
+# CVE-2026-76844). Upgrade only the affected packages; remove this layer when
+# the base includes their fixes. The refreshed base already includes the
+# OpenSSL fix.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends --only-upgrade \
-        liblzma5 apt libapt-pkg7.0 \
+        liblzma5 apt libapt-pkg7.0 zlib1g \
     && rm -rf /var/lib/apt/lists/*
 
 # VERSION/GIT_REVISION default to dev values so unlabeled local builds still
