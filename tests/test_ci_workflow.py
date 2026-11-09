@@ -28,10 +28,10 @@ def shard_matrix() -> list[dict]:
     return _session_plan()["matrix"]["include"]
 
 
-def test_ci_runs_full_suite_on_main_pushes_and_pull_requests_with_postgis(tmp_path):
+def test_ci_runs_full_suite_on_main_and_next_pushes_and_pull_requests_with_postgis(tmp_path):
     workflow = load_workflow()
 
-    assert workflow["on"] == {"push": {"branches": ["main"]}, "pull_request": ""}
+    assert workflow["on"] == {"push": {"branches": ["main", "next"]}, "pull_request": ""}
     assert workflow["permissions"] == {"contents": "read"}
 
     job = workflow["jobs"]["suite"]
@@ -169,15 +169,18 @@ def test_ci_runs_full_suite_on_main_pushes_and_pull_requests_with_postgis(tmp_pa
         assert (tmp_path / "pytest-shard.log").read_text() == "suite stdout\nsuite stderr\n"
 
 
-def test_ci_cancels_superseded_branch_runs_but_never_main():
+def test_ci_cancels_superseded_branch_runs_but_never_main_or_next():
     workflow = load_workflow()
 
     assert workflow["concurrency"] == {
         "group": (
             "${{ github.workflow }}-"
-            "${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}"
+            "${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next')"
+            " && github.run_id || github.ref }}"
         ),
-        "cancel-in-progress": "${{ github.ref != 'refs/heads/main' }}",
+        "cancel-in-progress": (
+            "${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/next' }}"
+        ),
     }
 
 

@@ -62,7 +62,9 @@ then run `python scripts/check_public_tree.py` before opening a pull request.
 
 Create a short-lived branch from current `main`, run the relevant tests during
 development, and run the full suite before opening or merging a pull request.
-Do not force-push `main` or release tags. Maintainers merge approved pull
+Work for the 2.0 release branches from `next` instead, and its pull request
+targets `next`; `main` stays the 1.x line until 2.0 is ready. Do not
+force-push `main`, `next` or release tags. Maintainers merge approved pull
 requests to `main`; releases are cut only from the exact reviewed merge commit.
 See [the release procedure](docs/releasing.md) for release-specific checks.
 
