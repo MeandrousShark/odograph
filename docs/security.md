@@ -14,9 +14,10 @@ nothing here defends against a hostile operator.
 - **Sign-in and sessions.** Local passwords, or an optional OIDC provider
   matched by its exact issuer and subject; provider email never selects an
   account. Sessions are signed cookies, sent only over HTTPS outside
-  development mode. Every state-changing request needs a CSRF token. Password,
-  provider and login-email changes require the current password or a fresh
-  provider sign-in. [Sessions and sign out everywhere](accounts.md#sessions-and-sign-out-everywhere)
+  development mode. Every state-changing browser request needs a CSRF token.
+  Password, provider and login-email changes require the current password or
+  a fresh provider sign-in.
+  [Sessions and sign out everywhere](accounts.md#sessions-and-sign-out-everywhere)
   covers what ends a session.
 - **Signup.** `/signup` works only when `INITIAL_ADMIN_SIGNUP=1` and no
   account has ever been created. Members join only by invitation.
