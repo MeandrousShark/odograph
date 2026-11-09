@@ -1,7 +1,7 @@
 # Security Policy
 
-See [docs/security.md](docs/security.md) for the trust model, what each
-network entry point checks, an operator hardening checklist, and how to
+See [docs/security.md](docs/security.md) for what Odograph protects, an
+operator hardening checklist, what to do about a compromise, and how to
 verify a released image's signature and software bill of materials. This
 document covers vulnerability reporting, supported versions, and scope.
 
