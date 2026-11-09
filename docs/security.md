@@ -29,10 +29,10 @@ nothing here defends against a hostile operator.
   **Signed-in apps**, where each can be revoked. A browser session cookie never
   authenticates an `/api/` request.
 - **Account isolation.** Each account's location history, trips and reports
-  are private to it, including from the administrator. Requests run as restricted database roles under
-  row-level security enabled and forced on every account-owned table, and
-  queries also filter by owner. Startup refuses to serve if the role contract
-  does not validate. See
+  are private to it, including from the administrator. Requests run as
+  restricted database roles under row-level security enabled and forced on
+  every account-owned table, and queries also filter by owner. Startup
+  refuses to serve if the role contract does not validate. See
   [Database roles](configuration.md#account-ownership-and-database-roles).
 - **Rate limits.** Failed sign-in, API token and ingest attempts are limited
   per client address, in memory, so they do not stop an attacker spread over
@@ -57,8 +57,8 @@ nothing here defends against a hostile operator.
   out.
 - **Container.** The image runs as UID/GID `10001`. `compose.yaml` also runs
   it with no Linux capabilities, `no-new-privileges`, a read-only root
-  filesystem and a `tmpfs` `/tmp`. A host directory you bind-mount must be readable (and writable, if
-  needed) by `10001`.
+  filesystem and a `tmpfs` `/tmp`. A host directory you bind-mount must be
+  readable (and writable, if needed) by `10001`.
 
 ## Hardening checklist
 
