@@ -130,10 +130,12 @@ IDENTITY="https://github.com/MeandrousShark/odograph/.github/workflows/release.y
 ISSUER="https://token.actions.githubusercontent.com"
 ```
 
-`$AMD64_DIGEST` and `$ARM64_DIGEST` are the release's per-architecture
-digests. Use this exact identity and issuer; do not loosen them to a pattern.
+Use this exact identity and issuer; do not loosen them to a pattern. Read
+the per-architecture digests from the tag, then verify each one:
 
 ```sh
+AMD64_DIGEST="$(docker manifest inspect "$IMAGE:$VERSION" | jq -r '.manifests[] | select(.platform.architecture == "amd64") | .digest')"
+ARM64_DIGEST="$(docker manifest inspect "$IMAGE:$VERSION" | jq -r '.manifests[] | select(.platform.architecture == "arm64") | .digest')"
 cosign verify --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" "$IMAGE:$VERSION"
 cosign verify --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" "$IMAGE@$AMD64_DIGEST"
 cosign verify --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" "$IMAGE@$ARM64_DIGEST"

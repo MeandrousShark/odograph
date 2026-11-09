@@ -52,6 +52,7 @@ authentication state; see [backups.md](backups.md).
 
 ## Logging
 
+- Access log lines drop each request's query string.
 - `httpx` logs at `WARNING`, so outgoing request URLs, which carry a Geoapify
   API key and coordinates or search text, are never logged.
 - A failed geocoder, address search or OSRM missing-trip lookup is logged by
