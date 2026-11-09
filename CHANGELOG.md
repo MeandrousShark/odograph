@@ -22,6 +22,13 @@ reproduced here.
   live at the top of its changelog section; earlier per-version sections
   remain in the
   [v1.4.1 guide](https://github.com/MeandrousShark/odograph/blob/v1.4.1/docs/upgrading.md).
+- `docs/security.md` and `docs/privacy.md` are shorter: what Odograph
+  protects, a hardening checklist and a compromise checklist, then one entry
+  per optional integration and what the logs leave out. The former detail
+  remains in the v1.4.1
+  [security](https://github.com/MeandrousShark/odograph/blob/v1.4.1/docs/security.md)
+  and [privacy](https://github.com/MeandrousShark/odograph/blob/v1.4.1/docs/privacy.md)
+  guides.
 
 ## [1.4.1] - 2026-11-06
 
