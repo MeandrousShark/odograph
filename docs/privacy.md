@@ -18,8 +18,9 @@ tiles.
   area you view, plus your instance's origin as the `Referer`. Point
   `MAP_TILE_URL` at your own tile server to keep this local; its attribution
   is set with `MAP_TILE_ATTRIBUTION`.
-- **OSRM** (self-hosted). Detected trips' GPS traces, for road snapping, and
-  the points of a routed manual trip go to the OSRM container you run.
+- **OSRM** (self-hosted). Detected trips' GPS traces, for road snapping, the
+  points of a routed manual trip, and the ends of a possible missing trip,
+  for its suggested distance, go to the OSRM container you run.
   Manual-trip points are sent while the form is filled in, even if the trip is
   never saved. Leave `OSRM_URL` unset to turn it off.
 - **Geocoder.** Trip endpoint coordinates (reverse geocoding) and the text you

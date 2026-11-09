@@ -28,33 +28,36 @@ nothing here defends against a hostile operator.
 - **Mobile app grants.** App tokens are stored as digests and listed under
   **Signed-in apps**, where each can be revoked. A browser session cookie never
   authenticates an `/api/` request.
-- **Account isolation.** Each account's data is private to it, including from
-  the administrator. Requests run as restricted database roles under
+- **Account isolation.** Each account's location history, trips and reports
+  are private to it, including from the administrator. Requests run as restricted database roles under
   row-level security enabled and forced on every account-owned table, and
   queries also filter by owner. Startup refuses to serve if the role contract
   does not validate. See
   [Database roles](configuration.md#account-ownership-and-database-roles).
 - **Rate limits.** Failed sign-in, API token and ingest attempts are limited
-  per client address, in memory. Password-reset requests are also limited per
-  submitted email. A limited `/ingest` request gets `503` with `Retry-After`,
+  per client address, in memory, so they do not stop an attacker spread over
+  many addresses. Password-reset requests are also limited per submitted
+  email. A limited `/ingest` request gets `503` with `Retry-After`,
   because OwnTracks discards a queued message after any `4xx`.
 - **Proxy trust.** The client address comes from `X-Forwarded-For` as allowed
-  by `FORWARDED_ALLOW_IPS`; under `*` the rightmost entry is used. Startup
-  logs a warning when it is `*` or empty.
+  by `FORWARDED_ALLOW_IPS`; under `*` the rightmost entry is used. Outside
+  development mode, startup logs a warning when it is `*` or empty.
 - **Loopback-only port.** `compose.yaml` publishes the app only on
   `127.0.0.1:8077`. The database and OSRM publish no ports. Odograph never
   terminates TLS.
 - **Browser.** HTML responses carry a Content-Security-Policy, and every
   script is served from the instance. Private pages are sent `no-store` and
   htmx history snapshots are disabled.
-- **`/healthz`.** Unauthenticated; returns only whether the database answers.
+- **Unauthenticated endpoints.** `/healthz` returns only whether the
+  database answers. `/api/v1/capabilities` returns the API versions and
+  whether mobile sign-in is available.
 - **Signed images.** Release images are signed with cosign and carry attested
   SBOMs; see [Release images](#release-images).
-- **Logs.** API keys, coordinates and request payloads stay out of logs; see
-  [Logging](privacy.md#logging).
-- **Container.** The image runs as UID/GID `10001` with no Linux
-  capabilities, `no-new-privileges`, a read-only root filesystem and a `tmpfs`
-  `/tmp`. A host directory you bind-mount must be readable (and writable, if
+- **Logs.** [Logging](privacy.md#logging) lists what each log path leaves
+  out.
+- **Container.** The image runs as UID/GID `10001`. `compose.yaml` also runs
+  it with no Linux capabilities, `no-new-privileges`, a read-only root
+  filesystem and a `tmpfs` `/tmp`. A host directory you bind-mount must be readable (and writable, if
   needed) by `10001`.
 
 ## Hardening checklist
@@ -73,8 +76,7 @@ nothing here defends against a hostile operator.
 6. Give each phone its own credential in **Settings > Tracking**, and revoke
    the migrated shared login once no phone uses it.
 7. Keep `INITIAL_ADMIN_SIGNUP=0` and create the first account with
-   `python -m app.manage_account create-admin`
-   ([Recover from the server](accounts.md#recover-from-the-server)).
+   `docker compose exec app python -m app.manage_account create-admin`.
 8. Encrypt backups and limit who can read them
    ([Encryption and off-host copies](backups.md#encryption-and-off-host-copies)).
 9. Leave OSRM, the geocoder, ntfy and SMTP unset unless you need them; each
@@ -89,16 +91,19 @@ nothing here defends against a hostile operator.
 ## What to do about a compromise
 
 1. Stop the `app` service. Leave the `dbdata` volume untouched.
-2. Rotate every secret in `.env`. A new `SESSION_SECRET` signs everyone out.
-   Rotate `OIDC_CLIENT_SECRET` and optional-service credentials with their
-   providers. For `POSTGRES_PASSWORD`, see
-   [Protecting `.env`](backups.md#protecting-env).
-3. Replace every device password in **Settings > Tracking** and change
-   account passwords.
-4. Rebuild the host or containers from a known-good base, and verify the
+2. Rotate every secret in `.env`. A new `SESSION_SECRET` signs out every
+   browser, not signed-in apps. Rotate `OIDC_CLIENT_SECRET` and
+   optional-service credentials with their providers. For
+   `POSTGRES_PASSWORD`, see [Protecting `.env`](backups.md#protecting-env).
+3. Rebuild the host or containers from a known-good base, and verify the
    image signature before starting it.
-5. Restore a backup taken before the compromise into a fresh volume
-   ([Disaster recovery](backups.md#disaster-recovery)).
+4. Restore a backup taken before the compromise into a fresh volume
+   ([Disaster recovery](backups.md#disaster-recovery)). The restore signs out
+   every browser and app, but brings back the passwords and device
+   credentials the backup holds.
+5. After the restore, replace every device password in
+   **Settings > Tracking** and have each account change its password. If you
+   do not restore, also have each account use **Sign out everywhere**.
 6. Review application, proxy and host logs for the suspected window.
    `python -m app.diagnose` inside the container shows current state, not
    history.
@@ -112,7 +117,8 @@ See [SECURITY.md](../SECURITY.md).
 
 Release images are built for `linux/amd64` and `linux/arm64`. A release
 publishes only after `pip-audit` of the locked dependencies and a Trivy scan
-of each architecture for fixable HIGH and CRITICAL findings pass. The
+of each architecture for fixable HIGH and CRITICAL findings pass, apart from
+findings that release's `CHANGELOG.md` section accepts. The
 manifest list and each architecture digest are signed with keyless cosign by
 the release workflow, and each architecture carries an attested SPDX SBOM.
 `scripts/verify_image.sh` is the routine signature check; the steps below
