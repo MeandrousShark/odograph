@@ -327,7 +327,14 @@ def test_upgrade_drill_workflow_runs_every_base_and_selects_migration_mode():
     assert drill["needs"] == "bases"
     assert drill["runs-on"] == "ubuntu-24.04"
     assert drill["strategy"]["fail-fast"] == "false"
-    assert drill["strategy"]["matrix"] == {"base": "${{ fromJSON(needs.bases.outputs.bases) }}"}
+    assert drill["strategy"]["matrix"] == {
+        "base": "${{ fromJSON(needs.bases.outputs.bases) }}",
+        "mode": ["standard"],
+        "include": [{"base": "v1.0.0", "mode": "image-only"}],
+    }
+    assert drill["name"] == (
+        "Drill from ${{ matrix.base }}${{ matrix.mode == 'image-only' && ' (image only)' || '' }}"
+    )
     checkout = drill["steps"][0]
     assert is_pinned(checkout["uses"], "actions/checkout")
     assert checkout["with"] == {
@@ -350,6 +357,7 @@ def test_upgrade_drill_workflow_runs_every_base_and_selects_migration_mode():
     run_step = steps["Run upgrade and rollback drill"]
     assert run_step["env"] == {
         "BASE": "${{ matrix.base }}",
+        "MODE": "${{ matrix.mode }}",
         "CANDIDATE_IMAGE": "${{ inputs.candidate-image }}",
         "REVISION": "${{ inputs.revision || github.sha }}",
     }
@@ -364,11 +372,14 @@ def test_upgrade_drill_workflow_runs_every_base_and_selects_migration_mode():
     assert 'CONTAINER_RUNTIME=docker scripts/db_image_identity.sh "$candidate_db"' in run
     assert 'COMPOSE_CMD="docker compose" scripts/upgrade_check.sh' in run
     assert 'tee "evidence/upgrade-drill-${BASE}.txt"' in run
+    assert '"${args[@]}" --image-only' in run
+    assert 'tee "evidence/upgrade-drill-${BASE}-image-only.txt"' in run
 
     upload = steps["Upload upgrade drill evidence"]
     assert upload["if"] == "always()"
     assert upload["with"]["name"] == (
         "${{ inputs.evidence-name || 'upgrade-drill' }}-${{ matrix.base }}"
+        "${{ matrix.mode == 'image-only' && '-image-only' || '' }}"
     )
 
 

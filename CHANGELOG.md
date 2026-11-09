@@ -9,6 +9,20 @@ reproduced here.
 
 ## [Unreleased]
 
+### Changed
+
+- Tracking the `v1` image is now a supported upgrade path, with a promise
+  every 1.x release keeps: a newer `v1` image runs a working 1.x install with
+  its existing `compose.yaml` and `.env` and no manual step, anything a
+  release does on its own is listed at the top of its notes, and the database
+  image never changes by pulling the app. Release preflight drills it from
+  v1.0.0's files. See [Track `v1`](docs/upgrading.md#track-v1).
+- `docs/upgrading.md` is rewritten around the two upgrade paths and is
+  about a quarter of its former length. Upgrade notes for each release now
+  live at the top of its changelog section; earlier per-version sections
+  remain in the
+  [v1.4.1 guide](https://github.com/MeandrousShark/odograph/blob/v1.4.1/docs/upgrading.md).
+
 ## [1.4.1] - 2026-11-06
 
 ### Fixed
@@ -42,18 +56,18 @@ reproduced here.
 
 - This release adds no migration; the schema stays at 51. The database image
   is a rebuild of 1.4.0's with unchanged versions.
-- See [Upgrading from 1.4](docs/upgrading.md#upgrading-from-14).
+- See [Upgrading from 1.4](https://github.com/MeandrousShark/odograph/blob/v1.4.1/docs/upgrading.md#upgrading-from-14).
 
 ### Supported upgrade path
 
 - Every 1.x release upgrades directly. Each one's database image has the
   same versions as this release's, so each upgrades in place through
   [Database image security rebuilds](docs/upgrading.md#database-image-security-rebuilds)
-  and also reads [Upgrading from 1.4](docs/upgrading.md#upgrading-from-14).
+  and also reads [Upgrading from 1.4](https://github.com/MeandrousShark/odograph/blob/v1.4.1/docs/upgrading.md#upgrading-from-14).
   `v1.3.1` and `v1.3.0` also read the 1.4.0 notes and
-  [Upgrading from 1.3](docs/upgrading.md#upgrading-from-13), since the
+  [Upgrading from 1.3](https://github.com/MeandrousShark/odograph/blob/v1.4.1/docs/upgrading.md#upgrading-from-13), since the
   `DETECTOR_VERSION` 3 reprocess still applies to them; `v1.2.0` also reads
-  the 1.3 notes and [Upgrading from 1.2](docs/upgrading.md#upgrading-from-12);
+  the 1.3 notes and [Upgrading from 1.2](https://github.com/MeandrousShark/odograph/blob/v1.4.1/docs/upgrading.md#upgrading-from-12);
   `v1.1.0` and `v1.0.0` also read the earlier notes. A 0.x installation first
   upgrades to `v1.0.0`.
 - Prior-release artifact upgrade gate: release preflight ran the Docker
@@ -134,14 +148,14 @@ reproduced here.
 
 - This release adds no migration; the schema stays at 51. The database image
   is the same as 1.3.1's.
-- See [Upgrading from 1.3](docs/upgrading.md#upgrading-from-13).
+- See [Upgrading from 1.3](https://github.com/MeandrousShark/odograph/blob/v1.4.0/docs/upgrading.md#upgrading-from-13).
 
 ### Supported upgrade path
 
 - `v1.3.1` and `v1.3.0` upgrade directly with the standard procedure; also
-  read [Upgrading from 1.3](docs/upgrading.md#upgrading-from-13). `v1.2.0`
+  read [Upgrading from 1.3](https://github.com/MeandrousShark/odograph/blob/v1.4.0/docs/upgrading.md#upgrading-from-13). `v1.2.0`
   also upgrades directly and reads the 1.3 notes and
-  [Upgrading from 1.2](docs/upgrading.md#upgrading-from-12). `v1.1.0` and
+  [Upgrading from 1.2](https://github.com/MeandrousShark/odograph/blob/v1.4.0/docs/upgrading.md#upgrading-from-12). `v1.1.0` and
   `v1.0.0` also upgrade directly; their database images have the same
   versions as this release's, so they upgrade in place through
   [Database image security rebuilds](docs/upgrading.md#database-image-security-rebuilds)
@@ -179,7 +193,7 @@ reproduced here.
 
 - `v1.3.0` and `v1.2.0` upgrade directly with the standard procedure; a
   `v1.2.0` installation also reads the 1.3.0 notes and
-  [Upgrading from 1.2](docs/upgrading.md#upgrading-from-12). `v1.1.0` and
+  [Upgrading from 1.2](https://github.com/MeandrousShark/odograph/blob/v1.4.0/docs/upgrading.md#upgrading-from-12). `v1.1.0` and
   `v1.0.0` also upgrade directly; their database images have the same
   versions as this release's, so they upgrade in place through
   [Database image security rebuilds](docs/upgrading.md#database-image-security-rebuilds)
@@ -244,7 +258,7 @@ reproduced here.
 
 - This release adds no migration; the schema stays at 51. The database image
   is the same as 1.2.0's.
-- See [Upgrading from 1.2](docs/upgrading.md#upgrading-from-12).
+- See [Upgrading from 1.2](https://github.com/MeandrousShark/odograph/blob/v1.4.0/docs/upgrading.md#upgrading-from-12).
 
 ### Supported upgrade path
 
@@ -332,7 +346,7 @@ reproduced here.
   apps list.
 - Migration 051 (`additive`) adds idempotency key columns to trips and
   expenses for creates through the API.
-- See [Upgrading from 1.1](docs/upgrading.md#upgrading-from-11).
+- See [Upgrading from 1.1](https://github.com/MeandrousShark/odograph/blob/v1.4.0/docs/upgrading.md#upgrading-from-11).
 
 ### Supported upgrade path
 
@@ -388,7 +402,7 @@ reproduced here.
   Settings shows usage only. Set `STORAGE_ACCOUNT_LIMIT_BYTES=2147483648` to
   keep the 1.0 limits; raw and enhancement limits then default to 256 MiB and
   128 MiB. Setting either sub-limit without an account limit refuses startup.
-  See [Upgrading from 1.0](docs/upgrading.md#upgrading-from-10).
+  See [Upgrading from 1.0](https://github.com/MeandrousShark/odograph/blob/v1.4.0/docs/upgrading.md#upgrading-from-10).
 - The administrator account never has a storage limit and uses none of the
   instance budget. With an account limit set, the budget funds member
   accounts only.
@@ -421,14 +435,14 @@ reproduced here.
 - Migration 047 (`rewrite`) adds the protected functions behind the storage
   limit editor and makes each restart apply the sub-limit defaults to custom
   accounts.
-- See [Upgrading from 1.0](docs/upgrading.md#upgrading-from-10) for their
+- See [Upgrading from 1.0](https://github.com/MeandrousShark/odograph/blob/v1.4.0/docs/upgrading.md#upgrading-from-10) for their
   operator impact.
 
 ### Supported upgrade path
 
 - `v1.0.0` may upgrade directly to 1.1 through the database-image migration
   below. A 0.x installation first upgrades to `v1.0.0`; see
-  [Upgrading to 1.0](docs/upgrading.md#upgrading-to-10).
+  [Upgrading to 1.0](https://github.com/MeandrousShark/odograph/blob/v1.4.0/docs/upgrading.md#upgrading-to-10).
 - Prior-release artifact upgrade gate: release preflight ran the Docker
   Compose upgrade drill from `v1.0.0` to this release in database-image
   migration mode before it was tagged.
@@ -535,7 +549,7 @@ reproduced here.
   network-isolated Compose project, starts a candidate release against the
   copy and writes a summary of migration timings, the startup result and
   row-count changes. See
-  [Rehearse an upgrade](docs/upgrading.md#rehearse-an-upgrade-against-your-own-backup).
+  [Rehearse an upgrade](https://github.com/MeandrousShark/odograph/blob/v1.4.0/docs/upgrading.md#rehearse-an-upgrade-against-your-own-backup).
 - Startup and the account management, detector reprocessing, role
   verification and restore commands refuse a database migrated by a newer
   release, naming the database's schema version and the image's newest
@@ -581,7 +595,7 @@ reproduced here.
   connections under restricted database roles whose exact permissions are
   validated at startup. The migration refuses a populated database that has
   no account; follow the
-  [schema 26 upgrade notes](docs/upgrading.md#account-ownership-migration-schema-26).
+  [schema 26 upgrade notes](https://github.com/MeandrousShark/odograph/blob/v1.4.0/docs/upgrading.md#account-ownership-migration-schema-26).
 - The `DATABASE_URL` role must be a superuser or have `BYPASSRLS`. Startup
   refuses to run migrations as any other role, because forced row-level
   security would make a data migration silently skip rows. The canonical
@@ -753,7 +767,7 @@ reproduced here.
 
 - Migrations 026 to 044 predate migration classes and carry no
   `-- migration-class:` header, so they have no per-migration label. The
-  [Upgrading to 1.0](docs/upgrading.md#upgrading-to-10) section summarizes
+  [Upgrading to 1.0](https://github.com/MeandrousShark/odograph/blob/v1.4.0/docs/upgrading.md#upgrading-to-10) section summarizes
   their operator impact, including a long first startup.
 - Migration 045 (`rewrite`) drops the single-account unique index and
   administrator-only check on `accounts` and makes new accounts default to
@@ -765,7 +779,7 @@ reproduced here.
   Older releases should first follow the supported upgrade path to `v0.11.3`.
   An installation from `v0.11.0` or earlier must first apply the v0.11.1
   road-snap correction if it has not; see
-  [Upgrading to 1.0](docs/upgrading.md#supported-starting-versions).
+  [Upgrading to 1.0](https://github.com/MeandrousShark/odograph/blob/v1.4.0/docs/upgrading.md#supported-starting-versions).
 - Prior-release artifact upgrade gate: release preflight ran the Docker
   Compose upgrade drill from `v0.10.2`, `v0.11.0`, `v0.11.1` and `v0.11.3` to
   this release before it was tagged. `v0.10.0` and `v0.11.2` share these
@@ -792,7 +806,7 @@ reproduced here.
 - No exact-image rollback is supported from 1.0 to a 0.x release. Recovery
   restores the verified pre-upgrade backup into a fresh volume under the old
   image and loses every write made after that backup. See
-  [Upgrading to 1.0](docs/upgrading.md#upgrading-to-10).
+  [Upgrading to 1.0](https://github.com/MeandrousShark/odograph/blob/v1.4.0/docs/upgrading.md#upgrading-to-10).
 
 ## [0.11.3] - 2026-10-12
 

@@ -13,6 +13,10 @@
 #   scripts/upgrade_check.sh --base REF --candidate REF --candidate-image IMAGE [--keep]
 #   scripts/upgrade_check.sh --base REF --candidate REF --database-image-migration [--keep]
 #   scripts/upgrade_check.sh --base REF --candidate REF --database-image-swap [--keep]
+#   scripts/upgrade_check.sh --base REF --candidate REF [--candidate-image IMAGE] --image-only [--keep]
+#
+# --image-only rehearses the v1 promise: the candidate stage keeps the base
+# install's compose.yaml and .env unchanged and swaps only the app image.
 #
 # REF is any git commit-ish resolvable in this checkout (tag, branch, SHA).
 # --keep skips container/volume/scratch teardown at exit, for inspecting a
@@ -51,7 +55,7 @@ EXACT_ROW_DEFAULTED_ADDITIONS=(
 
 usage() {
     cat >&2 <<'EOF'
-usage: scripts/upgrade_check.sh --base REF --candidate REF [--base-image IMAGE] [--candidate-image IMAGE] [--database-image-migration | --database-image-swap] [--keep]
+usage: scripts/upgrade_check.sh --base REF --candidate REF [--base-image IMAGE] [--candidate-image IMAGE] [--database-image-migration | --database-image-swap | --image-only] [--keep]
 
 Runs a disposable Compose backup/restore/upgrade/rollback rehearsal from a
 base git ref to a candidate git ref. When --candidate-image is given, the
@@ -73,12 +77,16 @@ any existing container/volume, or the repository working tree.
                           (scripts/db_image_identity.sh), and exercise the
                           candidate image and then the base image again on the
                           same volume
+  --image-only            keep the base compose.yaml and .env for the candidate
+                          stage and change only the app image to the candidate
+                          image (built from --candidate, or --candidate-image);
+                          the db service stays the base's
   --keep                  skip container/volume/scratch cleanup for debugging
 
 Base and candidate trees may differ in their app service, but the rendered db
 service must be identical by default. Migration and swap modes allow only the
 rendered db image to change; any other db-service drift needs a
-release-specific drill.
+release-specific drill. Image-only mode never changes the db service.
 EOF
     exit "${1:-1}"
 }
@@ -89,6 +97,7 @@ CANDIDATE_REF=""
 CANDIDATE_IMAGE=""
 # Empty for the standard drill, else "migration" or "swap".
 DATABASE_IMAGE_MODE=""
+IMAGE_ONLY=0
 KEEP=0
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -111,6 +120,7 @@ while [ "$#" -gt 0 ]; do
                 usage
             fi
             DATABASE_IMAGE_MODE="$requested_mode"; shift ;;
+        --image-only) IMAGE_ONLY=1; shift ;;
         --keep) KEEP=1; shift ;;
         -h|--help) usage 0 ;;
         *) echo "error: unrecognized argument: $1" >&2; usage ;;
@@ -118,6 +128,10 @@ while [ "$#" -gt 0 ]; do
 done
 if [ -z "$BASE_REF" ] || [ -z "$CANDIDATE_REF" ]; then
     echo "error: --base and --candidate are both required" >&2
+    usage
+fi
+if [ "$IMAGE_ONLY" -eq 1 ] && [ -n "$DATABASE_IMAGE_MODE" ]; then
+    echo "error: --image-only and --database-image-${DATABASE_IMAGE_MODE} are mutually exclusive" >&2
     usage
 fi
 
@@ -1149,6 +1163,13 @@ assert_db_image_identity_equal() {
 step_materialize() {
     git -C "$REPO_ROOT" archive "$BASE_REF" | tar -x -C "$BASE_DIR"
     git -C "$REPO_ROOT" archive "$CANDIDATE_REF" | tar -x -C "$CAND_DIR"
+    if [ "$IMAGE_ONLY" -eq 1 ]; then
+        # The candidate tree still supplies the backup/restore scripts and
+        # migrations; only the install's own compose.yaml is the base's. Step 1
+        # copies the base .env as in every mode.
+        cp "$BASE_DIR/compose.yaml" "$CAND_DIR/compose.yaml"
+        step_info "image-only: candidate stage uses the base ($BASE_REF) compose.yaml; only the app image changes"
+    fi
     # With --candidate-image the candidate tree is the image's own revision.
     BASE_DETECTOR_VERSION="$(detector_version_of "$BASE_DIR")" \
         || step_fail "materialize: could not read DETECTOR_VERSION from the base app/detector/runner.py"
@@ -1495,6 +1516,17 @@ verify_detector_reprocess() {
     step_pass "step 7a: DETECTOR_VERSION $from -> $to reprocess finished on every eligible device and every detected trip carries version $to"
 }
 
+# Image-only mode upgrades an install whose compose.yaml and .env are exactly
+# the base's, so prove that just before the candidate app starts.
+assert_image_only_install() {
+    local file
+    for file in compose.yaml .env; do
+        cmp -s "$BASE_DIR/$file" "$CAND_DIR/$file" \
+            || step_fail "step 7: image-only candidate $file differs from the base install's"
+    done
+    step_pass "step 7: image-only candidate keeps the base compose.yaml and .env byte-for-byte"
+}
+
 step7_upgrade() {
     local v mig account_count identity_count
     case "$DATABASE_IMAGE_MODE" in
@@ -1502,6 +1534,9 @@ step7_upgrade() {
         swap) step7_database_image_swap ;;
         *) compose_base stop app ;;
     esac
+    if [ "$IMAGE_ONLY" -eq 1 ]; then
+        assert_image_only_install
+    fi
     if [ -n "$CANDIDATE_IMAGE" ]; then
         compose_cand up -d --no-build app
     else
@@ -1658,5 +1693,8 @@ if [ -n "$CANDIDATE_IMAGE" ]; then
 fi
 if [ -n "$DATABASE_IMAGE_MODE" ]; then
     echo "db image mode: $DATABASE_IMAGE_MODE"
+fi
+if [ "$IMAGE_ONLY" -eq 1 ]; then
+    echo "mode:      image-only (base compose.yaml and .env)"
 fi
 echo "project:   $PROJECT"
