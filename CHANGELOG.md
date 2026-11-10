@@ -9,6 +9,11 @@ reproduced here.
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-11-09
+
+Nothing in this release runs on its own, and there is no step to take after
+upgrading from 1.4.1.
+
 ### Changed
 
 - Tracking the `v1` image is now a supported upgrade path, with a promise
@@ -33,6 +38,29 @@ reproduced here.
   application image for CVE-2026-85091 and CVE-2026-76844. Both are in
   zlib's `gz*` file write functions, which Python's `zlib` and `gzip`
   modules do not use; the base image and Python version are unchanged.
+
+### Migrations
+
+- This release adds no migration; the schema stays at 51. The database image
+  is unchanged from 1.4.1.
+
+### Supported upgrade path
+
+- Every 1.x release upgrades directly, by either path in the
+  [upgrading guide](docs/upgrading.md). `v1.4.0` and earlier also take
+  1.4.1's database image rebuild
+  ([Database image security rebuilds](docs/upgrading.md#database-image-security-rebuilds))
+  and read the notes of each release in between. A 0.x installation first
+  upgrades to `v1.0.0`.
+- Prior-release artifact upgrade gate: release preflight ran the Docker
+  Compose upgrade drill from `v1.4.1` with the database image unchanged, from
+  `v1.4.0`, `v1.3.1`, `v1.3.0`, `v1.2.0`, `v1.1.0` and `v1.0.0` in database
+  image swap mode, and the image-only drill from `v1.0.0`, before this
+  release was tagged.
+
+### Breaking changes
+
+- None. There is no migration and no configuration or environment change.
 
 ## [1.4.1] - 2026-11-06
 
