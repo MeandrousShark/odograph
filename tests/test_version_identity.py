@@ -224,6 +224,8 @@ def test_authenticated_settings_context_uses_config_and_live_schema(monkeypatch)
                     geocode_provider=None,
                     app_version="v0.6.0-rc.1",
                     app_git_revision="0123456789abcdef",
+                    # Read to tell whether the current year's rate is carried.
+                    display_tz=ZoneInfo("America/Los_Angeles"),
                     # The rest are only read by the diagnostics report's
                     # config-presence section (app/diagnose.py), added
                     # alongside the four version fields this test already
