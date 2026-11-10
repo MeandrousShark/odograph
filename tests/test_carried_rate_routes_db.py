@@ -176,3 +176,54 @@ def test_dashboard_response_carries_the_note_for_a_carried_week():
         assert "mileage rate is saved" not in response.body.decode()
 
     _scenario(run)
+
+
+async def _archive_ytd(pool, path: str) -> str:
+    archive = _endpoint(path, "GET")
+    filters = dict(category="", from_="", to="", vehicle="", q="", exclusion="")
+    if path == "/trips":
+        filters.update(manual_date="", manual_start="", manual_notes="", bridge_trip="", manual_open="")
+    else:
+        filters.update(loaded_depth="")
+    body = (await archive(_request(pool), USER, **filters)).body.decode()
+    ytd = body[body.index('id="trip-archive-ytd"'):]
+    return ytd[:ytd.index("</div>")]
+
+
+@pytest.mark.parametrize("path", ["/trips", "/trips/list"])
+def test_archive_page_and_filter_change_carry_the_year_to_date_note(path):
+    async def run(pool):
+        year = datetime.now(TZ).year
+        async with pool.connection() as conn:
+            await _only_rate(conn, year - 1, "0.7000")
+            await _insert_trip(conn, datetime(year, 1, 10, 9, tzinfo=TZ), "business")
+
+        ytd = await _archive_ytd(pool, path)
+        assert _sentence(year, year - 1, "0.7000") in ytd
+        assert f'<a href="/settings">Add the {year} rate</a>.' in ytd
+
+        async with pool.connection() as conn:
+            await conn.execute(
+                "INSERT INTO mileage_rates (account_id, year, rate_per_mi) VALUES (%s, %s, 0.7250)",
+                (account_id(conn), year),
+            )
+        assert "mileage rate is saved" not in await _archive_ytd(pool, path)
+
+    _scenario(run)
+
+
+def test_dashboard_reclassification_response_carries_the_hero_note():
+    async def run(pool):
+        async with pool.connection() as conn:
+            await _only_rate(conn, 2025, "0.7000")
+            target = await _insert_trip(conn, datetime(2026, 6, 2, 9, tzinfo=TZ), "unclassified")
+
+        tag = _endpoint("/trips/{trip_id}/tag", "POST")
+        response = await tag(_request(pool), target, "business", USER, dashboard_week="2026-06-01")
+        body = response.body.decode()
+        assert response.status_code == 200
+        hero = body[body.index('id="dashboard-hero"'):]
+        assert _sentence(2026, 2025, "0.7000") in hero
+        assert '<a href="/settings">Add the 2026 rate</a>.' in hero
+
+    _scenario(run)
