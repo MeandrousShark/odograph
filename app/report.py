@@ -158,13 +158,13 @@ def format_rate_periods(rate_periods: list[tuple[float, int, int]]) -> str:
 
 def caveat_lines(caveats: ReportCaveats, year: int) -> list[str]:
     """Plain-text caveat sentences, ordered unclassified/missing-purpose/gap/
-    low-confidence/manual/missing-rate or carried-rate. The one place this wording is built, called from
-    both the XLSX summary sheet and the HTML report page, so the two can't
-    drift on what each caveat says (they already had on the unclassified
-    line before this was unified). The rate line (missing or carried, never
-    both), when present, is always last -- callers needing to append
-    something rate-specific (e.g. the HTML page's settings link) can rely on
-    that ordering.
+    low-confidence/manual/missing-rate or carried-rate. The one place this
+    wording is built, called from both the XLSX summary sheet and the HTML
+    report page, so the two can't drift on what each caveat says (they
+    already had on the unclassified line before this was unified). The rate
+    line (missing or carried, never both), when present, is always last --
+    callers needing to append something rate-specific (e.g. the HTML page's
+    settings link) can rely on that ordering.
     """
     lines = []
     if caveats.unclassified_trips:

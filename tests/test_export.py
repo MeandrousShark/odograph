@@ -790,7 +790,6 @@ def test_xlsx_writer_failure_cleans_only_its_own_temporary_file(monkeypatch, fai
         unrelated_wb.close()
 
 
-
 @pytest.mark.parametrize("with_trips", [True, False])
 def test_report_xlsx_summary_carries_the_carried_rate_line(with_trips):
     trips = [_trip(started_at=datetime(2027, 6, 15, 15, 0, tzinfo=timezone.utc),

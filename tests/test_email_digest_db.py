@@ -277,7 +277,6 @@ def test_filing_reminder_sends_once_per_year_with_both_links_and_no_attachment()
     asyncio.run(_with_pool(_filing_reminder_scenario))
 
 
-
 CARRIED_2026 = (
     "No 2026 mileage rate is saved. 2026 figures use the 2025 rate of "
     "$0.7000/mi until you add one. Add it under Settings, Mileage rates."
