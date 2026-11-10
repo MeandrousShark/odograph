@@ -14,8 +14,9 @@ tiles.
 ## Optional integrations
 
 - **Map tiles.** Your browser fetches tiles directly from `MAP_TILE_URL`
-  (OpenStreetMap by default). The tile server sees your IP address and the map
-  area you view, plus your instance's origin as the `Referer`. Point
+  (OpenStreetMap by default) for the maps on Trip Detail, Review, the manual
+  trip form and a place's page. The tile server sees your IP address and the
+  map area you view, plus your instance's origin as the `Referer`. Point
   `MAP_TILE_URL` at your own tile server to keep this local; its attribution
   is set with `MAP_TILE_ATTRIBUTION`.
 - **OSRM** (self-hosted). Detected trips' GPS traces, for road snapping, the

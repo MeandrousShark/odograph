@@ -7,12 +7,12 @@ Each account has its own devices, vehicles, trips and settings; passwords,
 sign-in and member accounts are in [Account management](accounts.md).
 
 The main pages are **Dashboard**, **Trips**, **Review**, **Report**,
-**Expenses** and **Stats**. The header links to **Settings** and, through
-your name, **Account Settings**. On a phone, **Week** is the Dashboard,
-**More** holds Expenses and Stats, and the avatar menu holds the rest. The
-header shows your **Display name** (set in **Account Settings > Profile**,
-up to 100 characters), or the part of your login email before the `@`. It is
-only a label, not a login name.
+**Expenses**, **Stats** and **Places**. The header links to **Settings** and,
+through your name, **Account Settings**. On a phone, **Week** is the
+Dashboard, **More** holds Expenses, Stats and Places, and the avatar menu
+holds the rest. The header shows your **Display name** (set in **Account
+Settings > Profile**, up to 100 characters), or the part of your login email
+before the `@`. It is only a label, not a login name.
 
 ## Categories and exclusions
 
@@ -50,8 +50,9 @@ category it set) or Skip (field edits stay); it is forgotten on reload.
 
 The archive, grouped by month. Search matches notes, purposes, place names,
 location names and addresses. Filters cover category, date, vehicle (or
-**Unassigned**) and exclusion, and the **Export** menu downloads the trips
-they match as CSV or XLSX.
+**Unassigned**) and exclusion, and a place page's **Open in Trips** adds a
+place filter, shown as a chip, for trips starting or ending there. The
+**Export** menu downloads the trips the filters match as CSV or XLSX.
 
 **Select all matching** selects every trip the filters match, including
 unloaded pages and other months. It is a snapshot: trips that arrive later
@@ -127,6 +128,18 @@ For a **Possible missing trip**, **Add missing trip** in the row's menu (or
 the Dashboard link) prefills the date, start time and notes, and with
 routing, a suggested road distance. Check every field before saving.
 
+## Places
+
+**Places** lists each saved place with its trips and miles this year and its
+last visit. A place's page shows its map and radius and, for a chosen year,
+its arrivals, departures, trips and miles, a report summary for those trips,
+the trips themselves and the auto-tag rules that name the place or its kind.
+A trip from and to the same place counts once, as one arrival and one
+departure; the trip and mile totals leave out **Not one of my vehicles** and
+include unclassified miles, which the report summary does not. Places and
+rules are edited in **Settings**. **Open in Trips** shows the year's trips in
+the archive, filtered by the place.
+
 ## Settings
 
 **Places** name trip endpoints: a trip end within a place's radius (meters)
@@ -194,8 +207,8 @@ a standard versus actual expense estimate when the records exist, and a link
 to the **Expense ledger**.
 
 **Stats** shows driving for a year or date range and a vehicle: weekly and
-monthly charts, category share, top saved-place routes, most-used places and
-a per-vehicle breakdown.
+monthly charts, category share, top saved-place routes, most-used places
+(counted by trip ends) and a per-vehicle breakdown.
 
 ### Report workbooks
 

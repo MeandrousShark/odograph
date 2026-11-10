@@ -62,10 +62,12 @@
       {% set active_page = "expenses" %}
     {% elif current_path == "/stats" or current_path.startswith("/stats/") %}
       {% set active_page = "stats" %}
+    {% elif current_path == "/places" or current_path.startswith("/places/") %}
+      {% set active_page = "places" %}
     {% elif current_path == "/admin/accounts" or current_path.startswith("/admin/") %}
       {% set active_page = "accounts" %}
     {% endif %}
-    {% set more_active = active_page in ("expenses", "stats") %}
+    {% set more_active = active_page in ("expenses", "stats", "places") %}
     {% set settings_active = current_path == "/settings" %}
     {% set account_settings_active = current_path == "/settings/account" %}
     {% set account_menu_active = current_path == "/settings" or current_path.startswith("/settings/") or active_page == "accounts" %}
@@ -91,6 +93,7 @@
       <a href="/report"{% if active_page == "report" %} aria-current="page"{% endif %}>Report</a>
       <a href="/expenses"{% if active_page == "expenses" %} aria-current="page"{% endif %}>Expenses</a>
       <a href="/stats"{% if active_page == "stats" %} aria-current="page"{% endif %}>Stats</a>
+      <a href="/places"{% if active_page == "places" %} aria-current="page"{% endif %}>Places</a>
     </nav>
     <div class="header-account">
       {% if user.id %}
@@ -159,6 +162,9 @@
         </a>
         <a href="/stats" class="mobile-more-item{% if active_page == 'stats' %} is-active{% endif %}"{% if active_page == 'stats' %} aria-current="page"{% endif %}>
           {{ icon("chart-line", extra_class="mobile-more-icon") }}<span>Stats</span>
+        </a>
+        <a href="/places" class="mobile-more-item{% if active_page == 'places' %} is-active{% endif %}"{% if active_page == 'places' %} aria-current="page"{% endif %}>
+          {{ icon("house", extra_class="mobile-more-icon") }}<span>Places</span>
         </a>
       </div>
     </details>

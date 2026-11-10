@@ -54,6 +54,12 @@ def test_authenticated_mobile_shell_has_expected_destinations_and_local_icons():
     for name in ("gauge", "list-dashes", "check-circle", "chart-line", "dots-three-circle"):
         assert f"#{name}" in nav
         assert f'id="{name}"' in SPRITE
+    more = nav.split('<div class="mobile-more-panel">', 1)[1]
+    assert re.findall(r'<a href="([^"]+)" class="mobile-more-item', more) == [
+        "/expenses", "/stats", "/places",
+    ]
+    assert "#house" in more.split('href="/places"', 1)[1].split("</a>", 1)[0]
+    assert "<span>Places</span>" in more
 
 
 
@@ -138,7 +144,10 @@ def test_mobile_active_states_cover_primary_and_more_routes():
         assert active == [href]
         assert '<details class="mobile-more is-active">' not in nav
 
-    for path, href in (("/expenses", "/expenses"), ("/stats/coverage", "/stats")):
+    for path, href in (
+        ("/expenses", "/expenses"), ("/stats/coverage", "/stats"),
+        ("/places", "/places"), ("/places/3", "/places"),
+    ):
         nav = _mobile_nav(_render(path))
         assert '<details class="mobile-more is-active" data-header-disclosure="more">' in nav
         assert f'<a href="{href}" class="mobile-more-item is-active" aria-current="page">' in nav

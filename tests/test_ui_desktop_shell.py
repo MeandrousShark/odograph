@@ -50,6 +50,8 @@ def test_authenticated_primary_navigation_has_one_route_aware_active_link():
         "/expenses/ledger": "Expenses",
         "/stats": "Stats",
         "/stats/coverage": "Stats",
+        "/places": "Places",
+        "/places/3": "Places",
     }
     for path, label in expected.items():
         links = _nav(_render(path))
@@ -191,8 +193,9 @@ def test_desktop_header_uses_compact_nocturne_rule_and_active_accent_indicator()
     assert "@media (min-width: 761px)" in CSS
     assert "header { align-items: end; padding-bottom: var(--space-1); }" in CSS
     assert "header h1 { display: flex; min-height: var(--control-height); align-items: center; }" in CSS
-    assert "header nav { flex-wrap: nowrap; gap: var(--space-2); }" in CSS
-    assert "header nav a { padding-inline: 0; }" in CSS
+    compact_nav = CSS.split("@media (min-width: 761px) and (max-width: 1100px) {", 1)[1].split("\n}", 1)[0]
+    assert "header nav { flex-wrap: nowrap; gap: var(--space-1); font-size: .85rem; }" in compact_nav
+    assert "header nav a { padding-inline: 0; white-space: nowrap; }" in compact_nav
     assert ".header-account .account-name { display: none; }" in CSS
     assert ".header-account .settings-link, .header-account .accounts-link," in CSS
     assert "bottom: calc(-1 * var(--space-1))" in CSS

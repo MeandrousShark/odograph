@@ -197,6 +197,7 @@ def _trip_filter_sql(
     vehicle_id: int | None | Literal["none"] = None,
     q: str = "",
     exclusion: str = "",
+    place_id: int | None = None,
     *, owner_id: int,
 ) -> tuple[str, list]:
     """Build a `WHERE` clause + params list for filtering trips by category,
@@ -221,6 +222,10 @@ def _trip_filter_sql(
     existed. `EXCLUSION_FILTER_NONE` is the one non-enum value that isn't
     junk, the same role `VEHICLE_FILTER_UNASSIGNED` plays for `vehicle_id`:
     it means "normal trips only", i.e. `exclusion IS NULL`.
+
+    `place_id` matches a trip starting or ending at that place, so a trip
+    from and to the same place is one row. An id outside the account (row
+    security and the account clause both apply) matches nothing.
     """
     if type(owner_id) is not int or not 1 <= owner_id <= 2**63 - 1:
         raise ValueError("owner_id must be a positive bigint")
@@ -239,6 +244,9 @@ def _trip_filter_sql(
     elif exclusion in EXCLUSIONS:
         clauses.append("exclusion = %s")
         params.append(exclusion)
+    if place_id is not None:
+        clauses.append("(start_place_id = %s OR end_place_id = %s)")
+        params.extend((place_id, place_id))
     if from_dt is not None:
         clauses.append("started_at >= %s")
         params.append(from_dt)
@@ -275,9 +283,11 @@ class TripFilter:
     vehicle_id: int | None | Literal["none"] = None
     q: str = ""
     exclusion: str = ""
+    place_id: int | None = None
 
     def where(self, owner_id: int) -> tuple[str, list]:
         return _trip_filter_sql(
             self.category, self.from_dt, self.to_dt, self.vehicle_id,
-            q=self.q, exclusion=self.exclusion, owner_id=owner_id,
+            q=self.q, exclusion=self.exclusion, place_id=self.place_id,
+            owner_id=owner_id,
         )

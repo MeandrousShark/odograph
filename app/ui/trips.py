@@ -60,8 +60,10 @@ from app.ui._common import (
     _fetch_trip,
     _month_bounds,
     _month_page_url,
+    _parse_place_id,
     _parse_vehicle_form,
     _parse_vehicle_id,
+    _place_param,
     _trip_filter_sql,
     _url_with_filters,
     normalize_trip_label,
@@ -106,10 +108,11 @@ async def _fetch_month_page(
     vehicle_id: int | None | Literal["none"],
     q: str = "",
     exclusion: str = "",
+    place_id: int | None = None,
 ) -> tuple[list[dict], bool]:
     """Fetch one stable local-month page plus a one-row `has_more` sentinel."""
     return await fetch_month_page(
-        conn, TripFilter(category, from_dt, to_dt, vehicle_id, q, exclusion),
+        conn, TripFilter(category, from_dt, to_dt, vehicle_id, q, exclusion, place_id),
         tz, year, month, page_size, offset,
     )
 
@@ -224,6 +227,7 @@ async def _fetch_month_summary(
     conn, tz: ZoneInfo, year: int, month: int, rates,
     category: str, from_dt: datetime | None, to_dt: datetime | None,
     vehicle_id: int | None | Literal["none"], q: str, exclusion: str,
+    place_id: int | None = None,
 ) -> dict | None:
     """Recompute one archive month's summary figures against the live
     database, reusing the exact filter SQL (`_trip_filter_sql`) and column
@@ -233,7 +237,10 @@ async def _fetch_month_summary(
     hollow one.
     """
     month_start, month_end = _month_bounds(year, month, tz)
-    where, params = _trip_filter_sql(category, from_dt, to_dt, vehicle_id, q=q, exclusion=exclusion, owner_id=account_id(conn))
+    where, params = _trip_filter_sql(
+        category, from_dt, to_dt, vehicle_id, q=q, exclusion=exclusion,
+        place_id=place_id, owner_id=account_id(conn),
+    )
     where += " AND" if where else "WHERE"
     where += " started_at >= %s AND started_at < %s"
     params.extend((month_start, month_end))
@@ -271,6 +278,19 @@ async def _fetch_ytd_deduction(conn, tz: ZoneInfo, rates) -> tuple[int, float | 
     return ytd_year, sum_month_deductions(ytd_by_month, ytd_year, rates)
 
 
+async def _fetch_place_name(conn, place_id: int | None) -> str:
+    """The `place` filter chip's label. Empty for no filter, and for an id
+    outside the account, which the filter then matches nothing for."""
+    if place_id is None:
+        return ""
+    cur = await conn.execute(
+        "SELECT name FROM places WHERE id = %s AND account_id = %s",
+        (place_id, account_id(conn)),
+    )
+    row = await cur.fetchone()
+    return row[0] if row else ""
+
+
 def _parse_archive_current_url(url: str) -> dict[str, str] | None:
     """Extract the archive's own filter query params from htmx's
     HX-Current-URL request header, which carries the browser's actual
@@ -298,6 +318,7 @@ def _parse_archive_current_url(url: str) -> dict[str, str] | None:
     return {
         "category": first("category"), "from_": first("from"), "to": first("to"),
         "vehicle": first("vehicle"), "q": first("q"), "exclusion": first("exclusion"),
+        "place": first("place"),
     }
 
 
@@ -321,6 +342,7 @@ def _archive_history_directive(current_url: str, archive_state: dict) -> tuple[s
         "vehicle": archive_state["vehicle"],
         "q": archive_state["q"],
         "exclusion": archive_state["exclusion"],
+        "place": archive_state["place"],
     }
     header = "HX-Replace-Url" if unchanged else "HX-Push-Url"
     return header, archive_state["url"]
@@ -452,6 +474,7 @@ async def _fetch_archive_context(
     vehicle: str,
     q: str,
     exclusion: str,
+    place: str = "",
     date_preset: str = "",
     loaded_depth: str = "",
     include_recent_purposes: bool = False,
@@ -465,12 +488,14 @@ async def _fetch_archive_context(
     while the dedicated manual page owns its own place lookup.
     """
     exclusion = exclusion if isinstance(exclusion, str) else ""
+    place_id = _parse_place_id(place)
+    place = _place_param(place)
     tz = request.state.config.display_tz
     from_, to, resolved_date_preset = _resolve_archive_date_filter(
         from_, to, date_preset, tz,
     )
     from_dt, to_dt = parse_date_range(from_, to, tz)
-    filters = TripFilter(category, from_dt, to_dt, _parse_vehicle_id(vehicle), q, exclusion)
+    filters = TripFilter(category, from_dt, to_dt, _parse_vehicle_id(vehicle), q, exclusion, place_id)
     page_size = request.state.config.trips_page_size
     depths = _parse_archive_loaded_depth(loaded_depth, page_size)
     max_depth = max([page_size, *depths.values()])
@@ -480,6 +505,7 @@ async def _fetch_archive_context(
         initial_rows = await fetch_month_rows(conn, filters, tz, max_depth + 1)
         rates = await load_rates(conn)
         vehicles = await list_vehicles(conn)
+        place_name = await _fetch_place_name(conn, place_id)
         recent_purposes = (
             await _fetch_recent_purposes(conn) if include_recent_purposes else []
         )
@@ -502,7 +528,7 @@ async def _fetch_archive_context(
         month["loaded_depth"] = len(trips)
         month["next_url"] = _month_page_url(
             month["year"], month["month_num"], depth,
-            category, from_, to, vehicle, q, exclusion,
+            category, from_, to, vehicle, q, exclusion, place,
         )
         months.append(month)
 
@@ -510,9 +536,13 @@ async def _fetch_archive_context(
     # update export targets in the same response as its rows.
     from app.ui.review import _review_url
 
+    place_clear_url = _url_with_filters(
+        "/trips", from_, to, vehicle, q, category=category, exclusion=exclusion,
+    )
+
     def export_url(fmt: str) -> str:
         return _url_with_filters(
-            "/export", from_, to, vehicle, q, format=fmt, category=category,
+            "/export", from_, to, vehicle, q, place, format=fmt, category=category,
             exclusion=exclusion,
         )
 
@@ -526,12 +556,15 @@ async def _fetch_archive_context(
         "filter_vehicle": vehicle,
         "filter_q": q,
         "filter_exclusion": exclusion,
+        "filter_place": place,
+        "filter_place_name": place_name,
+        "place_clear_url": place_clear_url,
         "archive_date_preset": resolved_date_preset,
         "archive_filters_active": bool(
-            category or from_ or to or vehicle or q.strip() or exclusion
+            category or from_ or to or vehicle or q.strip() or exclusion or place
         ),
         "export_url": export_url,
-        "review_url": _review_url(from_, to, vehicle, q),
+        "review_url": _review_url(from_, to, vehicle, q, place),
         "ytd_year": ytd_year,
         "ytd_deduction": ytd_deduction,
         "ytd_carried": carried_rate(rates, ytd_year),
@@ -540,7 +573,7 @@ async def _fetch_archive_context(
         # outside that root) has to travel inside it.
         "archive_state": {
             "url": _url_with_filters(
-                "/trips", from_, to, vehicle, q,
+                "/trips", from_, to, vehicle, q, place,
                 category=category, exclusion=exclusion,
             ),
             "date_preset": resolved_date_preset,
@@ -550,6 +583,9 @@ async def _fetch_archive_context(
             "vehicle": vehicle,
             "q": q.strip(),
             "exclusion": exclusion,
+            "place": place,
+            "place_name": place_name,
+            "place_clear_url": place_clear_url,
             "export_csv": export_url("csv"),
             "export_xlsx": export_url("xlsx"),
         },
@@ -573,6 +609,7 @@ def register_archive(router: APIRouter) -> None:
             notice: str = Query(""),
             q: str = Query(""),
             exclusion: str = Query(""),
+            place: str = Query(""),
             date_preset: str = Query(""),
         ):
             legacy_manual_params = {
@@ -596,6 +633,7 @@ def register_archive(router: APIRouter) -> None:
                 vehicle=vehicle,
                 q=q,
                 exclusion=exclusion,
+                place=place,
                 date_preset=date_preset,
                 include_recent_purposes=True,
             )
@@ -630,6 +668,7 @@ def register_archive(router: APIRouter) -> None:
             vehicle: str = Query(""),
             q: str = Query(""),
             exclusion: str = Query(""),
+            place: str = Query(""),
             date_preset: str = Query(""),
             loaded_depth: str = Query(""),
         ):
@@ -647,6 +686,7 @@ def register_archive(router: APIRouter) -> None:
                 vehicle=vehicle,
                 q=q,
                 exclusion=exclusion,
+                place=place,
                 date_preset=date_preset,
                 loaded_depth=loaded_depth,
             )
@@ -673,6 +713,7 @@ def register_archive(router: APIRouter) -> None:
             vehicle: str = Query(""),
             q: str = Query(""),
             exclusion: str = Query(""),
+            place: str = Query(""),
             date_preset: str = Query(""),
         ):
             """Return the complete matching trip-ID snapshot for selection.
@@ -689,7 +730,8 @@ def register_archive(router: APIRouter) -> None:
             from_dt, to_dt = parse_date_range(from_, to, tz)
             where, params = _trip_filter_sql(
                 category, from_dt, to_dt, _parse_vehicle_id(vehicle),
-                q=q, exclusion=exclusion, owner_id=request.state.principal.account_id,
+                q=q, exclusion=exclusion, place_id=_parse_place_id(place),
+                owner_id=request.state.principal.account_id,
             )
             async with request.state.account_pool.connection() as conn:
                 cur = await conn.execute(
@@ -717,15 +759,18 @@ def register_month_page(router: APIRouter) -> None:
             user: dict = Depends(require_user),
             q: str = Query(""),
             exclusion: str = Query(""),
+            place: str = Query(""),
         ):
             exclusion = exclusion if isinstance(exclusion, str) else ""
+            place_id = _parse_place_id(place)
+            place = _place_param(place)
             tz = request.state.config.display_tz
             page_size = request.state.config.trips_page_size
             from_dt, to_dt = parse_date_range(from_, to, tz)
             async with request.state.account_pool.connection() as conn:
                 trips, has_more = await _fetch_month_page(
                     conn, tz, year, month, page_size, offset, category,
-                    from_dt, to_dt, _parse_vehicle_id(vehicle), q, exclusion,
+                    from_dt, to_dt, _parse_vehicle_id(vehicle), q, exclusion, place_id,
                 )
                 vehicles = await list_vehicles(conn)
                 recent_purposes = await _fetch_recent_purposes(conn)
@@ -739,7 +784,7 @@ def register_month_page(router: APIRouter) -> None:
                     "has_more": has_more,
                     "next_url": _month_page_url(
                         year, month, offset + page_size, category, from_, to, vehicle, q,
-                        exclusion,
+                        exclusion, place,
                     ),
                 },
             )
@@ -1203,7 +1248,7 @@ def register(router: APIRouter) -> None:
                 month = await _fetch_month_summary(
                     conn, tz, local_started_at.year, local_started_at.month, rates,
                     "", from_dt, to_dt, _parse_vehicle_id(page_filters["vehicle"]),
-                    page_filters["q"], "",
+                    page_filters["q"], "", _parse_place_id(page_filters["place"]),
                 )
                 ytd_year, ytd_deduction = await _fetch_ytd_deduction(conn, tz, rates)
 

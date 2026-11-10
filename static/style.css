@@ -515,9 +515,14 @@ textarea:focus-visible, summary:focus-visible {
   }
 }
 
+/* Seven nav links must stay on one line, without breaking a label, until the
+   full header fits at 1101px. */
+@media (min-width: 761px) and (max-width: 1100px) {
+  header nav { flex-wrap: nowrap; gap: var(--space-1); font-size: .85rem; }
+  header nav a { padding-inline: 0; white-space: nowrap; }
+}
+
 @media (min-width: 761px) and (max-width: 1024px) {
-  header nav { flex-wrap: nowrap; gap: var(--space-2); }
-  header nav a { padding-inline: 0; }
   .header-account .account-name { display: none; }
   .header-account .account-identity,
   .header-account .settings-link,
@@ -2773,6 +2778,20 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
   margin: 0; overflow: hidden; border: 1px solid var(--border);
   border-radius: var(--radius-md); background: var(--surface-raised);
 }
+.place-page .place-map {
+  width: 100%; height: clamp(12rem, 24vw, 16rem); min-width: 0;
+  margin: 0 0 var(--space-4); overflow: hidden; border: 1px solid var(--border);
+  border-radius: var(--radius-md); background: var(--surface-raised);
+}
+.place-page .place-trips-header {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: var(--space-2); margin: 1.5rem 0 var(--space-3);
+}
+.place-page .place-trips-header h2 { margin: 0; }
+/* Selection lives in trips.html's script, so place pages hide the box. A CSS
+   rule, unlike a template flag, also covers rows the server re-renders after
+   an in-place edit. */
+.place-page .trip-archive-row-selector { display: none; }
 .review-detail-fields {
   display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
   grid-template-areas: "purpose vehicle exclusion" "notes notes notes";

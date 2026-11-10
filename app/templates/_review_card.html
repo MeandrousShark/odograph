@@ -63,6 +63,7 @@
     <input type="hidden" name="to" value="{{ filter_to }}">
     <input type="hidden" name="vehicle" value="{{ filter_vehicle }}">
     <input type="hidden" name="q" value="{{ filter_q }}">
+    <input type="hidden" name="place" value="{{ filter_place }}">
     <div class="review-detail-fields">
       <div class="review-detail-field review-vehicle-field">
         <span class="field-label">Vehicle</span>
@@ -115,7 +116,7 @@
       trip, 'trip-delete-review-' ~ trip.id, '/review/' ~ trip.id ~ '/delete',
       hx_target='#review-card', hx_swap='outerHTML',
       filter_from=filter_from, filter_to=filter_to, filter_vehicle=filter_vehicle,
-      filter_q=filter_q
+      filter_q=filter_q, filter_place=filter_place
     ) }}
   </div>
 

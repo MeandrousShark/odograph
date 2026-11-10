@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Places: Odograph{% endblock %}
+{% block content %}
+
+<div class="page places-page">
+  <div class="page-title page-header">
+    <div>
+      <p class="page-title-eyebrow">Places</p>
+      <h2 id="places-page-title" class="page-title-heading">Saved places</h2>
+      <p class="page-title-subtitle">Trips and miles to and from each place in {{ year }}.</p>
+    </div>
+    <div class="page-title-actions">
+      <a class="control control-secondary" href="/settings#places-and-rules">Edit in Settings</a>
+    </div>
+  </div>
+
+{% if places %}
+<div class="settings-table-scroll">
+<table class="settings-table places-table">
+  <thead><tr><th>Place</th><th>Kind</th><th class="num">Trips in {{ year }}</th><th class="num">Miles in {{ year }}</th><th>Last visit</th></tr></thead>
+  <tbody>
+    {% for place in places %}
+    <tr>
+      <td><a href="/places/{{ place.id }}">{{ place.name }}</a></td>
+      <td>{{ place.kind | capitalize }}</td>
+      <td class="num">{{ place.trip_count }}</td>
+      <td class="num">{{ place.total_m | mi }}</td>
+      <td>{% if place.last_visit %}<time datetime="{{ place.last_visit.isoformat() }}">{{ place.last_visit | local_dt('%b %-d, %Y') }}</time>{% else %}<span class="muted">Never</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="muted">A trip from and to the same place counts once. Trips marked Not one of my vehicles are left out.</p>
+{% else %}
+<p class="empty">No saved places yet. <a href="/settings#places-and-rules">Add one in Settings</a>.</p>
+{% endif %}
+
+</div>
+{% endblock %}

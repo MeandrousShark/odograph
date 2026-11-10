@@ -29,6 +29,8 @@ FOLLOWS_RULES = {
     "account_security.html",
     "admin_accounts.html",
     "expenses.html",
+    "place.html",
+    "places.html",
     "report.html",
     "report_range.html",
     "review.html",
@@ -43,11 +45,16 @@ NOT_YET_MIGRATED: dict[str, str] = {}
 
 VARIANTS = {"control-primary", "control-secondary", "control-destructive"}
 
-# Buttons that are legitimately not .control. Both live in the shared header
-# shell (base.html) that every rendered page includes.
+# Buttons that are legitimately not .control: the shared header shell
+# (base.html) that every rendered page includes, and the archive row controls
+# (_trip_archive_row.html), exempt on every page that includes the row.
 COMPONENT_BUTTON_CLASSES = {
     "header-action",  # header log-out icon button
     "mobile-account-logout-button",  # log-out row in the mobile account menu
+    # Archive row controls, shared by the trip archive and place pages.
+    "trip-archive-row-icon-button",
+    "trip-archive-row-action",
+    "trip-quick-button",
 }
 
 

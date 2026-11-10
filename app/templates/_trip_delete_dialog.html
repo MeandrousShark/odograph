@@ -2,7 +2,7 @@
   trip, dialog_id, action_url,
   trigger_label='Delete trip', trigger_title='Delete trip',
   hx_target=none, hx_swap=none,
-  filter_from=none, filter_to=none, filter_vehicle=none, filter_q=none,
+  filter_from=none, filter_to=none, filter_vehicle=none, filter_q=none, filter_place=none,
   fragment=false, dashboard_week=none
 ) %}
 <button type="button" class="control control-destructive trip-delete-trigger"
@@ -29,6 +29,7 @@
       <input type="hidden" name="to" value="{{ filter_to }}">
       <input type="hidden" name="vehicle" value="{{ filter_vehicle }}">
       <input type="hidden" name="q" value="{{ filter_q }}">
+      <input type="hidden" name="place" value="{{ filter_place or '' }}">
     {% endif %}
     {% if fragment %}<input type="hidden" name="fragment" value="true">{% endif %}
     {% if dashboard_week %}<input type="hidden" name="dashboard_week" value="{{ dashboard_week }}">{% endif %}

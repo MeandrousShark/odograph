@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}{{ place.name }}: Odograph{% endblock %}
+{% block head %}
+  <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
+  <script src="/static/vendor/leaflet/leaflet.js"></script>
+{% endblock %}
+{% block content %}
+
+<div class="page place-page">
+  <div class="page-title page-header">
+    <div>
+      <p class="page-title-eyebrow">Place</p>
+      <h2 id="place-page-title" class="page-title-heading">{{ place.name }}</h2>
+      <p class="page-title-subtitle">{{ place.kind | capitalize }}, {{ place.radius_m | round(0) | int }} m radius.</p>
+    </div>
+    <div class="page-title-actions place-page-actions">
+      <nav class="year-nav" aria-label="Place year">
+        {% if year > 1 %}
+        <a href="/places/{{ place.id }}?year={{ year - 1 }}">← {{ year - 1 }}</a>
+        {% endif %}
+        <strong>{{ year }}</strong>
+        {% if next_year_disabled %}
+        <span class="year-nav-next" aria-disabled="true">{{ year + 1 }} →</span>
+        {% else %}
+        <a href="/places/{{ place.id }}?year={{ year + 1 }}">{{ year + 1 }} →</a>
+        {% endif %}
+      </nav>
+      <a class="control control-secondary" href="/places">All places</a>
+      <a class="control control-secondary" href="/settings#places-and-rules">Edit in Settings</a>
+    </div>
+  </div>
+
+  <div id="place-map" class="place-map"></div>
+
+  <div class="summary-tiles place-summary">
+    <div class="summary-tile"><span>Trips</span><strong>{{ totals.trip_count }}</strong></div>
+    <div class="summary-tile"><span>Arrivals</span><strong>{{ totals.arrivals }}</strong></div>
+    <div class="summary-tile"><span>Departures</span><strong>{{ totals.departures }}</strong></div>
+    <div class="summary-tile summary-tile-total"><span>Miles</span><strong>{{ totals.total_m | mi }} mi</strong></div>
+    {% if totals.unclassified_m %}
+    <div class="summary-tile"><span>Unclassified miles</span><strong>{{ totals.unclassified_m | mi }} mi</strong></div>
+    {% endif %}
+  </div>
+  <p class="muted">Trips in {{ year }} that start or end here, all categories, without trips marked Not one of my vehicles. A trip from and to {{ place.name }} counts once, as one arrival and one departure.</p>
+
+  {% if report.trip_count %}
+  <section class="place-report" aria-labelledby="place-report-heading">
+    <h2 id="place-report-heading">Report for these trips</h2>
+    {% include "_report_summary.html" %}
+    {% include "_report_notes.html" %}
+  </section>
+  {% endif %}
+
+  <section class="place-rules" aria-labelledby="place-rules-heading">
+    <h2 id="place-rules-heading">Auto-tag rules</h2>
+    {% if rules %}
+    <div class="settings-table-scroll">
+    <table class="settings-table">
+      <thead><tr><th>Side A</th><th>Side B</th><th>Category</th></tr></thead>
+      <tbody>
+        {% for rule in rules %}
+        <tr><td>{{ rule.a_desc }}</td><td>{{ rule.b_desc }}</td><td>{{ rule.category | capitalize }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p class="muted">No auto-tag rule names {{ place.name }} or the {{ place.kind | capitalize }} kind.</p>
+    {% endif %}
+  </section>
+
+  <section class="place-trips" aria-labelledby="place-trips-heading">
+    <div class="place-trips-header">
+      <h2 id="place-trips-heading">Trips in {{ year }}</h2>
+      <a class="control control-secondary" href="{{ archive_url }}">Open in Trips</a>
+    </div>
+    {% if trips %}
+    <div class="trip-archive-row-list">
+      <div class="trip-archive-row-header" aria-hidden="true">
+        <span class="trip-archive-row-header-select"></span>
+        <span class="trip-archive-row-header-time">Date &amp; time</span>
+        <span class="trip-archive-row-header-content">Trip</span>
+        <span class="trip-archive-row-header-category">Category</span>
+        <span class="trip-archive-row-header-distance">Distance</span>
+        <span class="trip-archive-row-header-actions">Actions</span>
+      </div>
+      {% include "_trip_page_rows.html" %}
+    </div>
+    {% else %}
+    <p class="empty">No trips start or end here in {{ year }}.</p>
+    {% endif %}
+  </section>
+</div>
+
+<script nonce="{{ csp_nonce }}">
+  (function () {
+    const center = [{{ place.lat }}, {{ place.lon }}];
+    const radius = {{ place.radius_m }};
+    const map = L.map('place-map', { dragging: !L.Browser.mobile });
+    const theme = getComputedStyle(document.documentElement);
+    const routeColor = theme.getPropertyValue('--route').trim() || '#2d6a4f';
+    // A view before any vector layer: Leaflet throws adding a circle to a
+    // viewless map (see trip.html).
+    map.setView(center, 16);
+    L.tileLayer({{ map_tile_url | tojson }}, {
+      maxZoom: 19,
+      attribution: {{ map_tile_attribution | tojson }}
+    }).addTo(map);
+    const circle = L.circle(center, { radius: radius, color: routeColor, fillOpacity: 0.15 }).addTo(map);
+    L.marker(center, { title: {{ place.name | tojson }} }).addTo(map);
+    map.fitBounds(circle.getBounds().pad(0.5));
+  })();
+</script>
+{% endblock %}
