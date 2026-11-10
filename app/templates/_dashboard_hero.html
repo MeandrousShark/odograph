@@ -15,6 +15,13 @@
              aria-label="Next week" title="Next week">{{ icon("caret-right") }}</a>
           <a class="week-nav-link control control-secondary" href="/">Current week</a>
           {% endif %}
+          {# The current week opens today's month; a past week opens its
+             Monday's month, which the calendar accepts up to year 9998. #}
+          {% if dashboard.nav.is_current_week %}
+          <a class="week-nav-link control control-secondary" href="/calendar">Calendar</a>
+          {% elif dashboard.nav.week_start.year <= 9998 %}
+          <a class="week-nav-link control control-secondary" href="/calendar?month={{ '%04d-%02d' | format(dashboard.nav.week_start.year, dashboard.nav.week_start.month) }}">Calendar</a>
+          {% endif %}
         </nav>
       </div>
 

@@ -19,6 +19,8 @@
         <a href="/stats?year={{ filter_year + 1 }}{% if filter_vehicle %}&vehicle={{ filter_vehicle }}{% endif %}">{{ filter_year + 1 }} →</a>
         {% endif %}
       </nav>
+      {# The current year opens today's month; another year its January. #}
+      <a class="control control-secondary" href="/calendar{% if not next_year_disabled %}?month={{ '%04d' | format(filter_year) }}-01{% endif %}">Calendar</a>
     </div>
   </div>
 

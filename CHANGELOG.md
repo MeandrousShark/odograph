@@ -19,6 +19,9 @@ reproduced here.
 - **Places** shows a heatmap of where you go: trip starts and ends, by
   category and vehicle, or time spent at stays, for chosen dates, grouped
   into cells about 50 m across.
+- **Calendar** shows a month with each day's miles by category, counted
+  as the Dashboard's week chart counts them. A day opens its trips in the
+  archive. The Dashboard's week and Stats link to it.
 - The trip archive takes a `place` filter, shown as a removable chip, that
   carries through paging, **Select all matching**, review and both exports.
   The API v1 export accepts `place` too.

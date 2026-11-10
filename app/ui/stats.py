@@ -3,13 +3,15 @@ from __future__ import annotations
 import calendar
 from datetime import date, datetime
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from psycopg.rows import dict_row
 
 from app.account_context import account_id
 from app.auth import require_user
 from app.capacity import owned_thread
 from app.page import render_page
 from app.dashboard import parse_week_anchor
+from app.month_calendar import build_month_calendar, parse_month
 from app.rates import load_rates
 from app.stats import build_dashboard
 from app.stats_multiyear import build_multiyear_chart
@@ -19,6 +21,7 @@ from app.stats_queries import (
     fetch_category_rows, fetch_cross_year_rows, fetch_vehicle_rows, multiyear_window, stats_period,
     vehicle_clause as stats_vehicle_clause,
 )
+from app.trip_archive import month_bounds
 from app.trip_queries import DISPLAY_DISTANCE_SQL
 from app.vehicles import list_vehicles
 from app.week_dashboard import build_week, fetch_week_inputs, missing_trip_threshold
@@ -53,6 +56,20 @@ async def _build_week_dashboard_context(
         "vehicles": vehicles,
         "recent_purposes": recent_purposes,
     }
+
+
+async def _fetch_calendar_trips(conn, start: datetime, end: datetime) -> list[dict]:
+    """The month's trips with only what `daily_distances` reads, in the
+    dashboard's order so each day sums its trips the same way."""
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(
+        f"SELECT started_at, {DISPLAY_DISTANCE_SQL} AS display_distance_m, "
+        "category::text AS category, exclusion::text AS exclusion "
+        "FROM trips WHERE started_at >= %s AND started_at < %s AND account_id = %s "
+        "ORDER BY started_at DESC, id DESC",
+        (start, end, account_id(conn)),
+    )
+    return await cur.fetchall()
 
 
 def register(router: APIRouter) -> None:
@@ -209,6 +226,35 @@ def register(router: APIRouter) -> None:
                     "next_year_disabled": selected_year >= now.year,
                     "period_start": period_start_date,
                     "period_end": period_end_date,
+                },
+            )
+
+        @router.get("/calendar")
+        async def month_calendar(
+            request: Request,
+            user: dict = Depends(require_user),
+            month: str = Query(""),
+        ):
+            """A month of daily totals by the dashboard's rules. `month` is
+            `YYYY-MM`, default the current local month; anything else is a
+            422 rather than a silent fallback, like the place page's year.
+            """
+            tz = request.state.config.display_tz
+            today = datetime.now(tz).date()
+            try:
+                first = parse_month(month, today)
+            except ValueError:
+                raise HTTPException(status_code=422, detail="month must be YYYY-MM") from None
+            async with request.state.account_pool.connection() as conn:
+                trips = await _fetch_calendar_trips(conn, *month_bounds(first.year, first.month, tz))
+
+            def day_url(day: date) -> str:
+                return _url_with_filters("/trips", day.isoformat(), day.isoformat(), "")
+
+            model = await owned_thread(build_month_calendar, trips, first, tz, today, day_url)
+            return await render_page(
+                request, "calendar.html", {
+                    "user": user, "csrf": request.session.get("csrf", ""), "calendar": model,
                 },
             )
 
