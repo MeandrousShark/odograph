@@ -235,4 +235,3 @@ def test_settings_current_year_carried_reads_the_table_rows(monkeypatch):
     assert settings._current_year_carried(rows, TZ) == CARRIED
     rows.append({"year": 2027, "rate_per_mi": 0.75, "rate_h2_per_mi": None, "h2_start_month": None})
     assert settings._current_year_carried(rows, TZ) is None
-
