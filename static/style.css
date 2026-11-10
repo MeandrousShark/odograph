@@ -2816,7 +2816,7 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
 .calendar-day-today .calendar-day-number { color: var(--accent-primary); }
 .calendar-day-miles {
   overflow: hidden; color: var(--fg-muted); font-size: .8rem;
-  font-variant-numeric: tabular-nums; white-space: nowrap;
+  font-variant-numeric: tabular-nums; white-space: nowrap; text-overflow: ellipsis;
 }
 .calendar-bar {
   display: block; width: 100%; height: .45rem; margin-top: auto;

@@ -357,6 +357,11 @@ def test_share_trend_legend_matches_its_bands_and_swatch_tokens():
 
 
 def test_page_header_links_to_the_month_calendar():
-    body = _render(_dashboard())
-    actions = body.split('class="page-title-actions stats-page-actions"', 1)[1].split("</div>", 1)[0]
-    assert '<a class="control control-secondary" href="/calendar">Calendar</a>' in actions
+    def actions(**context):
+        body = _render(_dashboard(), **context)
+        return body.split('class="page-title-actions stats-page-actions"', 1)[1].split("</div>", 1)[0]
+
+    current = actions(next_year_disabled=True)
+    assert '<a class="control control-secondary" href="/calendar">Calendar</a>' in current
+    past = actions(next_year_disabled=False, filter_year=2024)
+    assert '<a class="control control-secondary" href="/calendar?month=2024-01">Calendar</a>' in past

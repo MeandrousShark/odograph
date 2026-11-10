@@ -165,6 +165,34 @@ def test_each_day_equals_the_dashboards_day():
     _scenario(run)
 
 
+def _added(values) -> float:
+    # Plain left-to-right addition, as the day buckets do; sum() compensates
+    # float error and would hide the order.
+    total = 0.0
+    for value in values:
+        total += value
+    return total
+
+
+def test_a_day_sums_its_trips_in_the_dashboards_order():
+    meters = (0.1, 0.2, 0.3)
+    # Only equal when added in the same order, newest first as the
+    # dashboard reads them.
+    assert _added(reversed(meters)) != _added(meters)
+
+    async def run(raw_pool, pool):
+        async with pool.connection() as conn:
+            for hour, distance in zip((1, 2, 3), meters):
+                await _trip(conn, datetime(2025, 10, 1, hour, tzinfo=TZ), distance)
+        week = await _endpoint("/")(_request(pool), USER, "2025-10-01")
+        day = next(e for e in week.context["dashboard"].daily_series if e.day == date(2025, 10, 1))
+        october, _ = await _calendar(pool, "2025-10")
+        assert day.business_m == _added(reversed(meters))
+        assert october[date(2025, 10, 1)].distance == day
+
+    _scenario(run)
+
+
 def test_default_month_is_the_current_local_month():
     async def run(raw_pool, pool):
         today = datetime.now(TZ).date()

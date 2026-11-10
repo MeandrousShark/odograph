@@ -351,12 +351,21 @@ def test_calendar_template_navigation():
     assert 'href="/calendar?month=0001-02"' in first
 
 
-def test_dashboard_week_header_links_to_the_weeks_month():
-    dashboard = build_week_dashboard(
-        [], 0, {}, date(2026, 6, 29), NY, datetime(2026, 7, 2, 12, tzinfo=NY), 1000.0,
-    )
+def _week_header(week_start: date, now: datetime) -> str:
+    dashboard = build_week_dashboard([], 0, {}, week_start, NY, now, 1000.0)
     body = _render(
         "dashboard.html", dashboard=dashboard, vehicles=[], recent_purposes=[],
     )
-    header = body.split('aria-label="Week navigation"', 1)[1].split("</nav>", 1)[0]
-    assert 'href="/calendar?month=2026-06">Calendar</a>' in header
+    return body.split('aria-label="Week navigation"', 1)[1].split("</nav>", 1)[0]
+
+
+def test_dashboard_week_header_links_to_the_month_calendar():
+    # The current week opens today's month, even when its Monday is in the
+    # month before (Sunday Nov 1 2026 is in the week of Oct 26).
+    current = _week_header(date(2026, 10, 26), datetime(2026, 11, 1, 12, tzinfo=NY))
+    assert 'href="/calendar">Calendar</a>' in current
+    past = _week_header(date(2026, 6, 29), datetime(2026, 11, 1, 12, tzinfo=NY))
+    assert 'href="/calendar?month=2026-06">Calendar</a>' in past
+    # A week past the calendar's last year gets no link rather than a 422.
+    beyond = _week_header(date(9999, 6, 7), datetime(2026, 11, 1, 12, tzinfo=NY))
+    assert "Calendar</a>" not in beyond
