@@ -35,7 +35,9 @@
 </table>
 </div>
 
-<p class="muted">Tick <em>split from</em> for a year the IRS changed the rate mid-year
+{% if rates_carried | default(none, true) %}<p class="muted">{% with carried = rates_carried, carried_link = false %}{% include "_carried_rate_note.html" %}{% endwith %}</p>
+
+{% endif %}<p class="muted">Tick <em>split from</em> for a year the IRS changed the rate mid-year
   (e.g. 2022): trips before that month use the first rate, trips from it use the second.</p>
 
 <details class="add-manual">

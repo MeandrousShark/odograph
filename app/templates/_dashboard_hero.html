@@ -95,6 +95,9 @@
       <span class="dashboard-secondary-label">Estimated deduction</span>
       {% if dashboard.deduction.available %}
       <strong>{{ dashboard.deduction.amount | usd }}</strong>
+      {% if dashboard.deduction.carried %}
+      <small>{% with carried = dashboard.deduction.carried %}{% include "_carried_rate_note.html" %}{% endwith %}</small>
+      {% endif %}
       {% else %}
       <strong class="metric-unavailable">Unavailable</strong>
       <small>No mileage rate on file for part of this week;

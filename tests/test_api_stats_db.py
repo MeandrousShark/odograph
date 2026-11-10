@@ -190,3 +190,28 @@ def test_dashboard_and_stats_authenticate_by_bearer_only():
             response = await state.client.get(path, headers={"Authorization": "Bearer nope"})
             assert response.status_code == 401
     _run(check)
+
+
+def _shape(node):
+    if isinstance(node, dict):
+        return {key: _shape(value) for key, value in node.items()}
+    if isinstance(node, list):
+        return [_shape(node[0])] if node else []
+    return None
+
+
+def test_carried_rate_year_adds_no_json_field():
+    # 2026 priced with the 2025 rate: the figures carry no note in JSON.
+    async def check(state):
+        await _seed(state)
+        async with state.pools[state.owner].connection() as conn:
+            await conn.execute("DELETE FROM mileage_rates WHERE year >= 2026")
+        for name, path, params in (("dashboard_week_response.json", "/api/v1/dashboard/week", {"date": "2026-04-15"}),
+                                   ("stats_response.json", "/api/v1/stats", {"year": 2026})):
+            body = (await _get(state, path, **params)).json()
+            assert _shape(body) == _shape(json.loads((FIXTURES / name).read_text())), name
+            if name.startswith("dashboard"):
+                assert body["deduction"] is not None
+            else:
+                assert any(item["deduction"] is not None for item in body["vehicles"]["items"])
+    _run(check)

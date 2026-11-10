@@ -1,0 +1,4 @@
+{# The carried-rate note for a figure priced with an earlier year's rate:
+   `carried` is an app.rates.CarriedRate. Callers wrap it in their own
+   element; `carried_link=false` drops the Settings link. #}
+{{- carried.sentence }}{% if carried_link | default(true) %} <a href="/settings">Add the {{ carried.year }} rate</a>.{% endif %}
