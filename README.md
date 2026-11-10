@@ -40,19 +40,13 @@ or a train will show up as one, and you can delete it or mark it **Not one of
 my vehicles**. Sitting still for about five minutes or more ends a trip, and
 Merge fixes that.
 
-**Can I correct an incorrectly detected trip?** Yes. You can set its details,
-merge or split trips, delete and restore them, and add manual trips. You
-cannot edit a detected trip's times or distance, so if those are wrong, delete
-it and add a manual trip.
-
-**How much battery does the tracking consume?** It depends on the phone app
-and its mode. On the maintainer's iPhone, OwnTracks regularly accounts for 2
-to 4% of total battery use on days with about 75 miles of driving, using
-regions to switch modes. That is one phone rather than a benchmark, and
-Android has not been measured.
+**Can I correct an incorrectly detected trip?** Yes: set its details, merge or
+split trips, delete and restore them, or add manual trips. A detected trip's
+times and distance cannot be edited; if they are wrong, delete it and add a
+manual trip.
 
 The [full answers](docs/detection.md) cover each case, including phones that
-lose data service.
+lose data service and battery use.
 
 ## Why Odograph
 
@@ -68,7 +62,7 @@ lose data service.
   [OwnTracks](https://owntracks.org/) app can feed it, or
   [Traccar Client](docs/traccar.md).
 - **Built for review, not data entry.** Trips are detected automatically, and
-  the review queue lets you mark each one in a few taps.
+  you mark each one in the review queue.
 - **Exports you can hand off.** Reports download as XLSX workbooks, and the
   trip archive as CSV or XLSX.
 
@@ -115,9 +109,7 @@ Compose, see the [minimal Compose installation](docs/install-compose.md).
   verify the release image
 - A domain name and a reverse proxy that terminates HTTPS
 
-Docker Desktop or `podman machine` on macOS or Windows will probably work, but
-they are not tested. If you hit a problem, open an issue and I will help track
-it down.
+Docker Desktop and `podman machine` on macOS or Windows are not tested.
 
 ## Quick start
 
@@ -143,8 +135,8 @@ INITIAL_ADMIN_SIGNUP=0
 ### Start Odograph
 
 Pull the release image and verify its signature. This stops with an error if
-the check fails. It uses `docker` when installed, so set
-`CONTAINER_RUNTIME=podman` to use Podman instead:
+the check fails. It uses `docker` when installed; set
+`CONTAINER_RUNTIME=podman` for Podman:
 
 ```sh
 scripts/verify_image.sh
@@ -193,18 +185,15 @@ password into OwnTracks, and follow the [OwnTracks guide](docs/owntracks.md) to
 send a test track. Odograph then detects trips on its own, and
 [Use Odograph](docs/usage.md) covers the rest.
 
-[Traccar Client](docs/traccar.md) works too: paste the device's
-**Traccar Server URL** into the app and set a heartbeat shorter than five
-minutes. OwnTracks generally gives better trip boundaries, so prefer it if you
-can choose.
+[Traccar Client](docs/traccar.md) works too, though OwnTracks gives better trip
+boundaries.
 
 The phone posts straight to `https://your-domain/ingest` (or `/ingest/traccar`
 for Traccar Client) with no third-party relay, so it must reach the same HTTPS
 address as your browser and trust its certificate. The server does not need to
-be on the public internet: a private network or tunnel can work if it ends in
-an HTTPS proxy that forwards to `127.0.0.1:8077`, though Odograph does not test
-or document a specific VPN or tunnel product. If something sits in front of
-your reverse proxy, read
+be on the public internet if a private network or tunnel ends in an HTTPS proxy
+that forwards to `127.0.0.1:8077`; no specific VPN or tunnel product is tested
+or documented. If something sits in front of your reverse proxy, read
 [Trusting forwarded headers](docs/reverse-proxy.md#trusting-forwarded-headers).
 Set `APP_URL` to the same HTTPS address so reminder and email links point at it.
 
@@ -215,7 +204,7 @@ Set `APP_URL` to the same HTTPS address so reminder and email links point at it.
   lives in the `dbdata` volume, and `docker compose down -v` erases it. See
   [Backups and disaster recovery](docs/backups.md).
 - **Security:** there is one administrator and invited members, with no open
-  signup. Do not run Odograph as a public multi-tenant service. Work through the
+  signup, so do not run Odograph as a public multi-tenant service. See the
   [hardening checklist](docs/security.md#hardening-checklist).
 - **Optional features:** [OIDC sign-in](docs/oidc.md), linked from
   **Account Settings**; reverse geocoding; ntfy or email reminders; and
@@ -229,9 +218,8 @@ Use **Forgot password?** on the sign-in page if your email is verified, or
 
 ## Updating
 
-Follow the [upgrading guide](docs/upgrading.md): back up, verify, then move to
-an exact release tag. Any 1.x release upgrades directly to any later 1.x
-release. Moving back means restoring a backup.
+Follow the [upgrading guide](docs/upgrading.md). Moving back to an earlier
+release means restoring a backup.
 
 ## Contributing
 

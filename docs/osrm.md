@@ -1,31 +1,21 @@
 # Self-hosted OSRM road-snapping and routing
 
-OSRM serves two purposes in this app. First, it turns GPS traces with drift and
-gaps into routes that actually follow roads, which sharpens the mileage computed
-for detected trips. Second, it routes manual trips point-to-point: when a user
-creates a manual trip using a route mode (named places or map-picked points),
-OSRM computes the road distance and geometry between those endpoints. It's
-entirely optional: with `OSRM_URL` empty or unset, both snapping and manual
-trip routing are off, and the app is otherwise fully usable. Detected trips
-still assemble from GPS traces, and manual trips still save with a hand-entered
-distance. Reverse geocoding, list, tag, report, and export all continue to work.
-See [docs/privacy.md](privacy.md) for exactly what OSRM does and doesn't see,
-and [docs/security.md](security.md) for the operator hardening checklist that
-covers it alongside the other optional services.
+OSRM does two things. It turns GPS traces with drift and gaps into routes that
+follow roads, which sharpens the mileage of detected trips. It also routes
+manual trips made with a route mode (named places or map-picked points),
+computing the road distance and geometry between the endpoints.
 
-This document covers picking a road extract, running
-`scripts/provision_osrm.sh` against it, wiring the result into `.env`, sizing
-a host for the memory-hungry step, and refreshing an extract later.
+It is optional. With `OSRM_URL` empty or unset, both are off: detected trips
+still assemble from GPS traces, manual trips save with a hand-entered distance,
+and everything else works. See the [privacy guide](privacy.md) for what OSRM
+sees and the [hardening checklist](security.md#hardening-checklist) for how it
+fits with the other optional services.
 
 ## Is this for you
 
-Odograph computes IRS standard-mileage deductions, so it's built for a US
-operator. That's the actual reason this document exists: the project ships no
-road data at all, so anyone who wants road-snapping provisions an extract
-covering their own area first, or snapping quietly does nothing useful for
-them. Nothing here technically restricts you to a US extract (OSRM will route
-against whatever regional map data you give it, wherever that is), but the
-deduction figures stay US IRS mileage rates regardless of which region you
+Odograph ships no road data, so you provision an extract covering your own
+area first; without one, snapping does nothing useful. Any region works, but
+the deduction figures stay US IRS mileage rates regardless of which region you
 snap against.
 
 ## Choosing an extract
@@ -33,12 +23,11 @@ snap against.
 Extracts come from [Geofabrik](https://download.geofabrik.de/), as
 `<region>-latest.osm.pbf` files updated roughly daily. For a US operator, the
 right size is almost always a single state: browse to
-`north-america` → `us` → your state, and copy the `.osm.pbf` link, for
+`north-america` > `us` > your state, and copy the `.osm.pbf` link, for
 example, `https://download.geofabrik.de/north-america/us/florida-latest.osm.pbf`.
-Pick the smallest extract that covers everywhere you actually drive; a
-whole-country extract works but costs far more RAM and disk than most
-operators need, and Geofabrik also publishes smaller sub-regional extracts
-for some metro areas if a full state is still more than you need.
+Pick the smallest extract that covers everywhere you drive. A whole-country
+extract works but costs far more RAM and disk, and Geofabrik also publishes
+smaller sub-regional extracts for some metro areas.
 
 ## Driving outside the extract
 
@@ -54,10 +43,9 @@ for the deduction; the partial snapped route is drawn beneath the raw track
 rather than in place of it; and the trip page reads **Road-snap incomplete,
 showing raw GPS distance**.
 
-Mileage therefore stays correct wherever you drive, and a missing region costs
-only the tidier road-following line on those trips. If that label shows up on
-trips through somewhere you drive regularly, that area is outside your extract
-and is worth provisioning a larger one to cover.
+Mileage therefore stays correct wherever you drive; a missing region costs only
+the road-following line on those trips. If that label shows up on trips through
+somewhere you drive regularly, that area is outside your extract.
 
 ## Provisioning
 
@@ -65,7 +53,7 @@ and is worth provisioning a larger one to cover.
 scripts/provision_osrm.sh https://download.geofabrik.de/north-america/us/florida-latest.osm.pbf
 ```
 
-This downloads the extract, then runs `osrm-extract` → `osrm-partition` →
+This downloads the extract, then runs `osrm-extract` > `osrm-partition` >
 `osrm-customize` against it inside the same pinned `osrm/osrm-backend` image
 `compose.yaml`'s `osrm` service already uses, writing the result into the
 `osrmdata` compose volume. It works with either `docker compose` or
@@ -74,11 +62,9 @@ have both installed). Run it from the directory containing `compose.yaml`. The
 script comes with the full release checkout; the two-file installation does not
 include it.
 
-**Re-running it is safe, but replaces the current contents of the `osrmdata`
-volume**: the previous dataset is gone as soon as the new one starts
-writing, even if the new run then fails partway through. That's expected:
-provisioning a different region, or refreshing the same one, is meant to be
-this one command.
+**Re-running it replaces the current contents of the `osrmdata` volume**: the
+previous dataset is gone as soon as the new one starts writing, even if the new
+run then fails partway through.
 
 On success it prints the exact value to set:
 
@@ -95,8 +81,7 @@ Set in .env, then start (or restart) the osrm service:
 If it fails partway through, it diagnoses the common cases (a bad or stale
 extract URL, running out of disk while downloading or processing, and the
 Linux OOM killer during `osrm-extract`) instead of just relaying raw
-container output. Read the printed message before digging into container
-logs yourself.
+container output.
 
 ## Wiring it into `.env`
 
@@ -161,14 +146,11 @@ same input.
 
 ## Refreshing an extract
 
-Geofabrik regenerates extracts roughly daily, but there's no requirement to
-track that closely: road networks change slowly enough that refreshing
-every few months, or whenever you notice snapping quality drop somewhere
-you've started driving, is enough for most operators. Refreshing is the same
-command as provisioning the first time: re-run `scripts/provision_osrm.sh`
-with a fresh extract URL (the same region, or a different one if you've
-moved), then recreate the `osrm` service so `osrm-routed` picks up the new
-data: it doesn't hot-reload a dataset that changed underneath it:
+Refreshing is the same command as provisioning the first time: re-run
+`scripts/provision_osrm.sh` with a fresh extract URL (the same region, or a
+different one if you've moved), then recreate the `osrm` service so
+`osrm-routed` picks up the new data: it doesn't hot-reload a dataset that
+changed underneath it:
 
 ```sh
 scripts/provision_osrm.sh https://download.geofabrik.de/north-america/us/florida-latest.osm.pbf
@@ -182,11 +164,9 @@ is always the exact one to use.
 
 ## Snapping split trips again
 
-Before 1.4.1, snapping split a trace wherever two fixes were more than a minute
-apart and dropped the distance between the pieces. A tracker that reports by
-distance, such as Traccar Client, leaves such a gap at every wait at a light,
-so those trips show too few miles and often **low confidence**. After
-upgrading, queue the affected trips once for each account:
+Trips snapped before 1.4.1 split the trace wherever two fixes were more than a
+minute apart and dropped the distance between the pieces, so they show too few
+miles and often **low confidence**. Queue them once for each account:
 
 ```sh
 docker compose exec app python -m app.resnap --account ACCOUNT_ID

@@ -1,25 +1,18 @@
 # Reverse proxy and TLS
 
-Use this guide to give Odograph a secure HTTPS address. A reverse proxy accepts
-browser and phone connections, handles the HTTPS certificate, and passes
-requests to Odograph. In the standard setup, Odograph's own port is reachable
-only from the same host.
-
-See [security.md](security.md) for the full hardening checklist this guide
-feeds into, including HSTS and the `FORWARDED_ALLOW_IPS` risk this document
-covers in depth below.
-
-The canonical compose file publishes the application only on
-`127.0.0.1:8077`. Run the reverse proxy on the same host, terminate TLS there,
-and proxy to that loopback address. Port 8077 is not intended to be exposed to
-the internet directly.
+A reverse proxy accepts browser and phone connections, handles the HTTPS
+certificate, and passes requests to Odograph. The canonical compose file
+publishes the application only on `127.0.0.1:8077`. Run the reverse proxy on
+the same host, terminate TLS there, and proxy to that loopback address. Do not
+expose port 8077 to the internet directly. The
+[hardening checklist](security.md#hardening-checklist) covers HSTS and the
+`FORWARDED_ALLOW_IPS` risk described below.
 
 Production browser sessions use Secure cookies. Complete TLS setup and use the
 public `https://` URL before visiting `/signup`, `/login` or `/invite`; plain
 `http://127.0.0.1:8077` is suitable only for health checks and as the proxy
 upstream. Use a certificate trusted by both the browser and the OwnTracks
-phone. Caddy can obtain one automatically for a public domain; nginx commonly
-uses a certificate provisioned by a tool such as Certbot.
+phone. Caddy obtains one automatically for a public domain.
 
 ## Caddy
 
@@ -31,9 +24,8 @@ mileage.example.com {
 }
 ```
 
-Caddy supplies the forwarded host, client, and scheme headers expected by the
-application and manages public TLS automatically under its normal HTTPS
-configuration.
+Caddy supplies the forwarded host, client and scheme headers the application
+expects and manages public TLS automatically.
 
 If phones use Traccar Client, its credential is in the request query string.
 See [Connecting Traccar Client](traccar.md#security) to keep it out of the
@@ -114,12 +106,10 @@ The application reads the same `FORWARDED_ALLOW_IPS` environment variable as
 uvicorn, so set trust there rather than with uvicorn's `--forwarded-allow-ips`
 option.
 
-Having the proxy replace `X-Forwarded-For` with the address that connected to
-it, rather than append to the incoming header, is still recommended. The
-application then receives one value set by the proxy, and other tools that
-read the header, such as logs or a later proxy, see the same address. The
-Caddy example above already replaces the header; the nginx example does so
-with `$remote_addr`.
+Have the proxy replace `X-Forwarded-For` with the address that connected to
+it rather than append to the incoming header, so the application and anything
+else reading the header see one value set by the proxy. The Caddy example above
+already does; the nginx example uses `$remote_addr`.
 
 Change the setting when the topology changes:
 

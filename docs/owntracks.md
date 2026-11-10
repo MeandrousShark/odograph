@@ -1,10 +1,9 @@
 # Connecting OwnTracks
 
-This application is fed location data by [OwnTracks](https://owntracks.org/),
-a free, open-source location-tracking app for iOS and Android. OwnTracks runs
-in HTTP mode, posting your phone's location straight to your own instance.
-There is no third-party server in between. For the application's normal first
-steps after installation, see the [Odograph usage guide](usage.md).
+[OwnTracks](https://owntracks.org/) is a free, open-source location-tracking
+app for iOS and Android. In HTTP mode it posts your phone's location straight
+to your own instance, with no third-party server in between. For the first
+steps after installation, see the [usage guide](usage.md).
 
 ## App configuration
 
@@ -32,15 +31,13 @@ password above as HTTP Basic auth on every request.
 
 ## Monitoring mode and battery use
 
-OwnTracks offers a few location-reporting modes. **Move** is the most detailed
-mode while driving, but it uses more battery. **Significant changes** mode uses
-less power but produces sparser and less precise trip boundaries because it
-reports much less often while driving. A practical setup is to use Move while
-driving and let OwnTracks fall back to Significant changes while the phone is
-stationary or the battery is low.
-
-The exact controls differ between iOS and Android. OwnTracks documents the
-platform behavior in its [location guide](https://owntracks.org/booklet/features/location/).
+**Move** is the most detailed mode while driving, but it uses more battery.
+**Significant changes** uses less power but gives sparser, less precise trip
+boundaries because it reports much less often while driving. A practical setup
+is Move while driving, falling back to Significant changes while the phone is
+stationary or the battery is low. The controls differ between iOS and
+Android; see OwnTracks'
+[location guide](https://owntracks.org/booklet/features/location/).
 
 ### iOS battery settings
 
@@ -61,16 +58,14 @@ OwnTracks iOS also provides two automatic battery-saving controls:
   Significant-mode update. OwnTracks requires an active `+follow` region for
   `adapt` to take effect.
 
-These controls are documented by OwnTracks as app-version features, not iOS
-version features. Check the [OwnTracks app guide](https://owntracks.org/booklet/guide/apps/)
-if a setting is missing from the installed app.
+OwnTracks documents these as app-version features; see its
+[app guide](https://owntracks.org/booklet/guide/apps/) if a setting is missing.
 
 ### iOS regions for common places
 
 An OwnTracks region is a circular geofence around a place. Create one for each
-common place where you want lower-power tracking, such as home, work, or a
-regular parking location. Give the region a meaningful name and a radius that
-covers the place without overlapping nearby places unnecessarily.
+common place where you want lower-power tracking, such as home or work, with a
+radius that covers the place without overlapping nearby places.
 
 For automatic monitoring-mode changes, end the region name with
 `|<mode on enter>|<mode on exit>`. The mode numbers are:
@@ -93,9 +88,7 @@ waypoints guide](https://owntracks.org/booklet/features/waypoints/) for the
 general region setup and the [iOS guide](https://owntracks.org/booklet/features/ios/)
 for `+follow` details.
 
-Keep the automatic mode-change regions separate from the `+follow` region. The
-common-place regions control the mode; `+follow` helps OwnTracks notice movement
-and wake up while the mode changes.
+Keep the mode-change regions separate from the `+follow` region.
 
 OwnTracks publishes region and transition messages as well as normal location
 messages. Odograph stores those non-location messages in the raw ingest history
@@ -117,9 +110,8 @@ moved far enough. `locatorDisplacement` is ignored in Move mode.
 The documented `+follow` and `Home|1|2` automatic mode-change syntax is an iOS
 feature. The [OwnTracks Android guide](https://owntracks.org/booklet/features/android/)
 documents automation through Tasker or MacroDroid intents instead. Android
-battery optimization and vendor background restrictions can also delay or stop
-background reporting, so follow OwnTracks' Android background-running guidance
-if updates become intermittent.
+battery optimization and vendor background restrictions can delay or stop
+background reporting.
 
 ## Device identity and upgraded installations
 
@@ -152,9 +144,8 @@ OwnTracks iOS to discard that queued location. Keep the username and URL unchang
 come from [OwnTracks iOS connection settings](https://github.com/owntracks/ios/blob/26.2.3/OwnTracks/OwnTracks/SettingsTVC.swift#L1002-L1027)
 and its [HTTP response handling](https://github.com/owntracks/ios/blob/26.2.3/OwnTracks/OwnTracks/Connection.m#L535-L568).
 
-Verify new uploads after updating the phone. On the maintainer's iPhone,
-OwnTracks has reliably uploaded trips after driving through areas with no
-service. Traccar Client's offline behavior is untested.
+Verify new uploads after updating the phone. For offline behavior, see
+[detection](detection.md#what-happens-when-gps-reception-disappears).
 
 ## Verify your setup
 

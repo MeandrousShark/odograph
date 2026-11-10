@@ -2,10 +2,9 @@
 
 [Traccar Client](https://www.traccar.org/client/) is a free phone app for iOS
 and Android that can also feed Odograph. It posts each location straight to
-your own instance, with no third-party server in between. If you can choose,
-use [OwnTracks](owntracks.md): it generally gives better trip boundaries (see
-below). For the application's normal first steps after installation, see the
-[Odograph usage guide](usage.md).
+your own instance, with no third-party server in between.
+[OwnTracks](owntracks.md) generally gives better trip boundaries (see below).
+For the first steps after installation, see the [usage guide](usage.md).
 
 ## App configuration
 
@@ -39,10 +38,8 @@ pauses reporting while the phone is parked. A trip ends on the five-minute
 stay rule, so without a heartbeat it may not close until your next drive
 starts. Even with one, trips can close late: when the phone cannot get a
 fresh fix, a heartbeat repeats the last known location with its original
-time, which adds nothing new.
-
-OwnTracks generally gives better trip boundaries because of those arrival
-fixes.
+time, which adds nothing new. OwnTracks' arrival fixes give it better trip
+boundaries.
 
 ## What is stored
 

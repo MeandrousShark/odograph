@@ -25,6 +25,10 @@ reproduced here.
   [configuration](https://github.com/MeandrousShark/odograph/blob/v1.4.2/docs/configuration.md)
   and [backups](https://github.com/MeandrousShark/odograph/blob/v1.4.2/docs/backups.md)
   guides.
+- `docs/usage.md` is shorter: what each page is for and its non-obvious
+  rules, not step-by-step clicks. The README and the smaller guides drop
+  repeated and general advice. The former detail remains in the v1.4.2
+  [usage guide](https://github.com/MeandrousShark/odograph/blob/v1.4.2/docs/usage.md).
 
 ## [1.4.2] - 2026-11-09
 

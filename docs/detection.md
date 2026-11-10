@@ -1,8 +1,8 @@
 # How well does detection work?
 
-Plain answers about what trip detection does and does not do. Odograph works
-from position, time and the phone app's report type. The distances and times below are the default
-settings, and an operator can change them under
+What trip detection does and does not do. Odograph works from position, time
+and the phone app's report type. The distances and times below are the default
+settings; an operator can change them under
 [Detector behavior](configuration.md#detector-behavior).
 
 ## What happens when GPS reception disappears?
@@ -58,7 +58,7 @@ are in a car.
   count toward the average, so a move of up to about 600 m with no stretch over
   about 6.7 mph can be absorbed into the stop. If the phone reported rarely
   during the stop, that can reach close to 900 m. Add a manual trip if you need
-  one. Upgrading to detector version 3 deletes a trip like that.
+  one.
 - A bike ride, a run, a bus or a train will show up as a trip. Delete it or
   mark it **Not one of my vehicles**, and it stays out of your mileage.
 - Sitting still for about five minutes or more mid-drive, at a drive-through or
@@ -98,7 +98,7 @@ what the phone used, not of a full charge, and they are one phone rather than
 a benchmark. Android has not been measured.
 
 - **Move mode** gives the best trip detail. OwnTracks warns its battery use can
-  be as high as a navigation app, so use it only while driving.
+  be as high as a navigation app.
 - **Significant changes** uses much less, but trips get rougher boundaries and
   distance.
 - On iOS, regions switch between them for you: name a region `Home|1|2` or
