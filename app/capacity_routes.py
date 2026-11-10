@@ -20,12 +20,12 @@ from app.preparation_resources import PreparationBusy, PreparationResourceError
 # These paths materialize complete selections or perform structural mutations.
 # The keys describe server-owned route definitions, never client account claims.
 NAVIGATION_ROUTES = frozenset({
-    ('GET', '/'), ('POST', '/trips/{trip_id}/tag'),
+    ('GET', '/'), ('GET', '/places'), ('POST', '/trips/{trip_id}/tag'),
     ('POST', '/trips/{trip_id}/warnings/acknowledge'),
     ('POST', '/trips/{trip_id}/warnings/unacknowledge'),
 })
 FOREGROUND_ROUTES = frozenset({
-    ('GET', '/places/search'),
+    ('GET', '/places/search'), ('GET', '/places/{place_id}'),
     ('GET', '/trips/manual'), ('POST', '/trips/manual'),
     ('POST', '/trips/manual/route-preview'),
     ('GET', '/stats'), ('GET', '/expenses'),

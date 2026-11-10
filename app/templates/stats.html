@@ -118,6 +118,7 @@
     <table><thead><tr><th>Place</th><th>Endpoint visits</th></tr></thead><tbody>
       {% for place in stats.places %}<tr><td>{{ place.name }}</td><td class="num">{{ place.visit_count }}</td></tr>{% endfor %}
     </tbody></table>
+    <p class="muted">Counts trip ends, so a trip from and to one place counts twice.</p>
     {% else %}<p class="muted">Name places in Settings to see this ranking.</p>{% endif %}
   </section>
 </div>
