@@ -1,4 +1,4 @@
-"""Migrations refuse a role that forced row-level security would filter."""
+"""Migrations refuse a role that is not a superuser."""
 from __future__ import annotations
 
 import asyncio
@@ -77,7 +77,7 @@ def test_run_migrations_refuses_a_plain_role_before_touching_the_schema():
         finally:
             await pool.close()
         rendered = "".join(traceback.format_exception(failure.value))
-        assert "superuser" in str(failure.value) and "BYPASSRLS" in str(failure.value)
+        assert "superuser" in str(failure.value)
         for secret in (PASSWORD, PLAIN, "127.0.0.1", "postgresql://"):
             assert secret not in rendered
         async with admin.connection() as conn:
@@ -86,10 +86,15 @@ def test_run_migrations_refuses_a_plain_role_before_touching_the_schema():
     asyncio.run(_with_roles(check))
 
 
-def test_bypassrls_and_superuser_roles_may_migrate():
+def test_only_a_superuser_role_may_migrate():
     async def check(admin):
-        async with await AsyncConnection.connect(_url(BYPASS)) as conn:
-            await check_migration_role(conn)
+        # Role setup strips SUPERUSER and BYPASSRLS from Odograph's roles,
+        # which a BYPASSRLS non-superuser cannot do.
+        for role in (BYPASS, PLAIN):
+            async with await AsyncConnection.connect(_url(role)) as conn:
+                with pytest.raises(MigrationRoleError) as failure:
+                    await check_migration_role(conn)
+            assert "superuser" in str(failure.value)
         async with admin.connection() as conn:
             await check_migration_role(conn)
     asyncio.run(_with_roles(check))
