@@ -1,9 +1,8 @@
 # Account management
 
-This guide covers changing and recovering your password, signing out, and
-managing your login email. The last section describes administrator account
-management: inviting members, disabling accounts and deleting them. For
-linking an identity provider, see [OIDC sign-in](oidc.md).
+Changing and recovering your password, signing out, managing your login email,
+and administrator account management: inviting members, disabling accounts and
+deleting them. For linking an identity provider, see [OIDC sign-in](oidc.md).
 
 ## Change your password
 
@@ -13,8 +12,7 @@ While signed in, open **Settings**, then **Account Settings**, and use
 ## Reset a forgotten password
 
 If your login email is verified, choose **Forgot password?** on the sign-in
-page to reset a forgotten password. This needs `SMTP_HOST`, `EMAIL_FROM` and
-`APP_URL`; see
+page. This needs `SMTP_HOST`, `EMAIL_FROM` and `APP_URL`; see
 [Email](configuration.md#email). The link goes only to your verified login
 email and expires in 30 minutes. Completing a reset signs that account out of
 every Odograph session, including the browser that used the link, and returns
@@ -69,10 +67,10 @@ reauthenticating with that provider.
 
 The first-party Odograph mobile app signs in through your browser. Mobile
 sign-in is off by default. The operator turns it on with `MOBILE_SIGNIN=1`
-(see [Authentication and ingest](configuration.md#authentication-and-ingest)). It needs Odograph served over HTTPS
-at the address entered in the app, because the sign-in cookie is only sent
-over HTTPS. The setting only allows new
-sign-ins: turning it off does not sign out apps that are already signed in.
+(see [Authentication and ingest](configuration.md#authentication-and-ingest)).
+It needs Odograph served over HTTPS at the address entered in the app, because
+the sign-in cookie is only sent over HTTPS. Turning it off does not sign out
+apps that are already signed in.
 
 **Settings > Account Settings > Security > Signed-in apps** lists the apps
 signed in to your account, each with its device name, when it signed in and
@@ -90,13 +88,10 @@ every app along with every browser session.
 In **Settings > Account Settings**, you can verify your current login email or
 change it after confirming the new address. These actions require your current
 password, or provider reauthentication if the account has no password, and
-configured email delivery. Until a new address is confirmed, the
-current email remains the login. A confirmed change signs out other Odograph
-sessions; it does not change the linked OIDC identity or saved notification
-destinations. Email verification is not a password reset flow.
-
-Changing your login email is separate from password recovery. The new address
-becomes the login only after you confirm the emailed challenge.
+configured email delivery. The current email remains the login until the new
+address is confirmed from the emailed challenge. A confirmed change signs out
+other Odograph sessions; it does not change the linked OIDC identity or saved
+notification destinations.
 
 ## Administrator account management
 

@@ -1,9 +1,8 @@
 # OIDC sign-in
 
 OIDC can be linked as a second way to sign in to an existing account. The
-operator configures one OIDC provider for the instance in the environment
-(`.env`); there is no provider setting in the web interface. OIDC is optional;
-Odograph works without it.
+operator configures one OIDC provider for the instance in `.env`; there is no
+provider setting in the web interface. OIDC is optional.
 
 ## Set up the provider
 
@@ -50,5 +49,4 @@ after sign-in.
 
 ## Older OIDC-only installations
 
-If you are moving an older OIDC-only installation, read
-[Upgrading](upgrading.md) first.
+Before moving an older OIDC-only installation, read [Upgrading](upgrading.md).
