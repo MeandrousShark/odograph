@@ -28,7 +28,7 @@ from app.expenses import (
 )
 from app.formatting import format_miles
 from app.missing_trip import missing_trip_badge
-from app.rates import deduction, load_rates
+from app.rates import carried_rate, deduction, load_rates
 from app.report import sum_month_deductions
 from app.trip_archive import (
     MONTH_AGGREGATE_COLUMNS_SQL,
@@ -216,6 +216,7 @@ def _build_month_summary(year: int, month_num: int, row: dict, rates) -> dict:
     summary["business_deduction"] = deduction(
         summary["business_m"], year, rates, month_num
     )
+    summary["carried_rate"] = carried_rate(rates, year)
     return summary
 
 
@@ -533,6 +534,7 @@ async def _fetch_archive_context(
         "review_url": _review_url(from_, to, vehicle, q),
         "ytd_year": ytd_year,
         "ytd_deduction": ytd_deduction,
+        "ytd_carried": carried_rate(rates, ytd_year),
         # History restoration replaces the results root only, so everything
         # a sibling control needs (including the export targets that live
         # outside that root) has to travel inside it.
@@ -1213,6 +1215,7 @@ def register(router: APIRouter) -> None:
                         **ctx,
                         "month": month, "month_oob": True,
                         "ytd_year": ytd_year, "ytd_deduction": ytd_deduction, "ytd_oob": True,
+                        "ytd_carried": carried_rate(rates, ytd_year),
                     },
                 )
             )

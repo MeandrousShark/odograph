@@ -150,7 +150,7 @@ class Renderer:
             year,month = self.bounds['year'],self.bounds['month']
             context = {'business_mi':format_miles(self.summary.business_m),
                 'nondeductible_mi':format_miles(self.summary.nondeductible_m) if self.summary.nondeductible_m else '',
-                'deduction':format_usd(self.summary.total_deduction)}
+                'deduction':format_usd(self.summary.total_deduction),'carried_rate':self.summary.carried_rate}
             if self.kind == 'monthly_summary':
                 context.update(month_label=f'{MONTH_ABBR[month]} {year}',unclassified=self.summary.unclassified_trips)
                 subject = f'Odograph: {MONTH_ABBR[month]} summary'

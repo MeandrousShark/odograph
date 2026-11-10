@@ -13,7 +13,7 @@ from psycopg.rows import tuple_row
 
 from app.account_context import account_id
 from app.capacity import await_completion, owned_thread
-from app.rates import YearRate
+from app.rates import CarriedRate, YearRate, carried_rate
 from app.report import sum_month_deductions
 
 BATCH_SIZE = 256
@@ -32,6 +32,7 @@ class DigestSummary:
     nondeductible_m: float = 0.0
     unclassified_trips: int = 0
     total_deduction: float | None = None
+    carried_rate: CarriedRate | None = None
     business_by_month: dict[int, float] = field(default_factory=dict, repr=False)
 
     def fold(self, rows, tz, start: date, end: date):
@@ -52,6 +53,7 @@ class DigestSummary:
 
     def finish(self, rates, year):
         self.total_deduction = sum_month_deductions(self.business_by_month.items(), year, rates)
+        self.carried_rate = carried_rate(rates, year)
         return self
 
 

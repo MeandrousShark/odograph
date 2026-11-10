@@ -486,3 +486,47 @@ def test_sum_month_deductions_prices_each_month_with_mid_year_split():
     total = sum_month_deductions([(3, 1609.344), (8, 1609.344)], 2026, rates)
     assert total == pytest.approx(1.10)
     assert sum_month_deductions([(3, 1609.344)], 2026, {}) is None
+
+
+CARRIED_2027 = (
+    "No 2027 mileage rate is saved. 2027 figures use the 2026 rate of "
+    "$0.7250/mi until you add one."
+)
+
+
+def test_caveat_lines_add_the_carried_rate_line_last_and_only_when_carried():
+    from app.report import caveat_lines
+
+    caveats = ReportCaveats(
+        gap_trips=1, manual_trips=2, carried_from_year=2026, carried_rate_per_mi=0.725,
+    )
+    lines = caveat_lines(caveats, 2027)
+    assert lines[-1] == CARRIED_2027
+    assert len(lines) == 3
+    assert all("mileage rate is saved" not in line
+               for line in caveat_lines(ReportCaveats(gap_trips=1, manual_trips=2), 2027))
+
+
+def test_carried_report_caveats_count_as_any_on_their_own():
+    report = build_annual_report([], {2026: YearRate(0.7250)}, TZ, 2027)
+    assert report.caveats == ReportCaveats(carried_from_year=2026, carried_rate_per_mi=0.725)
+    assert report.caveats.any is True
+    assert report.caveats.missing_rate is False
+
+
+def test_carried_rate_leaves_every_figure_unchanged():
+    trip = _at(3, display_distance_m=10 * 1609.344)
+    rates = {2026: YearRate(0.7250)}
+    report = build_range_report(
+        [{**trip, "started_at": trip["started_at"].replace(year=2027)}],
+        rates, TZ, date(2027, 1, 1), date(2027, 12, 31),
+    )
+    assert report.total_deduction == pytest.approx(7.25)
+    assert report.months[0].rate_per_mi == 0.725
+    assert report.rate_periods == [(0.725, 1, 12)]
+
+
+def test_own_rate_report_has_no_carried_caveat():
+    report = build_annual_report([], {2026: YearRate(0.7250), 2027: YearRate(0.75)}, TZ, 2027)
+    assert report.caveats.carried_from_year is None
+    assert report.caveats.any is False

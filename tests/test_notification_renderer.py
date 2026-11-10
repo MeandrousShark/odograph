@@ -460,3 +460,41 @@ def test_actual_surrogate_config_use_matches_original_transport_phase(renderer,m
         streams=[stack.enter_context(renderer.budget.open(result['artifacts'][key],'rb')) for key in ('mime','mime_utf8')]
         with pytest.raises(ValueError): prepared_transport(config,{},*(s.fileno() for s in streams),new_state)
     assert old_state==new_state=={'phase':'connect'}
+
+
+@pytest.mark.parametrize('kind',['monthly_summary','filing_reminder'])
+def test_digest_body_notes_a_carried_rate_after_the_deduction(renderer,kind):
+    from datetime import datetime, date
+    from app.rates import CarriedRate
+    from app.formatting import format_miles, format_usd
+    from app.email_digest import MONTH_ABBR
+    text(renderer,'timezone_paths',json.dumps(__import__('zoneinfo').TZPATH))
+    text(renderer,'display_tz','America/Los_Angeles')
+    text(renderer,'filing_mmdd','01-15')
+    text(renderer,'app_url','')
+    renderer.initialize({'now':'2026-10-01T17:00:00+00:00','port':25,'tls_insecure':False})
+    bounds = renderer.email_bounds(kind,9)
+    if kind == 'filing_reminder':
+        bounds = renderer.history_bounds()
+    start = date.fromisoformat(bounds['start'])
+    tz = renderer.now.tzinfo
+    rows = [(datetime.combine(start,datetime.min.time(),tzinfo=tz),'business',None,1609.344)]
+    renderer.history_rows([[t.isoformat(),c,e,d.hex()] for t,c,e,d in rows])
+    # The helper receives only the latest rate row at or before the year.
+    text(renderer,'rate','0.56'); text(renderer,'rate_h2','0.625')
+    renderer.rate({'year':bounds['year']-1,'h2':True,'month':7})
+    renderer.history_finish()
+    carried = CarriedRate(bounds['year'],bounds['year']-1,.625)
+    assert renderer.summary.carried_rate == carried
+    context = dict(business_mi=format_miles(1609.344),nondeductible_mi='',deduction=format_usd(.625),carried_rate=carried)
+    if kind == 'monthly_summary':
+        context.update(month_label=f"{MONTH_ABBR[bounds['month']]} {bounds['year']}",unclassified=0,report_url='')
+    else:
+        context.update(year=bounds['year'],report_url='',export_url='')
+    expected = _render(kind+'.txt',**context)
+    renderer.email_body()
+    with renderer.budget.open('mail-body','rb') as source:
+        body = source.read().decode('utf8')
+    assert body == expected
+    lines = body.splitlines()
+    assert lines[lines.index('Deduction: '+format_usd(.625))+1] == carried.sentence + ' Add it under Settings, Mileage rates.'

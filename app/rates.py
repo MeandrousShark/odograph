@@ -46,6 +46,40 @@ def rate_for(rates: dict[int, YearRate], year: int, month: int = 1) -> float | N
     return rates[max(earlier)].rate(12)
 
 
+@dataclass(frozen=True)
+class CarriedRate:
+    """`year` has no rate of its own and is priced, by `rate_for`, with
+    `source_year`'s December `rate`. Builds the note's wording here so every
+    page, workbook and email says it the same way.
+    """
+    year: int
+    source_year: int
+    rate: float
+
+    @property
+    def sentence(self) -> str:
+        return (
+            f"No {self.year} mileage rate is saved. {self.year} figures use the "
+            f"{self.source_year} rate of ${self.rate:.4f}/mi until you add one."
+        )
+
+    @property
+    def short(self) -> str:
+        return f"({self.source_year} rate)"
+
+
+def carried_rate(rates: dict[int, YearRate], year: int) -> CarriedRate | None:
+    """The earlier year whose rate `rate_for` uses for `year`, or None when
+    `year` has its own rate or no rate exists at or before it."""
+    if year in rates:
+        return None
+    earlier = [y for y in rates if y < year]
+    if not earlier:
+        return None
+    source_year = max(earlier)
+    return CarriedRate(year, source_year, rates[source_year].rate(12))
+
+
 def deduction(
     distance_m: float, year: int, rates: dict[int, YearRate], month: int = 1
 ) -> float | None:

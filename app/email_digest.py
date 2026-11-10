@@ -445,6 +445,7 @@ class EmailDigestWorker:
                         if report.nondeductible_m else ""
                     ),
                     deduction=format_usd(report.total_deduction),
+                    carried_rate=report.carried_rate,
                     unclassified=report.unclassified_trips,
                     report_url=_url(
                         self.app_url,
@@ -482,6 +483,7 @@ class EmailDigestWorker:
                         if report.nondeductible_m else ""
                     ),
                     deduction=format_usd(report.total_deduction),
+                    carried_rate=report.carried_rate,
                     report_url=_url(self.app_url, f"/report/{year}"),
                     export_url=_url(self.app_url, f"/report/{year}/export"),
                 )

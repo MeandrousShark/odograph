@@ -421,7 +421,9 @@ with the same columns, as CSV or XLSX.
 ### US deduction limits
 
 Odograph's deduction figures use the IRS standard mileage rates entered under
-Settings. They are estimates for US filers, not tax advice. The app does not
+Settings. They are estimates for US filers, not tax advice. A year with no
+rate of its own is priced with the latest earlier year's rate, and the web
+pages, reports and summary emails say so until you add one. The app does not
 decide whether a trip is deductible, calculate MACRS or Section 179
 depreciation, determine basis or recapture, or recommend a filing method.
 Review report caveats and consult [IRS Publication 463](https://www.irs.gov/publications/p463)

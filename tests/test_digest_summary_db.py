@@ -13,7 +13,7 @@ from app.account_context import account_id
 from app.digest_summary import DigestSummary, fetch_digest_summary
 from app.email_digest import _render
 from app.formatting import format_miles, format_usd
-from app.rates import load_rates
+from app.rates import CarriedRate, load_rates
 from app.report import build_annual_report, build_range_report
 from app.ui.reports import _fetch_range_trips_in
 from test_email_digest_db import APP_URL, TZ, _insert_trip, _mailer, _with_pool, _worker
@@ -73,6 +73,7 @@ def test_real_nonheld_portal_batches_stable_ties_and_exact_complete_delivery(mon
                            business_mi=format_miles(filing.business_m),
                            nondeductible_mi=format_miles(filing.nondeductible_m) if filing.nondeductible_m else "",
                            deduction=format_usd(filing.total_deduction),
+                           carried_rate=CarriedRate(2026, 2025, 0.75),
                            report_url=f"{APP_URL}/report/2026", export_url=f"{APP_URL}/report/2026/export")
         assert message["Subject"] == "Odograph: 2026 filing reminder"
         assert message.get_content() == expected + ("" if expected.endswith("\n") else "\n")
@@ -82,6 +83,7 @@ def test_real_nonheld_portal_batches_stable_ties_and_exact_complete_delivery(mon
                            business_mi=format_miles(monthly.business_m),
                            nondeductible_mi=format_miles(monthly.nondeductible_m) if monthly.nondeductible_m else "",
                            deduction=format_usd(monthly.total_deduction), unclassified=monthly.caveats.unclassified_trips,
+                           carried_rate=CarriedRate(2026, 2025, 0.75),
                            report_url=f"{APP_URL}/report/range?from=2026-06-01&to=2026-06-30")
         assert monthly_calls[0]["Subject"] == "Odograph: Jun summary"
         assert monthly_calls[0].get_content() == expected + ("" if expected.endswith("\n") else "\n")
