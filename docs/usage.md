@@ -37,6 +37,10 @@ A Monday-to-Sunday week: the total by category, daily bars, trip count,
 estimated deduction and recorded expenses. **Needs attention** links to
 unclassified trips and possible missing trips.
 
+**Calendar**, linked from the week and from Stats, shows a month with each
+day's miles by category, counted as the Dashboard counts them. A day opens
+its trips in Trips, which also lists any marked **Not one of my vehicles**.
+
 ## Review
 
 Review shows unclassified trips one at a time. Purpose, vehicle, exclusion

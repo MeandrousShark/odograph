@@ -12,6 +12,7 @@ template to render.
 from __future__ import annotations
 
 import calendar
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -163,6 +164,58 @@ def week_bounds(anchor_date: date, tz: ZoneInfo) -> WeekBounds:
     return WeekBounds(monday=monday, start=start, end=end)
 
 
+DISTANCE_STATES = ("business", "personal", "unclassified", "nondeductible")
+
+
+def distance_state(trip: dict) -> str | None:
+    """The series a trip's miles count in, or None for `not_my_vehicle`.
+
+    `not_deductible` wins before the category, so another driver's business
+    trip is never counted as business miles.
+    """
+    exclusion = trip.get("exclusion")
+    if exclusion == "not_my_vehicle":
+        return None
+    if exclusion == "not_deductible":
+        return "nondeductible"
+    category = trip.get("category")
+    if category in ("business", "personal"):
+        return category
+    return "unclassified"
+
+
+def daily_distances(
+    trips: Iterable[dict], tz: ZoneInfo, first_day: date, day_count: int,
+) -> list[DailyDistanceBreakdown]:
+    """One breakdown per local day from `first_day`, by each trip's local
+    start date in `tz`. The dashboard's week chart and the month calendar
+    both call this, so a calendar day always matches the week chart. Trips
+    starting outside the days are ignored; only `started_at`,
+    `display_distance_m`, `category` and `exclusion` are read.
+    """
+    buckets: dict[date, dict[str, float]] = {}
+    for trip in trips:
+        state = distance_state(trip)
+        if state is None:
+            continue
+        day = trip["started_at"].astimezone(tz).date()
+        meters = buckets.setdefault(day, dict.fromkeys(DISTANCE_STATES, 0.0))
+        meters[state] += float(trip.get("display_distance_m") or 0.0)
+
+    series = []
+    for offset in range(day_count):
+        day = first_day + timedelta(days=offset)
+        meters = buckets.get(day, dict.fromkeys(DISTANCE_STATES, 0.0))
+        series.append(DailyDistanceBreakdown(
+            day=day,
+            business_m=meters["business"],
+            personal_m=meters["personal"],
+            unclassified_m=meters["unclassified"],
+            nondeductible_m=meters["nondeductible"],
+        ))
+    return series
+
+
 def build_week_dashboard(
     trips: list[dict],
     expense_total: Decimal | float,
@@ -176,9 +229,10 @@ def build_week_dashboard(
     `TRIP_COLUMNS` rows and one already-summed expense total.
 
     Every summary figure below (trip count, distance breakdown, deduction
-    buckets, missing-trip badges) and `day_groups` is derived from the same
-    exclusion-aware pass over `trips` -- never a second aggregate query -- so
-    the summary cards and the trip cards underneath them cannot drift apart.
+    buckets, missing-trip badges), `day_groups` and `daily_series` (through
+    `daily_distances`, shared with the month calendar) is derived from the
+    same fetched `trips` -- never a second aggregate query -- so the summary
+    cards and the trip cards underneath them cannot drift apart.
 
     The unclassified-trip count shown in the attention strip is deliberately
     not derived here: it covers the account's whole Review queue, not just
@@ -202,7 +256,6 @@ def build_week_dashboard(
     counted_trip_count = 0
     business_buckets: dict[tuple[int, int], float] = {}
     day_buckets: dict[date, list[dict]] = {}
-    daily_buckets: dict[date, list[float]] = {}
     badges: list[MissingTripBadge] = []
 
     for trip in trips:
@@ -220,11 +273,12 @@ def build_week_dashboard(
 
         counted_trip_count += 1
         total_m += distance_m
-        if exclusion == "not_deductible":
+        state = distance_state(trip)
+        if state == "nondeductible":
             nondeductible_m += distance_m
-        elif category == "business":
+        elif state == "business":
             business_m += distance_m
-        elif category == "personal":
+        elif state == "personal":
             personal_m += distance_m
         else:
             unclassified_m += distance_m
@@ -232,16 +286,6 @@ def build_week_dashboard(
         if not exclusion and category == "business" and distance_m:
             key = (local_started.year, local_started.month)
             business_buckets[key] = business_buckets.get(key, 0.0) + distance_m
-
-        daily = daily_buckets.setdefault(day, [0.0, 0.0, 0.0, 0.0])
-        if exclusion == "not_deductible":
-            daily[3] += distance_m
-        elif category == "business":
-            daily[0] += distance_m
-        elif category == "personal":
-            daily[1] += distance_m
-        else:
-            daily[2] += distance_m
 
         # An acknowledged warning leaves the attention strip, not the trip.
         badge = missing_trip_badge(trip, missing_trip_threshold_m, tz)
@@ -283,17 +327,7 @@ def build_week_dashboard(
         for day in sorted(day_buckets, reverse=True)
     ]
 
-    daily_series = []
-    for offset in range(7):
-        day = monday + timedelta(days=offset)
-        meters = daily_buckets.get(day, [0.0, 0.0, 0.0, 0.0])
-        daily_series.append(DailyDistanceBreakdown(
-            day=day,
-            business_m=meters[0],
-            personal_m=meters[1],
-            unclassified_m=meters[2],
-            nondeductible_m=meters[3],
-        ))
+    daily_series = daily_distances(trips, tz, monday, 7)
 
     attention = None
     if badges:

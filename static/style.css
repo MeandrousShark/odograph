@@ -2792,6 +2792,48 @@ a { color: var(--accent-primary); text-underline-offset: 3px; }
    rule, unlike a template flag, also covers rows the server re-renders after
    an in-place edit. */
 .place-page .trip-archive-row-selector { display: none; }
+.calendar-page .calendar-legend { margin: 0 0 var(--space-3); }
+/* Fixed layout splits the width into seven equal columns, so a long total
+   clips inside its day instead of widening the page at phone width. */
+.calendar-grid { table-layout: fixed; font-size: .85rem; }
+.calendar-grid th, .calendar-grid td {
+  padding: 0; border: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+}
+.calendar-grid th {
+  padding: var(--space-1) 0; border-width: 0 0 1px; text-align: center; text-transform: none;
+}
+.calendar-grid th abbr { text-decoration: none; }
+.calendar-grid td { vertical-align: top; }
+.calendar-day-link, .calendar-day-outside .calendar-day-number {
+  display: flex; box-sizing: border-box; min-width: 0; min-height: 4.75rem;
+  flex-direction: column; gap: var(--space-1); padding: var(--space-1) var(--space-2);
+}
+.calendar-day-link { color: var(--fg); text-decoration: none; }
+.calendar-day-link:hover { background: var(--surface-subtle); }
+.calendar-day-link:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: -3px; }
+.calendar-day-number { font-weight: 700; font-variant-numeric: tabular-nums; }
+.calendar-day-outside .calendar-day-number { color: var(--fg-disabled); font-weight: 400; }
+.calendar-day-today .calendar-day-number { color: var(--accent-primary); }
+.calendar-day-miles {
+  overflow: hidden; color: var(--fg-muted); font-size: .8rem;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.calendar-bar {
+  display: block; width: 100%; height: .45rem; margin-top: auto;
+  overflow: hidden; border-radius: var(--radius-sm);
+}
+.calendar-bar-fill {
+  display: flex; height: 100%; min-width: .2rem; overflow: hidden; border-radius: var(--radius-sm);
+}
+/* The week chart stacks segments upward; here they run left to right. */
+.calendar-bar .dashboard-bar-segment { width: auto; height: 100%; }
+@media (max-width: 420px) {
+  .calendar-day-link, .calendar-day-outside .calendar-day-number {
+    min-height: 3.75rem; padding: var(--space-1);
+  }
+  .calendar-day-miles { font-size: .7rem; }
+  .calendar-day-unit { display: none; }
+}
 .places-page .places-heat { margin: 0 0 1.5rem; }
 .places-page .places-heat h2 { margin: 0 0 var(--space-3); }
 .places-heat-controls {

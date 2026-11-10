@@ -354,3 +354,9 @@ def test_share_trend_legend_matches_its_bands_and_swatch_tokens():
         for category in expected:
             assert f'fill="{CATEGORY_COLORS[category]}"' in section
             assert CATEGORY_COLORS[category] == _swatch_token(category)
+
+
+def test_page_header_links_to_the_month_calendar():
+    body = _render(_dashboard())
+    actions = body.split('class="page-title-actions stats-page-actions"', 1)[1].split("</div>", 1)[0]
+    assert '<a class="control control-secondary" href="/calendar">Calendar</a>' in actions

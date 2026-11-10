@@ -28,6 +28,7 @@ TZ = ZoneInfo("UTC")
 FOLLOWS_RULES = {
     "account_security.html",
     "admin_accounts.html",
+    "calendar.html",
     "expenses.html",
     "place.html",
     "places.html",

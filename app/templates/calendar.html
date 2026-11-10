@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% from "_icons.html" import icon with context %}
+{% block title %}Calendar: Odograph{% endblock %}
+{% block content %}
+{% set nav = calendar.nav %}
+{% set month_label = calendar.month.strftime('%B') ~ ' ' ~ calendar.month.year %}
+{% set chart_max_m = calendar.max_day_m if calendar.max_day_m else 1 %}
+
+<div class="page calendar-page">
+  <div class="page-title page-header">
+    <div>
+      <p class="page-title-eyebrow">Calendar</p>
+      <h2 id="calendar-page-title" class="page-title-heading">{{ month_label }}</h2>
+      <p class="page-title-subtitle">Miles per day, without trips marked Not one of my vehicles. Open a day to see its trips.</p>
+    </div>
+    <div class="page-title-actions calendar-page-actions">
+      <nav class="week-nav" aria-label="Month navigation">
+        {% if nav.prev_month %}
+        <a class="week-nav-link week-nav-chevron icon-button" href="/calendar?month={{ '%04d-%02d' | format(nav.prev_month.year, nav.prev_month.month) }}"
+           aria-label="Previous month" title="Previous month">{{ icon("caret-left") }}</a>
+        {% endif %}
+        {% if nav.next_month %}
+        <a class="week-nav-link week-nav-chevron week-nav-next icon-button" href="/calendar?month={{ '%04d-%02d' | format(nav.next_month.year, nav.next_month.month) }}"
+           aria-label="Next month" title="Next month">{{ icon("caret-right") }}</a>
+        {% else %}
+        <span class="week-nav-link week-nav-chevron week-nav-next icon-button" aria-disabled="true"
+              aria-label="Next month unavailable" title="Next month unavailable">{{ icon("caret-right") }}</span>
+        {% endif %}
+        {% if not nav.is_current_month %}
+        <a class="week-nav-link control control-secondary" href="/calendar">This month</a>
+        {% endif %}
+      </nav>
+    </div>
+  </div>
+
+  <ul class="dashboard-breakdown-list calendar-legend" aria-label="Category colors">
+    {% for label, state in [("Business", "business"), ("Personal", "personal"), ("Unclassified", "unclassified"), ("Non-deductible", "nondeductible")] %}
+    <li class="dashboard-breakdown-item dashboard-state-{{ state }}">
+      <span class="dashboard-breakdown-swatch" aria-hidden="true"></span>
+      <span class="dashboard-breakdown-label">{{ label }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+
+  <table class="calendar-grid" aria-labelledby="calendar-page-title">
+    <thead>
+      <tr>
+        {% for short, long in [("Mon", "Monday"), ("Tue", "Tuesday"), ("Wed", "Wednesday"), ("Thu", "Thursday"), ("Fri", "Friday"), ("Sat", "Saturday"), ("Sun", "Sunday")] %}
+        <th scope="col"><abbr title="{{ long }}">{{ short }}</abbr></th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for week in calendar.weeks %}
+      <tr>
+        {% for cell in week %}
+        {% if cell.in_month %}
+        {% set day = cell.distance %}
+        {% set day_total_m = day.total_m %}
+        {% set day_categories = [
+          ("Business", "business", day.business_m),
+          ("Personal", "personal", day.personal_m),
+          ("Unclassified", "unclassified", day.unclassified_m),
+          ("Non-deductible", "nondeductible", day.nondeductible_m),
+        ] %}
+        <td class="calendar-day{% if cell.is_today %} calendar-day-today{% endif %}">
+          <a class="calendar-day-link" href="{{ cell.archive_url }}"{% if cell.is_today %} aria-current="date"{% endif %}
+             aria-label="{{ cell.day.strftime('%A, %B %-d') }}: {{ day_total_m | mi }} miles total.{% for label, state, meters in day_categories if meters | mi != '0.0' %}{{ ' ' if loop.first else '; ' }}{{ label }} {{ meters | mi }} miles{{ '.' if loop.last }}{% endfor %}">
+            <span class="calendar-day-number">{{ cell.day.day }}</span>
+            {% if day_total_m | mi != "0.0" %}
+            <span class="calendar-day-miles">{{ day_total_m | mi }}<span class="calendar-day-unit"> mi</span></span>
+            <span class="calendar-bar" aria-hidden="true">
+              <span class="calendar-bar-fill" style="width: {{ (day_total_m / chart_max_m * 100) | round(2) }}%;">
+                <span class="dashboard-bar-segment dashboard-bar-business" style="flex-basis: {{ (day.business_m / day_total_m * 100) | round(2) }}%;"></span>
+                <span class="dashboard-bar-segment dashboard-bar-personal" style="flex-basis: {{ (day.personal_m / day_total_m * 100) | round(2) }}%;"></span>
+                <span class="dashboard-bar-segment dashboard-bar-unclassified" style="flex-basis: {{ (day.unclassified_m / day_total_m * 100) | round(2) }}%;"></span>
+                <span class="dashboard-bar-segment dashboard-bar-nondeductible" style="flex-basis: {{ (day.nondeductible_m / day_total_m * 100) | round(2) }}%;"></span>
+              </span>
+            </span>
+            {% endif %}
+          </a>
+        </td>
+        {% else %}
+        <td class="calendar-day calendar-day-outside"><span class="calendar-day-number" aria-hidden="true">{{ cell.day.day }}</span></td>
+        {% endif %}
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
