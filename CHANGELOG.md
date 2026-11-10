@@ -9,6 +9,16 @@ reproduced here.
 
 ## [Unreleased]
 
+### Changed
+
+- `docs/security.md` and `docs/privacy.md` are shorter: what Odograph
+  protects, a hardening checklist and a compromise checklist, then one entry
+  per optional integration and what the logs leave out. The former detail
+  remains in the v1.4.1
+  [security](https://github.com/MeandrousShark/odograph/blob/v1.4.1/docs/security.md)
+  and [privacy](https://github.com/MeandrousShark/odograph/blob/v1.4.1/docs/privacy.md)
+  guides.
+
 ## [1.4.2] - 2026-11-09
 
 Nothing in this release runs on its own, and there is no step to take after
