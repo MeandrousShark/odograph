@@ -9,8 +9,21 @@ reproduced here.
 
 ## [Unreleased]
 
+### Added
+
+- **Places** lists each saved place with its trips and miles this year and
+  its last visit. A place's page shows its map and radius and, for a chosen
+  year, its arrivals, departures, trips and miles, a report summary, the
+  trips themselves and the auto-tag rules that name it. A trip from and to
+  the same place counts once.
+- The trip archive takes a `place` filter, shown as a removable chip, that
+  carries through paging, **Select all matching**, review and both exports.
+  The API v1 export accepts `place` too.
+
 ### Changed
 
+- Stats' **Most-used places** notes that it counts trip ends, so a trip from
+  and to one place counts twice. The number is unchanged.
 - `docs/security.md` and `docs/privacy.md` are shorter: what Odograph
   protects, a hardening checklist and a compromise checklist, then one entry
   per optional integration and what the logs leave out. The former detail
