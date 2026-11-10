@@ -13,8 +13,8 @@ OIDC, the only outside connection is your browser fetching map tiles.
 
 The Places heatmap is computed and served only by your instance. It groups
 trip ends and stays into cells about 50 m across on the server and sends
-only the cell centres, but the cells still show where you go and spend
-time. It is not anonymization.
+only each cell's centre with its count or time, but the cells still show
+where you go and spend time. It is not anonymization.
 
 ## Optional integrations
 

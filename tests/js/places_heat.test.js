@@ -205,6 +205,14 @@ test("switching to time spent disables the trip filters and drops them from the 
   assert.strictEqual(page.status.textContent, PlacesHeat.emptyMessage("time"));
   assert.strictEqual(page.status.hidden, false);
   assert.strictEqual(page.calls.fits.length, 0);
+
+  page.elements.category.value = "business";
+  page.form.mode = "visits";
+  await page.listeners.change();
+  assert.strictEqual(page.elements.category.disabled, false);
+  assert.strictEqual(page.elements.vehicle.disabled, false);
+  assert.strictEqual(page.timeNote.hidden, true);
+  assert.match(urls.at(-1), /^\/places\/heat\?mode=visits&.*category=business/);
 });
 
 test("a non-JSON or failed response shows the failure state", async () => {
@@ -246,4 +254,18 @@ test("an older response that lands after a newer request is dropped", async () =
   await Promise.all([first, second]);
   assert.deepStrictEqual(page.calls.latLngs, [[[3, 4, 1]]]);
   assert.doesNotMatch(page.status.textContent, /could not load/);
+});
+
+test("an older response is dropped even if the fetch ignores its abort", async () => {
+  const page = makePage();
+  const pending = [];
+  const fetchJson = () => new Promise((resolve) => { pending.push(resolve); });
+  const first = PlacesHeat.init(page.doc, page.L, fetchJson);
+  page.form.mode = "time";
+  const second = page.listeners.change();
+  pending[1](jsonResponse({ cells: [[3, 4, 60]], max: 60 }));
+  await second;
+  pending[0](jsonResponse({ cells: [[1, 2, 5]], max: 5 }));
+  await first;
+  assert.deepStrictEqual(page.calls.latLngs, [[[3, 4, 1]]]);
 });

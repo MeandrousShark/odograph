@@ -118,7 +118,7 @@ def test_visits_count_both_ends_with_the_archive_filters():
             "cells": everything, "max": 2,
         }
         # A single endpoint comes back at its cell's centre, never its raw value.
-        assert _cell(A, 1)[:2] != list(A)
+        assert list(A) not in [cell[:2] for cell in response.json()["cells"]]
 
         assert (await _heat(state, **MARCH, category="business"))["cells"] == _cells(
             _cell(A, 1), _cell(B, 1))

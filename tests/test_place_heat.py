@@ -68,8 +68,15 @@ def test_range_defaults_to_this_year_through_today():
     span = parse_range("", "", TZ)
     assert span.start == date(span.end.year, 1, 1)
     assert span.start <= span.end
-    assert parse_range("2025-03-01", "", TZ).end == span.end
-    assert parse_range("", "2026-12-31", TZ).start == span.start
+
+
+def test_a_single_date_anchors_the_other_and_never_reverses():
+    today = parse_range("", "", TZ).end
+    assert parse_range("", "2025-06-30", TZ) == parse_range("2025-01-01", "2025-06-30", TZ)
+    assert parse_range("2025-03-01", "", TZ).end == today
+    later = date(today.year + 1, 3, 1)
+    span = parse_range(later.isoformat(), "", TZ)
+    assert (span.start, span.end) == (later, date(later.year, 12, 31))
 
 
 def test_range_bounds_are_local_midnights_with_to_inclusive():

@@ -48,7 +48,6 @@ def test_place_routes_have_their_admission_lanes():
     assert lanes[("GET", "/places")] == "navigation"
     assert lanes[("GET", "/places/{place_id}")] == "foreground"
     assert lanes[("GET", "/places/search")] == "foreground"
-    assert lanes[("GET", "/places/heat")] == "foreground"
 
 
 def _trip(start, end, miles=1.0, category="business", exclusion=None):

@@ -4,7 +4,7 @@ Cells are about CELL_M on a side. Rows are a fixed latitude step; each row's
 longitude step is scaled by the cosine of the row's centre latitude, so a
 cell is close to square on the ground at any latitude. Only a cell's own
 centre leaves the server, never an average or a raw coordinate, so a cell
-holding one visit does not reveal where it was.
+holding one visit does not reveal its exact position.
 """
 from __future__ import annotations
 
@@ -36,6 +36,9 @@ VehicleFilter = int | None | Literal["none"]
 
 
 def cell_index(lat: float, lon: float) -> tuple[int, int]:
+    # The SQL in _cell_sql assigns cells; this mirrors it for tests and can
+    # differ by one column for a point exactly on a cell edge (numeric vs
+    # float arithmetic).
     row = min(max(math.floor(lat / LAT_STEP), -MAX_ROW - 1), MAX_ROW)
     return row, math.floor(lon * math.cos(math.radians((row + 0.5) * LAT_STEP)) / LAT_STEP)
 
@@ -86,10 +89,16 @@ def _parse_day(name: str, value: str) -> date:
 
 
 def parse_range(from_str: str, to_str: str, tz: ZoneInfo) -> HeatRange:
-    """Strict dates; an empty one takes the default (this year to today)."""
-    default = default_range(tz)
-    start = _parse_day("from", from_str) if from_str else default.start
-    end = _parse_day("to", to_str) if to_str else default.end
+    """Strict dates. Both empty: this year to today. An empty `from` starts
+    the year of `to`; an empty `to` is today, or the end of the year of a
+    future `from`. So only two given dates can be out of order."""
+    today = datetime.now(tz).date()
+    start = _parse_day("from", from_str) if from_str else None
+    end = _parse_day("to", to_str) if to_str else None
+    if start is None:
+        start = date((end or today).year, 1, 1)
+    if end is None:
+        end = today if start <= today else date(start.year, 12, 31)
     if start > end:
         raise HTTPException(status_code=422, detail="'from' must not be after 'to'")
     return HeatRange(start, end)
