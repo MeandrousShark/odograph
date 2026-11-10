@@ -1,5 +1,11 @@
 {% extends "base.html" %}
 {% block title %}Places: Odograph{% endblock %}
+{% block head %}
+  <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
+  <script src="/static/vendor/leaflet/leaflet.js"></script>
+  <script src="/static/vendor/leaflet-heat/leaflet-heat-global.js"></script>
+  <script src="/static/places_heat.js"></script>
+{% endblock %}
 {% block content %}
 
 <div class="page places-page">
@@ -13,6 +19,47 @@
       <a class="control control-secondary" href="/settings#places-and-rules">Edit in Settings</a>
     </div>
   </div>
+
+  <section class="places-heat" aria-labelledby="places-heat-heading" data-places-heat
+           data-heat-url="/places/heat"
+           data-tile-url="{{ map_tile_url }}"
+           data-tile-attribution="{{ map_tile_attribution }}">
+    <h2 id="places-heat-heading">Where you go</h2>
+    <form class="places-heat-controls" data-places-heat-form>
+      <fieldset class="category-segmented category-segmented-pair places-heat-mode">
+        <legend>Show</legend>
+        <div class="category-segmented-options">
+          <input class="category-segmented-input" type="radio" id="places-heat-mode-visits" name="mode" value="visits" checked>
+          <label class="category-segmented-option" for="places-heat-mode-visits">Visits</label>
+          <input class="category-segmented-input" type="radio" id="places-heat-mode-time" name="mode" value="time">
+          <label class="category-segmented-option" for="places-heat-mode-time">Time spent</label>
+        </div>
+      </fieldset>
+      <label>From <input type="date" name="from" value="{{ heat_from | default('') }}"></label>
+      <label>To <input type="date" name="to" value="{{ heat_to | default('') }}"></label>
+      <label>Category
+        <select name="category" data-places-heat-trip-filter>
+          <option value="">All</option>
+          <option value="business">Business</option>
+          <option value="personal">Personal</option>
+          <option value="unclassified">Unclassified</option>
+        </select>
+      </label>
+      <label>Vehicle
+        <select name="vehicle" data-places-heat-trip-filter>
+          <option value="">All</option>
+          <option value="none">Unassigned</option>
+          {% for v in vehicles | default([]) %}
+          <option value="{{ v.id }}">{{ v.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </form>
+    <p class="muted" data-places-heat-time-note hidden>Time spent uses dates only: stays carry no vehicle or category.</p>
+    <div class="places-heat-map" data-places-heat-map></div>
+    <p class="places-heat-status" data-places-heat-status role="status" hidden></p>
+    <p class="muted">Visits count trip starts and ends; time spent adds up stays. Both are grouped into cells about 50 m across.</p>
+  </section>
 
 {% if places %}
 <div class="settings-table-scroll">

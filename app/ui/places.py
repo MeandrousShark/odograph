@@ -15,6 +15,7 @@ from app.auth import require_csrf, require_user
 from app.capacity import owned_thread
 from app.detector.lock import lock_detector
 from app.detector.runner import reprocess_places_in
+from app.place_heat import HeatMode, default_range, heat_cells, parse_range
 from app.places_desc import PLACE_KINDS
 from app.rates import load_rates
 from app.report import build_range_report
@@ -23,7 +24,8 @@ from app.validation import parse_finite_number
 from app.vehicles import list_vehicles
 
 from app.ui._common import (
-    RULE_CATEGORIES, _fetch_recent_purposes, _poke_snap_worker, _redirect_back, _url_with_filters,
+    RULE_CATEGORIES, _fetch_recent_purposes, _parse_vehicle_id, _poke_snap_worker, _redirect_back,
+    _url_with_filters,
 )
 
 log = logging.getLogger(__name__)
@@ -379,16 +381,38 @@ def register(router: APIRouter) -> None:
             request.state._capacity_mutation_committed = True
             return _redirect_back(request)
 
+        # After /places/search and before /places/{place_id}, which would
+        # capture it.
+        @router.get("/places/heat")
+        async def places_heat(
+            request: Request,
+            mode: HeatMode = Query("visits"),
+            from_: str = Query("", alias="from"),
+            to: str = Query(""),
+            category: str = Query(""),
+            vehicle: str = Query(""),
+            user: dict = Depends(require_user),
+        ):
+            tz = request.state.config.display_tz
+            span = parse_range(from_, to, tz)
+            async with request.state.account_pool.connection() as conn:
+                return await heat_cells(conn, mode, span, tz, category, _parse_vehicle_id(vehicle))
+
         # After /places/search, which /places/{place_id} would capture, and
         # after the writes: route tests find POST /places by path alone.
         @router.get("/places")
         async def places_index(request: Request, user: dict = Depends(require_user)):
             tz = request.state.config.display_tz
             year = datetime.now(tz).year
+            heat = default_range(tz)
             async with request.state.account_pool.connection() as conn:
                 places = await _fetch_place_index_rows(conn, *_year_bounds(year, tz))
+                vehicles = await list_vehicles(conn)
             return await render_page(
-                request, "places.html", {"user": user, "places": places, "year": year},
+                request, "places.html", {
+                    "user": user, "places": places, "year": year, "vehicles": vehicles,
+                    "heat_from": heat.start.isoformat(), "heat_to": heat.end.isoformat(),
+                },
             )
 
         @router.get("/places/{place_id}")

@@ -140,6 +140,13 @@ include unclassified miles, which the report summary does not. Places and
 rules are edited in **Settings**. **Open in Trips** shows the year's trips in
 the archive, filtered by the place.
 
+Above the list, a heatmap shows where you go for the chosen dates.
+**Visits** counts trip starts and ends, filtered by category and vehicle as
+in Trips, and leaves out **Not one of my vehicles**. **Time spent** adds up
+the time you stayed in each spot, by dates only, since stays carry no
+vehicle or category. What the heatmap reveals is in the
+[privacy guide](privacy.md).
+
 ## Settings
 
 **Places** name trip endpoints: a trip end within a place's radius (meters)

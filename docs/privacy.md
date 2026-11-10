@@ -7,18 +7,23 @@ the logs leave out. For who can reach the application, see
 ## What stays on your instance
 
 Every GPS point, trip, stay, place and report lives in your own
-Postgres/PostGIS database and is sent nowhere by default. Without a geocoder,
-ntfy, SMTP or OIDC, the only outside connection is your browser fetching map
-tiles.
+Postgres/PostGIS database and is sent nowhere by default. Odograph has no
+telemetry, analytics or update checks. Without a geocoder, ntfy, SMTP or
+OIDC, the only outside connection is your browser fetching map tiles.
+
+The Places heatmap is computed and served only by your instance. It groups
+trip ends and stays into cells about 50 m across on the server and sends
+only the cell centres, but the cells still show where you go and spend
+time. It is not anonymization.
 
 ## Optional integrations
 
 - **Map tiles.** Your browser fetches tiles directly from `MAP_TILE_URL`
   (OpenStreetMap by default) for the maps on Trip Detail, Review, the manual
-  trip form and a place's page. The tile server sees your IP address and the
-  map area you view, plus your instance's origin as the `Referer`. Point
-  `MAP_TILE_URL` at your own tile server to keep this local; its attribution
-  is set with `MAP_TILE_ATTRIBUTION`.
+  trip form, Places and a place's page. The tile server sees your IP address
+  and the map area you view, plus your instance's origin as the `Referer`.
+  Point `MAP_TILE_URL` at your own tile server to keep this local; its
+  attribution is set with `MAP_TILE_ATTRIBUTION`.
 - **OSRM** (self-hosted). Detected trips' GPS traces, for road snapping, the
   points of a routed manual trip, and the ends of a possible missing trip,
   for its suggested distance, go to the OSRM container you run.
