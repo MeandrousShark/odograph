@@ -25,7 +25,7 @@ NAVIGATION_ROUTES = frozenset({
     ('POST', '/trips/{trip_id}/warnings/unacknowledge'),
 })
 FOREGROUND_ROUTES = frozenset({
-    ('GET', '/places/search'), ('GET', '/places/{place_id}'),
+    ('GET', '/places/search'), ('GET', '/places/heat'), ('GET', '/places/{place_id}'),
     ('GET', '/trips/manual'), ('POST', '/trips/manual'),
     ('POST', '/trips/manual/route-preview'),
     ('GET', '/stats'), ('GET', '/expenses'),

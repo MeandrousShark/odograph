@@ -16,6 +16,9 @@ reproduced here.
   year, its arrivals, departures, trips and miles, a report summary, the
   trips themselves and the auto-tag rules that name it. A trip from and to
   the same place counts once.
+- **Places** shows a heatmap of where you go: trip starts and ends, by
+  category and vehicle, or time spent at stays, for chosen dates, grouped
+  into cells about 50 m across.
 - The trip archive takes a `place` filter, shown as a removable chip, that
   carries through paging, **Select all matching**, review and both exports.
   The API v1 export accepts `place` too.

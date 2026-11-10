@@ -32,6 +32,7 @@ here; see `requirements.lock` for the full resolved set.
 | --- | --- | --- | --- |
 | Leaflet | 1.9.4 (from the file's own `@preserve` header comment) | BSD-2-Clause | `static/vendor/leaflet/LICENSE` (added; the vendored build did not ship its own license file, so the upstream text was copied in alongside it) |
 | htmx | 1.9.12 (from the file's embedded `version` string) | BSD-2-Clause | `static/vendor/htmx/LICENSE` (added; the vendored build did not ship its own license file, so the upstream text was copied in alongside it) |
+| Leaflet.heat | 1.0.0 (from the file's own `@preserve` header comment; tag `v1.0.0`). `leaflet-heat-global.js` is the package's plain script build, bundling simpleheat 1.0.0 (BSD-2-Clause, same author); sha256 `zQ/yMz3a0jorgZLgeRss+A/udZyzNBISK95et7v9bEo=` (base64) | BSD-2-Clause | `static/vendor/leaflet-heat/LICENSE` (the package's own license file) |
 
 ## External software, data, and services
 
