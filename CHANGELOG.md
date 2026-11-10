@@ -9,6 +9,16 @@ reproduced here.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-10
+
+Nothing in this release runs on its own. One change can refuse to start an
+installation after upgrading: startup now requires the `DATABASE_URL` role
+to be a superuser (see Fixed). The Compose database role is a superuser, so
+a Compose installation has no step to take. An installation whose
+`DATABASE_URL` names a `BYPASSRLS` role that is not a superuser points it
+back at a superuser role before upgrading. The refusal comes before any
+migration, so nothing is written, and the previous release still starts.
+
 ### Added
 
 - **Places** lists each saved place with its trips and miles this year and
@@ -59,6 +69,31 @@ reproduced here.
   after upgrading; the Compose database role is a superuser and is
   unaffected. See
   [account ownership and database roles](docs/configuration.md#account-ownership-and-database-roles).
+
+### Migrations
+
+- This release adds no migration; the schema stays at 51. The database image
+  is unchanged from 1.4.2.
+
+### Supported upgrade path
+
+- Every 1.x release upgrades directly, by either path in the
+  [upgrading guide](docs/upgrading.md). `v1.4.0` and earlier also take
+  1.4.1's database image rebuild
+  ([Database image security rebuilds](docs/upgrading.md#database-image-security-rebuilds))
+  and read the notes of each release in between. A 0.x installation first
+  upgrades to `v1.0.0`.
+- Prior-release artifact upgrade gate: release preflight ran the Docker
+  Compose upgrade drill from `v1.4.2` and `v1.4.1` with the database image
+  unchanged, from `v1.4.0`, `v1.3.1`, `v1.3.0`, `v1.2.0`, `v1.1.0` and
+  `v1.0.0` in database image swap mode, and the image-only drill from
+  `v1.0.0`, before this release was tagged.
+
+### Breaking changes
+
+- A `DATABASE_URL` role that is not a superuser is refused at startup, as
+  described above. Such a role could not finish first setup or a restore.
+  There is no migration and no other configuration or environment change.
 
 ## [1.4.2] - 2026-11-09
 
