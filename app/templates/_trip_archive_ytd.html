@@ -8,6 +8,9 @@
   <p class="trip-archive-ytd-metric">
     <span class="trip-archive-ytd-label">Year-to-date ({{ ytd_year }}) business deduction</span>
     <strong>{{ ytd_deduction | usd }}</strong>
+    {% if ytd_carried | default(none, true) %}
+    <small>{% with carried = ytd_carried %}{% include "_carried_rate_note.html" %}{% endwith %}</small>
+    {% endif %}
   </p>
   {% else %}
   <p class="trip-archive-ytd-metric trip-archive-ytd-metric-muted">

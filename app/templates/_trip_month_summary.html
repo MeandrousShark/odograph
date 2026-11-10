@@ -7,6 +7,6 @@
   {{ month.total_m | mi }} mi total ·
   {{ month.business_m | mi }} mi business
   {% if month.business_deduction is not none %}
-  · {{ month.business_deduction | usd }} deduction
+  · {{ month.business_deduction | usd }} deduction{% if month.carried_rate %} {{ month.carried_rate.short }}{% endif %}
   {% endif %}
 </div>

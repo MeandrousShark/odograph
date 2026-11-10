@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Iterable
 
-from app.rates import YearRate
+from app.rates import CarriedRate, YearRate, carried_rate
 from app.report import sum_month_deductions
 
 UNASSIGNED_LABEL = "Unassigned"
@@ -36,6 +36,7 @@ class VehicleBreakdown:
     unassigned_trip_count: int = 0
     coverage_note: str | None = None
     assigned_vehicle_count: int = 0
+    carried: CarriedRate | None = None  # the year is priced with an earlier year's rate
 
 
 @dataclass
@@ -124,4 +125,5 @@ def build_vehicle_breakdown(
         unassigned_trip_count=unassigned_trip_count,
         coverage_note=coverage_note,
         assigned_vehicle_count=assigned_vehicle_count,
+        carried=carried_rate(rates, year) if vehicles else None,
     )

@@ -29,6 +29,9 @@
     </tbody>
   </table>
   </div>
+  {% if vehicle_breakdown.carried %}
+  <p class="muted stats-coverage">{% with carried = vehicle_breakdown.carried %}{% include "_carried_rate_note.html" %}{% endwith %}</p>
+  {% endif %}
   {% else %}
   <p class="muted">No vehicle data available.</p>
   {% endif %}

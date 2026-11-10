@@ -277,6 +277,58 @@ def test_filing_reminder_sends_once_per_year_with_both_links_and_no_attachment()
     asyncio.run(_with_pool(_filing_reminder_scenario))
 
 
+CARRIED_2026 = (
+    "No 2026 mileage rate is saved. 2026 figures use the 2025 rate of "
+    "$0.7000/mi until you add one. Add it under Settings, Mileage rates."
+)
+
+
+async def _only_a_2025_rate(conn):
+    await conn.execute("DELETE FROM mileage_rates WHERE account_id = %s", (account_id(conn),))
+    await conn.execute(
+        "INSERT INTO mileage_rates (account_id, year, rate_per_mi) VALUES (%s, 2025, 0.7000)",
+        (account_id(conn),),
+    )
+
+
+async def _carried_rate_digest_scenario(pool):
+    calls: list[EmailMessage] = []
+    async with pool.connection() as conn:
+        await _only_a_2025_rate(conn)
+        truck_id = await _create_vehicle(conn, "Truck")
+        await _insert_trip(
+            conn, datetime(2026, 6, 15, 18, tzinfo=TZ), "business", 10 * 1609.344, truck_id,
+        )
+
+    await _worker(pool, _mailer(calls), monthly=True).run_once(MONTHLY_NOW)
+    await _worker(pool, _mailer(calls), filing=True).run_once(FILING_NOW)
+
+    assert len(calls) == 2
+    for message in calls:
+        lines = message.get_content().splitlines()
+        assert lines[lines.index("Deduction: $7.00") + 1] == CARRIED_2026
+
+
+def test_monthly_summary_and_filing_reminder_note_a_carried_rate():
+    asyncio.run(_with_pool(_carried_rate_digest_scenario))
+
+
+async def _own_rate_digest_scenario(pool):
+    calls: list[EmailMessage] = []
+    async with pool.connection() as conn:
+        await _only_a_2025_rate(conn)
+        await conn.execute(
+            "INSERT INTO mileage_rates (account_id, year, rate_per_mi) VALUES (%s, 2026, 0.7250)",
+            (account_id(conn),),
+        )
+    await _worker(pool, _mailer(calls), monthly=True).run_once(MONTHLY_NOW)
+    assert len(calls) == 1
+    assert "mileage rate is saved" not in calls[0].get_content()
+
+
+def test_monthly_summary_has_no_carried_note_when_the_year_has_its_rate():
+    asyncio.run(_with_pool(_own_rate_digest_scenario))
+
 # --- quarterly_odometer -------------------------------------------------
 
 QUARTER_START = datetime(2026, 7, 1, 9, tzinfo=TZ)

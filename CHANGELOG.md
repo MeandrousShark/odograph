@@ -11,6 +11,21 @@ reproduced here.
 
 ### Changed
 
+- `docs/security.md` and `docs/privacy.md` are shorter: what Odograph
+  protects, a hardening checklist and a compromise checklist, then one entry
+  per optional integration and what the logs leave out. The former detail
+  remains in the v1.4.1
+  [security](https://github.com/MeandrousShark/odograph/blob/v1.4.1/docs/security.md)
+  and [privacy](https://github.com/MeandrousShark/odograph/blob/v1.4.1/docs/privacy.md)
+  guides.
+
+## [1.4.2] - 2026-11-09
+
+Nothing in this release runs on its own, and there is no step to take after
+upgrading from 1.4.1.
+
+### Changed
+
 - Tracking the `v1` image is now a supported upgrade path, with a promise
   every 1.x release keeps: a newer `v1` image runs a working 1.x install with
   its existing `compose.yaml` and `.env` and no manual step, anything a
@@ -22,13 +37,40 @@ reproduced here.
   live at the top of its changelog section; earlier per-version sections
   remain in the
   [v1.4.1 guide](https://github.com/MeandrousShark/odograph/blob/v1.4.1/docs/upgrading.md).
-- `docs/security.md` and `docs/privacy.md` are shorter: what Odograph
-  protects, a hardening checklist and a compromise checklist, then one entry
-  per optional integration and what the logs leave out. The former detail
-  remains in the v1.4.1
-  [security](https://github.com/MeandrousShark/odograph/blob/v1.4.1/docs/security.md)
-  and [privacy](https://github.com/MeandrousShark/odograph/blob/v1.4.1/docs/privacy.md)
-  guides.
+- A deduction priced with an earlier year's mileage rate, because its own
+  year has none saved, now says so: the dashboard, Trips, Stats, Settings,
+  the report page and workbook, and the monthly summary and filing reminder
+  emails name the year and rate used. No figure changes.
+
+### Security
+
+- Upgrade Debian's `zlib1g` to `1:1.3.dfsg+really1.3.1-1+deb13u1` in the
+  application image for CVE-2026-85091 and CVE-2026-76844. Both are in
+  zlib's `gz*` file write functions, which Python's `zlib` and `gzip`
+  modules do not use; the base image and Python version are unchanged.
+
+### Migrations
+
+- This release adds no migration; the schema stays at 51. The database image
+  is unchanged from 1.4.1.
+
+### Supported upgrade path
+
+- Every 1.x release upgrades directly, by either path in the
+  [upgrading guide](docs/upgrading.md). `v1.4.0` and earlier also take
+  1.4.1's database image rebuild
+  ([Database image security rebuilds](docs/upgrading.md#database-image-security-rebuilds))
+  and read the notes of each release in between. A 0.x installation first
+  upgrades to `v1.0.0`.
+- Prior-release artifact upgrade gate: release preflight ran the Docker
+  Compose upgrade drill from `v1.4.1` with the database image unchanged, from
+  `v1.4.0`, `v1.3.1`, `v1.3.0`, `v1.2.0`, `v1.1.0` and `v1.0.0` in database
+  image swap mode, and the image-only drill from `v1.0.0`, before this
+  release was tagged.
+
+### Breaking changes
+
+- None. There is no migration and no configuration or environment change.
 
 ## [1.4.1] - 2026-11-06
 

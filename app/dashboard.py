@@ -18,7 +18,7 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from app.missing_trip import MissingTripBadge, missing_trip_badge
-from app.rates import YearRate, deduction
+from app.rates import CarriedRate, YearRate, carried_rate, deduction
 from app.trip_warnings import trip_warnings
 
 
@@ -73,6 +73,8 @@ class DeductionEstimate:
     """
     amount: float | None
     available: bool
+    # The latest bucket year priced with an earlier year's rate, if any.
+    carried: CarriedRate | None = None
 
 
 @dataclass(frozen=True)
@@ -255,15 +257,20 @@ def build_week_dashboard(
 
     deduction_total = 0.0
     deduction_available = True
+    carried = None
     for (year, month), meters in business_buckets.items():
         priced = deduction(meters, year, rates, month)
         if priced is None:
             deduction_available = False
             break
         deduction_total += priced
+        bucket_carried = carried_rate(rates, year)
+        if bucket_carried is not None and (carried is None or year > carried.year):
+            carried = bucket_carried
     deduction_estimate = DeductionEstimate(
         amount=deduction_total if deduction_available else None,
         available=deduction_available,
+        carried=carried if deduction_available else None,
     )
 
     day_groups = [

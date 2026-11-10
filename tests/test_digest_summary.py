@@ -13,7 +13,7 @@ from psycopg.errors import QueryCanceled
 from app.digest_summary import DigestSummary, owned_digest_turn
 from app.email_digest import _render
 from app.formatting import format_miles, format_usd
-from app.rates import YearRate
+from app.rates import CarriedRate, YearRate
 from app.report import build_range_report
 
 TZ = ZoneInfo("America/Los_Angeles")
@@ -214,3 +214,11 @@ def test_confirmed_rollback_after_ordinary_preparation_failure_releases_owner(er
         assert rolled_back == [True]
         assert not manager._active["background"] and not manager._leases
     asyncio.run(scenario())
+
+
+def test_digest_summary_records_the_carried_rate():
+    summary = DigestSummary()
+    summary.business_by_month[1] = 1609.344
+    assert summary.finish({2026: YearRate(0.7250)}, 2027).carried_rate == CarriedRate(2027, 2026, 0.7250)
+    assert DigestSummary().finish({2026: YearRate(0.7250)}, 2026).carried_rate is None
+    assert DigestSummary().finish({}, 2027).carried_rate is None

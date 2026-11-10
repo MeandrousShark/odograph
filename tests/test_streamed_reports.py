@@ -228,3 +228,42 @@ def test_html_header_uses_display_name_without_email_split(tmp_path, kind, displ
         if display_name:
             assert display_name.split()[0][0].upper() in actual.split('class="account-avatar" aria-hidden="true">', 1)[1][:16]
     finally: renderer.close(); reservation.release()
+
+
+@pytest.mark.parametrize('kind', ['annual_xlsx', 'range_xlsx'])
+def test_carried_year_parity_from_a_single_earlier_rate_row(tmp_path, kind):
+    # A 2027 report priced from the one 2026 rate row the helper receives:
+    # both folds must set the carried caveat, or the Summary sheets differ.
+    rows = [{**trip(i, 2), 'started_at': trip(i, 2)['started_at'].replace(year=2027),
+             'ended_at': trip(i, 2)['ended_at'].replace(year=2027)} for i in range(12)]
+    reservation = SpoolReservation.acquire(tmp_path / 'spool', time.monotonic() + 5)
+    renderer = Renderer(ResourceBudget(reservation.directory))
+    try:
+        text(renderer, 'display_tz', str(TZ))
+        text(renderer, 'email', 'a@example.com')
+        text(renderer, 'app_version', 'test')
+        renderer.initialize(dict(kind=kind, start='2027-01-01', end='2027-12-31', user=dict(id=1,is_admin=True,has_avatar=False,avatar_version=0), csrf='csrf', csp_nonce='nonce', review_count=1, storage=None, request_path='/report/2027'))
+        text(renderer, 'rate1', '.7'); text(renderer, 'rate2', '.8')
+        renderer.rate(dict(year=2026, has_rate2=True, h2_start_month=7))
+        for row in rows: renderer.global_fold.add(row)
+        text(renderer, 'vehicle_name', NAMES[2]); renderer.begin_group(2)
+        for row in rows: renderer.group_trip(row)
+        renderer.end_group()
+        for row in rows: renderer.detail_row(renderer.serial(row))
+        helper = renderer.global_fold.report(renderer.rates, [], kind.startswith('annual'))
+        assert helper.caveats.carried_from_year == 2026
+        assert helper.caveats.carried_rate_per_mi == .8
+        reference = build_range_report(rows, RATES, TZ, date(2027,1,1), date(2027,12,31))
+        assert helper.caveats == reference.caveats
+        result = renderer.render()
+        if kind.startswith('annual'):
+            expected = to_report_xlsx(build_annual_report(rows,RATES,TZ,2027),rows,RATES,TZ,[],build_expense_report(2027,rows,[],[],RATES,TZ),[])
+        else:
+            expected = to_range_report_xlsx(reference,rows,RATES,TZ)
+        actual = normalize(renderer.budget.path(result['path']).read_bytes())
+        assert actual == normalize(expected)
+        summary = [cell[0] for row in actual[0][1] for cell in row]
+        assert ("No 2027 mileage rate is saved. 2027 figures use the 2026 rate of "
+                "$0.8000/mi until you add one.") in summary
+    finally:
+        renderer.close(); reservation.release()

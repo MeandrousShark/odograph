@@ -14,7 +14,7 @@ from app.db import _fetch_schema_version
 from app.detector.runner import DETECTOR_VERSION
 from app.diagnose import build_report, run_connectivity_checks
 from app.odometer import OdometerReading, reconcile
-from app.rates import METERS_PER_MILE
+from app.rates import METERS_PER_MILE, YearRate, carried_rate
 from app.trip_queries import DISPLAY_DISTANCE_SQL
 from app.validation import NTFY_TOPIC_HINT, is_valid_ntfy_topic, parse_finite_number
 from app.vehicles import (
@@ -40,6 +40,16 @@ async def _fetch_rates_rows(conn) -> list[dict]:
     )
     rows = await cur.fetchall()
     return rows
+
+
+def _current_year_carried(rows: list[dict], tz):
+    """The rates table's note when this year has no rate of its own and is
+    priced with an earlier one, built from the rows the table shows."""
+    rates = {
+        row["year"]: YearRate(row["rate_per_mi"], row["rate_h2_per_mi"], row["h2_start_month"])
+        for row in rows
+    }
+    return carried_rate(rates, datetime.now(tz).year)
 
 
 async def _fetch_odometer_context(conn) -> list[dict]:
@@ -207,6 +217,7 @@ def register(router: APIRouter) -> None:
                 {
                     "preferences": request.state.account_settings,
                     "rates": db_rates, "vehicles": vehicles, "odometer": odometer,
+                    "rates_carried": _current_year_carried(db_rates, cfg.display_tz),
                     "auto_assign_default_vehicle": auto_assign_default_vehicle,
                     "places": places, "rules": rules,
                     "boundary_overrides": boundary_overrides,
@@ -448,5 +459,8 @@ def register(router: APIRouter) -> None:
                 db_rates = await _fetch_rates_rows(conn)
             request.state._capacity_mutation_committed = True
             return await render_template(
-                request, "_rates_table.html", {"rates": db_rates}
+                request, "_rates_table.html", {
+                    "rates": db_rates,
+                    "rates_carried": _current_year_carried(db_rates, request.state.config.display_tz),
+                },
             )

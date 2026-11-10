@@ -195,6 +195,10 @@ def test_every_pull_request_runs_the_trial_on_docker():
 
     assert "pull_request" in workflow["on"]
     assert "paths" not in workflow["on"]["pull_request"]
+    assert workflow["on"]["push"] == {"branches": ["main", "next"]}
+    assert workflow["concurrency"]["cancel-in-progress"] == (
+        "${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/next' }}"
+    )
     assert "if" not in job
     assert workflow["permissions"] == {"contents": "read"}
     assert job["env"]["ODOGRAPH_TRY_IMAGE"]

@@ -7,13 +7,15 @@ procedures are outside this checkout.
 
 ## Development workflow
 
-- Create a short-lived branch from current `main`.
+- Create a short-lived branch from current `main`. Work for the 2.0 release
+  branches from `next` instead, and its pull request targets `next`.
 - Keep changes focused and include regression tests for behavior changes.
 - Commit each logical change separately rather than batching unrelated work.
 - Do not co-author commits or add generated-by attribution to a commit message
   or a pull request description. Keep both concise and limited to what changed
   and why.
-- Open a pull request for review. Do not force-push `main` or release tags.
+- Open a pull request for review. Do not force-push `main`, `next` or release
+  tags.
 - Run the full suite before merge. Maintainers review the complete PR diff and
   merge the approved result to `main`.
 - Releases are cut only from the exact reviewed merge commit on `main`.
