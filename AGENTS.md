@@ -83,9 +83,9 @@ The guides in `docs/` are for people running an instance. Keep them short:
   (changes existing rows or constraints, keeps supported data) or
   `destructive` (drops data or narrows its meaning; major versions only).
   `tests/test_migration_class.py` enforces it.
-- Migrations run as a superuser or `BYPASSRLS` role; startup refuses any
-  other. Under forced row-level security, data migrations must not rely on
-  table ownership to see rows.
+- Migrations run as a superuser; startup refuses any other role. Under
+  forced row-level security, data migrations must not rely on table
+  ownership to see rows.
 - Preserve CSRF, auth-before-body reads, exact OIDC identity matching,
   source-aware deletion, and graceful routing/geocoding fallback.
 - Keep portable format compatibility and release image identity intact.

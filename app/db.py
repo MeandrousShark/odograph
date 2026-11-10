@@ -38,23 +38,26 @@ def make_pool(database_url: str) -> AsyncConnectionPool:
 
 
 class MigrationRoleError(RuntimeError):
-    """The migration role would be subject to forced row-level security."""
+    """The migration role cannot migrate and manage Odograph's roles."""
 
 
 async def check_migration_role(conn) -> None:
-    """Refuse a migration role that forced row-level security would filter.
+    """Refuse a migration role that is not a superuser.
 
     Owned tables force their account policies even on their owner, so a data
-    migration run by a plain owner role would silently touch no rows.
+    migration run by a plain owner role would silently touch no rows. Role
+    setup also strips SUPERUSER and BYPASSRLS from Odograph's roles, which
+    only a superuser may do, so BYPASSRLS alone would fail after migrating.
     """
     cur = await conn.execute(
-        "SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user"
+        "SELECT rolsuper FROM pg_roles WHERE rolname = current_user"
     )
     row = await cur.fetchone()
     if row is None or not row[0]:
         raise MigrationRoleError(
-            "database migrations require a DATABASE_URL role that is a superuser "
-            "or has BYPASSRLS; the configured role is neither"
+            "database migrations require a DATABASE_URL role that is a superuser, "
+            "to migrate under forced row-level security and manage Odograph's "
+            "roles; the configured role is not a superuser"
         )
 
 
