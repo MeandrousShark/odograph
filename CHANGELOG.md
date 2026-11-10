@@ -18,6 +18,13 @@ reproduced here.
   [security](https://github.com/MeandrousShark/odograph/blob/v1.4.1/docs/security.md)
   and [privacy](https://github.com/MeandrousShark/odograph/blob/v1.4.1/docs/privacy.md)
   guides.
+- `docs/configuration.md` and `docs/backups.md` are shorter: one table per
+  group of settings, and the steps to make, schedule, verify and restore a
+  backup, protect `.env` and recover from a failure. The former detail
+  remains in the v1.4.2
+  [configuration](https://github.com/MeandrousShark/odograph/blob/v1.4.2/docs/configuration.md)
+  and [backups](https://github.com/MeandrousShark/odograph/blob/v1.4.2/docs/backups.md)
+  guides.
 
 ## [1.4.2] - 2026-11-09
 
@@ -578,7 +585,7 @@ upgrading from 1.4.1.
   New `PREPARATION_SPOOL_DIR` selects the spool root, which must be owned by
   the application user with mode `0700`. Monthly summary and filing reminder
   totals are streamed rather than loaded whole. See
-  [Shared capacity](docs/configuration.md#shared-capacity).
+  [Shared capacity](https://github.com/MeandrousShark/odograph/blob/v1.4.2/docs/configuration.md#shared-capacity).
 - `DETECTOR_TURN_MAX_POINTS` (default `0`, unlimited) defers a device whose
   detector window is too large for one background turn, so other devices and
   accounts keep progressing. Deferred devices are listed under Workers in
@@ -753,7 +760,7 @@ upgrading from 1.4.1.
   deleted during an export can no longer produce an inconsistent bundle.
 - Concurrent backups to the same output are refused instead of overwriting each
   other, and restore inspects the container state before it starts. See
-  [One-off backup](docs/backups.md#one-off-backup).
+  [One-off backup](https://github.com/MeandrousShark/odograph/blob/v1.4.2/docs/backups.md#one-off-backup).
 - Ingest acknowledges and drops a body that is nested too deeply or holds an
   over-long integer instead of failing with a server error, and drops a fix
   whose `tst` is out of range. An out-of-range `acc`, `vel` or `alt`, or a
@@ -843,7 +850,7 @@ upgrading from 1.4.1.
   messages.
 - Startup refuses `WEB_CONCURRENCY` or `UVICORN_WORKERS` set to anything other
   than one, because shared capacity limits are per process. Unset them or set
-  them to `1`. See [Shared capacity](docs/configuration.md#shared-capacity).
+  them to `1`. See [Shared capacity](https://github.com/MeandrousShark/odograph/blob/v1.4.2/docs/configuration.md#shared-capacity).
 - Startup refuses a `public` schema whose relations do not match the
   application's table list exactly, so move any added table to another
   schema first.
