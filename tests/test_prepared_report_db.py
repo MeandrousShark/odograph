@@ -37,7 +37,9 @@ async def _move_to_carried_year(conn):
     await conn.execute("UPDATE trips SET started_at = started_at + interval '1 year', ended_at = ended_at + interval '1 year'")
     await conn.execute("UPDATE points SET recorded_at = recorded_at + interval '1 year'")
     await conn.execute("UPDATE expenses SET incurred_on = incurred_on + interval '1 year'")
-    await conn.execute("UPDATE odometer_readings SET recorded_at = recorded_at + interval '1 year'")
+    # Two steps: readings a year apart would collide on the way.
+    await conn.execute("UPDATE odometer_readings SET recorded_at = recorded_at + interval '100 years'")
+    await conn.execute("UPDATE odometer_readings SET recorded_at = recorded_at - interval '99 years'")
     await conn.execute('DELETE FROM mileage_rates')
     await conn.execute("INSERT INTO mileage_rates (account_id, year, rate_per_mi) VALUES (%s, 2026, 0.7250)", (account_id(conn),))
 
