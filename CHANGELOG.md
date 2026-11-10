@@ -30,6 +30,17 @@ reproduced here.
   repeated and general advice. The former detail remains in the v1.4.2
   [usage guide](https://github.com/MeandrousShark/odograph/blob/v1.4.2/docs/usage.md).
 
+### Fixed
+
+- Startup now refuses a `DATABASE_URL` role that is not a superuser.
+  Previously a `BYPASSRLS` role passed the check, migrations ran, and first
+  setup or a restore then failed in role setup with "application database
+  setup failed". An installation whose `DATABASE_URL` was later switched to a
+  `BYPASSRLS` role that is not a superuser starts today and will be refused
+  after upgrading; the Compose database role is a superuser and is
+  unaffected. See
+  [account ownership and database roles](docs/configuration.md#account-ownership-and-database-roles).
+
 ## [1.4.2] - 2026-11-09
 
 Nothing in this release runs on its own, and there is no step to take after
