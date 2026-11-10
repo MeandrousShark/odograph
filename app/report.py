@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, fields
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from app.rates import METERS_PER_MILE, YearRate, deduction, rate_for
+from app.rates import METERS_PER_MILE, CarriedRate, YearRate, carried_rate, deduction, rate_for
 
 MONTH_ABBR = calendar.month_abbr  # ['', 'Jan', ..., 'Dec'] -- same table app/main.py hands templates
 
@@ -49,13 +49,16 @@ class ReportCaveats:
     unclassified_trips: int = 0
     business_missing_purpose: int = 0
     missing_rate: bool = False
+    # Set when the year is priced with an earlier year's rate (`carried_rate`).
+    carried_from_year: int | None = None
+    carried_rate_per_mi: float | None = None
 
     @property
     def any(self) -> bool:
         return (
             self.gap_trips > 0 or self.low_conf_trips > 0 or self.manual_trips > 0
             or self.unclassified_trips > 0 or self.business_missing_purpose > 0
-            or self.missing_rate
+            or self.missing_rate or self.carried_from_year is not None
         )
 
 
@@ -155,12 +158,13 @@ def format_rate_periods(rate_periods: list[tuple[float, int, int]]) -> str:
 
 def caveat_lines(caveats: ReportCaveats, year: int) -> list[str]:
     """Plain-text caveat sentences, ordered unclassified/missing-purpose/gap/
-    low-confidence/manual/missing-rate. The one place this wording is built, called from
+    low-confidence/manual/missing-rate or carried-rate. The one place this wording is built, called from
     both the XLSX summary sheet and the HTML report page, so the two can't
     drift on what each caveat says (they already had on the unclassified
-    line before this was unified). `missing_rate`, when present, is always
-    last -- callers needing to append something rate-specific (e.g. the HTML
-    page's "Add one" settings link) can rely on that ordering.
+    line before this was unified). The rate line (missing or carried, never
+    both), when present, is always last -- callers needing to append
+    something rate-specific (e.g. the HTML page's settings link) can rely on
+    that ordering.
     """
     lines = []
     if caveats.unclassified_trips:
@@ -184,6 +188,10 @@ def caveat_lines(caveats: ReportCaveats, year: int) -> list[str]:
         lines.append(f"{caveats.manual_trips} trip(s) were entered manually.")
     if caveats.missing_rate:
         lines.append(f"No IRS mileage rate on file for {year}; deduction is unavailable.")
+    if caveats.carried_from_year is not None:
+        lines.append(
+            CarriedRate(year, caveats.carried_from_year, caveats.carried_rate_per_mi).sentence
+        )
     return lines
 
 
@@ -355,6 +363,7 @@ def build_range_report(
     # to *some* rate once its year is found; it's never partially missing),
     # so checking one month tells us whether the whole range is priced.
     missing_rate = context_month_rates[start.month] is None
+    carried = carried_rate(rates, year)
 
     months = [
         MonthLine(
@@ -411,6 +420,8 @@ def build_range_report(
             unclassified_trips=unclassified_trips,
             business_missing_purpose=business_missing_purpose,
             missing_rate=missing_rate,
+            carried_from_year=carried.source_year if carried else None,
+            carried_rate_per_mi=carried.rate if carried else None,
         ),
         by_vehicle=by_vehicle,
         start=start,

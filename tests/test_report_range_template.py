@@ -375,3 +375,27 @@ def test_range_report_notes_hold_report_caveats_only():
     assert "The larger estimate is informational" not in body
     assert "irs.gov" not in body
     assert body.index('<section class="report-section') < body.index('<section class="report-notes"')
+
+
+CARRIED_2027 = (
+    "No 2027 mileage rate is saved. 2027 figures use the 2026 rate of "
+    "$0.7250/mi until you add one."
+)
+
+
+def test_report_notes_show_the_carried_rate_line_last_with_its_settings_link():
+    trip = {**_trip(4), "started_at": datetime(2027, 4, 15, 12, tzinfo=TZ), "source": "manual"}
+    report = build_annual_report([trip], RATES, TZ, 2027)
+    body = _render("_report_notes.html", report=report)
+    assert f'<li>{CARRIED_2027} <a href="/settings">Add the 2027 rate</a>.</li>' in body
+    assert body.index("entered manually") < body.index(CARRIED_2027)
+    assert "Add one" not in body
+
+    own_rate = build_annual_report([_trip(4)], RATES, TZ, 2026)
+    assert "mileage rate is saved" not in _render("_report_notes.html", report=own_rate)
+
+
+def test_report_notes_keep_hiding_a_carried_line_without_trips():
+    report = build_annual_report([], RATES, TZ, 2027)
+    assert report.caveats.any
+    assert "mileage rate is saved" not in _render("_report_notes.html", report=report)

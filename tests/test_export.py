@@ -4,7 +4,7 @@ from __future__ import annotations
 import csv
 import io
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
 import openpyxl
@@ -788,3 +788,36 @@ def test_xlsx_writer_failure_cleans_only_its_own_temporary_file(monkeypatch, fai
         unrelated_writer.close()
         unrelated_writer.cleanup()
         unrelated_wb.close()
+
+
+
+@pytest.mark.parametrize("with_trips", [True, False])
+def test_report_xlsx_summary_carries_the_carried_rate_line(with_trips):
+    trips = [_trip(started_at=datetime(2027, 6, 15, 15, 0, tzinfo=timezone.utc),
+                   ended_at=datetime(2027, 6, 15, 15, 30, tzinfo=timezone.utc))] if with_trips else []
+    annual = build_annual_report(trips, RATES, TZ, 2027)
+    ranged = build_range_report(trips, RATES, TZ, date(2027, 1, 1), date(2027, 12, 31))
+    for raw in (to_report_xlsx(annual, trips, RATES, TZ), to_range_report_xlsx(ranged, trips, RATES, TZ)):
+        rows = [[c.value for c in row] for row in load_workbook(io.BytesIO(raw))["Summary"].iter_rows()]
+        flat = [v for row in rows for v in row if v is not None]
+        assert "Caveats: review before filing" in flat
+        assert (
+            "No 2027 mileage rate is saved. 2027 figures use the 2026 rate of "
+            "$0.7250/mi until you add one."
+        ) in flat
+
+
+def test_trip_export_rows_for_a_carried_year_keep_their_shape():
+    own = build_export_rows([_trip()], RATES, TZ)
+    carried = build_export_rows(
+        [_trip(started_at=datetime(2027, 6, 15, 15, 0, tzinfo=timezone.utc),
+               ended_at=datetime(2027, 6, 15, 15, 30, tzinfo=timezone.utc))],
+        RATES, TZ,
+    )
+    assert len(carried) == len(own) == 1
+    assert len(carried[0]) == len(own[0]) == len(HEADERS)
+    deduction = HEADERS.index("Deduction ($)")
+    assert carried[0][deduction] == own[0][deduction]
+    assert [value for i, value in enumerate(carried[0]) if i != HEADERS.index("Date")] == [
+        value for i, value in enumerate(own[0]) if i != HEADERS.index("Date")
+    ]

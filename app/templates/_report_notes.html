@@ -9,7 +9,7 @@
   <ul>
     {% if report_caveats %}
     {% for line in caveat_lines(report.caveats, report.year) %}
-    <li>{{ line }}{% if loop.last and report.caveats.missing_rate %} <a href="/settings">Add one</a>.{% endif %}</li>
+    <li>{{ line }}{% if loop.last and report.caveats.missing_rate %} <a href="/settings">Add one</a>.{% elif loop.last and report.caveats.carried_from_year is not none %} <a href="/settings">Add the {{ report.year }} rate</a>.{% endif %}</li>
     {% endfor %}
     {% endif %}
     {% if comparisons %}

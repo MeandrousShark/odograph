@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 from app.preparation_sort import CHUNK_BYTES, SortedRecords
 from app.report import AnnualReport, RangeReport, MonthLine, VehicleLine, ReportCaveats, NO_VEHICLE_LABEL, _rate_periods, sum_month_deductions, next_year_disabled, range_filename_slug, range_label
-from app.rates import YearRate, deduction, rate_for
+from app.rates import YearRate, carried_rate, deduction, rate_for
 from app.expenses import ExpenseReport, ExpenseComparison, _money, _decimal
 from app.odometer import VehicleCoverage
 
@@ -79,12 +79,18 @@ class Fold:
     def report(self, rates, vehicles, annual):
         year = self.start.year
         month_rates = {m: rate_for(rates, year, m) for m in range(self.start.month, self.end.month + 1)}
+        carried = carried_rate(rates, year)
         total = self.business + self.personal + self.nondeductible
         values = dict(year=year, months=[MonthLine(m, self.counts[m], self.months[m], month_rates[m], deduction(self.months[m], year, rates, m)) for m in sorted(self.months)],
                       business_m=self.business, personal_m=self.personal, nondeductible_m=self.nondeductible,
                       business_pct=self.business / total * 100.0 if total > 0 else None,
                       total_deduction=sum_month_deductions(list(self.months.items()), year, rates), rate_periods=_rate_periods(month_rates), trip_count=self.count,
-                      caveats=ReportCaveats(self.gaps, self.low, self.manual, self.unclassified, self.missing, month_rates[self.start.month] is None), by_vehicle=vehicles)
+                      caveats=ReportCaveats(gap_trips=self.gaps, low_conf_trips=self.low, manual_trips=self.manual,
+                                            unclassified_trips=self.unclassified, business_missing_purpose=self.missing,
+                                            missing_rate=month_rates[self.start.month] is None,
+                                            carried_from_year=carried.source_year if carried else None,
+                                            carried_rate_per_mi=carried.rate if carried else None),
+                      by_vehicle=vehicles)
         return AnnualReport(**values) if annual else RangeReport(**values, start=self.start, end=self.end)
 
 

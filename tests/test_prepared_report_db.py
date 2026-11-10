@@ -9,7 +9,7 @@ import pytest
 from openpyxl import load_workbook
 from psycopg.pq import TransactionStatus
 
-from app.account_context import control_connection
+from app.account_context import account_id, control_connection
 from app.account_work import report_account_work
 from app.main import make_templates
 from app.page import _fetch_review_count
@@ -31,22 +31,37 @@ def cells(content):
                           for row in sheet for cell in row]) for sheet in book]
 
 
+async def _move_to_carried_year(conn):
+    # 2027 trips with a single 2026 rate row: the report is priced with the
+    # carried rate, so both folds must agree on the carried caveat.
+    await conn.execute("UPDATE trips SET started_at = started_at + interval '1 year', ended_at = ended_at + interval '1 year'")
+    await conn.execute("UPDATE points SET recorded_at = recorded_at + interval '1 year'")
+    await conn.execute("UPDATE expenses SET incurred_on = incurred_on + interval '1 year'")
+    await conn.execute("UPDATE odometer_readings SET recorded_at = recorded_at + interval '1 year'")
+    await conn.execute('DELETE FROM mileage_rates')
+    await conn.execute("INSERT INTO mileage_rates (account_id, year, rate_per_mi) VALUES (%s, 2026, 0.7250)", (account_id(conn),))
+
+
+@pytest.mark.parametrize('year', [2026, 2027])
 @pytest.mark.parametrize('kind', ['annual_xlsx', 'range_xlsx', 'annual_html', 'range_html'])
-def test_prepared_report_database_projection_and_response_cleanup(tmp_path, kind):
+def test_prepared_report_database_projection_and_response_cleanup(tmp_path, kind, year):
     async def run():
         async with _scenario() as (raw, manager, runtime, control, accounts):
             account, _ = accounts
             async with account.connection() as conn:
                 await _seed(conn)
+                if year == 2027:
+                    await _move_to_carried_year(conn)
                 await conn.execute('UPDATE account_settings SET display_tz=%s WHERE account_id=%s', (str(TZ), account.principal.account_id))
             config = SimpleNamespace(display_tz=TZ, app_version='test')
             request = SimpleNamespace(
                 app=SimpleNamespace(state=SimpleNamespace(config=config)),
                 state=SimpleNamespace(principal=account.principal, account_pool=account, config=config, csp_nonce='nonce'),
-                session={'csrf':'csrf'}, url=SimpleNamespace(path='/report/2026'))
+                session={'csrf':'csrf'}, url=SimpleNamespace(path=f'/report/{year}'))
             user = dict(id=account.principal.account_id,is_admin=True,is_enabled=True,has_avatar=False,avatar_version=0,legacy_oidc=False)
             async with manager.operation('foreground', account.principal):
-                data = await (_build_annual_report_data(request,2026) if kind.startswith('annual') else _build_range_report_data(request,'2026-01-01','2026-12-31'))
+                data = await (_build_annual_report_data(request,year) if kind.startswith('annual') else _build_range_report_data(request,f'{year}-01-01',f'{year}-12-31'))
+                assert data.report.caveats.carried_from_year == (2026 if year == 2027 else None)
                 async with control_connection(control) as identity:
                     email = (await (await identity.execute('SELECT email FROM accounts WHERE id=%s', (account.principal.account_id,))).fetchone())[0]
                 async with account.connection() as conn:
@@ -62,7 +77,7 @@ def test_prepared_report_database_projection_and_response_cleanup(tmp_path, kind
                                    csrf='csrf',csp_nonce='nonce',review_count=review_count,storage=storage,request=request)
                     if kind == 'annual_html':
                         context.update(odometer_coverage=data.odometer_coverage,expense_report=data.expense_report,
-                                       next_year_disabled=next_year_disabled(2026,datetime.now(TZ)))
+                                       next_year_disabled=next_year_disabled(year,datetime.now(TZ)))
                     expected = make_templates(config).env.get_template('report.html' if kind == 'annual_html' else 'report_range.html').render(**context).encode()
                 async with PreparationOperation(spool_root=tmp_path/'spool') as op:
                     request.state._preparation = op
@@ -70,7 +85,7 @@ def test_prepared_report_database_projection_and_response_cleanup(tmp_path, kind
                         async with report_account_work(control, account.principal) as conn:
                             request.state._report_control_connection = conn
                             try:
-                                response = await prepare_report(request,user,kind,year=2026,start=date(2026,1,1),end=date(2026,12,31))
+                                response = await prepare_report(request,user,kind,year=year,start=date(year,1,1),end=date(year,12,31))
                                 assert conn.info.transaction_status == TransactionStatus.IDLE
                                 assert op.process.returncode == 0
                                 pieces = []
