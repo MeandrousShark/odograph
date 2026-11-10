@@ -290,6 +290,7 @@
       to: form ? form.elements.to.value : '',
       vehicle: form ? form.elements.vehicle.value : '',
       q: form ? form.elements.q.value : '',
+      place: form && form.elements.place ? form.elements.place.value : '',
     };
   });
 
@@ -321,7 +322,7 @@
       swap: 'outerHTML',
       values: {
         kind: action.kind, from: action.from, to: action.to, vehicle: action.vehicle,
-        q: action.q,
+        q: action.q, place: action.place,
       },
     });
   }

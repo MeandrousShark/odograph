@@ -18,10 +18,10 @@ REVIEW_CATEGORY = "unclassified"
 
 def review_filter(
     from_dt: datetime | None, to_dt: datetime | None,
-    vehicle_id: int | None | str = None, q: str = "",
+    vehicle_id: int | None | str = None, q: str = "", place_id: int | None = None,
 ) -> TripFilter:
     """The review filter is always pinned to unclassified trips."""
-    return TripFilter(REVIEW_CATEGORY, from_dt, to_dt, vehicle_id, q)
+    return TripFilter(REVIEW_CATEGORY, from_dt, to_dt, vehicle_id, q, place_id=place_id)
 
 
 async def next_review_trip(

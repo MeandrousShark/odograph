@@ -18,19 +18,23 @@ from app.vehicles import list_vehicles
 from app.ui._common import (
     EXCLUSIONS,
     _fetch_recent_purposes,
+    _parse_place_id,
     _parse_vehicle_form,
     _parse_vehicle_id,
+    _place_param,
     _url_with_filters,
     parse_date_range,
 )
 from app.ui.trips import _apply_human_tag, _delete_trip_in, _trip_position
 
 
-def _review_url(from_str: str, to_str: str, vehicle_str: str, q_str: str = "") -> str:
+def _review_url(
+    from_str: str, to_str: str, vehicle_str: str, q_str: str = "", place_str: str = "",
+) -> str:
     """`/review` link carrying the current filters. No category param:
     `/review` always pins category to unclassified.
     """
-    return _url_with_filters("/review", from_str, to_str, vehicle_str, q_str)
+    return _url_with_filters("/review", from_str, to_str, vehicle_str, q_str, place_str)
 
 
 async def _fetch_review_card(
@@ -69,17 +73,17 @@ async def _fetch_review_card(
 
 
 def _review_filters(
-    request: Request, from_: str, to: str, vehicle: str, q: str = ""
+    request: Request, from_: str, to: str, vehicle: str, q: str = "", place: str = "",
 ) -> TripFilter:
     """The unclassified-pinned filter every `/review` route shares."""
     tz = request.state.config.display_tz
     from_dt, to_dt = parse_date_range(from_, to, tz)
-    return review_filter(from_dt, to_dt, _parse_vehicle_id(vehicle), q)
+    return review_filter(from_dt, to_dt, _parse_vehicle_id(vehicle), q, _parse_place_id(place))
 
 
 async def _render_review_card(
     request: Request, conn, template: str, card: dict,
-    from_: str, to: str, vehicle: str, q: str = "", **extra,
+    from_: str, to: str, vehicle: str, q: str = "", place: str = "", **extra,
 ):
     """Render a review card with the shared context (vehicles, purpose
     suggestions, current filters) every `/review` route passes identically.
@@ -92,8 +96,8 @@ async def _render_review_card(
             {
                 **card, "vehicles": vehicles, "recent_purposes": recent_purposes,
                 "filter_from": from_, "filter_to": to, "filter_vehicle": vehicle,
-                "filter_q": q,
-                "review_url": _review_url(from_, to, vehicle, q),
+                "filter_q": q, "filter_place": place,
+                "review_url": _review_url(from_, to, vehicle, q, place),
                 "undo_notice": "",
                 **extra,
             },
@@ -104,8 +108,8 @@ async def _render_review_card(
         {
             **card, "vehicles": vehicles, "recent_purposes": recent_purposes,
             "filter_from": from_, "filter_to": to, "filter_vehicle": vehicle,
-            "filter_q": q,
-            "review_url": _review_url(from_, to, vehicle, q),
+            "filter_q": q, "filter_place": place,
+            "review_url": _review_url(from_, to, vehicle, q, place),
             "undo_notice": "",
             **extra,
         },
@@ -121,12 +125,14 @@ def register(router: APIRouter) -> None:
             to: str = Query(""),
             vehicle: str = Query(""),
             q: str = Query(""),
+            place: str = Query(""),
         ):
-            filters = _review_filters(request, from_, to, vehicle, q)
+            place = _place_param(place)
+            filters = _review_filters(request, from_, to, vehicle, q, place)
             async with request.state.account_pool.connection() as conn:
                 card = await _fetch_review_card(conn, filters, cursor=None)
                 return await _render_review_card(
-                    request, conn, "review.html", card, from_, to, vehicle, q,
+                    request, conn, "review.html", card, from_, to, vehicle, q, place,
                     user=user, csrf=request.session.get("csrf", ""),
                 )
 
@@ -139,17 +145,19 @@ def register(router: APIRouter) -> None:
             to: str = Query(""),
             vehicle: str = Query(""),
             q: str = Query(""),
+            place: str = Query(""),
         ):
             """Next-card partial, used by Skip. `after` is the currently displayed
             trip's id. Its own `(started_at, id)` becomes the cursor, so a
             skipped trip can't reappear within this pass.
             """
-            filters = _review_filters(request, from_, to, vehicle, q)
+            place = _place_param(place)
+            filters = _review_filters(request, from_, to, vehicle, q, place)
             async with request.state.account_pool.connection() as conn:
                 cursor = await _trip_position(conn, after)
                 card = await _fetch_review_card(conn, filters, cursor)
                 return await _render_review_card(
-                    request, conn, "_review_card.html", card, from_, to, vehicle, q,
+                    request, conn, "_review_card.html", card, from_, to, vehicle, q, place,
                 )
 
         @router.post("/review/{trip_id}/skip", dependencies=[Depends(require_csrf)])
@@ -164,6 +172,7 @@ def register(router: APIRouter) -> None:
             notes: str = Form(""),
             vehicle_id: str = Form(""),
             q: str = Form(""),
+            place: str = Form(""),
             exclusion: str = Form(""),
         ):
             """Save visible fields and advance without classifying the trip.
@@ -174,7 +183,8 @@ def register(router: APIRouter) -> None:
             exclusion = exclusion if isinstance(exclusion, str) else ""
             if exclusion and exclusion not in EXCLUSIONS:
                 raise HTTPException(status_code=400, detail="Unknown exclusion")
-            filters = _review_filters(request, from_, to, vehicle, q)
+            place = _place_param(place)
+            filters = _review_filters(request, from_, to, vehicle, q, place)
             notes_value = notes if isinstance(notes, str) else ""
             vehicle_value = vehicle_id if isinstance(vehicle_id, str) else ""
             async with request.state.account_pool.connection() as conn:
@@ -195,7 +205,7 @@ def register(router: APIRouter) -> None:
                     raise HTTPException(status_code=404, detail="No such trip")
                 card = await _fetch_review_card(conn, filters, cursor=position)
                 return await _render_review_card(
-                    request, conn, "_review_card.html", card, from_, to, vehicle, q,
+                    request, conn, "_review_card.html", card, from_, to, vehicle, q, place,
                 )
 
         @router.post("/review/{trip_id}/tag", dependencies=[Depends(require_csrf)])
@@ -211,6 +221,7 @@ def register(router: APIRouter) -> None:
             notes: str = Form(""),
             vehicle_id: str = Form(""),
             q: str = Form(""),
+            place: str = Form(""),
             exclusion: str = Form(""),
         ):
             """Tag-and-advance in one round trip. Unlike
@@ -225,7 +236,8 @@ def register(router: APIRouter) -> None:
             exclusion = exclusion if isinstance(exclusion, str) else ""
             if exclusion and exclusion not in EXCLUSIONS:
                 raise HTTPException(status_code=400, detail="Unknown exclusion")
-            filters = _review_filters(request, from_, to, vehicle, q)
+            place = _place_param(place)
+            filters = _review_filters(request, from_, to, vehicle, q, place)
             notes_value = notes if isinstance(notes, str) else ""
             vehicle_value = vehicle_id if isinstance(vehicle_id, str) else ""
             async with request.state.account_pool.connection() as conn:
@@ -243,7 +255,7 @@ def register(router: APIRouter) -> None:
                     raise HTTPException(status_code=400, detail="No such vehicle")
                 card = await _fetch_review_card(conn, filters, cursor=position)
                 return await _render_review_card(
-                    request, conn, "_review_card.html", card, from_, to, vehicle, q,
+                    request, conn, "_review_card.html", card, from_, to, vehicle, q, place,
                 )
 
         @router.post("/review/{trip_id}/exclusion", dependencies=[Depends(require_csrf)])
@@ -293,6 +305,7 @@ def register(router: APIRouter) -> None:
             vehicle: str = Form(""),
             user: dict = Depends(require_user),
             q: str = Form(""),
+            place: str = Form(""),
         ):
             """Reverse the one action review.html's page script remembers, and
             re-present that trip. One step, client-remembered, lost on reload --
@@ -315,7 +328,8 @@ def register(router: APIRouter) -> None:
             """
             if kind not in ("tag", "skip"):
                 raise HTTPException(status_code=400, detail="Unknown undo kind")
-            filters = _review_filters(request, from_, to, vehicle, q)
+            place = _place_param(place)
+            filters = _review_filters(request, from_, to, vehicle, q, place)
             async with request.state.account_pool.connection() as conn:
                 position = await _trip_position(conn, trip_id)
                 if position is None:
@@ -326,7 +340,7 @@ def register(router: APIRouter) -> None:
                     conn, filters, cursor=position, inclusive=True,
                 )
                 return await _render_review_card(
-                    request, conn, "_review_card.html", card, from_, to, vehicle, q,
+                    request, conn, "_review_card.html", card, from_, to, vehicle, q, place,
                     undo_notice="Previous action undone. Trip restored.",
                 )
 
@@ -339,6 +353,7 @@ def register(router: APIRouter) -> None:
             vehicle: str = Form(""),
             user: dict = Depends(require_user),
             q: str = Form(""),
+            place: str = Form(""),
         ):
             """Delete the displayed trip and advance beyond its prior position.
 
@@ -346,10 +361,11 @@ def register(router: APIRouter) -> None:
             removes the row, so the review pass continues exactly as tag and
             Skip do, including stable id tie-breaking.
             """
-            filters = _review_filters(request, from_, to, vehicle, q)
+            place = _place_param(place)
+            filters = _review_filters(request, from_, to, vehicle, q, place)
             async with request.state.account_pool.connection() as conn:
                 position = await _delete_trip_in(conn, trip_id)
                 card = await _fetch_review_card(conn, filters, cursor=position)
                 return await _render_review_card(
-                    request, conn, "_review_card.html", card, from_, to, vehicle, q,
+                    request, conn, "_review_card.html", card, from_, to, vehicle, q, place,
                 )

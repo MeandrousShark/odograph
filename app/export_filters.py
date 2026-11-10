@@ -7,7 +7,7 @@ import struct
 from psycopg.errors import DataError
 
 from app.preparation import FRAME_BYTES
-from app.ui._common import CATEGORIES, EXCLUSIONS, EXCLUSION_FILTER_NONE, _parse_vehicle_id, parse_date_range
+from app.ui._common import CATEGORIES, EXCLUSIONS, EXCLUSION_FILTER_NONE, _parse_place_id, _parse_vehicle_id, parse_date_range
 
 RECORD = struct.Struct('!I')
 SEARCH_SETTING = 'app.export_search_pattern'
@@ -20,7 +20,7 @@ class TextStore:
         self.refs = {}
 
     def receive(self, key, size, channel, encoding=None):
-        if key not in ('display_tz','timezone_paths','category','from','to','vehicle','q','exclusion','rate1','rate2',
+        if key not in ('display_tz','timezone_paths','category','from','to','vehicle','q','exclusion','place','rate1','rate2',
                 'field:start_place_name','field:end_place_name','field:start_address','field:end_address',
                 'field:vehicle_name','field:purpose','field:notes') or type(size) is not int or size<0:
             raise ValueError('invalid export text descriptor')
@@ -128,7 +128,9 @@ def prepare_filters(store, tz, codec):
     vehicle = _parse_vehicle_id(store.whole('vehicle'))
     category = store.choice('category',CATEGORIES)
     exclusion = store.choice('exclusion',(*EXCLUSIONS,EXCLUSION_FILTER_NONE))
-    return dict(category=category,exclusion=exclusion,vehicle=vehicle,
+    # A preparation that sent no place has no place filter.
+    place = _parse_place_id(store.whole('place')) if 'place' in store.refs else None
+    return dict(category=category,exclusion=exclusion,vehicle=vehicle,place=place,
                 from_dt=from_dt.isoformat() if from_dt is not None else None,
                 to_dt=to_dt.isoformat() if to_dt is not None else None,
                 **pattern(store,store.refs['q'],codec))

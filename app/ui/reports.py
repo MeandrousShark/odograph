@@ -34,6 +34,7 @@ from app.ui._common import (
     TRIP_COLUMNS,
     _parse_range_query_dates,
     _parse_vehicle_id,
+    _place_param,
     _trip_filter_sql,
     parse_date_range,
 )
@@ -176,13 +177,14 @@ def register(router: APIRouter) -> None:
             vehicle: str = Query(""),
             q: str = Query(""),
             exclusion: str = Query(""),
+            place: str = Query(""),
         ):
             exclusion = exclusion if isinstance(exclusion, str) else ""
             if format not in EXPORT_MEDIA_TYPES:
                 raise HTTPException(status_code=400, detail="format must be csv or xlsx")
             from app.export_preparation import prepare_export
             return await prepare_export(request, user, format, category, from_, to,
-                                        vehicle, q, exclusion)
+                                        vehicle, q, exclusion, _place_param(place))
 
         @router.get("/report")
         async def report_redirect(request: Request, user: dict = Depends(require_user)):

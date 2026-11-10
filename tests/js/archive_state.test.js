@@ -283,6 +283,31 @@ test("the serializer is stable for the same filter state", () => {
   assert.strictEqual(ArchiveState.sameFilters(applied, ArchiveState.serializeFilters(build(""))), false);
 });
 
+test("archive queries carry the place filter through apply and state restore", () => {
+  const pairs = [
+    ["q", ""], ["category", ""], ["date_preset", "this_year"],
+    ["from", "2026-01-01"], ["to", "2026-12-31"], ["vehicle", "3"],
+    ["exclusion", ""], ["place", "12"],
+  ];
+  assert.strictEqual(
+    ArchiveState.archiveFilterQuery(pairs),
+    "from=2026-01-01&to=2026-12-31&vehicle=3&place=12",
+  );
+  assert.strictEqual(
+    ArchiveState.archiveFilterQuery(pairs, { transientPreset: true }),
+    "date_preset=this_year&vehicle=3&place=12",
+  );
+  const restored = ArchiveState.archiveStateQuery({
+    q: "", category: "", from: "2026-01-01", to: "2026-12-31",
+    vehicle: "3", exclusion: "", place: "12",
+  });
+  assert.strictEqual(ArchiveState.sameFilters(restored, ArchiveState.archiveFilterQuery(pairs)), true);
+  assert.strictEqual(
+    ArchiveState.archiveStateQuery({ from: "2026-01-01", to: "2026-12-31", vehicle: "3", place: "" }),
+    "from=2026-01-01&to=2026-12-31&vehicle=3",
+  );
+});
+
 test("canonical archive queries keep resolved bounds and drop the applied preset", () => {
   const pairs = [
     ["q", "drive"],

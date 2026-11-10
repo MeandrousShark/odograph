@@ -105,6 +105,25 @@ def _parse_vehicle_id(vehicle: str) -> int | None | Literal["none"]:
         return None
 
 
+def _parse_place_id(place: object) -> int | None:
+    """The archive `place` filter, as forgiving as `_parse_vehicle_id`:
+    junk is no filter rather than a 400. A non-string is a route called
+    directly without the parameter."""
+    if not isinstance(place, str) or not place:
+        return None
+    try:
+        return int(place)
+    except ValueError:
+        return None
+
+
+def _place_param(place: object) -> str:
+    """The `place` value links carry: the parsed id, or empty for none, so
+    junk that filters nothing is not carried on as if it were a filter."""
+    place_id = _parse_place_id(place)
+    return "" if place_id is None else str(place_id)
+
+
 def _parse_vehicle_form(vehicle_id: str) -> int | None:
     """Form-field counterpart of `_parse_vehicle_id`: empty means "no
     vehicle" (NULL), but junk in a POSTed field is a 400 rather than being
@@ -119,7 +138,8 @@ def _parse_vehicle_form(vehicle_id: str) -> int | None:
 
 
 def _url_with_filters(
-    path: str, from_str: str, to_str: str, vehicle_str: str, q_str: str = "", **leading
+    path: str, from_str: str, to_str: str, vehicle_str: str, q_str: str = "",
+    place_str: str = "", **leading
 ) -> str:
     """One query-string builder for every link that carries the current
     filter set, so the views can't drift on param names or ordering.
@@ -140,6 +160,8 @@ def _url_with_filters(
     term = q_str.strip()
     if term:
         params["q"] = term
+    if place_str:
+        params["place"] = place_str
     return f"{path}?{urlencode(params)}" if params else path
 
 
@@ -153,9 +175,10 @@ def _month_page_url(
     vehicle: str,
     q: str = "",
     exclusion: str = "",
+    place: str = "",
 ) -> str:
     return _url_with_filters(
-        f"/trips/month/{year}/{month}", from_str, to_str, vehicle, q,
+        f"/trips/month/{year}/{month}", from_str, to_str, vehicle, q, place,
         offset=offset, category=category, exclusion=exclusion,
     )
 

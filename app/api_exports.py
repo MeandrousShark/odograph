@@ -27,6 +27,8 @@ XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.s
 RANGE_REVERSED = "End the range on or after its start."
 RANGE_CROSSES_YEAR = "Keep the range within one calendar year."
 _YEAR = re.compile(r"[0-9]{4}")
+_PLACE_ID = re.compile(r"[1-9][0-9]{0,18}")
+_MAX_ID = 2**63 - 1
 
 
 def _responses(*media_types: str) -> dict:
@@ -39,6 +41,16 @@ def _responses(*media_types: str) -> dict:
 
 def _day(field: str, value: str | None) -> date | None:
     return None if value is None else api_day(field, value)
+
+
+def _place(value: str | None) -> str:
+    """A place id, refused when malformed like `vehicle`. An id outside the
+    account is well formed and exports no trips."""
+    if value is None:
+        return ""
+    if not _PLACE_ID.fullmatch(value) or int(value) > _MAX_ID:
+        raise invalid_field("place")
+    return value
 
 
 async def _prepared(preparation):
@@ -64,18 +76,20 @@ def make_router() -> APIRouter:
         to: str | None = Query(None),
         vehicle: str | None = Query(None),
         q: str | None = Query(None),
+        place: str | None = Query(None),
         exclusion: Literal["not_my_vehicle", "not_deductible", "none"] | None = Query(None),
     ):
         _day("from", from_)
         _day("to", to)
         parse_vehicle(vehicle)
         parse_search(q)
+        place_value = _place(place)
         from app.export_preparation import prepare_export
         # The validated values go through as the web's query strings, so the
         # file is the one the web prepares for the same filters.
         return await _prepared(prepare_export(
             request, api_user.user, format, category or "", from_ or "", to or "",
-            vehicle or "", q or "", exclusion or ""))
+            vehicle or "", q or "", exclusion or "", place_value))
 
     # Ahead of "/api/v1/reports/{year}", which would otherwise match "range".
     @router.get("/api/v1/reports/range", response_class=Response, responses=_responses(XLSX_MEDIA_TYPE))

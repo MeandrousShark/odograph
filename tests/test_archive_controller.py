@@ -39,6 +39,7 @@ const values = Object.assign({
   to: "",
   vehicle: "",
   exclusion: "",
+  place: "",
 }, scenario.values || {});
 const state = Object.assign({
   q: values.q,
@@ -48,6 +49,7 @@ const state = Object.assign({
   to: values.to,
   vehicle: values.vehicle,
   exclusion: values.exclusion,
+  place: values.place,
 }, scenario.state || {});
 const location = { href: "/trips" };
 const localStorage = { removed: [], removeItem(key) { this.removed.push(key); } };
@@ -127,7 +129,7 @@ function makeElement(name, options = {}) {
 }
 
 const fields = {};
-for (const name of ["q", "date_preset", "from", "to", "vehicle", "exclusion"]) {
+for (const name of ["q", "date_preset", "from", "to", "vehicle", "exclusion", "place"]) {
   fields[name] = makeElement(name, { value: values[name] });
   fields[name].form = null;
 }
@@ -144,10 +146,20 @@ const dateRange = makeElement("date-range", {
 const secondary = makeElement("secondary", {
   querySelector(selector) { return selector === ".filter-clear" ? null : null; },
 });
+const placeName = makeElement("place-name", { textContent: "Home" });
+const placeChip = makeElement("place-chip", {
+  hidden: !values.place,
+  href: "/trips",
+  closest(selector) {
+    return selector === ".trip-filter-surface [data-archive-place-remove]" ? this : null;
+  },
+  querySelector(selector) { return selector === "[data-archive-place-name]" ? placeName : null; },
+});
 const form = makeElement("filter-form", {
   querySelector(selector) {
     const match = selector.match(/^\[name="([^"]+)"\]/);
     if (match) return fields[match[1]] || null;
+    if (selector === "[data-archive-place-remove]") return placeChip;
     if (selector === "[data-archive-date-preset]") return fields.date_preset;
     if (selector === "[data-custom-date-range]") return dateRange;
     return null;
@@ -651,6 +663,23 @@ function completeCategoryRefresh() {
     result.firstHeaders = firstRefresh.options.headers;
     result.secondHeaders = secondRefresh.options.headers;
     result.busy = window.archiveController.isWriteBusy();
+  } else if (scenario.action === "place-chip-remove") {
+    result.chipHiddenBefore = placeChip.hidden;
+    const event = emit("click", { target: placeChip });
+    result.defaultPrevented = event.defaultPrevented;
+    result.chipHidden = placeChip.hidden;
+    result.placeValue = fields.place.value;
+    result.urls = requests.map((request) => request.url);
+    const restored = Object.assign({}, state, {
+      place: "12", place_name: "Office", place_clear_url: "/trips?vehicle=1",
+    });
+    stateNode.dataset.archiveState = JSON.stringify(restored);
+    emit("htmx:historyRestore", { path: "/trips?vehicle=1&place=12", cacheMiss: false });
+    await settle();
+    result.restored = {
+      chipHidden: placeChip.hidden, placeValue: fields.place.value,
+      name: placeName.textContent, href: placeChip.href,
+    };
   } else if (scenario.action === "history-before-send") {
     const item = beginMutation("/trips/1/tag");
     const historyXhr = xhr();
@@ -1073,6 +1102,18 @@ def test_inline_controller_defers_date_and_vehicle_filter_until_write_refresh():
     assert "vehicle=2" in result["urls"][1]
     assert "loaded_depth=" not in result["urls"][1]
     assert result["busy"] is False
+
+
+def test_place_chip_removes_only_the_place_and_history_restore_brings_it_back():
+    result = _run("place-chip-remove", values={"vehicle": "1", "place": "12"})
+    assert result["chipHiddenBefore"] is False
+    assert result["defaultPrevented"] is True
+    assert result["chipHidden"] is True and result["placeValue"] == ""
+    assert len(result["urls"]) == 1
+    assert "vehicle=1" in result["urls"][0] and "place=" not in result["urls"][0]
+    assert result["restored"] == {
+        "chipHidden": False, "placeValue": "12", "name": "Office", "href": "/trips?vehicle=1",
+    }
 
 
 def test_inline_controller_defers_history_miss_abort_until_after_send():

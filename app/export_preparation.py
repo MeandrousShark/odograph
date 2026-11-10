@@ -68,7 +68,7 @@ def filter_sql(metadata,owner):
     where,params = _trip_filter_sql(metadata['category'],
         datetime.fromisoformat(metadata['from_dt']) if metadata['from_dt'] else None,
         datetime.fromisoformat(metadata['to_dt']) if metadata['to_dt'] else None,
-        metadata['vehicle'],exclusion=metadata['exclusion'],owner_id=owner)
+        metadata['vehicle'],exclusion=metadata['exclusion'],place_id=metadata.get('place'),owner_id=owner)
     if metadata['search']:
         expressions = ('notes','purpose',_START_PLACE_NAME_SQL,_END_PLACE_NAME_SQL,'start_label','end_label',_START_ADDRESS_SQL,_END_ADDRESS_SQL)
         where += ' AND (' + ' OR '.join(f"{value} ILIKE current_setting('{SEARCH_SETTING}') ESCAPE '\\'" for value in expressions) + ')'
@@ -188,7 +188,7 @@ class ExportProjection(Projection):
                     raise RuntimeError('missing export source stream')
 
 
-async def prepare_export(request,user,format='csv',category='',from_='',to='',vehicle='',q='',exclusion=''):
+async def prepare_export(request,user,format='csv',category='',from_='',to='',vehicle='',q='',exclusion='',place=''):
     if format not in ('csv','xlsx'):
         raise HTTPException(status_code=400,detail='format must be csv or xlsx')
     operation = request.state._preparation
@@ -209,7 +209,7 @@ async def prepare_export(request,user,format='csv',category='',from_='',to='',ve
                 raise RuntimeError('account preferences are missing')
             await projection.text(conn,'display_tz',settings['size'],'display_tz','account_settings','account_id=%s',(owner,))
             await projection.timezone_paths()
-            for key,value in (('category',category),('from',from_),('to',to),('vehicle',vehicle),('q',q),('exclusion',exclusion if isinstance(exclusion,str) else '')):
+            for key,value in (('category',category),('from',from_),('to',to),('vehicle',vehicle),('q',q),('exclusion',exclusion if isinstance(exclusion,str) else ''),('place',place if isinstance(place,str) else '')):
                 await projection.literal_text(key,value)
             codec = conn.info.encoding
             metadata = await session.request({'type':'initialize','metadata':{'format':format,'client_codec':'utf8' if codec=='ascii' else codec}})

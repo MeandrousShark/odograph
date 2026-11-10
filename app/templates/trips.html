@@ -40,7 +40,7 @@
   </div>
 </div>
 
-{% set filters_active = filter_category or filter_from or filter_to or filter_vehicle or filter_q or filter_exclusion %}
+{% set filters_active = filter_category or filter_from or filter_to or filter_vehicle or filter_q or filter_exclusion or filter_place %}
 {% set active_date_preset = archive_date_preset | default('all', true) %}
 {# The archive filter surface keeps the high-frequency search and category
    choices together, with compact secondary controls below them. #}
@@ -108,6 +108,14 @@
           {% endfor %}
         </select>
       </label>
+      {# Set from a place page rather than a control here, so it shows as a
+         chip that only removes it. An id outside the account names no place. #}
+      <input type="hidden" name="place" value="{{ filter_place }}">
+      <a class="control control-secondary control-compact trip-filter-place"
+         href="{{ place_clear_url | default('/trips', true) }}"
+         data-archive-place-remove{% if not filter_place %} hidden{% endif %}>
+        <span class="visually-hidden">Remove filter </span>Place: <span data-archive-place-name>{{ filter_place_name or 'Unknown place' }}</span>{{ icon('x') }}
+      </a>
       {% if filters_active %}<a class="control control-secondary filter-clear" href="/trips">Clear</a>{% endif %}
     </div>
     </form>
@@ -135,7 +143,7 @@
     if (!helpers) return;
 
     const SEARCH_DELAY_MS = 350;
-    const FILTER_NAMES = ['q', 'category', 'date_preset', 'from', 'to', 'vehicle', 'exclusion'];
+    const FILTER_NAMES = ['q', 'category', 'date_preset', 'from', 'to', 'vehicle', 'exclusion', 'place'];
     const RESULTS_SELECTOR = '#trip-archive-results';
     // The generation travels with the request instead of through a variable
     // held across the htmx.ajax() call: htmx does not always issue a request
@@ -263,6 +271,16 @@
     const setFieldValue = (form, name, value) => {
       const field = form.querySelector(`[name="${name}"]`);
       if (field) field.value = value;
+    };
+
+    const setPlaceFilter = (form, place, name, clearUrl) => {
+      setFieldValue(form, 'place', place);
+      const chip = form.querySelector('[data-archive-place-remove]');
+      if (!chip) return;
+      chip.hidden = !place;
+      if (clearUrl) chip.href = clearUrl;
+      const label = chip.querySelector('[data-archive-place-name]');
+      if (label) label.textContent = name || 'Unknown place';
     };
 
     const setRadioValue = (form, name, value) => {
@@ -601,6 +619,7 @@
       setFieldValue(form, 'to', '');
       setFieldValue(form, 'vehicle', '');
       setFieldValue(form, 'exclusion', '');
+      setPlaceFilter(form, '', '');
       updateCustomDates();
     };
 
@@ -667,13 +686,16 @@
         setFieldValue(form, 'date_preset', state.date_preset || 'all');
         setFieldValue(form, 'from', state.from || '');
         setFieldValue(form, 'to', state.to || '');
+        setPlaceFilter(form, state.place || '', state.place_name || '', state.place_clear_url);
         updateCustomDates();
       }
       syncClearControl(Boolean(
         state.category || state.from || state.to || state.vehicle || state.q || state.exclusion
+        || state.place
       ));
       syncFilterDisclosure(Boolean(
         state.category || state.from || state.to || state.vehicle || state.q || state.exclusion
+        || state.place
       ));
     };
 
@@ -1054,6 +1076,17 @@
     });
 
     document.addEventListener('click', (event) => {
+      const placeChip = event.target.closest('.trip-filter-surface [data-archive-place-remove]');
+      if (placeChip) {
+        // The href removes the filter without JavaScript; here it goes
+        // through the same in-place flow as every other control.
+        event.preventDefault();
+        const form = filterForm();
+        if (!form) return;
+        setPlaceFilter(form, '', '');
+        applyFilters();
+        return;
+      }
       const clear = event.target.closest('.trip-filter-surface .filter-clear');
       if (clear) {
         // The href keeps Clear working without JavaScript; with the

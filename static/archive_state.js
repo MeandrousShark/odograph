@@ -132,8 +132,8 @@
     const values = new Map(pairs.map((pair) => [pair[0], pair[1]]));
     const transientPreset = Boolean(options && options.transientPreset);
     const names = transientPreset
-      ? ["q", "category", "date_preset", "from", "to", "vehicle", "exclusion"]
-      : ["q", "category", "from", "to", "vehicle", "exclusion"];
+      ? ["q", "category", "date_preset", "from", "to", "vehicle", "exclusion", "place"]
+      : ["q", "category", "from", "to", "vehicle", "exclusion", "place"];
     return serializeFilters(
       names.map((name) => [
         name,
@@ -152,6 +152,7 @@
     ["to", state && state.to],
     ["vehicle", state && state.vehicle],
     ["exclusion", state && state.exclusion],
+    ["place", state && state.place],
   ]);
 
   // A write owns the archive until its applied-view refresh succeeds. Draft
