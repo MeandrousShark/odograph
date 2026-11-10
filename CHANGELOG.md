@@ -22,6 +22,10 @@ reproduced here.
   live at the top of its changelog section; earlier per-version sections
   remain in the
   [v1.4.1 guide](https://github.com/MeandrousShark/odograph/blob/v1.4.1/docs/upgrading.md).
+- A deduction priced with an earlier year's mileage rate, because its own
+  year has none saved, now says so: the dashboard, Trips, Stats, Settings,
+  the report page and workbook, and the monthly summary and filing reminder
+  emails name the year and rate used. No figure changes.
 
 ### Security
 
