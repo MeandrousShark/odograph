@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from app.rates import CarriedRate
 from app.email_digest import (
     EmailDigestWorker,
     _parse_mmdd,
@@ -181,3 +182,43 @@ def test_quarterly_odometer_template_names_vehicles():
     )
     assert "Truck, Sedan (vehicles)" in body
     assert "https://miles.example.com/settings" in body
+
+
+_CARRIED = CarriedRate(year=2027, source_year=2026, rate=0.7250)
+_CARRIED_EMAIL_LINE = (
+    "No 2027 mileage rate is saved. 2027 figures use the 2026 rate of "
+    "$0.7250/mi until you add one. Add it under Settings, Mileage rates."
+)
+
+
+def _monthly(**extra):
+    return _render(
+        "monthly_summary.txt", month_label="Jan 2027", business_mi="1.0",
+        nondeductible_mi="", deduction="$0.73", unclassified=0, report_url="", **extra,
+    )
+
+
+def _filing(**extra):
+    return _render(
+        "filing_reminder.txt", year=2027, business_mi="1.0", nondeductible_mi="",
+        deduction="$0.73", report_url="", export_url="", **extra,
+    )
+
+
+@pytest.mark.parametrize("render", [_monthly, _filing])
+def test_email_templates_print_the_note_on_the_line_after_the_deduction(render):
+    body = render(carried_rate=_CARRIED)
+    lines = body.splitlines()
+    assert lines[lines.index("Deduction: $0.73") + 1] == _CARRIED_EMAIL_LINE
+    assert render(carried_rate=None) == render()
+    assert "mileage rate is saved" not in render()
+
+
+def test_email_templates_without_a_carried_rate_are_unchanged():
+    assert _monthly() == (
+        "Odograph: Jan 2027 summary.\n\nBusiness miles: 1.0\nDeduction: $0.73\n"
+        "Unclassified trips: 0\n"
+    )
+    assert _filing() == (
+        "Odograph: 2027 filing reminder.\n\nBusiness miles: 1.0\nDeduction: $0.73\n"
+    )

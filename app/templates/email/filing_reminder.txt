@@ -4,6 +4,8 @@ Business miles: {{ business_mi }}
 {% if nondeductible_mi %}Non-deductible miles: {{ nondeductible_mi }}
 {% endif %}
 Deduction: {{ deduction }}
+{% if carried_rate %}{{ carried_rate.sentence }} Add it under Settings, Mileage rates.
+{% endif %}
 {% if report_url %}
 Report: {{ report_url }}
 {% endif %}
