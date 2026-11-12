@@ -69,7 +69,8 @@ async def get_account(conn, account_id: int) -> dict | None:
 
 
 async def get_report_account(conn, account_id: int) -> dict | None:
-    """The identity a prepared report needs, without variable-size account data."""
+    """The identity a prepared report or the avatar image needs, without
+    variable-size account data."""
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         "SELECT id, is_admin, is_enabled, auth_version, "

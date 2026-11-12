@@ -52,6 +52,14 @@ def test_account_auth_routes_resolve_and_setup_is_removed():
     assert _first_matching_route("POST", "/setup") is None
 
 
+def test_avatar_image_signs_in_without_the_settings_load():
+    from app.auth import require_report_user
+
+    route = _first_matching_route("GET", "/account/avatar")
+    assert route.protected_dependency() is require_report_user
+    assert route.capacity_lane is None
+
+
 def test_plain_auth_forms_use_hidden_form_csrf_checks():
     routes = {
         route.path: route

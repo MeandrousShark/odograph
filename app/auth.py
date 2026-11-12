@@ -411,7 +411,8 @@ async def require_user(request: Request) -> dict:
 
 
 async def require_report_user(request: Request) -> dict:
-    """Authenticate report identity before admitting variable-size preparation."""
+    """Sign in without the settings load: reports before their
+    variable-size preparation, and the avatar image."""
     return await _require_user(request, report_profile=True)
 
 
@@ -1967,8 +1968,12 @@ def make_router() -> APIRouter:
             user = _account_user(account)
         return await _render_email_challenge(request, user, success="Email address confirmed.")
 
+    # A signed-in page with an avatar set loads this image beside its own
+    # first request.
+    # The report sign-in checks the same identity without the settings load,
+    # whose per-account slot would otherwise refuse that request.
     @router.get("/account/avatar")
-    async def account_avatar(request: Request, user: dict = Depends(require_user)):
+    async def account_avatar(request: Request, user: dict = Depends(require_report_user)):
         async with control_connection(request.app.state.control_pool) as conn:
             avatar = await get_account_avatar(conn, user["id"])
         if avatar is None or avatar["avatar_mime"] is None:
