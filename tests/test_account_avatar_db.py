@@ -301,7 +301,7 @@ def test_avatar_route_does_not_serve_bytes_without_a_session():
         app = _bare_app(pool)
         async with await _client_for(app) as client:
             # No /test/login-as call: this session carries no account_id at
-            # all, so require_user must reject it before the route body ever
+            # all, so the sign-in check must reject it before the route body ever
             # runs.
             response = await client.get("/account/avatar")
         assert response.status_code == 303

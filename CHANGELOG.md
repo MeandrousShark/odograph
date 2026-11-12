@@ -14,11 +14,11 @@ reproduced here.
 - With an avatar picture set, **Places** often opened with "The heatmap
   could not load. Change a control to try again.", or without the header
   avatar: the server refused one of the two as busy because they started
-  together. The avatar no longer competes with the page's own requests,
-  which also fixes a trip archive that restores a deeper **Load more** on
-  reload showing "The trip list could not be updated." The heatmap now
-  sends one request at a time, so quick control changes no longer refuse
-  each other, and waits and tries again when the server is busy. See
+  together. The avatar no longer competes with a page's own requests,
+  including the trip archive's request that restores a deeper **Load
+  more** on reload. The heatmap now sends one request at a time, so quick
+  control changes no longer refuse each other, and waits and tries again
+  when the server is busy. See
   [Known issues](docs/known-issues.md#places-heatmap-could-not-load).
 
 ## [1.5.0] - 2026-11-10

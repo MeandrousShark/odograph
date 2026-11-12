@@ -309,7 +309,6 @@ test("dates out of order show a message without fetching", async () => {
   assert.strictEqual(page.status.textContent, "From must be on or before To.");
 });
 
-
 test("Retry-After is read in whole seconds, 1 s when unusable, never over 2 s", () => {
   assert.strictEqual(PlacesHeat.retryDelay("1"), 1000);
   assert.strictEqual(PlacesHeat.retryDelay(" 2 "), 2000);
