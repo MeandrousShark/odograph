@@ -88,9 +88,30 @@
     vehicle: form.elements.vehicle.value,
   });
 
+  // A busy server answers 503 when the account already has a request under
+  // way, so a short wait and a resend usually succeeds.
+  const BUSY_RETRIES = 2;
+  const RETRY_MAX_MS = 2000;
+  // Requests take turns, so a stalled one would hold "Loading..." up and
+  // every later change behind it.
+  const REQUEST_TIMEOUT_MS = 15000;
+
+  const retryDelay = (header) => {
+    const text = String(header == null ? "" : header).trim();
+    const seconds = /^\d+$/.test(text) ? Number(text) : 0;
+    return seconds > 0 ? Math.min(seconds * 1000, RETRY_MAX_MS) : 1000;
+  };
+
+  // Wrapped so the browser's timers are never called with the wrong `this`.
+  const defaultTimers = {
+    setTimeout: (fn, ms) => setTimeout(fn, ms),
+    clearTimeout: (handle) => clearTimeout(handle),
+  };
+
   // Returns the first load, so tests can await it; the change listener is
-  // that same load function.
-  const init = (doc, L, fetchJson) => {
+  // that same load function. Each returns a promise that settles once no
+  // request is in flight or waiting.
+  const init = (doc, L, fetchJson, timers = defaultTimers) => {
     const root = doc.querySelector("[data-places-heat]");
     if (!root || !L || typeof L.heatLayer !== "function") return null;
     const form = root.querySelector("[data-places-heat-form]");
@@ -114,44 +135,11 @@
       status.classList.toggle("places-heat-status-error", Boolean(failed));
     };
 
-    let controller = null;
-    const load = async () => {
-      const state = readState(form);
-      const timeMode = state.mode === "time";
-      tripFilters.forEach((field) => { field.disabled = timeMode; });
-      timeNote.hidden = !timeMode;
-      if (controller) controller.abort();
-      if (!datesInOrder(state.from, state.to)) {
-        controller = null;
-        layer.setLatLngs([]);
-        showStatus("From must be on or before To.", true);
-        return;
-      }
-      const current = controller = new AbortController();
-      showStatus("Loading...", false);
-      let data;
-      try {
-        const response = await fetchJson(root.dataset.heatUrl + "?" + heatQuery(state), {
-          headers: { Accept: "application/json" },
-          credentials: "same-origin",
-          signal: current.signal,
-        });
-        // An expired session answers with the login page, not JSON.
-        const type = response.headers.get("content-type") || "";
-        if (!response.ok || !type.includes("application/json")) throw new Error("heat request failed");
-        data = await response.json();
-      } catch (error) {
-        if (current.signal.aborted) return;
-        layer.setLatLngs([]);
-        showStatus("The heatmap could not load. Change a control to try again.", true);
-        return;
-      }
-      if (current !== controller) return;
-      controller = null;
-      const points = heatPoints(data, state.mode);
+    const draw = (data, mode) => {
+      const points = heatPoints(data, mode);
       layer.setLatLngs(points);
       if (!points.length) {
-        showStatus(emptyMessage(state.mode), false);
+        showStatus(emptyMessage(mode), false);
         return;
       }
       showStatus("", false);
@@ -161,6 +149,107 @@
       map.fitBounds(L.latLngBounds(points.map(([lat, lon]) => [lat, lon])).pad(0.1), {
         maxZoom: FIT_MAX_ZOOM,
       });
+    };
+
+    // Settles with { data }, { busy, delay } or { failed }, and never rejects.
+    const request = (state) => new Promise((resolve) => {
+      const controller = new AbortController();
+      let done = false;
+      const settle = (outcome) => {
+        if (done) return;
+        done = true;
+        timers.clearTimeout(limit);
+        resolve(outcome);
+      };
+      // Raced rather than left to the abort, which a fetch may not honour.
+      const limit = timers.setTimeout(() => {
+        controller.abort();
+        settle({ failed: true });
+      }, REQUEST_TIMEOUT_MS);
+      (async () => {
+        const response = await fetchJson(root.dataset.heatUrl + "?" + heatQuery(state), {
+          headers: { Accept: "application/json" },
+          credentials: "same-origin",
+          signal: controller.signal,
+        });
+        if (response.status === 503) {
+          return { busy: true, delay: retryDelay(response.headers.get("retry-after")) };
+        }
+        // An expired session answers with the login page, not JSON.
+        const type = response.headers.get("content-type") || "";
+        if (!response.ok || !type.includes("application/json")) return { failed: true };
+        return { data: await response.json() };
+      })().then(settle, () => settle({ failed: true }));
+    });
+
+    // One request at a time: the server refuses a second request from the
+    // same account while the first runs, and an aborted fetch still runs
+    // to completion there. A change made meanwhile waits in `wanted`.
+    let wanted = null;
+    let stale = false;
+    let running = null;
+    let wake = null;
+
+    const pause = (ms) => new Promise((resolve) => {
+      const handle = timers.setTimeout(() => {
+        wake = null;
+        resolve(true);
+      }, ms);
+      wake = () => {
+        timers.clearTimeout(handle);
+        wake = null;
+        resolve(false);
+      };
+    });
+
+    const send = async (state) => {
+      stale = false;
+      for (let attempt = 0; ; attempt += 1) {
+        const outcome = await request(state);
+        if (stale || wanted) return;
+        if (outcome.busy && attempt < BUSY_RETRIES) {
+          if (await pause(outcome.delay)) continue;
+          return;
+        }
+        if (outcome.data === undefined) {
+          layer.setLatLngs([]);
+          showStatus("The heatmap could not load. Change a control to try again.", true);
+          return;
+        }
+        draw(outcome.data, state.mode);
+        return;
+      }
+    };
+
+    const drain = async () => {
+      try {
+        while (wanted) {
+          const state = wanted;
+          wanted = null;
+          await send(state);
+        }
+      } finally {
+        running = null;
+      }
+    };
+
+    const load = () => {
+      const state = readState(form);
+      const timeMode = state.mode === "time";
+      tripFilters.forEach((field) => { field.disabled = timeMode; });
+      timeNote.hidden = !timeMode;
+      if (wake) wake();
+      if (!datesInOrder(state.from, state.to)) {
+        wanted = null;
+        stale = true;
+        layer.setLatLngs([]);
+        showStatus("From must be on or before To.", true);
+        return running || Promise.resolve();
+      }
+      wanted = state;
+      showStatus("Loading...", false);
+      if (!running) running = drain();
+      return running;
     };
 
     form.addEventListener("change", load);
@@ -179,6 +268,9 @@
     scaleWeight,
     heatPoints,
     emptyMessage,
+    BUSY_RETRIES,
+    REQUEST_TIMEOUT_MS,
+    retryDelay,
     init,
   };
 

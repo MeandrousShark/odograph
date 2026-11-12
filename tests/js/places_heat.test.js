@@ -163,9 +163,79 @@ function makePage({ mode = "visits", from = "2026-01-01", to = "2026-03-31" } = 
   return { doc, L, form, elements, status, timeNote, listeners, calls };
 }
 
-function jsonResponse(body, { ok = true, type = "application/json" } = {}) {
-  return { ok, headers: { get: () => type }, json: async () => body };
+function jsonResponse(body, { ok = true, status = ok ? 200 : 500, type = "application/json", retryAfter } = {}) {
+  const headers = { "content-type": type };
+  if (retryAfter !== undefined) headers["retry-after"] = retryAfter;
+  return {
+    ok,
+    status,
+    headers: { get: (name) => (name.toLowerCase() in headers ? headers[name.toLowerCase()] : null) },
+    json: async () => body,
+  };
 }
+
+// What the server sends when the account already has a request under way.
+function busyResponse(retryAfter = "1") {
+  return jsonResponse(
+    { ok: false, error: "capacity_busy", detail: "The server is busy. Please try again." },
+    { ok: false, status: 503, retryAfter }
+  );
+}
+
+const CELLS = { cells: [[37.5, -122.25, 2]], max: 2 };
+const DRAWN = [[37.5, -122.25, 1]];
+
+// Lets every pending promise callback run.
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+// A clock the test moves by hand.
+function fakeTimers() {
+  let now = 0;
+  let next = 1;
+  const active = new Map();
+  return {
+    setTimeout(fn, ms) {
+      const id = next++;
+      active.set(id, { fn, at: now + ms, ms });
+      return id;
+    },
+    clearTimeout(id) { active.delete(id); },
+    // Waits before a resend, leaving out each request's time limit.
+    retryWaits() {
+      return [...active.values()].map((timer) => timer.ms)
+        .filter((ms) => ms !== PlacesHeat.REQUEST_TIMEOUT_MS);
+    },
+    count() { return active.size; },
+    async advance(ms) {
+      const end = now + ms;
+      for (;;) {
+        await flush();
+        const due = [...active.entries()]
+          .filter(([, timer]) => timer.at <= end)
+          .sort((a, b) => a[1].at - b[1].at)[0];
+        if (!due) break;
+        active.delete(due[0]);
+        now = due[1].at;
+        due[1].fn();
+      }
+      now = end;
+      await flush();
+    },
+  };
+}
+
+// A fetch whose answers the test hands out one by one.
+function queuedFetch() {
+  const calls = [];
+  const fetchJson = (url, options) => new Promise((resolve, reject) => {
+    calls.push({ url, options, resolve, reject });
+  });
+  return { calls, fetchJson };
+}
+
+const DEFAULT_URL = "/places/heat?mode=visits&from=2026-01-01&to=2026-03-31&category=business&vehicle=4";
+const TIME_URL = "/places/heat?mode=time&from=2026-01-01&to=2026-03-31";
+const FAILED = /could not load/;
 
 test("init fetches the default view and draws and fits its cells", async () => {
   const page = makePage();
@@ -239,33 +309,277 @@ test("dates out of order show a message without fetching", async () => {
   assert.strictEqual(page.status.textContent, "From must be on or before To.");
 });
 
-test("an older response that lands after a newer request is dropped", async () => {
-  const page = makePage();
-  const pending = [];
-  const fetchJson = (url, options) => new Promise((resolve, reject) => {
-    pending.push({ resolve, url });
-    options.signal.addEventListener("abort", () => reject(new Error("aborted")));
-  });
-  const first = PlacesHeat.init(page.doc, page.L, fetchJson);
-  page.form.mode = "time";
-  const second = page.listeners.change();
-  pending[0].resolve(jsonResponse({ cells: [[1, 2, 5]], max: 5 }));
-  pending[1].resolve(jsonResponse({ cells: [[3, 4, 60]], max: 60 }));
-  await Promise.all([first, second]);
-  assert.deepStrictEqual(page.calls.latLngs, [[[3, 4, 1]]]);
-  assert.doesNotMatch(page.status.textContent, /could not load/);
+
+test("Retry-After is read in whole seconds, 1 s when unusable, never over 2 s", () => {
+  assert.strictEqual(PlacesHeat.retryDelay("1"), 1000);
+  assert.strictEqual(PlacesHeat.retryDelay(" 2 "), 2000);
+  assert.strictEqual(PlacesHeat.retryDelay("120"), 2000);
+  for (const unusable of [null, undefined, "", "0", "-1", "1.5", "soon", "Wed, 21 Oct 2026 07:28:00 GMT"]) {
+    assert.strictEqual(PlacesHeat.retryDelay(unusable), 1000, String(unusable));
+  }
 });
 
-test("an older response is dropped even if the fetch ignores its abort", async () => {
+test("a control change during a request waits for it and drops its answer", async () => {
   const page = makePage();
-  const pending = [];
-  const fetchJson = () => new Promise((resolve) => { pending.push(resolve); });
-  const first = PlacesHeat.init(page.doc, page.L, fetchJson);
+  const timers = fakeTimers();
+  const { calls, fetchJson } = queuedFetch();
+  const first = PlacesHeat.init(page.doc, page.L, fetchJson, timers);
   page.form.mode = "time";
   const second = page.listeners.change();
-  pending[1](jsonResponse({ cells: [[3, 4, 60]], max: 60 }));
-  await second;
-  pending[0](jsonResponse({ cells: [[1, 2, 5]], max: 5 }));
-  await first;
+  await flush();
+  assert.strictEqual(calls.length, 1, "the second request went out while the first ran");
+  assert.strictEqual(calls[0].options.signal.aborted, false);
+  assert.strictEqual(page.status.textContent, "Loading...");
+
+  calls[0].resolve(jsonResponse({ cells: [[1, 2, 5]], max: 5 }));
+  await flush();
+  assert.deepStrictEqual(page.calls.latLngs, []);
+  assert.deepStrictEqual(calls.map((call) => call.url), [DEFAULT_URL, TIME_URL]);
+
+  calls[1].resolve(jsonResponse({ cells: [[3, 4, 60]], max: 60 }));
+  await Promise.all([first, second]);
   assert.deepStrictEqual(page.calls.latLngs, [[[3, 4, 1]]]);
+  assert.strictEqual(page.status.hidden, true);
+  assert.strictEqual(timers.count(), 0);
+});
+
+test("several changes during one request send only the newest once it settles", async () => {
+  const page = makePage();
+  const timers = fakeTimers();
+  const { calls, fetchJson } = queuedFetch();
+  const first = PlacesHeat.init(page.doc, page.L, fetchJson, timers);
+  page.form.mode = "time";
+  page.listeners.change();
+  page.form.mode = "visits";
+  page.elements.category.value = "personal";
+  const last = page.listeners.change();
+  await flush();
+  assert.strictEqual(calls.length, 1);
+
+  calls[0].resolve(jsonResponse(CELLS));
+  await flush();
+  assert.strictEqual(calls.length, 2);
+  assert.match(calls[1].url, /mode=visits&.*category=personal/);
+  calls[1].resolve(jsonResponse({ cells: [[3, 4, 60]], max: 60 }));
+  await Promise.all([first, last]);
+  assert.strictEqual(calls.length, 2);
+  assert.deepStrictEqual(page.calls.latLngs, [[[3, 4, 1]]]);
+});
+
+test("a busy answer is sent again after its Retry-After, with Loading... kept up", async () => {
+  const page = makePage();
+  const timers = fakeTimers();
+  const { calls, fetchJson } = queuedFetch();
+  const loaded = PlacesHeat.init(page.doc, page.L, fetchJson, timers);
+  calls[0].resolve(busyResponse("1"));
+  await flush();
+  assert.deepStrictEqual(timers.retryWaits(), [1000]);
+  assert.strictEqual(page.status.textContent, "Loading...");
+  assert.strictEqual(page.status.classList.has("places-heat-status-error"), false);
+
+  await timers.advance(999);
+  assert.strictEqual(calls.length, 1);
+  await timers.advance(1);
+  assert.strictEqual(calls.length, 2);
+  assert.strictEqual(calls[1].url, DEFAULT_URL);
+  assert.strictEqual(page.status.textContent, "Loading...");
+
+  calls[1].resolve(jsonResponse(CELLS));
+  await loaded;
+  assert.deepStrictEqual(page.calls.latLngs, [DRAWN]);
+  assert.strictEqual(page.status.hidden, true);
+  assert.strictEqual(timers.count(), 0);
+});
+
+test("three busy answers in a row show the failure message", async () => {
+  const page = makePage();
+  const timers = fakeTimers();
+  const { calls, fetchJson } = queuedFetch();
+  const loaded = PlacesHeat.init(page.doc, page.L, fetchJson, timers);
+  for (let attempt = 0; attempt < PlacesHeat.BUSY_RETRIES; attempt += 1) {
+    calls[attempt].resolve(busyResponse("1"));
+    await timers.advance(1000);
+  }
+  assert.strictEqual(calls.length, 3);
+  calls[2].resolve(busyResponse("1"));
+  await loaded;
+  await timers.advance(5000);
+  assert.strictEqual(calls.length, 3);
+  assert.match(page.status.textContent, FAILED);
+  assert.strictEqual(page.status.classList.has("places-heat-status-error"), true);
+  assert.deepStrictEqual(page.calls.latLngs, [[]]);
+  assert.strictEqual(timers.count(), 0);
+});
+
+test("a long, zero, missing or invalid Retry-After waits 2 s at most and 1 s otherwise", async () => {
+  for (const [retryAfter, wait] of [["120", 2000], ["2", 2000], ["0", 1000], [undefined, 1000], ["later", 1000]]) {
+    const page = makePage();
+    const timers = fakeTimers();
+    const { calls, fetchJson } = queuedFetch();
+    const loaded = PlacesHeat.init(page.doc, page.L, fetchJson, timers);
+    calls[0].resolve(busyResponse(retryAfter));
+    await flush();
+    assert.deepStrictEqual(timers.retryWaits(), [wait], String(retryAfter));
+    await timers.advance(wait - 1);
+    assert.strictEqual(calls.length, 1, String(retryAfter));
+    await timers.advance(1);
+    assert.strictEqual(calls.length, 2, String(retryAfter));
+    calls[1].resolve(jsonResponse(CELLS));
+    await loaded;
+  }
+});
+
+test("a control change during the wait cancels it and sends the new state instead", async () => {
+  const page = makePage();
+  const timers = fakeTimers();
+  const { calls, fetchJson } = queuedFetch();
+  const first = PlacesHeat.init(page.doc, page.L, fetchJson, timers);
+  calls[0].resolve(busyResponse("2"));
+  await flush();
+  assert.deepStrictEqual(timers.retryWaits(), [2000]);
+
+  page.form.mode = "time";
+  const second = page.listeners.change();
+  await flush();
+  assert.deepStrictEqual(timers.retryWaits(), []);
+  assert.deepStrictEqual(calls.map((call) => call.url), [DEFAULT_URL, TIME_URL]);
+
+  await timers.advance(5000);
+  assert.strictEqual(calls.length, 2, "the cancelled wait still resent the old state");
+  calls[1].resolve(jsonResponse({ cells: [[3, 4, 60]], max: 60 }));
+  await Promise.all([first, second]);
+  assert.deepStrictEqual(page.calls.latLngs, [[[3, 4, 1]]]);
+});
+
+test("a failed request with a newer state waiting is dropped without a message or retry", async () => {
+  for (const settle of [
+    (call) => call.resolve(busyResponse("1")),
+    (call) => call.resolve(jsonResponse({}, { ok: false })),
+    (call) => call.reject(new Error("offline")),
+  ]) {
+    const page = makePage();
+    const timers = fakeTimers();
+    const { calls, fetchJson } = queuedFetch();
+    const first = PlacesHeat.init(page.doc, page.L, fetchJson, timers);
+    page.form.mode = "time";
+    const second = page.listeners.change();
+    settle(calls[0]);
+    await flush();
+    assert.doesNotMatch(page.status.textContent, FAILED);
+    assert.deepStrictEqual(page.calls.latLngs, []);
+    assert.deepStrictEqual(timers.retryWaits(), []);
+    assert.deepStrictEqual(calls.map((call) => call.url), [DEFAULT_URL, TIME_URL]);
+    calls[1].resolve(jsonResponse({ cells: [[3, 4, 60]], max: 60 }));
+    await Promise.all([first, second]);
+    assert.deepStrictEqual(page.calls.latLngs, [[[3, 4, 1]]]);
+  }
+});
+
+test("dates going out of order mid-request drop its answer and keep the message", async () => {
+  const page = makePage();
+  const timers = fakeTimers();
+  const { calls, fetchJson } = queuedFetch();
+  const first = PlacesHeat.init(page.doc, page.L, fetchJson, timers);
+  page.elements.from.value = "2026-04-01";
+  const second = page.listeners.change();
+  assert.strictEqual(page.status.textContent, "From must be on or before To.");
+
+  calls[0].resolve(jsonResponse(CELLS));
+  await Promise.all([first, second]);
+  assert.strictEqual(calls.length, 1);
+  assert.deepStrictEqual(page.calls.latLngs, [[]]);
+  assert.strictEqual(page.status.textContent, "From must be on or before To.");
+  assert.strictEqual(timers.count(), 0);
+});
+
+test("dates going out of order during the wait cancel the resend", async () => {
+  const page = makePage();
+  const timers = fakeTimers();
+  const { calls, fetchJson } = queuedFetch();
+  const first = PlacesHeat.init(page.doc, page.L, fetchJson, timers);
+  calls[0].resolve(busyResponse("1"));
+  await flush();
+  page.elements.from.value = "2026-04-01";
+  page.listeners.change();
+  await first;
+  await timers.advance(5000);
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(page.status.textContent, "From must be on or before To.");
+  assert.strictEqual(timers.count(), 0);
+});
+
+test("dates put back in order mid-request still wait for that request", async () => {
+  const page = makePage();
+  const timers = fakeTimers();
+  const { calls, fetchJson } = queuedFetch();
+  const first = PlacesHeat.init(page.doc, page.L, fetchJson, timers);
+  page.elements.from.value = "2026-04-01";
+  page.listeners.change();
+  page.elements.from.value = "2026-02-01";
+  const last = page.listeners.change();
+  await flush();
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(page.status.textContent, "Loading...");
+
+  calls[0].resolve(jsonResponse({ cells: [[1, 2, 5]], max: 5 }));
+  await flush();
+  assert.strictEqual(calls.length, 2);
+  assert.match(calls[1].url, /from=2026-02-01/);
+  calls[1].resolve(jsonResponse(CELLS));
+  await Promise.all([first, last]);
+  assert.deepStrictEqual(page.calls.latLngs, [[], DRAWN]);
+});
+
+test("a request with no answer after 15 s is abandoned and treated as failed", async () => {
+  const page = makePage();
+  const timers = fakeTimers();
+  const { calls, fetchJson } = queuedFetch();
+  const loaded = PlacesHeat.init(page.doc, page.L, fetchJson, timers);
+  await timers.advance(PlacesHeat.REQUEST_TIMEOUT_MS - 1);
+  assert.strictEqual(page.status.textContent, "Loading...");
+  await timers.advance(1);
+  await loaded;
+  assert.strictEqual(calls[0].options.signal.aborted, true);
+  assert.match(page.status.textContent, FAILED);
+  assert.deepStrictEqual(page.calls.latLngs, [[]]);
+
+  // A late answer is not drawn, and the next change is not held up.
+  calls[0].resolve(jsonResponse(CELLS));
+  await flush();
+  assert.deepStrictEqual(page.calls.latLngs, [[]]);
+  page.form.mode = "time";
+  const next = page.listeners.change();
+  assert.strictEqual(calls.length, 2);
+  calls[1].resolve(jsonResponse({ cells: [[3, 4, 60]], max: 60 }));
+  await next;
+  assert.deepStrictEqual(page.calls.latLngs.at(-1), [[3, 4, 1]]);
+});
+
+test("a stalled body read also hits the 15 s limit", async () => {
+  const page = makePage();
+  const timers = fakeTimers();
+  const stalled = { ok: true, status: 200, headers: { get: () => "application/json" }, json: () => new Promise(() => {}) };
+  const loaded = PlacesHeat.init(page.doc, page.L, async () => stalled, timers);
+  await timers.advance(PlacesHeat.REQUEST_TIMEOUT_MS);
+  await loaded;
+  assert.match(page.status.textContent, FAILED);
+});
+
+test("the sign-in page or another failure answering is not retried", async () => {
+  for (const response of [
+    jsonResponse("<html>login</html>", { type: "text/html; charset=utf-8" }),
+    jsonResponse({}, { ok: false, status: 500, retryAfter: "1" }),
+    jsonResponse("<html>busy</html>", { ok: false, status: 502, type: "text/html" }),
+  ]) {
+    const page = makePage();
+    const timers = fakeTimers();
+    const { calls, fetchJson } = queuedFetch();
+    const loaded = PlacesHeat.init(page.doc, page.L, fetchJson, timers);
+    calls[0].resolve(response);
+    await loaded;
+    await timers.advance(5000);
+    assert.strictEqual(calls.length, 1);
+    assert.match(page.status.textContent, FAILED);
+    assert.strictEqual(timers.count(), 0);
+  }
 });
