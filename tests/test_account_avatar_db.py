@@ -343,6 +343,62 @@ def test_avatar_route_serves_stored_bytes_and_revalidates_via_etag():
     _scenario(run)
 
 
+@pytest.mark.parametrize("change", [
+    "UPDATE accounts SET is_enabled = false WHERE id = 1",
+    "UPDATE accounts SET auth_version = auth_version + 1 WHERE id = 1",
+])
+def test_avatar_route_refuses_a_disabled_or_signed_out_session(change):
+    async def run(pool):
+        async with pool.connection() as conn:
+            await _insert_account(conn)
+            await _set_avatar(conn, 1)
+
+        app = _bare_app(pool)
+        async with await _client_for(app) as client:
+            await client.get("/test/login-as/1/1")
+            assert (await client.get("/account/avatar")).status_code == 200
+            async with pool.connection() as conn:
+                await conn.execute(change)
+            response = await client.get("/account/avatar")
+            assert response.status_code == 303
+            assert response.headers["location"] == "/login"
+            assert AVATAR_BYTES not in response.content
+            # The refused session is cleared, so restoring the account does
+            # not bring it back.
+            async with pool.connection() as conn:
+                await conn.execute(
+                    "UPDATE accounts SET is_enabled = true, auth_version = 1 WHERE id = 1"
+                )
+            again = await client.get("/account/avatar")
+            assert again.status_code == 303
+            assert AVATAR_BYTES not in again.content
+
+    _scenario(run)
+
+
+def test_avatar_route_refuses_a_page_signed_in_as_another_account():
+    async def run(pool):
+        async with pool.connection() as conn:
+            await _insert_account(conn)
+            await _set_avatar(conn, 1)
+
+        app = _bare_app(pool)
+        async with await _client_for(app) as client:
+            await client.get("/test/login-as/1/1")
+            response = await client.get(
+                "/account/avatar", headers={"X-Odograph-Account": "2"}
+            )
+            assert response.status_code == 409
+            assert AVATAR_BYTES not in response.content
+            same = await client.get(
+                "/account/avatar", headers={"X-Odograph-Account": "1"}
+            )
+            assert same.status_code == 200
+            assert same.content == AVATAR_BYTES
+
+    _scenario(run)
+
+
 def test_sub_second_avatar_writes_produce_distinct_etag_and_version():
     async def run(pool):
         async with pool.connection() as conn:
