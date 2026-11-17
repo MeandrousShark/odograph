@@ -274,3 +274,219 @@ def test_snap_worker_picks_up_each_requeued_trip(command_env):
         return picked
 
     assert sorted(_run(drain)) == sorted(ids[name] for name in ("split_a", "split_a2", "split_b"))
+
+
+# ---- --declined: clear snapped distances the snap ceiling now declines ----
+
+async def _snapped(conn, device, raw, snapped, *, has_gap=False, source="detected",
+                   status="low_confidence", category="unclassified",
+                   started_at="2026-03-01 17:00:00+00"):
+    cur = await conn.execute(
+        "INSERT INTO trips(account_id,tracking_device_id,device,source,started_at,ended_at,"
+        " distance_m,point_count,detector_version,snap_status,snap_attempted_at,path_snapped,"
+        " distance_snapped_m,snapped_at,has_gap,category,updated_at) "
+        "VALUES(%s,%s,'phone',%s,%s::timestamptz,%s::timestamptz + interval '10 minutes',%s,10,2,"
+        " %s::snap_state,now(),ST_GeomFromText(%s,4326),%s,now(),%s,%s::trip_category,"
+        " '2026-03-02 00:00:00+00') RETURNING id",
+        (account_id(conn), device, source, started_at, started_at, raw, status, SINGLE,
+         snapped, has_gap, category))
+    return (await cur.fetchone())[0]
+
+
+async def _declined_fixture(raw):
+    pool = await reset_account_db(raw)
+    other_pool = await add_test_account(raw, OTHER)
+    ids = {}
+    async with pool.connection() as conn:
+        a = await seed_tracking_device(conn, "a")
+        b = await seed_tracking_device(conn, "b")
+        await _points(conn, a)
+        await _points(conn, b)
+        ids["over"] = await _snapped(conn, a, 1125, 4516, category="business",
+                                     started_at="2026-03-01 05:00:00+00")
+        ids["over_ok"] = await _snapped(conn, a, 1000, 1600, status="ok")
+        ids["over_b"] = await _snapped(conn, b, 1000, 1700)
+        ids["at"] = await _snapped(conn, a, 1000, 1500)
+        ids["under"] = await _snapped(conn, a, 1000, 1400)
+        ids["gap"] = await _snapped(conn, a, 1000, 1600, has_gap=True)
+        ids["zero_raw"] = await _snapped(conn, a, 0, 500, status="ok")
+        ids["manual"] = await _snapped(conn, a, 1000, 1600, source="manual", status="ok")
+        ids["no_snap"] = await _snapped(conn, a, 1000, None)
+    async with other_pool.connection() as conn:
+        c = await seed_tracking_device(conn, "c")
+        await _points(conn, c)
+        ids["foreign"] = await _snapped(conn, c, 1000, 1600)
+    async with raw.connection() as conn:
+        await conn.execute("UPDATE account_settings SET display_tz='America/Los_Angeles' "
+                           "WHERE account_id=%s", (OWNER,))
+    return ids, a, b
+
+
+async def _declined_state(raw):
+    async with raw.connection() as conn:
+        cur = await conn.execute(
+            "SELECT id, snap_status::text, path_snapped IS NOT NULL, distance_snapped_m,"
+            " updated_at FROM trips ORDER BY id")
+        return {row[0]: row[1:] for row in await cur.fetchall()}
+
+
+def _cleared(before, after):
+    status, has_path, snapped, updated = after
+    return (status, has_path, snapped, updated) == ("low_confidence", True, None, before[3])
+
+
+def _csv(out):
+    return out.strip().splitlines()
+
+
+HEADER = "trip_id,local_start_date,category,distance_m,distance_snapped_m"
+
+
+def test_declined_clears_only_trips_above_the_ceiling_and_lists_them(command_env, capsys):
+    ids, a, b = _run(_declined_fixture)
+    before = _run(_declined_state)
+    assert resnap.main(["--account", str(OWNER), "--declined"]) == 0
+    captured = capsys.readouterr()
+    assert _csv(captured.out) == [
+        HEADER,
+        # Local start date in the account's display time zone, not UTC.
+        f"{ids['over']},2026-02-28,business,1125,4516",
+        f"{ids['over_ok']},2026-03-01,unclassified,1000,1600",
+        f"{ids['over_b']},2026-03-01,unclassified,1000,1700",
+    ]
+    assert captured.err.strip() == f"account {OWNER}: 3 trips cleared"
+    after = _run(_declined_state)
+    for name in ("over", "over_ok", "over_b"):
+        assert _cleared(before[ids[name]], after[ids[name]]), name
+    for name in ("at", "under", "gap", "zero_raw", "manual", "no_snap", "foreign"):
+        assert after[ids[name]] == before[ids[name]], name
+    # A repeat finds nothing and changes nothing.
+    assert resnap.main(["--account", str(OWNER), "--declined"]) == 0
+    captured = capsys.readouterr()
+    assert _csv(captured.out) == [HEADER]
+    assert captured.err.strip() == f"account {OWNER}: no declined snapped distances to clear"
+    assert _run(_declined_state) == after
+
+
+def test_declined_dry_run_lists_the_same_trips_and_changes_nothing(command_env, capsys):
+    ids, a, b = _run(_declined_fixture)
+    before = _run(_declined_state)
+    assert resnap.main(["--account", str(OWNER), "--declined", "--dry-run"]) == 0
+    dry = capsys.readouterr()
+    assert dry.err.strip() == f"account {OWNER}: 3 trips would be cleared"
+    assert _run(_declined_state) == before
+    assert resnap.main(["--account", str(OWNER), "--declined"]) == 0
+    assert capsys.readouterr().out == dry.out
+
+
+@pytest.mark.parametrize("revoke", [False, True])
+def test_declined_includes_and_accepts_a_disabled_or_revoked_device(command_env, capsys, revoke):
+    async def setup(raw):
+        ids, a, b = await _declined_fixture(raw)
+        await _stop_device(raw, b, revoke=revoke)
+        return ids, a, b
+
+    ids, a, b = _run(setup)
+    before = _run(_declined_state)
+    assert resnap.main(["--account", str(OWNER), "--declined", "--device", str(b)]) == 0
+    captured = capsys.readouterr()
+    assert _csv(captured.out) == [HEADER, f"{ids['over_b']},2026-03-01,unclassified,1000,1700"]
+    assert captured.err.strip() == f"account {OWNER}: 1 trip cleared"
+    after = _run(_declined_state)
+    assert _cleared(before[ids["over_b"]], after[ids["over_b"]])
+    assert after[ids["over"]] == before[ids["over"]]
+    assert resnap.main(["--account", str(OWNER), "--declined"]) == 0
+    assert capsys.readouterr().err.strip() == f"account {OWNER}: 2 trips cleared"
+
+
+def test_declined_refuses_a_disabled_account_and_an_unknown_device(command_env, capsys):
+    async def setup(raw):
+        ids, a, b = await _declined_fixture(raw)
+        async with raw.connection() as conn:
+            await conn.execute("UPDATE accounts SET is_enabled=false WHERE id=%s", (OTHER,))
+            foreign = (await (await conn.execute(
+                "SELECT id FROM tracking_devices WHERE account_id=%s", (OTHER,))).fetchone())[0]
+        return foreign
+
+    foreign_device = _run(setup)
+    before = _run(_declined_state)
+    assert resnap.main(["--account", str(OTHER), "--declined"]) == 1
+    captured = capsys.readouterr()
+    assert "That account is disabled" in captured.err and captured.out == ""
+    for device in ("777", str(foreign_device)):
+        assert resnap.main(["--account", str(OWNER), "--declined", "--device", device]) == 1
+        captured = capsys.readouterr()
+        assert "No tracking device has that ID for this account." in captured.err
+        assert captured.out == ""
+    assert _run(_declined_state) == before
+
+
+def test_declined_failure_is_reported_without_detail_and_changes_nothing(command_env, capsys):
+    _run(_declined_fixture)
+    before = _run(_declined_state)
+    real = resnap.external_account_work
+
+    @asynccontextmanager
+    async def with_refusing_trigger(control, owner):
+        async with real(control, owner):
+            with psycopg.connect(TEST_DB, autocommit=True) as admin:
+                admin.execute(
+                    "CREATE FUNCTION public.refuse_resnap() RETURNS trigger LANGUAGE plpgsql AS "
+                    "$$ BEGIN RAISE EXCEPTION 'synthetic failure with private detail'; END $$")
+                admin.execute("CREATE TRIGGER refuse_resnap BEFORE UPDATE ON trips "
+                              "FOR EACH ROW EXECUTE FUNCTION public.refuse_resnap()")
+            try:
+                yield
+            finally:
+                with psycopg.connect(TEST_DB, autocommit=True) as admin:
+                    admin.execute("DROP TRIGGER IF EXISTS refuse_resnap ON trips")
+                    admin.execute("DROP FUNCTION IF EXISTS public.refuse_resnap()")
+
+    command_env.setattr(resnap, "external_account_work", with_refusing_trigger)
+    assert resnap.main(["--account", str(OWNER), "--declined"]) == 1
+    captured = capsys.readouterr()
+    assert captured.err.strip() == "error: clearing failed (RaiseException); nothing was changed"
+    assert captured.out == ""
+    assert _run(_declined_state) == before
+
+
+# (raw, snapped, has_gap) on both sides of the ceiling, at it, at zero raw
+# and on gap trips, all at or above the coverage floor so a snapped distance
+# could have been stored.
+_PARITY_ROWS = [
+    (1000, 850, False), (1000, 1000, False), (1000, 1499, False), (1000, 1500, False),
+    (1000, 1501, False), (1000, 4000, False), (1125, 4516, False), (1000.5, 1500.75, False),
+    (1000.5, 1500.8, False), (999.9, 1500, False), (0, 500, False),
+    (1000, 1500, True), (1000, 1600, True), (1000, 4000, True), (0, 500, True),
+]
+
+
+def test_declined_selects_exactly_what_the_snap_rule_declines(command_env, capsys):
+    from app.snap import parse_match_response
+
+    async def setup(raw):
+        pool = await reset_account_db(raw)
+        ids = {}
+        async with pool.connection() as conn:
+            a = await seed_tracking_device(conn, "a")
+            await _points(conn, a)
+            for row in _PARITY_ROWS:
+                ids[await _snapped(conn, a, row[0], row[1], has_gap=row[2])] = row
+            # Read back as stored, since real columns round what was written.
+            cur = await conn.execute("SELECT id, distance_m, distance_snapped_m FROM trips")
+            stored = {r[0]: (r[1], r[2], ids[r[0]][2]) for r in await cur.fetchall()}
+        return stored
+
+    stored = _run(setup)
+    expected = set()
+    for trip_id, (raw, snapped, has_gap) in stored.items():
+        response = {"code": "Ok", "tracepoints": [{}, {}], "matchings": [{
+            "confidence": 0.0, "distance": snapped,
+            "geometry": {"type": "LineString", "coordinates": [[0, 0], [1, 1]]}}]}
+        result = parse_match_response(response, 0.5, 2, raw, has_gap=has_gap)
+        if result.distance_m is None:
+            expected.add(trip_id)
+    assert expected  # the matrix exercises declines, not only keeps
+    assert resnap.main(["--account", str(OWNER), "--declined", "--dry-run"]) == 0
+    listed = {int(line.split(",")[0]) for line in _csv(capsys.readouterr().out)[1:]}
+    assert listed == expected
