@@ -279,17 +279,17 @@ def test_snap_worker_picks_up_each_requeued_trip(command_env):
 # ---- --declined: clear snapped distances the snap ceiling now declines ----
 
 async def _snapped(conn, device, raw, snapped, *, has_gap=False, source="detected",
-                   status="low_confidence", category="unclassified",
+                   imported=False, status="low_confidence", category="unclassified",
                    started_at="2026-03-01 17:00:00+00"):
     cur = await conn.execute(
         "INSERT INTO trips(account_id,tracking_device_id,device,source,started_at,ended_at,"
         " distance_m,point_count,detector_version,snap_status,snap_attempted_at,path_snapped,"
-        " distance_snapped_m,snapped_at,has_gap,category,updated_at) "
+        " distance_snapped_m,snapped_at,has_gap,category,imported,updated_at) "
         "VALUES(%s,%s,'phone',%s,%s::timestamptz,%s::timestamptz + interval '10 minutes',%s,10,2,"
-        " %s::snap_state,now(),ST_GeomFromText(%s,4326),%s,now(),%s,%s::trip_category,"
+        " %s::snap_state,now(),ST_GeomFromText(%s,4326),%s,now(),%s,%s::trip_category,%s,"
         " '2026-03-02 00:00:00+00') RETURNING id",
         (account_id(conn), device, source, started_at, started_at, raw, status, SINGLE,
-         snapped, has_gap, category))
+         snapped, has_gap, category, imported))
     return (await cur.fetchone())[0]
 
 
@@ -311,6 +311,7 @@ async def _declined_fixture(raw):
         ids["gap"] = await _snapped(conn, a, 1000, 1600, has_gap=True)
         ids["zero_raw"] = await _snapped(conn, a, 0, 500, status="ok")
         ids["manual"] = await _snapped(conn, a, 1000, 1600, source="manual", status="ok")
+        ids["imported"] = await _snapped(conn, a, 1000, 1600, imported=True)
         ids["no_snap"] = await _snapped(conn, a, 1000, None)
     async with other_pool.connection() as conn:
         c = await seed_tracking_device(conn, "c")
@@ -358,7 +359,7 @@ def test_declined_clears_only_trips_above_the_ceiling_and_lists_them(command_env
     after = _run(_declined_state)
     for name in ("over", "over_ok", "over_b"):
         assert _cleared(before[ids[name]], after[ids[name]]), name
-    for name in ("at", "under", "gap", "zero_raw", "manual", "no_snap", "foreign"):
+    for name in ("at", "under", "gap", "zero_raw", "manual", "imported", "no_snap", "foreign"):
         assert after[ids[name]] == before[ids[name]], name
     # A repeat finds nothing and changes nothing.
     assert resnap.main(["--account", str(OWNER), "--declined"]) == 0
@@ -426,7 +427,13 @@ def test_declined_refuses_a_disabled_account_and_an_unknown_device(command_env, 
     before = _run(_declined_state)
     assert resnap.main(["--account", str(OTHER), "--declined"]) == 1
     captured = capsys.readouterr()
-    assert "That account is disabled" in captured.err and captured.out == ""
+    assert captured.err.strip() == (
+        "error: That account is disabled; its snapped distances were not cleared.")
+    assert captured.out == ""
+    # The split mode keeps its own wording.
+    assert resnap.main(["--account", str(OTHER)]) == 1
+    assert capsys.readouterr().err.strip() == (
+        "error: That account is disabled; its trips were not queued.")
     for device in ("777", str(foreign_device)):
         assert resnap.main(["--account", str(OWNER), "--declined", "--device", device]) == 1
         captured = capsys.readouterr()

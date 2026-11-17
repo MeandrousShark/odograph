@@ -92,7 +92,7 @@ _REQUEUE = (
 )
 
 
-async def _principal(pools, owner: int) -> AccountPrincipal:
+async def _principal(pools, owner: int, refused: str) -> AccountPrincipal:
     async with control_connection(pools.control) as conn:
         cur = await conn.execute(
             "SELECT id, is_enabled, auth_version FROM accounts WHERE id = %s", (owner,))
@@ -100,14 +100,14 @@ async def _principal(pools, owner: int) -> AccountPrincipal:
     if row is None:
         raise ValueError("No account has that ID. Run python -m app.manage_account list-accounts to find it.")
     if not row[1]:
-        raise ValueError("That account is disabled; its trips were not queued.")
+        raise ValueError(f"That account is disabled; {refused}.")
     return AccountPrincipal(*row)
 
 
 async def _resnap(cfg: Config, owner: int, device: int | None) -> bool:
     """Return True when the trips were queued."""
     async with application_role_pools(cfg.database_url) as pools:
-        principal = await _principal(pools, owner)
+        principal = await _principal(pools, owner, "its trips were not queued")
         # The shared account work lock blocks account purge while the update
         # runs. A snap result already in flight is discarded by the worker's
         # updated_at generation check, because the requeue sets updated_at = now().
@@ -149,11 +149,11 @@ async def _resnap(cfg: Config, owner: int, device: int | None) -> bool:
 
 
 # app.snap.parse_match_response's ceiling restated on stored columns, so the
-# command clears exactly what a new snap would decline. Gap trips are exempt
-# there, and a zero raw distance never fires it. Status is not tested: the
-# ceiling declines a match whatever its confidence.
+# command clears exactly what a new snap would decline. Imported trips are
+# never snapped, gap trips are exempt, and a zero raw distance never fires it.
+# Status is not tested: the ceiling declines a match whatever its confidence.
 _DECLINED_PREDICATE = (
-    "t.account_id = %s AND t.source = 'detected' AND NOT t.has_gap "
+    "t.account_id = %s AND t.source = 'detected' AND NOT t.imported AND NOT t.has_gap "
     "AND t.distance_snapped_m IS NOT NULL AND t.distance_m > 0 "
     "AND t.distance_snapped_m > %s * t.distance_m"
 )
@@ -171,7 +171,7 @@ _CSV_HEADER = ("trip_id", "local_start_date", "category", "distance_m", "distanc
 async def _clear_declined(cfg: Config, owner: int, device: int | None, dry_run: bool) -> bool:
     """Return True when the declined distances were listed, and cleared unless dry_run."""
     async with application_role_pools(cfg.database_url) as pools:
-        principal = await _principal(pools, owner)
+        principal = await _principal(pools, owner, "its snapped distances were not cleared")
         # Same account work lock as the requeue. Unlike it, updated_at is left
         # alone: the trips are not pending, and updated_at also orders recent
         # purpose suggestions. A snap in flight cannot be pending on a trip
