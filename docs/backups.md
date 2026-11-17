@@ -82,6 +82,10 @@ scripts/restore_database.sh backups/mileage-20260719T030000Z.dump
 docker compose up -d app
 ```
 
+A [minimal Compose installation](install-compose.md#add-these-later) skips
+`verify_image.sh`, since its `compose.yaml` pulls the pinned image, and runs
+`./restore_database.sh`.
+
 The script refuses to run while the app is running or its state is unclear,
 and refuses a database that already holds application data. It checks the
 archive's `.sha256` first, which must sit beside it. It needs free temporary
@@ -117,7 +121,9 @@ for example in a password manager. Without it:
   its `GEOCODE_NOMINATIM_URL`.
 
 If `.env` is gone, run `scripts/generate_env.sh` and put back each setting
-you used ([Configuration reference](configuration.md)). The restored data is
+you used ([Configuration reference](configuration.md)). A minimal install
+has no such script: write `.env` from `.env.example` as its
+[install block](install-compose.md#install) does. The restored data is
 unaffected.
 
 ## Encryption and off-host copies

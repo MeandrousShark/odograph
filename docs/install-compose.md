@@ -1,355 +1,149 @@
 # Minimal Compose installation
 
-If you already manage Docker Compose or podman-compose, you can install
-Odograph using only the `compose.yaml`, `.env.example` and
-`scripts/verify_image.sh` files from one exact release. The recommended path
-remains the [full release checkout](../README.md#quick-start), which also
-provides the guarded secret, backup, restore, test-track, OSRM, and upgrade
-helpers.
+If you already run Compose, you can install Odograph from two release files,
+`compose.yaml` and `.env.example`, instead of the recommended
+[full release checkout](../README.md#quick-start). This route exists from the
+first release that attaches `compose.yaml`; an earlier release keeps its own
+guide at its tag.
 
-Do not mix files from different releases. Use a published exact release tag
-for every download, and never use `main` or a moving image tag for this setup.
-The app image is that exact release tag, verified by digest with
-`verify_image.sh` before it starts.
-Replace `vX.Y.Z` below with the exact release tag you selected.
+## What you need
 
-## Before you start
+- Docker Compose v2, or podman-compose 1.3.0 or newer
+- `curl` and `openssl`
+- A Linux host (AMD64 or ARM64) with about 2 GB of RAM and 5 GB of free disk
+- A domain and a reverse proxy that terminates HTTPS
 
-You need:
+## Install
 
-- A Linux host with Docker Engine and the Compose v2 plugin. Podman with
-  podman-compose 1.3.0 or newer is supported as a substitution.
-- `curl` and Python 3 for writing generated secrets directly to `.env`.
-- [cosign](https://docs.sigstore.dev/cosign/system_config/installation/), which
-  `verify_image.sh` uses to check the release image signature.
-- A dedicated directory that you own, a domain pointing at the host, and a
-  reverse proxy that can terminate HTTPS.
-- About 2 GB of RAM and 5 GB of free disk to start.
-
-The application port is bound to host loopback only. Keep it that way when
-using the shipped `FORWARDED_ALLOW_IPS=*` setting. If your proxy runs on
-another host or in a container, follow the [forwarded-header trust
-guidance](reverse-proxy.md#trusting-forwarded-headers) instead.
-
-## Download the release files
-
-Choose a dedicated directory. Replace `/path/to/odograph` with a directory you
-own, then run:
+Replace `vX.Y.Z` with the release and set `TZ_NAME` to your
+[IANA timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
+first, since the administrator account takes it. Run this where no `odograph`
+directory exists yet:
 
 ```sh
-VERSION=vX.Y.Z
-INSTALL_DIR=/path/to/odograph
-
 (
-    set -e
-    mkdir -p "$INSTALL_DIR"
-    chmod 700 "$INSTALL_DIR"
-    cd "$INSTALL_DIR" || {
-        printf '%s\n' "cannot enter $INSTALL_DIR" >&2
-        exit 1
-    }
-
-    if [ -e compose.yaml ] || [ -L compose.yaml ] ||
-       [ -e .env ] || [ -L .env ]; then
-        printf '%s\n' 'compose.yaml or .env already exists; refusing to overwrite an installation.' >&2
-        exit 1
-    fi
-
+    set -eu
     umask 077
-    compose_tmp=
-    env_tmp=
-    verify_tmp=
-    cleanup() {
-        [ -z "$compose_tmp" ] || rm -f -- "$compose_tmp"
-        [ -z "$env_tmp" ] || rm -f -- "$env_tmp"
-        [ -z "$verify_tmp" ] || rm -f -- "$verify_tmp"
-    }
-    trap cleanup EXIT HUP INT TERM
-
-    compose_tmp="$(mktemp "$INSTALL_DIR/.compose.yaml.download.XXXXXX")"
-    env_tmp="$(mktemp "$INSTALL_DIR/.env.download.XXXXXX")"
-    verify_tmp="$(mktemp "$INSTALL_DIR/.verify_image.download.XXXXXX")"
-    curl -fsSL "https://raw.githubusercontent.com/MeandrousShark/odograph/${VERSION}/compose.yaml" -o "$compose_tmp"
-    curl -fsSL "https://raw.githubusercontent.com/MeandrousShark/odograph/${VERSION}/.env.example" -o "$env_tmp"
-    curl -fsSL "https://raw.githubusercontent.com/MeandrousShark/odograph/${VERSION}/scripts/verify_image.sh" -o "$verify_tmp"
-
-    mv -- "$compose_tmp" compose.yaml
-    mv -- "$env_tmp" .env
-    mv -- "$verify_tmp" verify_image.sh
-    trap - EXIT HUP INT TERM
-    chmod 600 .env
-    chmod 700 verify_image.sh
+    mkdir odograph
+    cd odograph
+    curl -fsSLO https://github.com/MeandrousShark/odograph/releases/download/vX.Y.Z/compose.yaml
+    curl -fsSLO https://raw.githubusercontent.com/MeandrousShark/odograph/vX.Y.Z/.env.example
+    TZ_NAME=America/Los_Angeles
+    pg_password=$(openssl rand -hex 32)
+    session_secret=$(openssl rand -hex 32)
+    set -C
+    {
+        grep -v -e '^POSTGRES_PASSWORD=$' -e '^SESSION_SECRET=$' -e '^DISPLAY_TZ=' .env.example
+        printf 'COMPOSE_PROJECT_NAME=odograph\nDISPLAY_TZ=%s\n' "$TZ_NAME"
+        printf 'POSTGRES_PASSWORD=%s\n' "$pg_password"
+        printf 'SESSION_SECRET=%s\n' "$session_secret"
+    } > .env
 )
+install_status=$?
+[ "$install_status" -eq 0 ] && cd odograph && docker compose up -d
 ```
 
-The download block leaves your shell in its original directory. Stop if it
-reports an error; otherwise, edit `.env` inside your chosen installation
-directory. The three URLs contain the same release tag. Keep that tag recorded
-with the installation so a later upgrade can select the correct release notes and
-matching helper scripts.
-
-## Configure `.env`
-
-From the installation directory, fill the blank secret fields without printing
-their values or putting them on process arguments. This command refuses to
-replace an existing nonblank secret:
+Wait for the app, then create the administrator (it prompts for the email
+and password):
 
 ```sh
-python3 - <<'PYENV'
-from pathlib import Path
-import os
-import re
-import secrets
-
-path = Path(".env")
-text = path.read_text()
-for key in ("POSTGRES_PASSWORD", "INGEST_PASSWORD", "SESSION_SECRET"):
-    pattern = rf"(?m)^{key}=$"
-    if len(re.findall(pattern, text)) != 1:
-        raise SystemExit(f"Expected exactly one blank {key}; existing values were not changed")
-    text = re.sub(pattern, f"{key}={secrets.token_hex(32)}", text)
-os.chmod(path, 0o600)
-path.write_text(text)
-PYENV
-```
-
-Then open `.env` in an editor. Add a `COMPOSE_PROJECT_NAME` line (the file
-does not include one) for a stable Compose project name, keep
-`INITIAL_ADMIN_SIGNUP=0`, and set an explicit IANA timezone.
-Keep the generated secrets private. The relevant
-fields are shown below with placeholders, not values to copy over your file.
-`INGEST_PASSWORD` is retained for legacy-upgrade compatibility; after fresh
-setup, issue device credentials in Tracking. `DISPLAY_TZ` supplies the initial
-account timezone; Settings controls it afterward.
-
-```dotenv
-COMPOSE_PROJECT_NAME=odograph
-POSTGRES_PASSWORD=PASTE_A_FRESH_URI_SAFE_VALUE_HERE
-INGEST_PASSWORD=PASTE_A_FRESH_VALUE_HERE
-SESSION_SECRET=PASTE_A_FRESH_VALUE_HERE
-INITIAL_ADMIN_SIGNUP=0
-DISPLAY_TZ=America/Los_Angeles
-FORWARDED_ALLOW_IPS=*
-```
-
-Leave optional integrations unset until you have read the
-[configuration reference](configuration.md) and [privacy guide](privacy.md).
-Keep the project name unchanged if you move the directory. Compose uses it to
-name the resources that include the persistent `dbdata` volume.
-
-This checkout's `compose.yaml` uses the signed native PostgreSQL 16.15/PostGIS
-3.6.4 image
-`ghcr.io/meandrousshark/odograph-postgis@sha256:590ce320e242b1fa3d6bc652bf5a17cfc499be2025e18f1d570460d7204ec577` for
-Linux AMD64 and ARM64. When a target release uses it, an installation that
-still uses `postgis/postgis:16-3.4` must follow
-[Upgrading the PostGIS database image](upgrading.md#upgrading-the-postgis-database-image)
-before starting the target project.
-
-After editing, protect both the directory and the file:
-
-```sh
-cd /path/to/odograph || exit 1
-chmod 700 .
-chmod 600 .env
-```
-
-Keep an encrypted copy of `.env` with your backup records. The database backup
-does not contain it.
-
-## Start locally and create the administrator
-
-Validate the rendered configuration, pull and verify the image pinned by the
-downloaded Compose file, and start the services. `verify_image.sh` pulls the
-exact release tag and checks its signature with cosign; it exits with an error,
-and you must not continue, if the check fails. The app service never pulls on
-its own (`pull_policy: never`), so `up` starts only the verified image:
-
-```sh
-docker compose config >/dev/null
-./verify_image.sh
-docker compose up -d
-```
-
-With Podman, use `podman-compose` for the Compose commands and run
-`CONTAINER_RUNTIME=podman ./verify_image.sh`.
-
-`verify_image.sh` checks only the app image named in `./compose.yaml`. If a
-`compose.override.yaml` or a `COMPOSE_FILE` setting replaces the app image,
-that image is not verified.
-
-Wait until both `db` and `app` report `healthy`, then check the loopback health
-endpoint:
-
-```sh
-docker compose ps
-curl -fsS http://127.0.0.1:8077/healthz
-```
-
-If either service is unhealthy, inspect the focused logs before continuing:
-
-```sh
-docker compose logs app db
-```
-
-Create the only administrator while the application is still reachable only
-locally:
-
-```sh
-docker compose exec app python -m app.manage_account create-admin
-```
-
-The command prompts for the administrator email and password, and accepts no
-password argument. `INITIAL_ADMIN_SIGNUP=0` keeps browser signup disabled, so
-the public `/signup` route cannot let an unknown visitor create the first
-account. Run this command before configuring public proxy access. Further
-members join by invitation from **Accounts**; see [administrator account
-management](accounts.md#administrator-account-management).
-
-With Podman, replace each `docker compose` command above with
-`podman-compose`. The account command and its interactive prompts are the same.
-
-## Add HTTPS access
-
-Configure your existing reverse proxy to terminate TLS and proxy to
-`127.0.0.1:8077`. The [reverse proxy guide](reverse-proxy.md) has Caddy and
-nginx examples. Do not publish port 8077 on a public interface.
-
-After DNS and the certificate are ready, check the public health endpoint:
-
-```text
-https://mileage.example.com/healthz
-```
-
-Replace the hostname with yours, then visit the same HTTPS address's `/login`
-page. Browser sessions require HTTPS because their cookies are marked Secure.
-If the proxy is not on the same host, or if it runs in a container, change
-`FORWARDED_ALLOW_IPS` as described in the trust guidance before relying on
-client IP based controls.
-
-## Connect OwnTracks
-
-Follow [Connecting OwnTracks](owntracks.md) with these values:
-
-- URL: `https://mileage.example.com/ingest`
-- Username and password: create a device in **Settings > Tracking** and use
-  the issued values. The password is displayed once.
-- Tracker ID (`tid`): a short label; the issued credential selects the device.
-
-Confirm that the device appears under Settings > Device status
-and that its newest location time advances. Location points can arrive before the
-detector has enough quiet time to create a completed trip. The two-file path
-does not include `scripts/send_test_track.sh`; use a real phone for this check
-or obtain the matching helper from the full release checkout.
-
-Then continue with [Use Odograph](usage.md) for vehicle setup, trip review,
-corrections, and reports.
-
-## Limits and upgrades
-
-Startup uses the privileged database URL to migrate and provision managed
-restricted roles, then closes the setup connection. Personal data is explicitly
-account-scoped and enforced by row-level security. Follow the
-[database role and preference contract](configuration.md#account-ownership-and-database-roles)
-when configuring an external database or upgrading an existing installation.
-
-These files are enough for the baseline application, but they intentionally
-omit the repository's operator toolkit:
-
-- `scripts/generate_env.sh` and its refusal-to-overwrite secret safeguards
-- guarded backup and fresh-target restore commands
-- the synthetic OwnTracks test-track sender and cleanup command
-- OSRM dataset provisioning
-- `scripts/upgrade_check.sh` and other release tooling
-- local copies of the security, privacy, backup, recovery, and upgrade guides
-
-Do not treat hand-written `pg_dump` or `pg_restore` commands as equivalent to
-the guarded scripts. Decide how you will protect important data before relying
-on this installation. You can obtain the scripts and guides from the same
-exact release tag, or use the [full release checkout](../README.md#quick-start).
-Use [Backups and disaster recovery](backups.md) to create a verified archive
-and to test a restore into a fresh target.
-
-For an upgrade, read every applicable release note first. Obtain the full
-release checkout or the target release's matching backup and restore scripts,
-then follow [Upgrading](upgrading.md). Create and verify a pre-upgrade logical
-backup and keep a protected copy of `.env`. Replace `/path/to/odograph` below
-with this installation directory to download the target Compose file:
-
-```sh
-TARGET_VERSION=vX.Y.Z
 (
-    set -e
-    cd /path/to/odograph || exit 1
-    compose_tmp=
-    verify_tmp=
-    cleanup() {
-        [ -z "$compose_tmp" ] || rm -f -- "$compose_tmp"
-        [ -z "$verify_tmp" ] || rm -f -- "$verify_tmp"
-    }
-    trap cleanup EXIT HUP INT TERM
+    i=0
+    until curl -fsS http://127.0.0.1:8077/healthz; do
+        [ $((i += 1)) -lt 36 ] || { echo 'not healthy after 3 minutes; read: docker compose logs app db' >&2; exit 1; }
+        sleep 5
+    done
+) && docker compose exec app python -m app.manage_account create-admin
+```
 
-    compose_tmp="$(mktemp .compose.yaml.upgrade.XXXXXX)"
-    verify_tmp="$(mktemp .verify_image.upgrade.XXXXXX)"
-    curl -fsSL "https://raw.githubusercontent.com/MeandrousShark/odograph/${TARGET_VERSION}/compose.yaml" -o "$compose_tmp"
-    curl -fsSL "https://raw.githubusercontent.com/MeandrousShark/odograph/${TARGET_VERSION}/scripts/verify_image.sh" -o "$verify_tmp"
-    mv -- "$compose_tmp" compose.yaml.target
-    mv -- "$verify_tmp" verify_image.sh
-    chmod 700 verify_image.sh
-    trap - EXIT HUP INT TERM
+`mkdir` refuses an existing directory, `set -e` stops on a failed download or
+secret, `set -C` refuses to overwrite a file, and `umask 077` makes `.env`
+mode 0600; Compose starts only if all of that succeeded. If it stops after
+creating `odograph`, remove that new directory and run it again. The secrets
+reach `.env` only through the shell's `printf` builtin, never a process
+argument; `grep` and `printf` work the same on Linux and macOS. The fixed
+project name keeps the database volume if you move the directory, and
+`INITIAL_ADMIN_SIGNUP=0` keeps browser signup closed. The wait covers startup
+migrations, which run before `/healthz` answers.
 
-    docker compose -f compose.yaml.target config >/dev/null
+`compose.yaml` comes from the release page, not the repository: that copy
+pins the app image by digest and pulls it. Take every file from the same
+release. The blocks are POSIX `sh` (run them in `sh` or `bash`, not fish);
+with Podman, use `podman-compose` for `docker compose` throughout. Keep a copy
+of `.env` safe ([Protecting `.env`](backups.md#protecting-env)); no backup
+contains it.
+
+## Then
+
+Point your reverse proxy at `127.0.0.1:8077`
+([Reverse proxy and TLS](reverse-proxy.md)). That port listens on loopback
+only, which is what makes the shipped `FORWARDED_ALLOW_IPS=*` safe; see
+[Trusting forwarded headers](reverse-proxy.md#trusting-forwarded-headers) for
+any other topology. Then connect a phone with [OwnTracks](owntracks.md) or
+[Traccar Client](traccar.md).
+
+## What this route leaves out
+
+- **Backups**: none until you add the backup script, and no restore. A
+  hand-written `pg_dump` is no substitute: the restore script recreates the
+  database roles and checks row-level security.
+- **The test-track sender and OSRM data.**
+- **The image signature check**: the image is pinned by digest, but its
+  [cosign](https://docs.sigstore.dev/cosign/system_config/installation/)
+  signature is not checked; `scripts/verify_image.sh` in the full checkout
+  does that.
+- **The upgrade drill**: `upgrade_check.sh` needs a full checkout.
+
+## Add these later
+
+Download from the same release into the directory holding `compose.yaml`,
+`chmod 700 ./*.sh`, and run each as `./NAME.sh` from there where its guide
+says `scripts/NAME.sh`. Skip `scripts/verify_image.sh`: this `compose.yaml`
+pulls the pinned image itself. First set
+`RAW=https://raw.githubusercontent.com/MeandrousShark/odograph/vX.Y.Z/scripts`.
+
+| Add | Download | Guide |
+| --- | --- | --- |
+| Backup and restore | `curl -fsSLO "$RAW/backup_database.sh" -O "$RAW/restore_database.sh"` | [Backups](backups.md) |
+| OSRM | `curl -fsSLO "$RAW/provision_osrm.sh"` | [Provisioning](osrm.md#provisioning) |
+| Test track | `curl -fsSLO "$RAW/send_test_track.sh" --create-dirs -o sql/cleanup_test_device.sql "$RAW/sql/cleanup_test_device.sql"` | [Verify your setup](owntracks.md#verify-your-setup) |
+
+After provisioning OSRM and setting the two values it prints in `.env`, run
+`docker compose --profile osrm up -d`. podman-compose does not recreate the
+app to load `OSRM_URL`, so run `podman-compose --profile osrm up -d osrm`,
+then `podman-compose up -d --force-recreate app`. The test track also needs
+`bash` and `python3`.
+
+## Upgrading
+
+Read the notes of every release up to the target. If they change the
+database image, stop and follow
+[Database image changes](upgrading.md#database-image-changes) instead.
+Otherwise, with the backup and restore scripts in place and `vX.Y.Z` set to
+the target:
+
+```sh
+(
+    set -eu
+    ./backup_database.sh --output backups/pre-vX.Y.Z.dump
+    ./restore_database.sh --verify-only backups/pre-vX.Y.Z.dump
+    cp .env backups/pre-vX.Y.Z.env
+    cp compose.yaml compose.yaml.previous
+    curl -fsSL -o compose.yaml.next https://github.com/MeandrousShark/odograph/releases/download/vX.Y.Z/compose.yaml
+    mv compose.yaml.next compose.yaml
+    docker compose up -d
+    i=0
+    until curl -fsS http://127.0.0.1:8077/healthz; do
+        [ $((i += 1)) -lt 36 ] || { echo 'not healthy after 3 minutes; read: docker compose logs app' >&2; exit 1; }
+        sleep 5
+    done
 )
 ```
 
-The download leaves the old `compose.yaml`, `.env`, project, and database volume
-untouched, saves the target file as `compose.yaml.target`, and replaces
-`verify_image.sh` with the target release's copy. Do not run
-`docker compose up -d` yet. If the target's `db.image` differs from
-the current installation, its release notes say which kind of change it is. A
-rebuild with unchanged versions upgrades in place on the existing volume; see
-[Database image security rebuilds](upgrading.md#database-image-security-rebuilds).
-For a database-image migration, a version change, including the transition
-from `postgis/postgis:16-3.4` to the signed native image above, use the
-[PostGIS database image migration](upgrading.md#upgrading-the-postgis-database-image)
-procedure first. It stops the app for the final backup, preserves the old
-project and volume, then replaces `compose.yaml` only after the backup and
-stop steps. It creates a fresh project name in the existing `.env`, starts only
-the target database, restores with the target script, and starts the app after
-the restore checks pass. Replace the existing `COMPOSE_PROJECT_NAME` line, or
-add exactly one line if it is absent; do not regenerate `.env`, leave a shell
-`COMPOSE_PROJECT_NAME` set, use `-p`, or reuse the old volume.
-
-After the old app and database are stopped, and the protected pre-upgrade
-backup and `.env` copy are ready, replace the old Compose file:
-
-```sh
-mv compose.yaml.target compose.yaml
-```
-
-When the release notes say the database image was rebuilt with unchanged
-versions, do not run the block below, which starts the app and database
-together before any version check. Follow
-[Database image security rebuilds](upgrading.md#database-image-security-rebuilds)
-instead: record the database versions before stopping the database, stop it,
-pull the new database image, run `docker compose up -d db`, confirm the
-container runs the target `db.image` and reports the same versions, and only
-then run `docker compose up -d`.
-
-Only when the database image is unchanged may you complete an
-application-only upgrade with this block. Verify the target image first, then
-start it; do not skip `verify_image.sh`, because Compose will not pull the app
-image itself:
-
-```sh
-./verify_image.sh
-docker compose up -d
-docker compose ps
-curl -fsS http://127.0.0.1:8077/healthz
-```
-
-Migrations are forward-only. Rollback restores the verified backup into a
-fresh target with the previous release, and writes made after that backup are
-lost. Running the previous image against a migrated database is supported only
-where a release's notes document that pair as drilled; none exists for 0.x to
-1.0. Never run `docker compose down -v` unless you intend to erase the
-database.
+If the wait gives up after 3 minutes, read `docker compose logs app`. Once
+the app is healthy, download the new release's copies of your scripts.
+Migrations are forward-only: going back
+means restoring that backup with `compose.yaml.previous` into a fresh project
+([Rollback](upgrading.md#rollback)), losing everything written after it. To
+follow `v1` instead, the `compose.override.yaml` from
+[Track `v1`](upgrading.md#track-v1) works on this layout too.

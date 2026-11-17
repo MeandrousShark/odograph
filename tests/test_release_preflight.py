@@ -421,3 +421,25 @@ def test_published_verification_runs_the_trial_from_the_release_asset():
     checkout = next(s for s in steps if "actions/checkout" in s.get("uses", ""))
     assert checkout["with"]["ref"] == "${{ needs.prepare.outputs.revision }}"
     assert 'test -z "$(docker images -q "$IMAGE:$VERSION")"' in run
+
+
+def test_published_verification_installs_from_the_release_asset():
+    workflow = yaml.load(WORKFLOW.read_text(), Loader=yaml.BaseLoader)
+    steps = workflow["jobs"]["published-native-smoke"]["steps"]
+    names = [s.get("name") for s in steps]
+    [step] = [s for s in steps if s.get("name") == "Install from the published asset"]
+
+    assert names.index("Run the trial from the published asset") < names.index(
+        "Install from the published asset"
+    )
+    assert step["env"]["INDEX_DIGEST"] == "${{ needs.resolve-published.outputs.index-digest }}"
+    run = step["run"]
+    assert run.index("gh release download") < run.index("--verify") < run.index(
+        "scripts/install_smoke.sh"
+    )
+    assert "--pattern compose.yaml " in run
+    assert "--mode install" in run
+    assert '--digest "$INDEX_DIGEST"' in run
+    assert "--source compose.yaml" in run
+    assert "continue-on-error" not in step
+    assert 'test -z "$(docker images -q "$IMAGE:$VERSION")"' in run

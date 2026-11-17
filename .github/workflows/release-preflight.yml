@@ -542,6 +542,20 @@ jobs:
           scripts/try_smoke.sh "$RUNNER_TEMP/asset/compose.try.yaml"
           # An installation's pull_policy: never trusts this tag to be verified.
           test -z "$(docker images -q "$IMAGE:$VERSION")"
+      - name: Install from the published asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          INDEX_DIGEST: ${{ needs.resolve-published.outputs.index-digest }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release download "$VERSION" --pattern compose.yaml --dir "$RUNNER_TEMP/install-asset"
+          python3 scripts/render_try_compose.py --mode install --image "$IMAGE" --digest "$INDEX_DIGEST" \
+            --source compose.yaml --verify "$RUNNER_TEMP/install-asset/compose.yaml"
+          scripts/install_smoke.sh "$RUNNER_TEMP/install-asset/compose.yaml"
+          # Pulled by digest, so the tag an installation's pull_policy: never trusts stays unwritten.
+          test -z "$(docker images -q "$IMAGE:$VERSION")"
       - name: Upload published native evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
