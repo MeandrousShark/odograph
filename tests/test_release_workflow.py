@@ -306,3 +306,36 @@ def test_release_attaches_the_rendered_trial_asset_after_signing():
     assert "continue-on-error" not in render
     checkout = next(step for step in publish["steps"] if "actions/checkout" in step.get("uses", ""))
     assert checkout["with"]["ref"] == "${{ needs.prepare.outputs.revision }}"
+
+
+def test_release_attaches_the_rendered_install_asset_after_signing():
+    publish = load_workflow()["jobs"]["publish"]
+    steps = steps_by_name(publish)
+    names = [step.get("name") for step in publish["steps"]]
+    render = steps["Render the install compose asset"]
+    create = steps["Create GitHub release from changelog"]["run"]
+
+    assert render["env"]["MANIFEST_DIGEST"] == "${{ steps.manifest.outputs.digest }}"
+    assert render["run"].count("--mode install") == 2
+    assert render["run"].count('--digest "$MANIFEST_DIGEST"') == 2
+    assert render["run"].count("--source compose.yaml") == 2
+    assert '--output "$RUNNER_TEMP/install/compose.yaml"' in render["run"]
+    assert '--verify "$RUNNER_TEMP/install/compose.yaml"' in render["run"]
+    # One release create, so the release never exists with only one asset.
+    assert create.count("release create") == 1
+    assert '"$RUNNER_TEMP/compose.try.yaml"' in create
+    assert '"$RUNNER_TEMP/install/compose.yaml"' in create
+    assert names.index("Sign the manifest and each architecture digest") < names.index(
+        "Render the install compose asset"
+    ) < names.index("Create GitHub release from changelog") < names.index(
+        "Verify the attached install compose asset"
+    )
+    verify = steps["Verify the attached install compose asset"]
+    assert verify["run"].index("gh release download") < verify["run"].index("--verify")
+    assert "--pattern compose.yaml " in verify["run"]
+    assert "--mode install" in verify["run"]
+    assert verify["env"]["MANIFEST_DIGEST"] == "${{ steps.manifest.outputs.digest }}"
+    assert '--digest "$MANIFEST_DIGEST"' in verify["run"]
+    assert "--source compose.yaml" in verify["run"]
+    assert "continue-on-error" not in verify
+    assert "continue-on-error" not in render

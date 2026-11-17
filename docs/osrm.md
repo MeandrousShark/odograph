@@ -59,8 +59,8 @@ This downloads the extract, then runs `osrm-extract` > `osrm-partition` >
 `osrmdata` compose volume. It works with either `docker compose` or
 `podman-compose` on `PATH` (override autodetection with `COMPOSE_CMD` if you
 have both installed). Run it from the directory containing `compose.yaml`. The
-script comes with the full release checkout; the two-file installation does not
-include it.
+script comes with the full release checkout; a minimal installation downloads
+it ([Add these later](install-compose.md#add-these-later)).
 
 **Re-running it replaces the current contents of the `osrmdata` volume**: the
 previous dataset is gone as soon as the new one starts writing, even if the new

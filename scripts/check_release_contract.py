@@ -21,6 +21,8 @@ TRY_IMAGE_VARIABLE = (
     "${ODOGRAPH_TRY_IMAGE:?download compose.try.yaml from a GitHub release, see the header}"
 )
 TRY_IMAGE_SERVICES = ("try-app", "try-seed")
+# The install asset keeps the repository file's name, rendered from it.
+INSTALL_COMPOSE = "compose.yaml"
 
 
 class ReleaseContractError(ValueError):

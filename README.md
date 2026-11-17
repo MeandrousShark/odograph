@@ -93,7 +93,9 @@ Deduction figures are estimates for US filers, not tax advice; see
 ## Install
 
 The recommended path is the full release checkout below. If you already manage
-Compose, see the [minimal Compose installation](docs/install-compose.md).
+Compose, the [minimal Compose installation](docs/install-compose.md) needs only
+two files from a release, without the checkout's backup, OSRM and
+signature-check tools.
 
 ### What you need
 

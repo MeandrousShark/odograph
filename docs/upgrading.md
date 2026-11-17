@@ -17,6 +17,9 @@ scripts/backup_database.sh --output backups/pre-upgrade.dump
 scripts/restore_database.sh --verify-only backups/pre-upgrade.dump
 ```
 
+A [minimal Compose installation](install-compose.md) runs its downloaded
+`./backup_database.sh` and `./restore_database.sh` instead, here and below.
+
 Keep that archive until the new release has run for a while. It is the only
 way back (see [Rollback](#rollback)). To try a release against a copy of
 your data first, `scripts/rehearse_upgrade.sh` restores the archive into a
@@ -62,7 +65,8 @@ Every 1.x release keeps these promises, and a release that cannot is a 2.0:
   [Database image changes](#database-image-changes).
 
 When a release's notes say its database image was rebuilt or changed, check
-out that release and follow [Database image changes](#database-image-changes).
+out that release (or, on a minimal install, download its `compose.yaml`) and
+follow [Database image changes](#database-image-changes).
 Until you do, the database keeps its old image and pulling `v1` keeps
 working.
 
@@ -103,9 +107,10 @@ the tag and checks its signature with
    one. Then sign in and check a recent trip.
 
 With Podman, use `podman-compose` and
-`CONTAINER_RUNTIME=podman scripts/verify_image.sh`. A
-[minimal Compose installation](install-compose.md) runs `./verify_image.sh`
-from its own directory.
+`CONTAINER_RUNTIME=podman scripts/verify_image.sh`. A minimal installation
+upgrades by downloading the new release's `compose.yaml` asset instead, as
+[its guide](install-compose.md#upgrading) describes, with no
+`verify_image.sh`.
 
 ## What happens on its own
 
@@ -133,7 +138,11 @@ app container for each one
 
 A release that changes `db.image` says which kind of change it is. Both
 kinds need the backup and restore scripts, and neither happens by pulling
-the app.
+the app. On a minimal install, each `git checkout vX.Y.Z` below means
+keeping the current file as `compose.yaml.previous`, downloading the target
+release's `compose.yaml` asset and backup and restore scripts in their place,
+and skipping `verify_image.sh`; going back means restoring
+`compose.yaml.previous`.
 
 ### Database image security rebuilds
 
@@ -222,7 +231,8 @@ database is not supported, and 1.0 and later refuse to start that way.
 
 On the pinned path, copy `scripts/verify_image.sh` outside the checkout
 before checking out the previous release, since an older release may not
-contain it, and run the copy before `up`. On the `v1` path, point the
+contain it, and run the copy before `up`. A minimal installation puts
+`compose.yaml.previous` back as `compose.yaml` instead. On the `v1` path, point the
 override's image at the digest you recorded.
 
 ## Support policy

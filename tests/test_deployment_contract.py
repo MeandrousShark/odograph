@@ -107,21 +107,93 @@ def test_quickstart_separates_critical_path_from_post_install_operations():
 
 
 def test_install_and_upgrade_guides_verify_the_app_image_before_starting_it():
-    # Compose never pulls the app image (pull_policy: never), so each guide
-    # must run the verification script before `up`.
+    # The checkout's compose.yaml never pulls the app image (pull_policy:
+    # never), so each checkout guide must run the verification script before
+    # `up`. The minimal guide uses the digest-pinned release asset instead and
+    # must say plainly that it skips the signature check.
     for relative in ("README.md", "docs/install-compose.md", "docs/upgrading.md", "docs/backups.md"):
         text = (ROOT / relative).read_text()
         assert "verify_image.sh" in text, relative
         if relative != "docs/backups.md":
             assert "sigstore.dev/cosign" in text, relative
     install = (ROOT / "docs" / "install-compose.md").read_text()
-    assert install.index("./verify_image.sh") < install.index("docker compose up -d")
+    left_out = install.split("## What this route leaves out", 1)[1].split("\n## ", 1)[0]
+    assert "signature is not checked" in left_out
     upgrading = (ROOT / "docs" / "upgrading.md").read_text()
     app_only = upgrading.split("4. **If the database image is unchanged", 1)[1]
     app_only = app_only.split("```sh", 1)[1].split("```", 1)[0]
     assert app_only.index("scripts/verify_image.sh") < app_only.index("docker compose up -d")
     assert "docker compose pull\n" not in install
     assert "compose pull app" not in install
+
+
+_RELEASE_ASSET = "https://github.com/MeandrousShark/odograph/releases/download/vX.Y.Z/compose.yaml"
+_RAW_PREFIX = "https://raw.githubusercontent.com/MeandrousShark/odograph/vX.Y.Z/"
+
+
+def _first_sh_block(text: str, heading: str) -> str:
+    # Mirrors how the release smoke finds the install block: the first sh
+    # fence after the exact heading.
+    section = text.split(f"\n{heading}\n", 1)[1]
+    return section.split("\n```sh\n", 1)[1].split("\n```", 1)[0]
+
+
+def test_minimal_install_block_is_guarded_and_uses_the_release_asset():
+    install = (ROOT / "docs" / "install-compose.md").read_text()
+    block = _first_sh_block(install, "## Install")
+    lines = [line.strip() for line in block.splitlines()]
+
+    assert f"curl -fsSLO {_RELEASE_ASSET}" in lines
+    assert f"curl -fsSLO {_RAW_PREFIX}.env.example" in lines
+    # The asset pins the image by digest; the raw repository file does not.
+    assert f"{_RAW_PREFIX}compose.yaml" not in install
+    # The secrets are generated into variables under set -e and before set -C,
+    # so a failed openssl stops the block before .env exists. They reach .env
+    # only through the printf builtin, never an argument of another command.
+    order = [
+        "set -eu",
+        "umask 077",
+        "mkdir odograph",
+        "cd odograph",
+        f"curl -fsSLO {_RELEASE_ASSET}",
+        "pg_password=$(openssl rand -hex 32)",
+        "session_secret=$(openssl rand -hex 32)",
+        "set -C",
+        "printf 'POSTGRES_PASSWORD=%s\\n' \"$pg_password\"",
+        "printf 'SESSION_SECRET=%s\\n' \"$session_secret\"",
+        "} > .env",
+        # Not `) && ...`: a subshell on the left of && runs with set -e off.
+        ")",
+        "install_status=$?",
+        '[ "$install_status" -eq 0 ] && cd odograph && docker compose up -d',
+    ]
+    positions = [lines.index(step) for step in order]
+    assert positions == sorted(positions)
+    assert block.count("openssl") == 2
+    assert "COMPOSE_PROJECT_NAME=odograph" in block
+
+    after = install.split(block, 1)[1].split("\n## ", 1)[0]
+    wait = after.index("http://127.0.0.1:8077/healthz")
+    assert wait < after.index("docker compose exec app python -m app.manage_account create-admin")
+
+
+def test_minimal_upgrade_verifies_a_backup_before_taking_the_new_asset():
+    install = (ROOT / "docs" / "install-compose.md").read_text()
+    section = install.split("\n## Upgrading\n", 1)[1]
+    assert section.index("upgrading.md#database-image-changes") < section.index("```sh")
+    block = _first_sh_block(install, "## Upgrading")
+    steps = [
+        "./backup_database.sh --output",
+        "./restore_database.sh --verify-only",
+        "cp .env ",
+        "cp compose.yaml compose.yaml.previous",
+        _RELEASE_ASSET,
+        "docker compose up -d",
+        "http://127.0.0.1:8077/healthz",
+    ]
+    positions = [block.index(step) for step in steps]
+    assert positions == sorted(positions)
+    assert "upgrading.md#rollback" in section
 
 
 def test_compose_preserves_state_and_waits_for_healthy_database():

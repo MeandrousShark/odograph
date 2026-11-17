@@ -84,6 +84,7 @@ git switch -c release/$VERSION
 Stop if `git status --short` prints anything or the revision check fails.
 
 Update `compose.yaml` so `services.app.image` is exactly `$IMAGE:$VERSION`.
+The release workflow renders the attached install `compose.yaml` from it.
 `compose.try.yaml` carries no release tag, so it does not change here. A database
 image change updates `services.db.image` in `compose.yaml` and
 `services.try-db.image` in `compose.try.yaml`. Move the release's entries out of `Unreleased` into one
@@ -303,11 +304,17 @@ The published upgrade and rollback drill runs the same base matrix with Docker
 Compose, the exact checked-out revision as `--candidate`, the exact OCI index
 digest as `--candidate-image`, and the same per-base migration mode selection.
 
-Published verification also downloads the release's `compose.try.yaml`, compares
-it byte for byte with a fresh render of the repository file at the tagged revision
-and the OCI index digest, runs `scripts/try_smoke.sh` against it on both
-architectures, and checks that no local `$IMAGE:$VERSION` tag resulted. The
-repository's `compose.try.yaml` has no application image and refuses to start.
+Published verification also downloads the release's `compose.try.yaml` and
+install `compose.yaml`, compares each byte for byte with a fresh render of the
+repository file at the tagged revision and the OCI index digest, runs
+`scripts/try_smoke.sh` against the trial file and `scripts/install_smoke.sh`
+(the guide's install block from an empty directory) against the install file
+on both architectures, and checks that no local `$IMAGE:$VERSION` tag
+resulted. The repository's
+`compose.try.yaml` has no application image and refuses to start. The install
+asset is the repository's `compose.yaml` with the app image pinned by that
+digest and `pull_policy: never` removed, so it pulls the image; the
+[minimal Compose installation](install-compose.md) uses it.
 A release whose asset step fails is a failed release: the version is consumed,
 as for any other failure after the manifest is published. That includes a
 transient download failure in the release workflow's verify step, which has no
@@ -456,12 +463,14 @@ it runs. Confirm, in order, that CI:
    reports the manifest, amd64, and arm64 digests;
 5. generates and attests an SBOM for each architecture digest, then signs the
    manifest list and each architecture digest with keyless cosign;
-6. renders `compose.try.yaml` with the manifest digest and fails if the rendered
-   file keeps its image variable or names another digest;
-7. creates the GitHub release from the exact changelog section, with that file
-   attached; and
-8. downloads the attached file and fails unless it matches a fresh render byte
-   for byte. A transient download failure here also consumes the version.
+6. renders `compose.try.yaml` and the install `compose.yaml` with the manifest
+   digest and fails if either names another digest, the trial file keeps its
+   image variable, or the install file changes more than its app image, pull
+   policy and comment;
+7. creates the GitHub release from the exact changelog section, with both
+   files attached; and
+8. downloads the attached files and fails unless each matches a fresh render
+   byte for byte. A transient download failure here also consumes the version.
 
 Record all three reported digests in the release record. If any job fails,
 leave any published object untouched, investigate the failure, and prepare a

@@ -643,6 +643,7 @@ _OPS_MODULE_STEMS = {
     "test_deployment_contract",
     "test_devsite_script",
     "test_generate_env_script",
+    "test_install_smoke",
     "test_no_dashes",
     "test_provision_osrm_script",
     "test_rehearse_upgrade_script",

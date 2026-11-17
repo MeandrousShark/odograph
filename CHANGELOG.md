@@ -9,6 +9,15 @@ reproduced here.
 
 ## [Unreleased]
 
+### Added
+
+- Each GitHub release attaches an install `compose.yaml` that pins the app
+  image by digest and pulls it. The
+  [minimal Compose installation](docs/install-compose.md) now starts from it
+  and `.env.example` alone, makes `.env` in one block, and lists what the
+  route leaves out and how to add each piece. A minimal install upgrades by
+  downloading the new release's `compose.yaml`, with no `verify_image.sh`.
+
 ## [1.5.1] - 2026-11-12
 
 Nothing in this release runs on its own, and there is no step to take after

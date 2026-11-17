@@ -162,8 +162,8 @@ helper, replacing the example username with the issued one:
 scripts/send_test_track.sh --username test-ab12
 ```
 
-A two-file installation has no `scripts/` directory. Run the helper from the
-matching release's full checkout instead (see the cleanup note below).
+A [minimal installation](install-compose.md#add-these-later) downloads the
+helper and its `sql/` file, and runs it as `./send_test_track.sh`.
 
 The helper silently prompts for the issued password. It never accepts a
 password argument or reads your shared `.env` credential. Automation can use
@@ -185,7 +185,4 @@ points, raw messages, overrides, checkpoint, and credentials. Other devices
 with the same label are untouched. The test credential stops working afterward.
 It uses `docker compose` or `podman-compose` to access the local database;
 `COMPOSE_CMD` can select the command. Cleanup does not follow `--base-url`, so
-run it from the Compose directory of the instance you tested. For a two-file
-installation, change to its Compose directory and call the helper from the
-checkout by full path, setting `COMPOSE_CMD` if needed, for example
-`/path/to/checkout/scripts/send_test_track.sh --cleanup --username test-ab12`.
+run it from the Compose directory of the instance you tested.

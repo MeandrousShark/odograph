@@ -82,6 +82,10 @@ scripts/restore_database.sh backups/mileage-20260719T030000Z.dump
 docker compose up -d app
 ```
 
+A [minimal Compose installation](install-compose.md#add-these-later) skips
+`verify_image.sh`, since its `compose.yaml` pulls the pinned image, and runs
+`./restore_database.sh`.
+
 The script refuses to run while the app is running or its state is unclear,
 and refuses a database that already holds application data. It checks the
 archive's `.sha256` first, which must sit beside it. It needs free temporary
