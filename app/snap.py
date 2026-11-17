@@ -26,6 +26,10 @@ from app.worker import BatchOutcome, TurnOutcome
 log = logging.getLogger(__name__)
 PROVIDER_ROUTE_MAX_VERTICES = 100_000
 SNAP_MIN_ROUTE_BYTES = 54  # EWKB MultiLineString with one two-vertex segment.
+# Snapped over raw distance above which a match on a trip without a recording
+# gap supplies no distance. See parse_match_response; app.resnap restates the
+# same rule on stored columns, so both read this constant.
+SNAP_MAX_COVERAGE = 1.5
 
 
 class ProviderOutputTooLarge(ValueError):
@@ -49,8 +53,8 @@ class SnapResult:
     status: str                        # "ok" | "low_confidence" | "failed"
     path_geojson: Optional[dict]       # GeoJSON MultiLineString geometry, or None
     distance_m: Optional[float]        # None when failed, and when the match
-                                       # didn't cover the trip -- see
-                                       # parse_match_response's min_coverage
+                                       # covered too little or far too much of
+                                       # the trip -- see parse_match_response
     reason: Optional[str] = None       # populated for low_confidence/failed; logged only
 
 
@@ -264,6 +268,8 @@ def parse_match_response(
     input_count: int,
     raw_distance_m: Optional[float],
     min_coverage: float = 0.85,
+    *,
+    has_gap: bool = False,
 ) -> SnapResult:
     """Parse an OSRM `/match/v1/car/...` response. OSRM can return
     multiple disjoint matchings when it finds no route between candidates;
@@ -288,6 +294,20 @@ def parse_match_response(
     gap. Raw GPS normally runs slightly *longer* than the snapped route
     because jitter inflates it, which is why those ratios cluster just either
     side of 1 rather than below it.
+
+    A match whose distance runs more than `SNAP_MAX_COVERAGE` times raw is
+    declined the same way and marked low_confidence. OSRM's matching
+    confidence is itself a function of matched length over trace length, so
+    an honest match stays close to raw (0.5 confidence falls at about 1.08)
+    and a sparse trace that cuts curves reads only somewhat higher. Far above
+    that, the route is not the one travelled: a walk matched to a car route
+    that detours along roads reads about 4x. 1.5 sits well clear of both. A trip with `has_gap` is exempt, because its raw distance draws a
+    straight line across the recording gap and under-reads, so a road route
+    bridging the gap can honestly run much longer.
+
+    The confidence and tracepoint gates set the status only. A low-confidence
+    match within both bounds keeps its distance: on a sparse trace the raw
+    distance is the poorer figure.
     """
     code = response_json.get("code")
     matchings = response_json.get("matchings") or []
@@ -315,26 +335,30 @@ def parse_match_response(
     match_fraction = (matched_count / input_count) if input_count else 0.0
 
     # A raw distance of zero or None can't be divided into, and a trip that
-    # short has no mileage worth protecting, so it never declines a match.
-    coverage = (
-        total_distance / raw_distance_m
-        if raw_distance_m and raw_distance_m > 0
-        else 1.0
-    )
+    # short has no mileage worth protecting, so neither coverage bound
+    # declines its match.
+    has_raw = bool(raw_distance_m) and raw_distance_m > 0
+    coverage = total_distance / raw_distance_m if has_raw else 1.0
     covers_trip = coverage >= min_coverage
+    over_ceiling = not has_gap and has_raw and coverage > SNAP_MAX_COVERAGE
 
-    # Three gates, three different failure modes. confidence = "matched, but
-    # shakily". coverage = "matched a fragment and called it the trip": the
-    # only gate that costs distance, and the only one measured against the
-    # trip itself rather than against the response. fraction = "didn't match
-    # at all" (OSRM tends to drop unmatchable spans as null tracepoints
-    # rather than emit them as a separate low-confidence matching). fraction
-    # predates coverage and is kept because it still fires on a trace OSRM
-    # barely recognized, even where the little it did match is long enough to
-    # clear coverage; 0.8 there remains a starting heuristic.
-    low_conf = not covers_trip or worst_confidence < min_confidence or match_fraction < 0.8
+    # Four gates, three failure modes. confidence = "matched, but shakily".
+    # coverage and the ceiling = "matched a fragment, or a different route,
+    # and called it the trip": the only gates that cost distance, and the only
+    # ones measured against the trip itself rather than against the response.
+    # fraction = "didn't match at all" (OSRM tends to drop unmatchable spans
+    # as null tracepoints rather than emit them as a separate low-confidence
+    # matching). fraction predates coverage and is kept because it still
+    # fires on a trace OSRM barely recognized, even where the little it did
+    # match is long enough to clear coverage; 0.8 there remains a starting
+    # heuristic.
+    low_conf = (not covers_trip or over_ceiling
+                or worst_confidence < min_confidence or match_fraction < 0.8)
     if not covers_trip:
         reason = f"snapped distance is only {coverage:.0%} of the raw distance"
+    elif over_ceiling:
+        reason = (f"snapped distance is {coverage:.0%} of the raw distance, "
+                  f"above the {SNAP_MAX_COVERAGE:.0%} ceiling")
     elif worst_confidence < min_confidence:
         reason = f"min matching confidence {worst_confidence:.2f} < {min_confidence}"
     elif low_conf:
@@ -348,12 +372,12 @@ def parse_match_response(
         # the only record of what OSRM could place, and the trip page draws
         # it underneath the raw track rather than in place of it.
         path_geojson={"type": "MultiLineString", "coordinates": lines} if lines else None,
-        distance_m=total_distance if covers_trip else None,
+        distance_m=None if not covers_trip or over_ceiling else total_distance,
         reason=reason,
     )
 
 
-def _parse_and_serialize_match(body, min_confidence, input_count, raw_distance_m):
+def _parse_and_serialize_match(body, min_confidence, input_count, raw_distance_m, has_gap=False):
     matchings = body.get("matchings") or []
     tracepoints = body.get("tracepoints") or []
     if not isinstance(matchings, list) or not isinstance(tracepoints, list):
@@ -379,7 +403,8 @@ def _parse_and_serialize_match(body, min_confidence, input_count, raw_distance_m
                     or parse_finite_number(coordinate[0], minimum=-180, maximum=180) is None
                     or parse_finite_number(coordinate[1], minimum=-90, maximum=90) is None):
                 raise ValueError("invalid OSRM coordinate")
-    result = parse_match_response(body, min_confidence, input_count, raw_distance_m)
+    result = parse_match_response(body, min_confidence, input_count, raw_distance_m,
+                                  has_gap=has_gap)
     geometry_json = json.dumps(result.path_geojson) if result.path_geojson else None
     return result, geometry_json
 
@@ -509,7 +534,7 @@ class SnapWorker:
             # The terminal write uses a fresh transaction and rejects any
             # rewrite that committed while the snapshot/provider was active.
             cur = await conn.execute(
-                "SELECT t.updated_at, t.distance_m, t.tracking_device_id, d.generation, "
+                "SELECT t.updated_at, t.distance_m, t.has_gap, t.tracking_device_id, d.generation, "
                 "t.snap_capacity_needed_bytes FROM trips t "
                 "JOIN tracking_devices d ON d.account_id=t.account_id AND d.id=t.tracking_device_id "
                 "WHERE t.account_id=%s AND t.id=%s AND t.snap_status='pending' "
@@ -519,7 +544,7 @@ class SnapWorker:
             row = await cur.fetchone()
             if row is None:
                 return BatchOutcome()
-            generation, raw_distance_m, device_id, device_generation, needed_bytes = row
+            generation, raw_distance_m, has_gap, device_id, device_generation, needed_bytes = row
             points = await self._load_points(conn, trip_id)
         if len(points) < 2:
             # A detected trip should always have >= 2 points; if one somehow
@@ -622,7 +647,7 @@ class SnapWorker:
         try:
             result, geometry_json = await owned_thread(
                 _parse_and_serialize_match, body, self.min_confidence,
-                len(sampled), raw_distance_m,
+                len(sampled), raw_distance_m, has_gap,
             )
         except (TypeError, ValueError, KeyError) as exc:
             return BatchOutcome(attempted=1, retriable_failures=1,
