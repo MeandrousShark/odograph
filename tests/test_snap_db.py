@@ -20,6 +20,7 @@ import pytest
 
 from app.db import make_pool
 from app.snap import MatchPoint, SNAP_MIN_ROUTE_BYTES, SnapWorker, downsample
+from app.trip_queries import DISPLAY_DISTANCE_SQL
 from app.storage import storage_status
 from app.worker import BatchOutcome
 from app.detector.runner import load_trip_points
@@ -904,3 +905,59 @@ def test_unadmitted_early_trip_continues_to_later_trip_without_busy_retry():
         finally:
             await raw.close()
     asyncio.run(scenario())
+
+
+async def _ceiling_scenario(has_gap):
+    raw_pool = make_pool(TEST_DB)
+    await raw_pool.open(wait=True)
+    try:
+        pool = await reset_account_db(raw_pool)
+        async with pool.connection() as conn:
+            await seed_tracking_device(conn, DEVICE, device_id=1)
+        async with pool.connection() as conn:
+            trip = await _insert_trip(conn, T0, T0 + timedelta(seconds=15), point_count=2)
+            await conn.execute("UPDATE trips SET has_gap = %s WHERE id = %s", (has_gap, trip))
+            await _insert_point(conn, T0, trip)
+            await _insert_point(conn, T0 + timedelta(seconds=15), trip)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            # 1.6 times the trip's 1000 m raw distance, above the ceiling.
+            return httpx.Response(200, json={
+                "code": "Ok",
+                "matchings": [{
+                    "confidence": 0.0, "distance": 1600.0,
+                    "geometry": {"type": "LineString",
+                                 "coordinates": [[-122.33, 47.60], [-122.32, 47.61]]},
+                }],
+                "tracepoints": [{}, {}],
+            })
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            worker = SnapWorker(pool, client, "http://osrm", 0.5, 250)
+            assert (await worker._snap_one(trip)).completed == 1
+
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT path_snapped IS NOT NULL, distance_snapped_m, snap_status::text, "
+                f"{DISPLAY_DISTANCE_SQL} FROM trips WHERE id = %s",
+                (trip,),
+            )
+            return await cur.fetchone()
+    finally:
+        await raw_pool.close()
+
+
+def test_snapworker_stores_no_distance_for_a_match_above_the_ceiling():
+    path_is_set, distance_snapped_m, status, display = asyncio.run(_ceiling_scenario(False))
+    assert path_is_set
+    assert distance_snapped_m is None
+    assert status == "low_confidence"
+    assert display == 1000.0
+
+
+def test_snapworker_passes_has_gap_so_a_gap_trip_keeps_its_distance():
+    path_is_set, distance_snapped_m, status, display = asyncio.run(_ceiling_scenario(True))
+    assert path_is_set
+    assert distance_snapped_m == 1600.0
+    assert status == "low_confidence"
+    assert display == 1600.0
