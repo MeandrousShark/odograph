@@ -182,7 +182,7 @@ def caveat_lines(caveats: ReportCaveats, year: int) -> list[str]:
         )
     if caveats.low_conf_trips:
         lines.append(
-            f"{caveats.low_conf_trips} trip(s) have a low-confidence road-snapped distance."
+            f"{caveats.low_conf_trips} trip(s) have a low-confidence road snap."
         )
     if caveats.manual_trips:
         lines.append(f"{caveats.manual_trips} trip(s) were entered manually.")

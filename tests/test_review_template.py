@@ -23,6 +23,7 @@ def _trip(source: str, **overrides) -> dict:
         "started_at": datetime(2026, 3, 1, 9, 0, tzinfo=TZ),
         "ended_at": datetime(2026, 3, 1, 9, 20, tzinfo=TZ),
         "display_distance_m": 8046.72,
+        "distance_snapped_m": 8046.72,
         "has_gap": False,
         "category": "unclassified",
         "exclusion": None,
@@ -101,6 +102,21 @@ def test_detected_trip_card_map_carries_geometry_data_attributes():
     assert 'data-end-lon="-74.1"' in body
     assert 'data-path="{&#34;type&#34;:&#34;LineString&#34;' in body
     assert 'data-path-snapped="{&#34;type&#34;:&#34;MultiLineString&#34;' in body
+
+
+def test_detected_trip_card_draws_the_raw_track_when_the_snapped_distance_was_not_used():
+    """A declined match keeps its route, but the card must not lead with a
+    road route whose distance is not the one shown.
+    """
+    kwargs = dict(
+        path_geojson='{"type":"LineString","coordinates":[[1,2],[3,4]]}',
+        path_snapped_geojson='{"type":"MultiLineString","coordinates":[[[1,2],[3,4]]]}',
+    )
+    declined = _render(trip=_trip("detected", distance_snapped_m=None), **kwargs)
+    assert 'data-path="{&#34;type&#34;:&#34;LineString&#34;' in declined
+    assert "data-path-snapped=" not in declined
+    used = _render(trip=_trip("detected", distance_snapped_m=8100.0), **kwargs)
+    assert 'data-path-snapped="{&#34;type&#34;:&#34;MultiLineString&#34;' in used
 
 
 def test_detected_trip_card_omits_path_attributes_when_no_geometry():

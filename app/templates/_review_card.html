@@ -44,12 +44,14 @@
        swapped in by htmx keeps the document's original CSP nonce, so a
        per-fragment <script> would be blocked as a nonce mismatch. review.html's
        page-level script (loaded once, correct nonce) reads this element and
-       builds the map. #}
+       builds the map. The snapped path goes along only when its distance is
+       the one shown, as on the trip page; otherwise review.html draws the
+       raw track. #}
     <div id="review-map" class="review-map"
          data-start-lat="{{ trip.start_lat }}" data-start-lon="{{ trip.start_lon }}"
          data-end-lat="{{ trip.end_lat }}" data-end-lon="{{ trip.end_lon }}"
          {% if path_geojson %}data-path="{{ path_geojson }}"{% endif %}
-         {% if path_snapped_geojson %}data-path-snapped="{{ path_snapped_geojson }}"{% endif %}></div>
+         {% if path_snapped_geojson and trip.distance_snapped_m is not none %}data-path-snapped="{{ path_snapped_geojson }}"{% endif %}></div>
     {% endif %}
   </section>
 

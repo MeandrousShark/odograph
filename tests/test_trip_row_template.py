@@ -1043,7 +1043,7 @@ def test_trip_detail_labels_a_shaky_but_complete_snap_with_its_raw_baseline():
 
     assert "Road-snapped, low confidence" in body
     assert "raw GPS" in body
-    assert "Road-snap incomplete" not in body
+    assert "Road-snap not used" not in body
 
 
 def test_trip_detail_labels_an_incomplete_snap_instead_of_calling_it_snapped():
@@ -1053,7 +1053,7 @@ def test_trip_detail_labels_an_incomplete_snap_instead_of_calling_it_snapped():
     """
     body = _render_detail(_trip(snap_status="low_confidence", distance_snapped_m=None))
 
-    assert "Road-snap incomplete, showing raw GPS distance" in body
+    assert "Road-snap not used, showing raw GPS distance" in body
     assert "Road-snapped, low confidence" not in body
 
 
@@ -1063,7 +1063,7 @@ def test_trip_detail_labels_an_incomplete_snap_that_never_tripped_the_older_gate
     """
     body = _render_detail(_trip(snap_status="ok", distance_snapped_m=None))
 
-    assert "Road-snap incomplete, showing raw GPS distance" in body
+    assert "Road-snap not used, showing raw GPS distance" in body
 
 
 def test_trip_detail_lets_a_trusted_snapped_route_lead_the_map():

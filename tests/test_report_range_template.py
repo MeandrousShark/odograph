@@ -71,7 +71,7 @@ def test_report_summary_renders_metrics_and_rates_and_notes_render_caveats():
     assert "4 trip(s) still unclassified" in body
     assert "5 business trip(s) have no purpose recorded." in body
     assert "1 trip(s) have a recording gap; distance may under-read." in body
-    assert "2 trip(s) have a low-confidence road-snapped distance." in body
+    assert "2 trip(s) have a low-confidence road snap." in body
     assert "3 trip(s) were entered manually." in body
     assert "No IRS mileage rate on file for 2026; deduction is unavailable." in body
     assert '<a href="/settings">Add one</a>.' in body
