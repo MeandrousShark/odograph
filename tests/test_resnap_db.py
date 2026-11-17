@@ -302,7 +302,7 @@ async def _declined_fixture(raw):
         b = await seed_tracking_device(conn, "b")
         await _points(conn, a)
         await _points(conn, b)
-        ids["over"] = await _snapped(conn, a, 1125, 4516, category="business",
+        ids["over"] = await _snapped(conn, a, 1000, 4000, category="business",
                                      started_at="2026-03-01 05:00:00+00")
         ids["over_ok"] = await _snapped(conn, a, 1000, 1600, status="ok")
         ids["over_b"] = await _snapped(conn, b, 1000, 1700)
@@ -350,7 +350,7 @@ def test_declined_clears_only_trips_above_the_ceiling_and_lists_them(command_env
     assert _csv(captured.out) == [
         HEADER,
         # Local start date in the account's display time zone, not UTC.
-        f"{ids['over']},2026-02-28,business,1125,4516",
+        f"{ids['over']},2026-02-28,business,1000,4000",
         f"{ids['over_ok']},2026-03-01,unclassified,1000,1600",
         f"{ids['over_b']},2026-03-01,unclassified,1000,1700",
     ]
@@ -397,6 +397,20 @@ def test_declined_includes_and_accepts_a_disabled_or_revoked_device(command_env,
     assert after[ids["over"]] == before[ids["over"]]
     assert resnap.main(["--account", str(OWNER), "--declined"]) == 0
     assert capsys.readouterr().err.strip() == f"account {OWNER}: 2 trips cleared"
+
+
+@pytest.mark.parametrize("revoke", [False, True])
+def test_declined_account_run_includes_a_disabled_or_revoked_device(command_env, capsys, revoke):
+    async def setup(raw):
+        ids, a, b = await _declined_fixture(raw)
+        await _stop_device(raw, b, revoke=revoke)
+        return ids
+
+    ids = _run(setup)
+    before = _run(_declined_state)
+    assert resnap.main(["--account", str(OWNER), "--declined"]) == 0
+    assert capsys.readouterr().err.strip() == f"account {OWNER}: 3 trips cleared"
+    assert _cleared(before[ids["over_b"]], _run(_declined_state)[ids["over_b"]])
 
 
 def test_declined_refuses_a_disabled_account_and_an_unknown_device(command_env, capsys):
@@ -446,7 +460,8 @@ def test_declined_failure_is_reported_without_detail_and_changes_nothing(command
     assert resnap.main(["--account", str(OWNER), "--declined"]) == 1
     captured = capsys.readouterr()
     assert captured.err.strip() == "error: clearing failed (RaiseException); nothing was changed"
-    assert captured.out == ""
+    # The list is written before the clear is attempted.
+    assert len(_csv(captured.out)) == 4 and "private detail" not in captured.out
     assert _run(_declined_state) == before
 
 
@@ -455,7 +470,7 @@ def test_declined_failure_is_reported_without_detail_and_changes_nothing(command
 # could have been stored.
 _PARITY_ROWS = [
     (1000, 850, False), (1000, 1000, False), (1000, 1499, False), (1000, 1500, False),
-    (1000, 1501, False), (1000, 4000, False), (1125, 4516, False), (1000.5, 1500.75, False),
+    (1000, 1501, False), (1000, 4000, False), (1250, 5000, False), (1000.5, 1500.75, False),
     (1000.5, 1500.8, False), (999.9, 1500, False), (0, 500, False),
     (1000, 1500, True), (1000, 1600, True), (1000, 4000, True), (0, 500, True),
 ]

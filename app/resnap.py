@@ -198,6 +198,12 @@ async def _clear_declined(cfg: Config, owner: int, device: int | None, dry_run: 
                         sql += " FOR UPDATE OF t"
                     cur = await conn.execute(sql, args)
                     rows = await cur.fetchall()
+                    # Listed before the clear, so a failure after it can
+                    # never leave cleared values without their record.
+                    writer = csv.writer(sys.stdout, lineterminator="\n")
+                    writer.writerow(_CSV_HEADER)
+                    writer.writerows(rows)
+                    sys.stdout.flush()
                     if rows and not dry_run:
                         await conn.execute(
                             "UPDATE trips SET distance_snapped_m = NULL, "
@@ -208,11 +214,6 @@ async def _clear_declined(cfg: Config, owner: int, device: int | None, dry_run: 
                 print(f"error: clearing failed ({type(exc).__name__}); nothing was changed",
                       file=sys.stderr)
                 return False
-    # Printed only after the transaction committed, so the list never names
-    # a change that was rolled back.
-    writer = csv.writer(sys.stdout, lineterminator="\n")
-    writer.writerow(_CSV_HEADER)
-    writer.writerows(rows)
     count = len(rows)
     noun = "trip" if count == 1 else "trips"
     if count == 0:

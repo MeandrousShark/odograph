@@ -343,9 +343,9 @@ def test_walk_matched_to_a_road_detour_is_declined():
     """One matching, confidence 0.0, about four times the raw distance: a
     short walk matched to a car route that detours along roads.
     """
-    result = _ceiling_case(4516.0, confidence=0.0, raw=1125.0)
+    result = _ceiling_case(4000.0, confidence=0.0, raw=1000.0)
     _assert_declined_by_ceiling(result)
-    assert "401%" in result.reason and "150%" in result.reason
+    assert "400%" in result.reason and "150%" in result.reason
 
 
 def test_match_exactly_at_the_ceiling_keeps_its_distance():
