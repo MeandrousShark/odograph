@@ -57,8 +57,8 @@ its raw distance is a straight line across the gap, so a road route bridging
 it can honestly be much longer.
 
 A snapped route that is longer than raw by less than that is still used. On
-sparse tracking the raw distance cuts every curve, so the snap is the better
-figure even when OSRM rates it low confidence (see
+sparse tracking the raw distance cuts every curve, so the snap is usually the
+closer figure, even when OSRM rates it low confidence (see
 [`OSRM_MIN_CONFIDENCE`](configuration.md#road-snapping-and-manual-trip-routing)).
 
 ## Provisioning

@@ -301,13 +301,14 @@ def parse_match_response(
     an honest match stays close to raw (0.5 confidence falls at about 1.08)
     and a sparse trace that cuts curves reads only somewhat higher. Far above
     that, the route is not the one travelled: a walk matched to a car route
-    that detours along roads reads about 4x. 1.5 sits well clear of both. A trip with `has_gap` is exempt, because its raw distance draws a
+    that detours along roads reads about 4x. 1.5 sits well clear of both.
+    A trip with `has_gap` is exempt, because its raw distance draws a
     straight line across the recording gap and under-reads, so a road route
     bridging the gap can honestly run much longer.
 
     The confidence and tracepoint gates set the status only. A low-confidence
     match within both bounds keeps its distance: on a sparse trace the raw
-    distance is the poorer figure.
+    distance is usually the poorer figure.
     """
     code = response_json.get("code")
     matchings = response_json.get("matchings") or []
