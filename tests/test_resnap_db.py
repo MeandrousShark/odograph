@@ -340,7 +340,7 @@ def _csv(out):
     return out.strip().splitlines()
 
 
-HEADER = "trip_id,local_start_date,category,distance_m,distance_snapped_m"
+HEADER = "trip_id,local_start_date,category,snap_status,distance_m,distance_snapped_m"
 
 
 def test_declined_clears_only_trips_above_the_ceiling_and_lists_them(command_env, capsys):
@@ -351,9 +351,9 @@ def test_declined_clears_only_trips_above_the_ceiling_and_lists_them(command_env
     assert _csv(captured.out) == [
         HEADER,
         # Local start date in the account's display time zone, not UTC.
-        f"{ids['over']},2026-02-28,business,1000,4000",
-        f"{ids['over_ok']},2026-03-01,unclassified,1000,1600",
-        f"{ids['over_b']},2026-03-01,unclassified,1000,1700",
+        f"{ids['over']},2026-02-28,business,low_confidence,1000,4000",
+        f"{ids['over_ok']},2026-03-01,unclassified,ok,1000,1600",
+        f"{ids['over_b']},2026-03-01,unclassified,low_confidence,1000,1700",
     ]
     assert captured.err.strip() == f"account {OWNER}: 3 trips cleared"
     after = _run(_declined_state)
@@ -391,7 +391,7 @@ def test_declined_includes_and_accepts_a_disabled_or_revoked_device(command_env,
     before = _run(_declined_state)
     assert resnap.main(["--account", str(OWNER), "--declined", "--device", str(b)]) == 0
     captured = capsys.readouterr()
-    assert _csv(captured.out) == [HEADER, f"{ids['over_b']},2026-03-01,unclassified,1000,1700"]
+    assert _csv(captured.out) == [HEADER, f"{ids['over_b']},2026-03-01,unclassified,low_confidence,1000,1700"]
     assert captured.err.strip() == f"account {OWNER}: 1 trip cleared"
     after = _run(_declined_state)
     assert _cleared(before[ids["over_b"]], after[ids["over_b"]])

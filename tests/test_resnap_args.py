@@ -34,10 +34,8 @@ def test_declined_and_dry_run_are_parsed():
 def test_dry_run_without_declined_is_refused(capsys, monkeypatch):
     # Refused before any database setting is read.
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    with pytest.raises(SystemExit) as exit_info:
-        resnap.main(["--account", "3", "--dry-run"])
-    assert exit_info.value.code == 2
-    assert "error: invalid arguments" in capsys.readouterr().err
+    assert resnap.main(["--account", "3", "--dry-run"]) == 2
+    assert "error: --dry-run requires --declined" in capsys.readouterr().err
 
 
 def test_declined_predicate_uses_the_snap_ceiling():

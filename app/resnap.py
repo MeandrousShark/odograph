@@ -1,4 +1,4 @@
-"""Queue an account's split road snaps to be snapped again.
+"""Queue split road snaps to be snapped again, or clear declined snapped distances.
 
 Road snapping used to ask OSRM to split a trace at every time gap of about a
 minute, so a trip that waited at a stoplight with a distance-based tracker was
@@ -26,8 +26,8 @@ clears the snapped distance the current snap rule would decline: a detected
 trip without a recording gap whose snapped distance is more than
 app.snap.SNAP_MAX_COVERAGE times its raw distance. The trip is marked
 low_confidence and shows its raw distance; its snapped route is kept. Each
-cleared trip is printed to standard output as CSV with the value it had, so a
-correction can be undone from that list, and the count goes to standard error.
+cleared trip is printed to standard output as CSV with the status and value
+it had, so a correction can be undone from that list, and the count goes to standard error.
 --dry-run prints the same list and changes nothing. No OSRM call is made, so
 trips on a disabled or revoked device are included.
 """
@@ -161,11 +161,12 @@ _DECLINED_PREDICATE = (
 _DECLINED_SELECT = (
     "SELECT t.id, (t.started_at AT TIME ZONE "
     "(SELECT s.display_tz FROM account_settings s WHERE s.account_id = t.account_id))::date, "
-    "t.category::text, t.distance_m::text, t.distance_snapped_m::text "
+    "t.category::text, t.snap_status::text, t.distance_m::text, t.distance_snapped_m::text "
     "FROM trips t WHERE " + _DECLINED_PREDICATE
 )
 
-_CSV_HEADER = ("trip_id", "local_start_date", "category", "distance_m", "distance_snapped_m")
+_CSV_HEADER = ("trip_id", "local_start_date", "category", "snap_status", "distance_m",
+               "distance_snapped_m")
 
 
 async def _clear_declined(cfg: Config, owner: int, device: int | None, dry_run: bool) -> bool:
@@ -229,7 +230,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     if args.dry_run and not args.declined:
-        parser.error("--dry-run requires --declined")
+        parser.print_usage(sys.stderr)
+        print("error: --dry-run requires --declined", file=sys.stderr)
+        return 2
     if not os.environ.get("DATABASE_URL", ""):
         print("error: DATABASE_URL is not configured", file=sys.stderr)
         return 1
