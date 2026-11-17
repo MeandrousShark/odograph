@@ -121,7 +121,9 @@ for example in a password manager. Without it:
   its `GEOCODE_NOMINATIM_URL`.
 
 If `.env` is gone, run `scripts/generate_env.sh` and put back each setting
-you used ([Configuration reference](configuration.md)). The restored data is
+you used ([Configuration reference](configuration.md)). A minimal install
+has no such script: write `.env` from `.env.example` as its
+[install block](install-compose.md#install) does. The restored data is
 unaffected.
 
 ## Encryption and off-host copies

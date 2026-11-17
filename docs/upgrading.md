@@ -51,7 +51,9 @@ the pull is a direct `docker pull` (`docker compose pull` would skip an image
 that is already present). With Podman, use `podman image inspect`,
 `podman pull` and `podman-compose`.
 `--force-recreate` matters there: podman-compose otherwise restarts the old
-container, because the image name has not changed.
+container, because the image name has not changed. podman-compose 1.3.0
+ignores `--no-deps` with it and recreates the `db` container too; its volume
+and data are kept.
 
 Every 1.x release keeps these promises, and a release that cannot is a 2.0:
 

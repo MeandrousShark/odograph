@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Run the install block of docs/install-compose.md against a rendered install
-# compose.yaml, from an empty directory, and check what an operator gets: a
-# healthy app on loopback, a private .env with generated secrets, and a second
-# run that refuses to touch either file.
+# compose.yaml, from an empty directory, and check what an operator gets: an
+# app that answers /healthz, a private .env with generated secrets, and a
+# second run that refuses to touch either file.
 #
 #   scripts/install_smoke.sh COMPOSE_FILE
 #
@@ -158,8 +158,10 @@ echo "ok: .env is 0600 with each key once and 64-hex secrets"
 printf '%s\n%s\n%s\n' "$ADMIN_EMAIL" "$ADMIN_PASSWORD" "$ADMIN_PASSWORD" \
     | run_compose exec -T app python -m app.manage_account create-admin >>"$up_log" 2>&1 \
     || fail "create-admin failed"
-run_compose exec -T app python -m app.manage_account list-accounts </dev/null 2>>"$up_log" \
-    | grep -qF "$ADMIN_EMAIL" || fail "the new administrator is not listed"
+# Captured first: grep -q exiting early would SIGPIPE the writer under pipefail.
+accounts="$(run_compose exec -T app python -m app.manage_account list-accounts </dev/null 2>>"$up_log")" \
+    || fail "list-accounts failed"
+grep -qF "$ADMIN_EMAIL" <<< "$accounts" || fail "the new administrator is not listed"
 echo "ok: create-admin works non-interactively"
 
 before="$(cd "$install_dir" && cksum compose.yaml .env)"
@@ -174,7 +176,8 @@ echo "ok: a second run fails and leaves compose.yaml and .env alone"
 run_compose down -v >>"$up_log" 2>&1 || fail "down failed"
 started=false
 [ -z "$(project_containers)" ] || fail "containers remain after down"
-if "$runtime" volume ls -q | grep -q "^${PROJECT}_"; then
+volumes="$("$runtime" volume ls -q)"
+if grep -q "^${PROJECT}_" <<< "$volumes"; then
     fail "volumes remain after down -v"
 fi
 echo "ok: down -v removed the installation's containers and volumes"

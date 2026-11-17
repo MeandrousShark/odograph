@@ -204,3 +204,173 @@ def test_every_pull_request_installs_from_a_digest_rendered_asset():
     assert names.index("Render the install compose asset") < names.index("Install with Docker Compose")
     assert not any("continue-on-error" in step for step in job["steps"])
     assert "continue-on-error" not in job
+
+
+_RELEASE_PREFIX = "https://github.com/MeandrousShark/odograph/releases/download/vX.Y.Z/"
+_RAW_PREFIX = "https://raw.githubusercontent.com/MeandrousShark/odograph/vX.Y.Z/"
+_SH = shutil.which("sh")
+needs_sh = pytest.mark.skipif(_SH is None, reason="sh is not available")
+needs_curl = pytest.mark.skipif(REAL_CURL is None, reason="curl is not available")
+
+_FAKE_DOCKER = '#!/bin/sh\necho "$*" >> "$FAKE_LOG"\n'
+_FAKE_OPENSSL_OK = (
+    "#!/bin/sh\necho 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n"
+)
+_FAKE_OPENSSL_FAIL = "#!/bin/sh\nexit 1\n"
+# Real curl for file:// downloads; every other call is the health probe.
+_FAKE_CURL = (
+    "#!/bin/sh\n"
+    'for arg in "$@"; do case "$arg" in file://*) exec "$REAL_CURL" "$@" ;; esac; done\n'
+    'echo curl >> "$FAKE_LOG"\n'
+    '[ "$FAKE_HEALTH" = up ]\n'
+)
+
+
+def _guide_block(heading: str, index: int = 0) -> str:
+    lines = GUIDE.read_text().splitlines()
+    position = lines.index(heading)
+    for _ in range(index + 1):
+        position = lines.index("```sh", position + 1)
+    return "\n".join(lines[position + 1:lines.index("```", position + 1)]) + "\n"
+
+
+def _run_block(
+    tmp_path: Path, block: str, tools: dict[str, str], health: str = "up",
+    cwd: Path | None = None,
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    log = tmp_path / "log"
+    log.touch()
+    for name, source in {"sleep": "#!/bin/sh\nexit 0\n", **tools}.items():
+        tool = fake_bin / name
+        tool.write_text(source)
+        tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
+    script = tmp_path / "block.sh"
+    script.write_text(block)
+    environment = {**os.environ, "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}"}
+    environment.update(
+        FAKE_LOG=str(log), FAKE_HEALTH=health, REAL_CURL=REAL_CURL or "", TZ_NAME="UTC",
+    )
+    result = subprocess.run(
+        [_SH, str(script)], cwd=cwd or tmp_path, env=environment,
+        capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL,
+    )
+    return result, log.read_text().splitlines()
+
+
+def _install_setup(tmp_path: Path, missing: bool = False) -> tuple[str, Path]:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "compose.yaml").write_text("services: {}\n")
+    (source / ".env.example").write_text("LOG_LEVEL=info\nPOSTGRES_PASSWORD=\nSESSION_SECRET=\nDISPLAY_TZ=x\n")
+    local = f"file://{source / ('nowhere' if missing else '')}"
+    local = local if missing else local + "/"
+    block = _guide_block("## Install")
+    for prefix in (_RELEASE_PREFIX, _RAW_PREFIX):
+        assert block.count(prefix) == 1
+        block = block.replace(prefix, local + ("/" if missing else ""))
+    work = tmp_path / "work"
+    work.mkdir()
+    return block, work
+
+
+@needs_sh
+@needs_curl
+@pytest.mark.parametrize("failure", ["openssl", "download"])
+def test_install_block_stops_before_env_and_compose_on_a_failed_step(tmp_path, failure):
+    block, work = _install_setup(tmp_path, missing=failure == "download")
+    openssl = _FAKE_OPENSSL_FAIL if failure == "openssl" else _FAKE_OPENSSL_OK
+    result, log = _run_block(
+        tmp_path, block, {"docker": _FAKE_DOCKER, "openssl": openssl, "curl": _FAKE_CURL},
+        cwd=work,
+    )
+
+    assert result.returncode != 0
+    assert not (work / "odograph" / ".env").exists()
+    assert log == []
+    if failure == "openssl":
+        # It got as far as the secrets, so the failure is the one under test.
+        assert (work / "odograph" / ".env.example").exists()
+
+
+@needs_sh
+@needs_curl
+def test_install_block_writes_a_private_env_then_starts_compose(tmp_path):
+    block, work = _install_setup(tmp_path)
+    result, log = _run_block(
+        tmp_path, block,
+        {"docker": _FAKE_DOCKER, "openssl": _FAKE_OPENSSL_OK, "curl": _FAKE_CURL}, cwd=work,
+    )
+
+    assert result.returncode == 0, result.stderr
+    env = work / "odograph" / ".env"
+    assert stat.S_IMODE(env.stat().st_mode) == 0o600
+    assert "POSTGRES_PASSWORD=" + "0123456789abcdef" * 4 in env.read_text().splitlines()
+    assert log == ["compose up -d"]
+
+
+_HEALTH_ADMIN = "compose exec app python -m app.manage_account create-admin"
+
+
+@needs_sh
+def test_wait_block_gives_up_after_36_tries_without_creating_the_admin(tmp_path):
+    result, log = _run_block(
+        tmp_path, _guide_block("## Install", 1),
+        {"docker": _FAKE_DOCKER, "curl": _FAKE_CURL}, health="down",
+    )
+
+    assert result.returncode != 0
+    assert "not healthy after 3 minutes" in result.stderr
+    assert log == ["curl"] * 36
+
+
+@needs_sh
+def test_wait_block_creates_the_admin_once_healthy(tmp_path):
+    result, log = _run_block(
+        tmp_path, _guide_block("## Install", 1),
+        {"docker": _FAKE_DOCKER, "curl": _FAKE_CURL}, health="up",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert log == ["curl", _HEALTH_ADMIN]
+
+
+def _upgrade_run(tmp_path: Path, health: str) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "compose.yaml").write_text("services: {}\n")
+    block = _guide_block("## Upgrading")
+    assert block.count(_RELEASE_PREFIX) == 1
+    block = block.replace(_RELEASE_PREFIX, f"file://{source}/")
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / ".env").write_text("A=1\n")
+    (work / "compose.yaml").write_text("old\n")
+    for name in ("backup_database.sh", "restore_database.sh"):
+        script = work / name
+        script.write_text('#!/bin/sh\nmkdir -p backups\necho "$0" >> "$FAKE_LOG"\n')
+        script.chmod(0o755)
+    return _run_block(
+        tmp_path, block, {"docker": _FAKE_DOCKER, "curl": _FAKE_CURL}, health=health, cwd=work,
+    )
+
+
+@needs_sh
+@needs_curl
+def test_upgrade_block_waits_a_bounded_time_for_health(tmp_path):
+    result, log = _upgrade_run(tmp_path, "down")
+
+    assert result.returncode != 0
+    assert "not healthy after 3 minutes" in result.stderr
+    assert log.count("curl") == 36
+    assert log[:3] == ["./backup_database.sh", "./restore_database.sh", "compose up -d"]
+
+
+@needs_sh
+@needs_curl
+def test_upgrade_block_succeeds_when_the_app_is_healthy(tmp_path):
+    result, log = _upgrade_run(tmp_path, "up")
+
+    assert result.returncode == 0, result.stderr
+    assert log[-2:] == ["compose up -d", "curl"]

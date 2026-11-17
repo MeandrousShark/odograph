@@ -132,12 +132,17 @@ the target:
     curl -fsSL -o compose.yaml.next https://github.com/MeandrousShark/odograph/releases/download/vX.Y.Z/compose.yaml
     mv compose.yaml.next compose.yaml
     docker compose up -d
-    until curl -fsS http://127.0.0.1:8077/healthz; do sleep 5; done
+    i=0
+    until curl -fsS http://127.0.0.1:8077/healthz; do
+        [ $((i += 1)) -lt 36 ] || { echo 'not healthy after 3 minutes; read: docker compose logs app' >&2; exit 1; }
+        sleep 5
+    done
 )
 ```
 
-Follow `docker compose logs -f app` if the wait runs long, then download the
-new release's copies of your scripts. Migrations are forward-only: going back
+If the wait gives up after 3 minutes, read `docker compose logs app`. Once
+the app is healthy, download the new release's copies of your scripts.
+Migrations are forward-only: going back
 means restoring that backup with `compose.yaml.previous` into a fresh project
 ([Rollback](upgrading.md#rollback)), losing everything written after it. To
 follow `v1` instead, the `compose.override.yaml` from

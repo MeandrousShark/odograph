@@ -194,6 +194,10 @@ def test_minimal_upgrade_verifies_a_backup_before_taking_the_new_asset():
     positions = [block.index(step) for step in steps]
     assert positions == sorted(positions)
     assert "upgrading.md#rollback" in section
+    # The wait is bounded like the install wait: 36 tries of 5 s, then exit 1.
+    assert "until curl -fsS http://127.0.0.1:8077/healthz; do sleep" not in block
+    assert "-lt 36 ] ||" in block and "sleep 5" in block
+    assert "not healthy after 3 minutes" in block and "exit 1" in block
 
 
 def test_compose_preserves_state_and_waits_for_healthy_database():
