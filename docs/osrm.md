@@ -200,14 +200,18 @@ A trip snapped by an earlier release can keep a snapped distance more than
 backup you have validated:
 
 ```sh
-docker compose exec -T app python -m app.resnap --account ACCOUNT_ID --declined > declined-ACCOUNT_ID.csv
+docker compose exec -T app python -m app.resnap --account ACCOUNT_ID --declined --dry-run
+docker compose exec -T app python -m app.resnap --account ACCOUNT_ID --declined > "declined-ACCOUNT_ID-$(date +%Y%m%d%H%M%S).csv"
 # podman-compose:
-podman-compose exec -T app python -m app.resnap --account ACCOUNT_ID --declined > declined-ACCOUNT_ID.csv
+podman-compose exec -T app python -m app.resnap --account ACCOUNT_ID --declined --dry-run
+podman-compose exec -T app python -m app.resnap --account ACCOUNT_ID --declined > "declined-ACCOUNT_ID-$(date +%Y%m%d%H%M%S).csv"
 ```
 
-It lists each trip it clears as CSV (trip ID, local start date, category, raw
-and cleared snapped distance in metres) and prints the count. Keep the list:
-it is the only record of the cleared values. `--dry-run` lists without
-changing anything, and `--device DEVICE_ID` limits it to one tracking device.
+It lists each trip it clears as CSV (trip ID, local start date, category,
+snap status, raw and cleared snapped distance in metres) and prints the
+count. Keep the list: it is the only record of the cleared values. Each run
+writes its own list, so keep every earlier list too. `--dry-run` lists
+without changing anything, and `--device DEVICE_ID` limits it to one
+tracking device.
 No trip is snapped again, so trips on a disabled or revoked device are
 included, and running it again is harmless. A disabled account is refused.

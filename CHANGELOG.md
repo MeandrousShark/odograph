@@ -17,16 +17,19 @@ cleared. After upgrading, and after a backup you have validated, run this
 once for each account:
 
 ```sh
-docker compose exec -T app python -m app.resnap --account ACCOUNT_ID --declined > declined-ACCOUNT_ID.csv
+docker compose exec -T app python -m app.resnap --account ACCOUNT_ID --declined --dry-run
+docker compose exec -T app python -m app.resnap --account ACCOUNT_ID --declined > "declined-ACCOUNT_ID-$(date +%Y%m%d%H%M%S).csv"
 # podman-compose:
-podman-compose exec -T app python -m app.resnap --account ACCOUNT_ID --declined > declined-ACCOUNT_ID.csv
+podman-compose exec -T app python -m app.resnap --account ACCOUNT_ID --declined --dry-run
+podman-compose exec -T app python -m app.resnap --account ACCOUNT_ID --declined > "declined-ACCOUNT_ID-$(date +%Y%m%d%H%M%S).csv"
 ```
 
-Add `--dry-run` first to see the list without changing anything. The file
-lists every trip cleared, with its local start date, category, raw distance
-and the snapped distance cleared, in metres. Keep it with your backups: it is
-the only record of the old values, and lets the correction be reversed
-without restoring a backup.
+The `--dry-run` line shows the list without changing anything. The file
+lists every trip cleared, with its local start date, category, snap status,
+raw distance and the snapped distance cleared, in metres. Keep it with your
+backups: it is the only record of the old values, and lets the correction be
+reversed without restoring a backup. Each run writes its own list, so keep
+every earlier list too.
 
 Every affected trip's distance goes down, to its raw GPS distance. Where an
 affected trip is business, business miles and the deduction go down with it,
