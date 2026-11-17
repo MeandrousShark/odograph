@@ -1,4 +1,4 @@
-"""Queue an account's split road snaps to be snapped again.
+"""Queue split road snaps to be snapped again, or clear declined snapped distances.
 
 Road snapping used to ask OSRM to split a trace at every time gap of about a
 minute, so a trip that waited at a stoplight with a distance-based tracker was
@@ -19,14 +19,27 @@ touched, nor are trips on a disabled or revoked tracking device, which the snap
 worker does not pick up. The command uses the restricted runtime role and
 row-level security like the application, runs as one transaction, and is safe
 to repeat.
+
+    python -m app.resnap --account ACCOUNT_ID --declined [--device DEVICE_ID] [--dry-run]
+
+clears the snapped distance the current snap rule would decline: a detected
+trip without a recording gap whose snapped distance is more than
+app.snap.SNAP_MAX_COVERAGE times its raw distance. The trip is marked
+low_confidence and shows its raw distance; its snapped route is kept. Each
+cleared trip is printed to standard output as CSV with the status and value
+it had, so a correction can be undone from that list, and the count goes to standard error.
+--dry-run prints the same list and changes nothing. No OSRM call is made, so
+trips on a disabled or revoked device are included.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
+import csv
 import os
 import sys
 
+import psycopg
 from psycopg import errors
 
 from app.account_context import AccountPool, AccountPrincipal, control_connection
@@ -34,6 +47,7 @@ from app.account_work import external_account_work
 from app.application_roles import application_role_pools
 from app.config import Config
 from app.db import SchemaTooNewError
+from app.snap import SNAP_MAX_COVERAGE
 from app.storage import is_storage_capacity_error
 
 
@@ -54,11 +68,16 @@ class _SafeArgumentParser(argparse.ArgumentParser):
 
 def _parser() -> argparse.ArgumentParser:
     parser = _SafeArgumentParser(
-        description="Queue an account's trips with a split road snap to be snapped again."
+        description="Queue an account's trips with a split road snap to be snapped again, "
+                    "or with --declined clear snapped distances the snap rule declines."
     )
     parser.add_argument("--account", type=_positive_id, required=True, metavar="ACCOUNT_ID")
     parser.add_argument("--device", type=_positive_id, metavar="DEVICE_ID",
                         help="only trips from one tracking device; default is every device")
+    parser.add_argument("--declined", action="store_true",
+                        help="clear snapped distances the snap rule now declines, instead of queueing")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="with --declined, list the trips without changing them")
     return parser
 
 
@@ -73,18 +92,22 @@ _REQUEUE = (
 )
 
 
+async def _principal(pools, owner: int, refused: str) -> AccountPrincipal:
+    async with control_connection(pools.control) as conn:
+        cur = await conn.execute(
+            "SELECT id, is_enabled, auth_version FROM accounts WHERE id = %s", (owner,))
+        row = await cur.fetchone()
+    if row is None:
+        raise ValueError("No account has that ID. Run python -m app.manage_account list-accounts to find it.")
+    if not row[1]:
+        raise ValueError(f"That account is disabled; {refused}.")
+    return AccountPrincipal(*row)
+
+
 async def _resnap(cfg: Config, owner: int, device: int | None) -> bool:
     """Return True when the trips were queued."""
     async with application_role_pools(cfg.database_url) as pools:
-        async with control_connection(pools.control) as conn:
-            cur = await conn.execute(
-                "SELECT id, is_enabled, auth_version FROM accounts WHERE id = %s", (owner,))
-            row = await cur.fetchone()
-        if row is None:
-            raise ValueError("No account has that ID. Run python -m app.manage_account list-accounts to find it.")
-        if not row[1]:
-            raise ValueError("That account is disabled; its trips were not queued.")
-        principal = AccountPrincipal(*row)
+        principal = await _principal(pools, owner, "its trips were not queued")
         # The shared account work lock blocks account purge while the update
         # runs. A snap result already in flight is discarded by the worker's
         # updated_at generation check, because the requeue sets updated_at = now().
@@ -125,8 +148,91 @@ async def _resnap(cfg: Config, owner: int, device: int | None) -> bool:
     return True
 
 
+# app.snap.parse_match_response's ceiling restated on stored columns, so the
+# command clears exactly what a new snap would decline. Imported trips are
+# never snapped, gap trips are exempt, and a zero raw distance never fires it.
+# Status is not tested: the ceiling declines a match whatever its confidence.
+_DECLINED_PREDICATE = (
+    "t.account_id = %s AND t.source = 'detected' AND NOT t.imported AND NOT t.has_gap "
+    "AND t.distance_snapped_m IS NOT NULL AND t.distance_m > 0 "
+    "AND t.distance_snapped_m > %s * t.distance_m"
+)
+
+_DECLINED_SELECT = (
+    "SELECT t.id, (t.started_at AT TIME ZONE "
+    "(SELECT s.display_tz FROM account_settings s WHERE s.account_id = t.account_id))::date, "
+    "t.category::text, t.snap_status::text, t.distance_m::text, t.distance_snapped_m::text "
+    "FROM trips t WHERE " + _DECLINED_PREDICATE
+)
+
+_CSV_HEADER = ("trip_id", "local_start_date", "category", "snap_status", "distance_m",
+               "distance_snapped_m")
+
+
+async def _clear_declined(cfg: Config, owner: int, device: int | None, dry_run: bool) -> bool:
+    """Return True when the declined distances were listed, and cleared unless dry_run."""
+    async with application_role_pools(cfg.database_url) as pools:
+        principal = await _principal(pools, owner, "its snapped distances were not cleared")
+        # Same account work lock as the requeue. Unlike it, updated_at is left
+        # alone: the trips are not pending, and updated_at also orders recent
+        # purpose suggestions. A snap in flight cannot be pending on a trip
+        # this selects, because those already hold a snapped distance.
+        async with external_account_work(pools.control, owner):
+            pool = AccountPool(pools.runtime, principal)
+            try:
+                async with pool.connection() as conn:
+                    await conn.execute("SELECT set_config('lock_timeout', '0', true)")
+                    await conn.execute("SELECT set_config('statement_timeout', '0', true)")
+                    sql, args = _DECLINED_SELECT, [owner, SNAP_MAX_COVERAGE]
+                    if device is not None:
+                        # No worker is involved, so a disabled or revoked
+                        # device's trips are corrected too.
+                        cur = await conn.execute(
+                            "SELECT 1 FROM tracking_devices WHERE account_id = %s AND id = %s",
+                            (owner, device))
+                        if await cur.fetchone() is None:
+                            raise ValueError("No tracking device has that ID for this account.")
+                        sql += " AND t.tracking_device_id = %s"
+                        args.append(device)
+                    sql += " ORDER BY t.started_at, t.id"
+                    if not dry_run:
+                        sql += " FOR UPDATE OF t"
+                    cur = await conn.execute(sql, args)
+                    rows = await cur.fetchall()
+                    # Listed before the clear, so a failure after it can
+                    # never leave cleared values without their record.
+                    writer = csv.writer(sys.stdout, lineterminator="\n")
+                    writer.writerow(_CSV_HEADER)
+                    writer.writerows(rows)
+                    sys.stdout.flush()
+                    if rows and not dry_run:
+                        await conn.execute(
+                            "UPDATE trips SET distance_snapped_m = NULL, "
+                            "snap_status = 'low_confidence'::snap_state "
+                            "WHERE account_id = %s AND id = ANY(%s)",
+                            (owner, [row[0] for row in rows]))
+            except psycopg.Error as exc:
+                print(f"error: clearing failed ({type(exc).__name__}); nothing was changed",
+                      file=sys.stderr)
+                return False
+    count = len(rows)
+    noun = "trip" if count == 1 else "trips"
+    if count == 0:
+        print(f"account {owner}: no declined snapped distances to clear", file=sys.stderr)
+    elif dry_run:
+        print(f"account {owner}: {count} {noun} would be cleared", file=sys.stderr)
+    else:
+        print(f"account {owner}: {count} {noun} cleared", file=sys.stderr)
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args = parser.parse_args(argv)
+    if args.dry_run and not args.declined:
+        parser.print_usage(sys.stderr)
+        print("error: --dry-run requires --declined", file=sys.stderr)
+        return 2
     if not os.environ.get("DATABASE_URL", ""):
         print("error: DATABASE_URL is not configured", file=sys.stderr)
         return 1
@@ -139,7 +245,10 @@ def main(argv: list[str] | None = None) -> int:
         print("error: a numeric setting in the environment is invalid", file=sys.stderr)
         return 1
     try:
-        ok = asyncio.run(_resnap(cfg, args.account, args.device))
+        if args.declined:
+            ok = asyncio.run(_clear_declined(cfg, args.account, args.device, args.dry_run))
+        else:
+            ok = asyncio.run(_resnap(cfg, args.account, args.device))
     except (ValueError, SchemaTooNewError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

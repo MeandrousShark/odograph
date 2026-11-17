@@ -48,7 +48,7 @@
       <div class="trip-detail-meta">
         <span>{{ trip.point_count }} points</span>
         {% if trip.snap_status in ('ok', 'low_confidence') and trip.distance_snapped_m is none %}
-        <span class="trip-detail-snap">Road-snap incomplete, showing raw GPS distance</span>
+        <span class="trip-detail-snap">Road-snap not used, showing raw GPS distance</span>
         {% elif trip.snap_status in ('ok', 'low_confidence') %}
         <span class="trip-detail-snap">Road-snapped{% if trip.snap_status == 'low_confidence' %}, low confidence{% endif %}; raw GPS {{ trip.distance_m | mi }} mi</span>
         {% elif trip.snap_capacity_needed_bytes | default(0) > 0 %}
@@ -338,8 +338,9 @@ document.addEventListener('change', function (event) {
   const path = {{ path_geojson | safe if path_geojson else 'null' }};
   const pathSnapped = {{ path_snapped_geojson | safe if path_snapped_geojson else 'null' }};
   // A NULL distance_snapped_m on a trip that *has* a snapped path means the
-  // match covered only part of the drive and its distance was declined
-  // (app/snap.py's min_coverage), so the raw track is the honest primary line.
+  // match covered too little of the drive, or ran far longer than it, and its
+  // distance was declined (app/snap.py's parse_match_response), so the raw
+  // track is the honest primary line.
   const snappedDistanceUsed = {{ 'true' if trip.distance_snapped_m is not none else 'false' }};
   const stays = {{ stay_centroids | safe }};
   const start = [{{ trip.start_lat }}, {{ trip.start_lon }}];

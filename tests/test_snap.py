@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.snap import (
-    MatchPoint, PROVIDER_ROUTE_MAX_VERTICES, ProviderOutputTooLarge,
+    MatchPoint, PROVIDER_ROUTE_MAX_VERTICES, ProviderOutputTooLarge, SNAP_MAX_COVERAGE,
     _parse_and_serialize_match, downsample, parse_match_response, radiuses,
     sample_ordinals,
 )
@@ -226,8 +226,9 @@ def test_parse_declines_distance_just_below_the_coverage_threshold():
 
 
 def test_parse_keeps_distance_when_snapped_route_exceeds_raw():
-    """Coverage is a floor, not a band. A snapped route is routinely longer
-    than the raw track where the fixes cut a corner the road goes around.
+    """Below the ceiling, a snapped route longer than raw keeps its distance.
+    A snapped route is routinely longer than the raw track where the fixes
+    cut a corner the road goes around.
     """
     response = {
         "code": "Ok",
@@ -295,6 +296,104 @@ def test_parse_coverage_threshold_is_configurable():
     kwargs = dict(min_confidence=0.5, input_count=3, raw_distance_m=1000.0)
     assert parse_match_response(response, **kwargs).distance_m is None
     assert parse_match_response(response, min_coverage=0.4, **kwargs).distance_m == 500.0
+
+
+# ---- parse_match_response: distance ceiling ----
+
+def _ceiling_case(distance, *, confidence=0.95, tracepoints=None, raw=1000.0,
+                  min_confidence=0.5, has_gap=False):
+    response = {
+        "code": "Ok",
+        "matchings": [_matching(confidence=confidence, distance=distance)],
+        "tracepoints": tracepoints if tracepoints is not None else [{}, {}, {}],
+    }
+    return parse_match_response(
+        response, min_confidence=min_confidence, input_count=3,
+        raw_distance_m=raw, has_gap=has_gap,
+    )
+
+
+def _assert_declined_by_ceiling(result):
+    assert result.status == "low_confidence"
+    assert result.distance_m is None
+    assert "ceiling" in result.reason
+    # The route is still kept, for the trip page to draw beneath the raw track.
+    assert result.path_geojson["type"] == "MultiLineString"
+
+
+def test_ceiling_constant_is_one_and_a_half():
+    assert SNAP_MAX_COVERAGE == 1.5
+
+
+def test_low_confidence_match_below_the_ceiling_keeps_its_distance():
+    """A sparse trace cuts curves, so its honest snap reads above raw and
+    below OSRM's confidence floor. That distance is still the better figure.
+    """
+    result = _ceiling_case(1400.0, confidence=0.0)
+    assert result.status == "low_confidence"
+    assert result.distance_m == 1400.0
+    assert "confidence" in result.reason
+
+
+def test_match_above_the_ceiling_is_declined():
+    _assert_declined_by_ceiling(_ceiling_case(1600.0, confidence=0.0))
+
+
+def test_walk_matched_to_a_road_detour_is_declined():
+    """One matching, confidence 0.0, about four times the raw distance: a
+    short walk matched to a car route that detours along roads.
+    """
+    result = _ceiling_case(4000.0, confidence=0.0, raw=1000.0)
+    _assert_declined_by_ceiling(result)
+    assert "400%" in result.reason and "150%" in result.reason
+
+
+def test_match_exactly_at_the_ceiling_keeps_its_distance():
+    result = _ceiling_case(1500.0, confidence=0.0)
+    assert result.distance_m == 1500.0
+    assert "ceiling" not in result.reason
+
+
+def test_tracepoint_fraction_failure_above_the_ceiling_is_declined():
+    _assert_declined_by_ceiling(_ceiling_case(1600.0, tracepoints=[{}, None, None]))
+
+
+def test_ceiling_does_not_depend_on_match_confidence():
+    """A confident match above the ceiling is declined and marked, and so is
+    one under a confidence setting of zero, which no confidence gate fails.
+    """
+    _assert_declined_by_ceiling(_ceiling_case(1600.0, confidence=0.95))
+    _assert_declined_by_ceiling(_ceiling_case(1600.0, confidence=0.95, min_confidence=0.0))
+
+
+def test_ceiling_reason_follows_coverage_and_precedes_confidence():
+    result = _ceiling_case(1600.0, confidence=0.0, tracepoints=[{}, None, None])
+    assert "ceiling" in result.reason
+
+
+def test_gap_trip_above_the_ceiling_keeps_its_distance():
+    """The raw distance of a gap trip is a straight line across the gap, so a
+    road route bridging it can honestly run far longer.
+    """
+    result = _ceiling_case(1600.0, confidence=0.0, has_gap=True)
+    assert result.status == "low_confidence"
+    assert result.distance_m == 1600.0
+    assert "ceiling" not in result.reason
+    ok = _ceiling_case(1600.0, has_gap=True)
+    assert (ok.status, ok.distance_m) == ("ok", 1600.0)
+
+
+@pytest.mark.parametrize("raw", [0.0, None])
+def test_ceiling_never_fires_without_a_raw_distance(raw):
+    result = _ceiling_case(5000.0, raw=raw)
+    assert result.status == "ok"
+    assert result.distance_m == 5000.0
+
+
+def test_serialize_wrapper_passes_has_gap_to_the_rule():
+    body = {"code": "Ok", "matchings": [_matching(distance=1600.0)], "tracepoints": [{}, {}, {}]}
+    assert _parse_and_serialize_match(body, 0.5, 3, 1000.0)[0].distance_m is None
+    assert _parse_and_serialize_match(body, 0.5, 3, 1000.0, True)[0].distance_m == 1600.0
 
 
 @pytest.mark.parametrize("count, cap", [(0, 2), (1, 2), (2, 2), (3, 2),

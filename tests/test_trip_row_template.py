@@ -1043,27 +1043,27 @@ def test_trip_detail_labels_a_shaky_but_complete_snap_with_its_raw_baseline():
 
     assert "Road-snapped, low confidence" in body
     assert "raw GPS" in body
-    assert "Road-snap incomplete" not in body
+    assert "Road-snap not used" not in body
 
 
-def test_trip_detail_labels_an_incomplete_snap_instead_of_calling_it_snapped():
+def test_trip_detail_labels_a_snap_not_used_instead_of_calling_it_snapped():
     """A snapped path with no snapped distance is a match that covered part of
     the drive. Its displayed distance is the raw one, and the label has to say
     so rather than read as an ordinary road-snapped trip.
     """
     body = _render_detail(_trip(snap_status="low_confidence", distance_snapped_m=None))
 
-    assert "Road-snap incomplete, showing raw GPS distance" in body
+    assert "Road-snap not used, showing raw GPS distance" in body
     assert "Road-snapped, low confidence" not in body
 
 
-def test_trip_detail_labels_an_incomplete_snap_that_never_tripped_the_older_gates():
+def test_trip_detail_labels_a_snap_not_used_that_never_tripped_the_older_gates():
     """The silent case: the tracepoint and confidence gates passed, so the row
     is 'ok', but coverage declined the distance.
     """
     body = _render_detail(_trip(snap_status="ok", distance_snapped_m=None))
 
-    assert "Road-snap incomplete, showing raw GPS distance" in body
+    assert "Road-snap not used, showing raw GPS distance" in body
 
 
 def test_trip_detail_lets_a_trusted_snapped_route_lead_the_map():
@@ -1076,7 +1076,7 @@ def test_trip_detail_lets_a_trusted_snapped_route_lead_the_map():
     assert "const snappedDistanceUsed = true;" in body
 
 
-def test_trip_detail_keeps_the_raw_track_leading_when_the_snap_is_incomplete():
+def test_trip_detail_keeps_the_raw_track_leading_when_the_snap_is_not_used():
     """The flag the map branches on. A partial snapped line must not take the
     framing, or the map zooms to the matched fragment and the rest of the drive
     falls off-screen -- the original British Columbia symptom.
