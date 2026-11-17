@@ -76,8 +76,9 @@ The trip's map, times, point count and distance, with category, vehicle,
 exclusion, purpose and notes that save as you change them. A detected trip
 shows its road-snapped distance beside the raw GPS distance, or says why it
 shows only the raw distance: **Not yet road-snapped**, **Road-snap failed**,
-**Road-snap incomplete**, or route enhancement paused for storage. A
-low-confidence snap is labelled.
+**Road-snap not used** (the route covered too little of the trip, or ran far
+longer than it), or route enhancement paused for storage. A low-confidence
+snap is labelled.
 
 **Advanced trip tools** (detected trips only, not imported ones) holds:
 

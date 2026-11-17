@@ -40,12 +40,26 @@ Odograph checks every snapped route against the trip's own raw GPS distance. A
 route covering less than 85% of it is treated as not describing the trip: the
 trip keeps its raw GPS distance for its displayed figure, for every total, and
 for the deduction; the partial snapped route is drawn beneath the raw track
-rather than in place of it; and the trip page reads **Road-snap incomplete,
+rather than in place of it; and the trip page reads **Road-snap not used,
 showing raw GPS distance**.
 
 Mileage therefore stays correct wherever you drive; a missing region costs only
 the road-following line on those trips. If that label shows up on trips through
 somewhere you drive regularly, that area is outside your extract.
+
+## Routes far longer than the trip
+
+The same label appears when a snapped route is more than 1.5 times the trip's
+raw GPS distance, as when a walk is matched to a car route that detours along
+roads. The trip is marked low confidence and keeps its raw distance, and the
+route is drawn beneath the raw track. A trip with a recording gap is exempt:
+its raw distance is a straight line across the gap, so a road route bridging
+it can honestly be much longer.
+
+A snapped route that is longer than raw by less than that is still used. On
+sparse tracking the raw distance cuts every curve, so the snap is the better
+figure even when OSRM rates it low confidence (see
+[`OSRM_MIN_CONFIDENCE`](configuration.md#road-snapping-and-manual-trip-routing)).
 
 ## Provisioning
 
@@ -178,3 +192,22 @@ podman-compose exec app python -m app.resnap --account ACCOUNT_ID
 it queued, and running it again is harmless. Each queued trip shows its raw GPS
 route until the running app snaps it again, starting within `SNAP_SWEEP_S`
 (5 minutes by default).
+
+## Clearing declined snapped distances
+
+A trip snapped by an earlier release can keep a snapped distance more than
+1.5 times raw. Clear those once for each account after upgrading, after a
+backup you have validated:
+
+```sh
+docker compose exec -T app python -m app.resnap --account ACCOUNT_ID --declined > declined-ACCOUNT_ID.csv
+# podman-compose:
+podman-compose exec -T app python -m app.resnap --account ACCOUNT_ID --declined > declined-ACCOUNT_ID.csv
+```
+
+It lists each trip it clears as CSV (trip ID, local start date, category, raw
+and cleared snapped distance in metres) and prints the count. Keep the list:
+it is the only record of the cleared values. `--dry-run` lists without
+changing anything, and `--device DEVICE_ID` limits it to one tracking device.
+No trip is snapped again, so trips on a disabled or revoked device are
+included, and running it again is harmless. A disabled account is refused.

@@ -261,7 +261,7 @@ and `SSL_CERT_DIR`; SMTP does not.
 |---|---|---|
 | `OSRM_URL` | unset | OSRM base URL; turns on road snapping, routed manual trips and suggested missing-trip distances. With the Compose profile, `http://osrm:5000`. |
 | `OSRM_DATASET` | unset | Dataset served by the Compose `osrm` profile, as printed by `scripts/provision_osrm.sh`. |
-| `OSRM_MIN_CONFIDENCE` | `0.5` | Lowest match confidence accepted for a snapped route. |
+| `OSRM_MIN_CONFIDENCE` | `0.5` | Match confidence below which a snap is marked low confidence and counted in the report caveat. OSRM rates a match by how much longer its road route is than the straight lines between fixes, so sparse tracking reads low. It does not decide the distance: a snapped route more than 1.5 times the raw GPS distance is not used, whatever its confidence ([osrm.md](osrm.md#routes-far-longer-than-the-trip)). |
 | `OSRM_MAX_COORDS` | `250` | Most coordinates in one match request, 2 to 10000; startup refuses others. |
 | `SNAP_DEBOUNCE_S` | `15` | Quiet time before new trips are snapped. |
 | `SNAP_SWEEP_S` | `300` | Interval of the periodic snapping catch-up. |

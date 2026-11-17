@@ -9,6 +9,36 @@ reproduced here.
 
 ## [Unreleased]
 
+### Correcting existing trips
+
+A road-snapped distance more than 1.5 times the trip's raw GPS distance is no
+longer used (see Fixed), but trips snapped earlier keep it until it is
+cleared. After upgrading, and after a backup you have validated, run this
+once for each account:
+
+```sh
+docker compose exec -T app python -m app.resnap --account ACCOUNT_ID --declined > declined-ACCOUNT_ID.csv
+# podman-compose:
+podman-compose exec -T app python -m app.resnap --account ACCOUNT_ID --declined > declined-ACCOUNT_ID.csv
+```
+
+Add `--dry-run` first to see the list without changing anything. The file
+lists every trip cleared, with its local start date, category, raw distance
+and the snapped distance cleared, in metres. Keep it with your backups: it is
+the only record of the old values, and lets the correction be reversed
+without restoring a backup.
+
+Every affected trip's distance goes down, to its raw GPS distance. Where an
+affected trip is business, business miles and the deduction go down with it,
+in every year that holds one, including years already filed.
+
+A disabled account is refused; run the command for it after re-enabling it.
+After a rollback to an earlier release and a later upgrade, run it again,
+since the earlier release stores such distances for trips it snaps. A
+portable export taken before the correction carries the old distances into
+any import, so take a new export afterwards. See
+[osrm.md](docs/osrm.md#clearing-declined-snapped-distances).
+
 ### Added
 
 - Each GitHub release attaches an install `compose.yaml` that pins the app
@@ -17,6 +47,22 @@ reproduced here.
   and `.env.example` alone, makes `.env` in one block, and lists what the
   route leaves out and how to add each piece. A minimal install upgrades by
   downloading the new release's `compose.yaml`, with no `verify_image.sh`.
+
+### Fixed
+
+- A road snap far longer than the trip no longer sets its distance. A walk
+  matched to a car route that detoured along roads showed about four times
+  its raw GPS distance, in the trip, every total and the deduction, although
+  the match was marked low confidence. A snapped route more than 1.5 times
+  the raw GPS distance of a trip without a recording gap is now marked low
+  confidence and the trip keeps its raw distance; the route is still drawn
+  beneath the raw track. Trip Detail reads **Road-snap not used, showing raw
+  GPS distance** for this and for a route that covers too little of the trip
+  (previously **Road-snap incomplete**), and the review card draws the raw
+  track for both. The report caveat now reads "N trip(s) have a
+  low-confidence road snap.", since such a trip has no snapped distance. Trips
+  snapped earlier need the step above
+  ([osrm.md](docs/osrm.md#routes-far-longer-than-the-trip)).
 
 ## [1.5.1] - 2026-11-12
 
