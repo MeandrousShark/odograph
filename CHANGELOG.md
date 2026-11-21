@@ -9,6 +9,14 @@ reproduced here.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-20
+
+Nothing in this release runs on its own. One step is for you to choose:
+road-snapped distances stored before this release that the new snap ceiling
+declines (see Fixed) stay in place until you run the correction below, after
+a backup you have validated. It lowers the affected trips' distances,
+including business miles in years already filed.
+
 ### Correcting existing trips
 
 A road-snapped distance more than 1.5 times the trip's raw GPS distance is no
@@ -66,6 +74,29 @@ any import, so take a new export afterwards. See
   low-confidence road snap.", since such a trip has no snapped distance. Trips
   snapped earlier need the step above
   ([osrm.md](docs/osrm.md#routes-far-longer-than-the-trip)).
+
+### Migrations
+
+- This release adds no migration; the schema stays at 51. The database image
+  is unchanged from 1.5.1.
+
+### Supported upgrade path
+
+- Every 1.x release upgrades directly, by either path in the
+  [upgrading guide](docs/upgrading.md). `v1.4.0` and earlier also take
+  1.4.1's database image rebuild
+  ([Database image security rebuilds](docs/upgrading.md#database-image-security-rebuilds))
+  and read the notes of each release in between. A 0.x installation first
+  upgrades to `v1.0.0`.
+- Prior-release artifact upgrade gate: release preflight ran the Docker
+  Compose upgrade drill from `v1.5.1`, `v1.5.0`, `v1.4.2` and `v1.4.1` with
+  the database image unchanged, from `v1.4.0`, `v1.3.1`, `v1.3.0`,
+  `v1.2.0`, `v1.1.0` and `v1.0.0` in database image swap mode, and the
+  image-only drill from `v1.0.0`, before this release was tagged.
+
+### Breaking changes
+
+- None. There is no migration and no configuration or environment change.
 
 ## [1.5.1] - 2026-11-12
 
